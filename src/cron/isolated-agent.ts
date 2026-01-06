@@ -19,7 +19,11 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  chunkText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   stripHeartbeatToken,
@@ -439,7 +443,10 @@ export async function runCronIsolatedAgentTurn(params: {
           const mediaList =
             payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           if (mediaList.length === 0) {
-            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
+            for (const chunk of chunkMarkdownText(
+              payload.text ?? "",
+              textLimit,
+            )) {
               await params.deps.sendMessageTelegram(chatId, chunk, {
                 verbose: false,
                 token: telegramToken || undefined,
@@ -528,7 +535,10 @@ export async function runCronIsolatedAgentTurn(params: {
           const mediaList =
             payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           if (mediaList.length === 0) {
-            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
+            for (const chunk of chunkMarkdownText(
+              payload.text ?? "",
+              textLimit,
+            )) {
               await params.deps.sendMessageSlack(slackTarget, chunk);
             }
           } else {

@@ -12,7 +12,7 @@ import type {
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
 
-import { chunkText } from "../auto-reply/chunk.js";
+import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import {
   normalizePollDurationHours,
@@ -360,7 +360,7 @@ async function sendDiscordText(
     })) as { id: string; channel_id: string };
     return res;
   }
-  const chunks = chunkText(text, DISCORD_TEXT_LIMIT);
+  const chunks = chunkMarkdownText(text, DISCORD_TEXT_LIMIT);
   let last: { id: string; channel_id: string } | null = null;
   let isFirst = true;
   for (const chunk of chunks) {

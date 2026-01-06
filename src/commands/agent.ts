@@ -22,7 +22,11 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  chunkText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
@@ -667,7 +671,7 @@ export async function agentCommand(
     if (deliveryProvider === "telegram" && telegramTarget) {
       try {
         if (media.length === 0) {
-          for (const chunk of chunkText(text, deliveryTextLimit)) {
+          for (const chunk of chunkMarkdownText(text, deliveryTextLimit)) {
             await deps.sendMessageTelegram(telegramTarget, chunk, {
               verbose: false,
               token: telegramToken || undefined,

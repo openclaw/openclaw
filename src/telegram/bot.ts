@@ -4,7 +4,10 @@ import { Buffer } from "node:buffer";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -667,7 +670,7 @@ async function deliverReplies(params: {
         ? [reply.mediaUrl]
         : [];
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(reply.text || "", textLimit)) {
+      for (const chunk of chunkMarkdownText(reply.text || "", textLimit)) {
         await sendTelegramText(bot, chatId, chunk, runtime, {
           replyToMessageId:
             replyToId && (replyToMode === "all" || !hasReplied)
