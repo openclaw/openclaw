@@ -71,6 +71,7 @@ It does **not** install or change anything on the remote host.
    - Discord: bot token.
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
+   - DM security: default is pairing (unknown DMs get a pairing code). Approve via `clawdbot pairing approve --provider <provider> <code>`.
 
 6) **Daemon install**
    - macOS: LaunchAgent

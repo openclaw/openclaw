@@ -87,6 +87,17 @@ Upgrading? `clawdbot doctor`.
 
 If you run from source, prefer `bun run clawdbot …` or `pnpm clawdbot …` (not global `clawdbot`).
 
+## Security defaults (DM access)
+
+Clawdbot connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
+
+Default behavior on Telegram/WhatsApp/Signal/iMessage/Discord/Slack:
+- **DM pairing** (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
+- Approve with: `clawdbot pairing approve --provider <provider> <code>` (then the sender is added to a local allowlist store).
+- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the provider allowlist (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`).
+
+Run `clawdbot doctor` to surface risky/misconfigured DM policies.
+
 ## Highlights
 
 - **[Local-first Gateway](https://github.com/clawdbot/clawdbot/blob/main/docs/gateway.md)** — single control plane for sessions, providers, tools, and events.
