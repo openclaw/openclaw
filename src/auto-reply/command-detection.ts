@@ -1,5 +1,5 @@
 const CONTROL_COMMAND_RE =
-  /(?:^|\s)\/(?:status|help|thinking|think|t|verbose|v|elevated|elev|model|queue|activation|send|restart|reset|new)(?=$|\s|:)\b/i;
+  /(?:^|\s)\/(?:status|help|thinking|think|t|verbose|v|elevated|elev|model|queue|activation|send|restart|reset|new|compact)(?=$|\s|:)\b/i;
 
 const CONTROL_COMMAND_EXACT = new Set([
   "help",
@@ -16,6 +16,8 @@ const CONTROL_COMMAND_EXACT = new Set([
   "/reset",
   "new",
   "/new",
+  "compact",
+  "/compact",
 ]);
 
 export function hasControlCommand(text?: string): boolean {

@@ -209,6 +209,7 @@ Send these in WhatsApp/Telegram/Slack/WebChat (group commands are owner-only):
 
 - `/status` — health + session info (group shows activation mode)
 - `/new` or `/reset` — reset the session
+- `/compact` — compact session context (summary)
 - `/think <level>` — off|minimal|low|medium|high
 - `/verbose on|off`
 - `/restart` — restart the gateway (owner-only in groups)

@@ -24,6 +24,7 @@ import { resolveSessionTranscriptPath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
+import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
@@ -42,6 +43,7 @@ import {
   defaultGroupActivation,
   resolveGroupRequireMention,
 } from "./reply/groups.js";
+import { stripMentions } from "./reply/mentions.js";
 import {
   createModelSelectionState,
   resolveContextTokens,
@@ -75,6 +77,9 @@ export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
+
+const CONTROL_COMMAND_PREFIX_RE =
+  /^\/(?:status|help|thinking|think|t|verbose|v|elevated|elev|model|queue|activation|send|restart|reset|new|compact)\b/i;
 
 function normalizeAllowToken(value?: string) {
   if (!value) return "";
@@ -240,7 +245,17 @@ export async function getReplyFromConfig(
     }
   }
 
-  const sessionState = await initSessionState({ ctx, cfg });
+  const commandAuthorized = ctx.CommandAuthorized ?? true;
+  const commandAuth = resolveCommandAuthorization({
+    ctx,
+    cfg,
+    commandAuthorized,
+  });
+  const sessionState = await initSessionState({
+    ctx,
+    cfg,
+    commandAuthorized,
+  });
   let {
     sessionCtx,
     sessionEntry,
@@ -258,7 +273,6 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   const rawBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const commandAuthorized = ctx.CommandAuthorized ?? true;
   const parsedDirectives = parseInlineDirectives(rawBody);
   const directives = commandAuthorized
     ? parsedDirectives
@@ -516,6 +530,16 @@ export async function getReplyFromConfig(
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
+  const strippedCommandBody = isGroup
+    ? stripMentions(triggerBodyNormalized, ctx, cfg)
+    : triggerBodyNormalized;
+  if (
+    !commandAuth.isAuthorizedSender &&
+    CONTROL_COMMAND_PREFIX_RE.test(strippedCommandBody.trim())
+  ) {
+    typing.cleanup();
+    return undefined;
+  }
   if (!commandAuthorized && !baseBodyTrimmedRaw && hasControlCommand(rawBody)) {
     typing.cleanup();
     return undefined;

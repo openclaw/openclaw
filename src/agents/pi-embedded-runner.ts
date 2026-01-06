@@ -98,6 +98,18 @@ export type EmbeddedPiRunResult = {
   meta: EmbeddedPiRunMeta;
 };
 
+export type EmbeddedPiCompactResult = {
+  ok: boolean;
+  compacted: boolean;
+  reason?: string;
+  result?: {
+    summary: string;
+    firstKeptEntryId: string;
+    tokensBefore: number;
+    details?: unknown;
+  };
+};
+
 type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
@@ -312,6 +324,212 @@ function resolvePromptSkills(
   return snapshotNames
     .map((name) => entryByName.get(name))
     .filter((skill): skill is Skill => Boolean(skill));
+}
+
+export async function compactEmbeddedPiSession(params: {
+  sessionId: string;
+  sessionKey?: string;
+  surface?: string;
+  sessionFile: string;
+  workspaceDir: string;
+  config?: ClawdbotConfig;
+  skillsSnapshot?: SkillSnapshot;
+  provider?: string;
+  model?: string;
+  thinkLevel?: ThinkLevel;
+  bashElevated?: BashElevatedDefaults;
+  customInstructions?: string;
+  lane?: string;
+  enqueue?: typeof enqueueCommand;
+  extraSystemPrompt?: string;
+  ownerNumbers?: string[];
+}): Promise<EmbeddedPiCompactResult> {
+  const sessionLane = resolveSessionLane(
+    params.sessionKey?.trim() || params.sessionId,
+  );
+  const globalLane = resolveGlobalLane(params.lane);
+  const enqueueGlobal =
+    params.enqueue ??
+    ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+  return enqueueCommandInLane(sessionLane, () =>
+    enqueueGlobal(async () => {
+      const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+      const prevCwd = process.cwd();
+
+      const provider =
+        (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
+      const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
+      await ensureClawdbotModelsJson(params.config);
+      const agentDir = resolveClawdbotAgentDir();
+      const { model, error, authStorage, modelRegistry } = resolveModel(
+        provider,
+        modelId,
+        agentDir,
+      );
+      if (!model) {
+        return {
+          ok: false,
+          compacted: false,
+          reason: error ?? `Unknown model: ${provider}/${modelId}`,
+        };
+      }
+      try {
+        const apiKey = await getApiKeyForModel(model, authStorage);
+        authStorage.setRuntimeApiKey(model.provider, apiKey);
+      } catch (err) {
+        return {
+          ok: false,
+          compacted: false,
+          reason: describeUnknownError(err),
+        };
+      }
+
+      await fs.mkdir(resolvedWorkspace, { recursive: true });
+      await ensureSessionHeader({
+        sessionFile: params.sessionFile,
+        sessionId: params.sessionId,
+        cwd: resolvedWorkspace,
+      });
+
+      let restoreSkillEnv: (() => void) | undefined;
+      process.chdir(resolvedWorkspace);
+      try {
+        const shouldLoadSkillEntries =
+          !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
+        const skillEntries = shouldLoadSkillEntries
+          ? loadWorkspaceSkillEntries(resolvedWorkspace)
+          : [];
+        const skillsSnapshot =
+          params.skillsSnapshot ??
+          buildWorkspaceSkillSnapshot(resolvedWorkspace, {
+            config: params.config,
+            entries: skillEntries,
+          });
+        const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const sandbox = await resolveSandboxContext({
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          workspaceDir: resolvedWorkspace,
+        });
+        restoreSkillEnv = params.skillsSnapshot
+          ? applySkillEnvOverridesFromSnapshot({
+              snapshot: params.skillsSnapshot,
+              config: params.config,
+            })
+          : applySkillEnvOverrides({
+              skills: skillEntries ?? [],
+              config: params.config,
+            });
+
+        const bootstrapFiles =
+          await loadWorkspaceBootstrapFiles(resolvedWorkspace);
+        const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+        const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
+        const tools = createClawdbotCodingTools({
+          bash: {
+            ...params.config?.agent?.bash,
+            elevated: params.bashElevated,
+          },
+          sandbox,
+          surface: params.surface,
+          sessionKey: params.sessionKey ?? params.sessionId,
+          config: params.config,
+        });
+        const machineName = await getMachineDisplayName();
+        const runtimeInfo = {
+          host: machineName,
+          os: `${os.type()} ${os.release()}`,
+          arch: os.arch(),
+          node: process.version,
+          model: `${provider}/${modelId}`,
+        };
+        const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
+        const reasoningTagHint = provider === "ollama";
+        const userTimezone = resolveUserTimezone(
+          params.config?.agent?.userTimezone,
+        );
+        const userTime = formatUserTime(new Date(), userTimezone);
+        const systemPrompt = buildSystemPrompt({
+          appendPrompt: buildAgentSystemPromptAppend({
+            workspaceDir: resolvedWorkspace,
+            defaultThinkLevel: params.thinkLevel,
+            extraSystemPrompt: params.extraSystemPrompt,
+            ownerNumbers: params.ownerNumbers,
+            reasoningTagHint,
+            runtimeInfo,
+            sandboxInfo,
+            toolNames: tools.map((tool) => tool.name),
+            userTimezone,
+            userTime,
+          }),
+          contextFiles,
+          skills: promptSkills,
+          cwd: resolvedWorkspace,
+          tools,
+        });
+
+        const sessionManager = SessionManager.open(params.sessionFile);
+        const settingsManager = SettingsManager.create(
+          resolvedWorkspace,
+          agentDir,
+        );
+
+        const builtInToolNames = new Set(["read", "bash", "edit", "write"]);
+        const builtInTools = tools.filter((t) => builtInToolNames.has(t.name));
+        const customTools = toToolDefinitions(
+          tools.filter((t) => !builtInToolNames.has(t.name)),
+        );
+
+        const { session } = await createAgentSession({
+          cwd: resolvedWorkspace,
+          agentDir,
+          authStorage,
+          modelRegistry,
+          model,
+          thinkingLevel: mapThinkingLevel(params.thinkLevel),
+          systemPrompt,
+          tools: builtInTools,
+          customTools,
+          sessionManager,
+          settingsManager,
+          skills: promptSkills,
+          contextFiles,
+        });
+
+        try {
+          const prior = await sanitizeSessionMessagesImages(
+            session.messages,
+            "session:history",
+          );
+          if (prior.length > 0) {
+            session.agent.replaceMessages(prior);
+          }
+          const result = await session.compact(params.customInstructions);
+          return {
+            ok: true,
+            compacted: true,
+            result: {
+              summary: result.summary,
+              firstKeptEntryId: result.firstKeptEntryId,
+              tokensBefore: result.tokensBefore,
+              details: result.details,
+            },
+          };
+        } finally {
+          session.dispose();
+        }
+      } catch (err) {
+        return {
+          ok: false,
+          compacted: false,
+          reason: describeUnknownError(err),
+        };
+      } finally {
+        restoreSkillEnv?.();
+        process.chdir(prevCwd);
+      }
+    }),
+  );
 }
 
 export async function runEmbeddedPiAgent(params: {
