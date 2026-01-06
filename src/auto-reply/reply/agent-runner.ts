@@ -401,8 +401,25 @@ export async function runReplyAgent(params: {
     const sanitizedPayloads = isHeartbeat
       ? payloadArray
       : payloadArray.flatMap((payload) => {
-          const text = payload.text;
-          if (!text || !text.includes("HEARTBEAT_OK")) return [payload];
+          let text = payload.text;
+
+          if (payload.isError) {
+            // Handle Bun fetch socket connection error that may indicate a context length issue
+            // Error source: https://github.com/oven-sh/bun/blob/main/src/bun.js/webcore/fetch/FetchTasklet.zig
+            const isBunFetchSocketError =
+              text ===
+              "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
+
+            if (isBunFetchSocketError) {
+              text = `⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:
+              \`\`\`
+              ${text || "Unknown error"}
+              \`\`\``;
+            }
+          }
+
+          if (!text || !text.includes("HEARTBEAT_OK"))
+            return [{ ...payload, text }];
           const stripped = stripHeartbeatToken(text, { mode: "message" });
           if (stripped.didStrip && !didLogHeartbeatStrip) {
             didLogHeartbeatStrip = true;
