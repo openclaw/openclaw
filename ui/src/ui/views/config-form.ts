@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
 import type { ConfigUiHint, ConfigUiHints } from "../types";
 
 export type ConfigFormProps = {
@@ -70,7 +70,7 @@ function renderNode(params: {
   disabled: boolean;
   showLabel?: boolean;
   onPatch: (path: Array<string | number>, value: unknown) => void;
-}) {
+}): TemplateResult | typeof nothing {
   const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
   const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
@@ -85,7 +85,95 @@ function renderNode(params: {
     </div>`;
   }
 
-  if (schema.anyOf || schema.oneOf || schema.allOf) {
+  if (schema.anyOf || schema.oneOf) {
+    const variants = schema.anyOf ?? schema.oneOf ?? [];
+    const nonNull = variants.filter(
+      (v) => !(v.type === "null" || (Array.isArray(v.type) && v.type.includes("null"))),
+    );
+
+    if (nonNull.length === 1) {
+      return renderNode({ ...params, schema: nonNull[0] });
+    }
+
+    const extractLiteral = (v: JsonSchema): unknown | undefined => {
+      if (v.const !== undefined) return v.const;
+      if (v.enum && v.enum.length === 1) return v.enum[0];
+      return undefined;
+    };
+    const literals = nonNull.map(extractLiteral);
+    const allLiterals = literals.every((v) => v !== undefined);
+
+    if (allLiterals && literals.length > 0) {
+      const currentIndex = literals.findIndex(
+        (lit) => lit === value || String(lit) === String(value),
+      );
+      return html`
+        <label class="field">
+          ${showLabel ? html`<span>${label}</span>` : nothing}
+          ${help ? html`<div class="muted">${help}</div>` : nothing}
+          <select
+            .value=${currentIndex >= 0 ? String(currentIndex) : ""}
+            ?disabled=${disabled}
+            @change=${(e: Event) => {
+              const idx = (e.target as HTMLSelectElement).value;
+              onPatch(path, idx === "" ? undefined : literals[Number(idx)]);
+            }}
+          >
+            <option value="">—</option>
+            ${literals.map(
+              (opt, i) => html`<option value=${String(i)}>${String(opt)}</option>`,
+            )}
+          </select>
+        </label>
+      `;
+    }
+
+    const primitiveTypes = ["string", "number", "integer", "boolean"];
+    const allPrimitive = nonNull.every((v) => v.type && primitiveTypes.includes(String(v.type)));
+    if (allPrimitive) {
+      const typeHint = nonNull.map((v) => v.type).join(" | ");
+      const hasBoolean = nonNull.some((v) => v.type === "boolean");
+      const hasNumber = nonNull.some((v) => v.type === "number" || v.type === "integer");
+      const isInteger = nonNull.every((v) => v.type !== "number");
+      return html`
+        <label class="field">
+          ${showLabel ? html`<span>${label}</span>` : nothing}
+          ${help ? html`<div class="muted">${help}</div>` : nothing}
+          <input
+            type="text"
+            placeholder=${typeHint}
+            .value=${value == null ? "" : String(value)}
+            ?disabled=${disabled}
+            @input=${(e: Event) => {
+              const raw = (e.target as HTMLInputElement).value;
+              if (raw === "") {
+                onPatch(path, undefined);
+                return;
+              }
+              if (hasBoolean && (raw === "true" || raw === "false")) {
+                onPatch(path, raw === "true");
+                return;
+              }
+              if (hasNumber && /^-?\d+(\.\d+)?$/.test(raw)) {
+                const num = Number(raw);
+                if (Number.isFinite(num) && (!isInteger || Number.isInteger(num))) {
+                  onPatch(path, num);
+                  return;
+                }
+              }
+              onPatch(path, raw);
+            }}
+          />
+        </label>
+      `;
+    }
+
+    return html`<div class="callout danger">
+      ${label}: unsupported schema node. Use Raw.
+    </div>`;
+  }
+
+  if (schema.allOf) {
     return html`<div class="callout danger">
       ${label}: unsupported schema node. Use Raw.
     </div>`;
@@ -182,18 +270,26 @@ function renderNode(params: {
   }
 
   if (schema.enum) {
+    const enumValues = schema.enum;
+    const currentIndex = enumValues.findIndex(
+      (v) => v === value || String(v) === String(value),
+    );
+    const unsetValue = "__unset__";
     return html`
       <label class="field">
         ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <select
-          .value=${value == null ? "" : String(value)}
+          .value=${currentIndex >= 0 ? String(currentIndex) : unsetValue}
           ?disabled=${disabled}
-          @change=${(e: Event) =>
-            onPatch(path, (e.target as HTMLSelectElement).value)}
+          @change=${(e: Event) => {
+            const idx = (e.target as HTMLSelectElement).value;
+            onPatch(path, idx === unsetValue ? undefined : enumValues[Number(idx)]);
+          }}
         >
-          ${schema.enum.map(
-            (opt) => html`<option value=${String(opt)}>${String(opt)}</option>`,
+          <option value=${unsetValue}>—</option>
+          ${enumValues.map(
+            (opt, i) => html`<option value=${String(i)}>${String(opt)}</option>`,
           )}
         </select>
       </label>
@@ -327,7 +423,7 @@ function renderMapField(params: {
   disabled: boolean;
   reservedKeys: Set<string>;
   onPatch: (path: Array<string | number>, value: unknown) => void;
-}) {
+}): TemplateResult {
   const {
     schema,
     value,
@@ -517,7 +613,8 @@ function normalizeUnion(
   schema: JsonSchema,
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
-  const variants = schema.anyOf ?? schema.oneOf ?? schema.allOf;
+  if (schema.allOf) return null;
+  const variants = schema.anyOf ?? schema.oneOf;
   if (!variants) return null;
   const values: unknown[] = [];
   const nonLiteral: JsonSchema[] = [];
@@ -568,9 +665,20 @@ function normalizeUnion(
   if (nonLiteral.length === 1) {
     const result = normalizeSchemaNode(nonLiteral[0], path);
     if (result.schema) {
-      result.schema.nullable = true;
+      result.schema.nullable = nullable || result.schema.nullable;
     }
     return result;
+  }
+
+  const primitiveTypes = ["string", "number", "integer", "boolean"];
+  const allPrimitive = nonLiteral.every(
+    (v) => v.type && primitiveTypes.includes(String(v.type)),
+  );
+  if (allPrimitive && nonLiteral.length > 0 && values.length === 0) {
+    return {
+      schema: { ...schema, nullable },
+      unsupportedPaths: [],
+    };
   }
 
   return null;

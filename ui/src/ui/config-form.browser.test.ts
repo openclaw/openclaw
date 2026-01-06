@@ -72,7 +72,7 @@ describe("config form renderer", () => {
     const select = container.querySelector("select") as HTMLSelectElement | null;
     expect(select).not.toBeNull();
     if (!select) return;
-    select.value = "token";
+    select.value = "1";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
