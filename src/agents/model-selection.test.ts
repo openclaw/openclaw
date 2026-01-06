@@ -2,7 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveConfiguredModelRef } from "./model-selection.js";
+import {
+  normalizeProviderId,
+  resolveConfiguredModelRef,
+} from "./model-selection.js";
 
 describe("resolveConfiguredModelRef", () => {
   it("parses provider/model from agent.model.primary", () => {
@@ -127,5 +130,17 @@ describe("resolveConfiguredModelRef", () => {
     });
 
     expect(resolved).toEqual({ provider: "zai", model: "glm-4.7" });
+  });
+});
+
+describe("normalizeProviderId", () => {
+  it("normalizes z.ai aliases to canonical zai", () => {
+    expect(normalizeProviderId("z.ai")).toBe("zai");
+    expect(normalizeProviderId("z-ai")).toBe("zai");
+  });
+
+  it("normalizes provider casing", () => {
+    expect(normalizeProviderId("OpenAI")).toBe("openai");
+    expect(normalizeProviderId("Z.AI")).toBe("zai");
   });
 });
