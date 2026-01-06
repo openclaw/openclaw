@@ -221,7 +221,7 @@ The agent should not assume tabs are ephemeral. It should:
 
 ## CLI quick reference (one example each)
 
-All commands accept `--profile <name>` to target a specific profile (default: `clawd`).
+All commands accept `--browser-profile <name>` to target a specific profile (default: `clawd`).
 
 Profile management:
 - `clawdbot browser profiles`

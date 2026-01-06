@@ -64,7 +64,7 @@ export function registerBrowserActionInputCommands(
     .action(async (url: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserNavigate(baseUrl, {
           url,
@@ -91,7 +91,7 @@ export function registerBrowserActionInputCommands(
     .action(async (width: number, height: number, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       if (!Number.isFinite(width) || !Number.isFinite(height)) {
         defaultRuntime.error(danger("width and height must be numbers"));
         defaultRuntime.exit(1);
@@ -130,7 +130,7 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       const refValue = typeof ref === "string" ? ref.trim() : "";
       if (!refValue) {
         defaultRuntime.error(danger("ref is required"));
@@ -179,7 +179,7 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string | undefined, text: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       const refValue = typeof ref === "string" ? ref.trim() : "";
       if (!refValue) {
         defaultRuntime.error(danger("ref is required"));
@@ -218,7 +218,7 @@ export function registerBrowserActionInputCommands(
     .action(async (key: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserAct(
           baseUrl,
@@ -248,7 +248,7 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserAct(
           baseUrl,
@@ -279,7 +279,7 @@ export function registerBrowserActionInputCommands(
     .action(async (startRef: string, endRef: string, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserAct(
           baseUrl,
@@ -311,7 +311,7 @@ export function registerBrowserActionInputCommands(
     .action(async (ref: string, values: string[], opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserAct(
           baseUrl,
@@ -350,7 +350,7 @@ export function registerBrowserActionInputCommands(
     .action(async (paths: string[], opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserArmFileChooser(baseUrl, {
           paths,
@@ -383,7 +383,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const fields = await readFields({
           fields: opts.fields,
@@ -424,7 +424,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       const accept = opts.accept ? true : opts.dismiss ? false : undefined;
       if (accept === undefined) {
         defaultRuntime.error(danger("Specify --accept or --dismiss"));
@@ -462,7 +462,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserAct(
           baseUrl,
@@ -495,7 +495,7 @@ export function registerBrowserActionInputCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       if (!opts.fn) {
         defaultRuntime.error(danger("Missing --fn"));
         defaultRuntime.exit(1);
