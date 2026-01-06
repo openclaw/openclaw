@@ -23,7 +23,13 @@ const PROVIDERS: PairingProvider[] = [
 ];
 
 function parseProvider(raw: unknown): PairingProvider {
-  const value = String(raw ?? "")
+  const value = (
+    typeof raw === "string"
+      ? raw
+      : typeof raw === "number" || typeof raw === "boolean"
+        ? String(raw)
+        : ""
+  )
     .trim()
     .toLowerCase();
   if ((PROVIDERS as string[]).includes(value)) return value as PairingProvider;
