@@ -386,20 +386,6 @@ export async function runOnboardingWizard(
           });
           return String(code);
         },
-        onManualCodeInput: isRemote
-          ? () => {
-              if (!manualCodePromise) {
-                manualCodePromise = prompter
-                  .text({
-                    message: "Paste the redirect URL (or authorization code)",
-                    validate: (value) =>
-                      value?.trim() ? undefined : "Required",
-                  })
-                  .then((value) => String(value));
-              }
-              return manualCodePromise;
-            }
-          : undefined,
         onProgress: (msg) => spin.update(msg),
       });
       spin.stop("OpenAI OAuth complete");

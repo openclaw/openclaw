@@ -14,6 +14,8 @@
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
 - Onboarding: prompt immediately for OpenAI Codex redirect URL on remote/headless logins.
+- Doctor: suggest adding the workspace memory system when missing (opt-out via `--no-workspace-suggestions`).
+- Build: fix duplicate protocol export, align Codex OAuth options, and add proper-lockfile typings.
 - Typing indicators: stop typing once the reply dispatcher drains to prevent stuck typing across Discord/Telegram/WhatsApp.
 - Typing indicators: fix a race that could keep the typing indicator stuck after quick replies. Thanks @thewilloftheshadow for PR #270.
 - Google: merge consecutive messages to satisfy strict role alternation for Google provider models. Thanks @Asleep123 for PR #266.

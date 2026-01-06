@@ -394,5 +394,4 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
-  PollParams,
 };

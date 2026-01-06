@@ -289,9 +289,16 @@ export function buildProgram() {
   program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and providers")
-    .action(async () => {
+    .option(
+      "--no-workspace-suggestions",
+      "Disable workspace memory system suggestions",
+      false,
+    )
+    .action(async (opts) => {
       try {
-        await doctorCommand(defaultRuntime);
+        await doctorCommand(defaultRuntime, {
+          workspaceSuggestions: opts.workspaceSuggestions,
+        });
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
