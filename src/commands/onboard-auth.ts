@@ -7,7 +7,7 @@ export async function writeOAuthCredentials(
   creds: OAuthCredentials,
 ): Promise<void> {
   upsertAuthProfile({
-    profileId: `${provider}:default`,
+    profileId: `${provider}:${creds.email ?? "default"}`,
     credential: {
       type: "oauth",
       provider,
