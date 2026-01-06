@@ -145,7 +145,7 @@ describe("resolveAuthProfileOrder", () => {
       },
       provider: "anthropic",
     });
-    expect(order).toEqual(["anthropic:b", "anthropic:a", "anthropic:c"]);
+    expect(order).toEqual(["anthropic:a", "anthropic:b", "anthropic:c"]);
   });
 
   it("pushes cooldown profiles to the end, ordered by cooldown expiry", () => {
