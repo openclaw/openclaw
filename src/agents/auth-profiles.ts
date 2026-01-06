@@ -258,10 +258,16 @@ export function resolveAuthProfileOrder(params: {
         .map(([profileId]) => profileId)
     : [];
   const lastGood = store.lastGood?.[provider];
-  const order =
+  const baseOrder =
     configuredOrder ??
-    (explicitProfiles.length > 0 ? explicitProfiles : undefined);
-  if (!order) return [];
+    (explicitProfiles.length > 0
+      ? explicitProfiles
+      : listProfilesForProvider(store, provider));
+  if (baseOrder.length === 0) return [];
+  const order =
+    configuredOrder && configuredOrder.length > 0
+      ? baseOrder
+      : orderProfilesByMode(baseOrder, store);
 
   const filtered = order.filter((profileId) => {
     const cred = store.profiles[profileId];
@@ -286,6 +292,20 @@ export function resolveAuthProfileOrder(params: {
     return [lastGood, ...deduped.filter((entry) => entry !== lastGood)];
   }
   return deduped;
+}
+
+function orderProfilesByMode(
+  order: string[],
+  store: AuthProfileStore,
+): string[] {
+  const scored = order.map((profileId) => {
+    const type = store.profiles[profileId]?.type;
+    const score = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
+    return { profileId, score };
+  });
+  return scored
+    .sort((a, b) => a.score - b.score)
+    .map((entry) => entry.profileId);
 }
 
 export async function resolveApiKeyForProfile(params: {

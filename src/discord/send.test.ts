@@ -108,7 +108,9 @@ describe("sendMessageDiscord", () => {
 
   it("adds missing permission hints on 50013", async () => {
     const { rest, postMock, getMock } = makeRest();
-    const perms = new PermissionsBitField([PermissionsBitField.Flags.ViewChannel]);
+    const perms = new PermissionsBitField([
+      PermissionsBitField.Flags.ViewChannel,
+    ]);
     const apiError = Object.assign(new Error("Missing Permissions"), {
       code: 50013,
       status: 403,

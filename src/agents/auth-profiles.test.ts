@@ -30,12 +30,12 @@ describe("resolveAuthProfileOrder", () => {
     },
   };
 
-  it("returns empty order without explicit config", () => {
+  it("uses stored profiles when no config exists", () => {
     const order = resolveAuthProfileOrder({
       store,
       provider: "anthropic",
     });
-    expect(order).toEqual([]);
+    expect(order).toEqual(["anthropic:default", "anthropic:work"]);
   });
 
   it("prioritizes preferred profiles", () => {
@@ -79,5 +79,30 @@ describe("resolveAuthProfileOrder", () => {
       provider: "anthropic",
     });
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+
+  it("prioritizes oauth profiles when order missing", () => {
+    const mixedStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:default": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-default",
+        },
+        "anthropic:oauth": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+    const order = resolveAuthProfileOrder({
+      store: mixedStore,
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:oauth", "anthropic:default"]);
   });
 });
