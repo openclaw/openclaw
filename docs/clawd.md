@@ -93,6 +93,8 @@ Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideal
 clawdbot setup
 ```
 
+Full workspace layout + backup guide: [`docs/agent-workspace.md`](https://docs.clawd.bot/agent-workspace)
+
 Optional: choose a different workspace with `agent.workspace` (supports `~`).
 
 ```json5

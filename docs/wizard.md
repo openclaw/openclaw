@@ -59,6 +59,7 @@ It does **not** install or change anything on the remote host.
 3) **Workspace**
    - Default `~/clawd` (configurable).
    - Seeds the workspace files needed for the agent bootstrap ritual.
+   - Full workspace layout + backup guide: [`docs/agent-workspace.md`](https://docs.clawd.bot/agent-workspace)
 
 4) **Gateway**
    - Port, bind, auth mode, tailscale exposure.

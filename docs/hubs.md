@@ -28,6 +28,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Architecture](https://docs.clawd.bot/architecture)
 - [Agent runtime](https://docs.clawd.bot/agent)
+- [Agent workspace](https://docs.clawd.bot/agent-workspace)
 - [Agent loop](https://docs.clawd.bot/agent-loop)
 - [Multi-agent routing](https://docs.clawd.bot/multi-agent)
 - [Sessions](https://docs.clawd.bot/session)

@@ -13,6 +13,8 @@ CLAWDBOT uses a single agent workspace directory (`agent.workspace`) as the agen
 
 Recommended: use `clawdbot setup` to create `~/.clawdbot/clawdbot.json` if missing and initialize the workspace files.
 
+Full workspace layout + backup guide: [`docs/agent-workspace.md`](https://docs.clawd.bot/agent-workspace)
+
 If `agent.sandbox` is enabled, non-main sessions can override this with
 per-session workspaces under `agent.sandbox.workspaceRoot` (see
 [`docs/configuration.md`](https://docs.clawd.bot/configuration)).
