@@ -6,6 +6,11 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
+import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import { loadModelCatalog } from "../agents/model-catalog.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
@@ -57,6 +62,82 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
+
+const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.2";
+
+function shouldSetOpenAICodexModel(model?: string): boolean {
+  const trimmed = model?.trim();
+  if (!trimmed) return true;
+  const normalized = trimmed.toLowerCase();
+  if (normalized.startsWith("openai-codex/")) return false;
+  if (normalized.startsWith("openai/")) return true;
+  return normalized === "gpt" || normalized === "gpt-mini";
+}
+
+function applyOpenAICodexModelDefault(
+  cfg: ClawdbotConfig,
+): { next: ClawdbotConfig; changed: boolean } {
+  if (!shouldSetOpenAICodexModel(cfg.agent?.model)) {
+    return { next: cfg, changed: false };
+  }
+  return {
+    next: {
+      ...cfg,
+      agent: {
+        ...cfg.agent,
+        model: OPENAI_CODEX_DEFAULT_MODEL,
+      },
+    },
+    changed: true,
+  };
+}
+
+async function warnIfModelConfigLooksOff(
+  config: ClawdbotConfig,
+  prompter: WizardPrompter,
+) {
+  const ref = resolveConfiguredModelRef({
+    cfg: config,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const warnings: string[] = [];
+  const catalog = await loadModelCatalog({ config, useCache: false });
+  if (catalog.length > 0) {
+    const known = catalog.some(
+      (entry) => entry.provider === ref.provider && entry.id === ref.model,
+    );
+    if (!known) {
+      warnings.push(
+        `Model not found: ${ref.provider}/${ref.model}. Update agent.model or run /models list.`,
+      );
+    }
+  }
+
+  const store = ensureAuthProfileStore();
+  const hasProfile = listProfilesForProvider(store, ref.provider).length > 0;
+  const envKey = resolveEnvApiKey(ref.provider);
+  const customKey = getCustomProviderApiKey(config, ref.provider);
+  if (!hasProfile && !envKey && !customKey) {
+    warnings.push(
+      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
+    );
+  }
+
+  if (ref.provider === "openai") {
+    const hasCodex =
+      listProfilesForProvider(store, "openai-codex").length > 0;
+    if (hasCodex) {
+      warnings.push(
+        `Detected OpenAI Codex OAuth. Consider setting agent.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
+      );
+    }
+  }
+
+  if (warnings.length > 0) {
+    await prompter.note(warnings.join("\n"), "Model check");
+  }
+}
 
 export async function runOnboardingWizard(
   opts: OnboardOptions,
@@ -287,6 +368,14 @@ export async function runOnboardingWizard(
           provider: "openai-codex",
           mode: "oauth",
         });
+        const applied = applyOpenAICodexModelDefault(nextConfig);
+        nextConfig = applied.next;
+        if (applied.changed) {
+          await prompter.note(
+            `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+            "Model configured",
+          );
+        }
       }
     } catch (err) {
       spin.stop("OpenAI OAuth failed");
@@ -379,6 +468,8 @@ export async function runOnboardingWizard(
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
   }
+
+  await warnIfModelConfigLooksOff(nextConfig, prompter);
 
   const portRaw = await prompter.text({
     message: "Gateway port",

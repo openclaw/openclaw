@@ -5,6 +5,7 @@ import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
+  listProfilesForProvider,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
@@ -81,6 +82,15 @@ export async function resolveApiKeyForProvider(params: {
   const customKey = getCustomProviderApiKey(cfg, provider);
   if (customKey) {
     return { apiKey: customKey, source: "models.json" };
+  }
+
+  if (provider === "openai") {
+    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
+    if (hasCodex) {
+      throw new Error(
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.2 (ChatGPT OAuth) or set OPENAI_API_KEY for openai/gpt-5.2.',
+      );
+    }
   }
 
   throw new Error(`No API key found for provider "${provider}".`);

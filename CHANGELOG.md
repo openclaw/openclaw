@@ -11,6 +11,7 @@
 
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
+- Onboarding: when OpenAI Codex OAuth is used, default to `openai-codex/gpt-5.2` and warn if the selected model lacks auth.
 - CLI: auto-migrate legacy config entries on command start (same behavior as gateway startup).
 - Auth: prioritize OAuth profiles but fall back to API keys when refresh fails; stored profiles now load without explicit auth order.
 - Docs: add group chat participation guidance to the AGENTS template.
@@ -27,6 +28,7 @@
 - Model: `/model list` is an alias for `/model`.
 - Model: `/model` output now includes auth source location (env/auth.json/models.json).
 - Model: avoid duplicate `missing (missing)` auth labels in `/model` list output.
+- Auth: when `openai` has no API key but Codex OAuth exists, suggest `openai-codex/gpt-5.2` vs `OPENAI_API_KEY`.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Control UI: show a reading indicator bubble while the assistant is responding.

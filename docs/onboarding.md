@@ -50,6 +50,7 @@ The macOS app should:
 - Auto-capture the callback on `http://127.0.0.1:1455/auth/callback` when possible.
 - If the callback fails, prompt the user to paste the redirect URL or code.
 - Store credentials in `~/.clawdbot/credentials/oauth.json` (same OAuth store as Anthropic).
+- Set `agent.model` to `openai-codex/gpt-5.2` when the model is unset or `openai/*`.
 
 ### Alternative: API key (instructions only)
 

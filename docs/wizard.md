@@ -49,10 +49,12 @@ It does **not** install or change anything on the remote host.
 2) **Model/Auth**
    - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
    - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
+     - Sets `agent.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
    - **API key**: stores the key for you.
    - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
-  - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agent/auth-profiles.json` (API keys + OAuth).
+   - Wizard runs a model check and warns if the configured model is unknown or missing auth.
+   - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agent/auth-profiles.json` (API keys + OAuth).
 
 3) **Workspace**
    - Default `~/clawd` (configurable).
