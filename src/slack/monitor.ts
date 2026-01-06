@@ -20,6 +20,7 @@ import {
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import type { TypingController } from "../auto-reply/reply/typing.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -499,6 +500,41 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
 
+  const setSlackThreadStatus = async (params: {
+    channelId: string;
+    threadTs?: string;
+    status: string;
+  }) => {
+    if (!params.threadTs) return;
+    const payload = {
+      token: botToken,
+      channel_id: params.channelId,
+      thread_ts: params.threadTs,
+      status: params.status,
+    };
+    const client = app.client as unknown as {
+      assistant?: {
+        threads?: {
+          setStatus?: (args: typeof payload) => Promise<unknown>;
+        };
+      };
+      apiCall?: (method: string, args: typeof payload) => Promise<unknown>;
+    };
+    try {
+      if (client.assistant?.threads?.setStatus) {
+        await client.assistant.threads.setStatus(payload);
+        return;
+      }
+      if (typeof client.apiCall === "function") {
+        await client.apiCall("assistant.threads.setStatus", payload);
+      }
+    } catch (err) {
+      logVerbose(
+        `slack status update failed for channel ${params.channelId}: ${String(err)}`,
+      );
+    }
+  };
+
   const isChannelAllowed = (params: {
     channelId?: string;
     channelName?: string;
@@ -823,6 +859,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     // Only thread replies if the incoming message was in a thread.
     const incomingThreadTs = message.thread_ts;
+    const statusThreadTs = message.thread_ts ?? message.ts;
+    const onReplyStart = async () => {
+      await setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "is typing...",
+      });
+    };
+    let typingController: TypingController | undefined;
     const dispatcher = createReplyDispatcher({
       responsePrefix: cfg.messages?.responsePrefix,
       deliver: async (payload) => {
@@ -835,10 +880,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           threadTs: incomingThreadTs,
         });
       },
+      onIdle: () => {
+        typingController?.markDispatchIdle();
+      },
       onError: (err, info) => {
         runtime.error?.(
           danger(`slack ${info.kind} reply failed: ${String(err)}`),
         );
+        void setSlackThreadStatus({
+          channelId: message.channel,
+          threadTs: statusThreadTs,
+          status: "",
+        });
       },
     });
 
@@ -846,8 +899,22 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ctx: ctxPayload,
       cfg,
       dispatcher,
+      replyOptions: {
+        onReplyStart,
+        onTypingController: (typing) => {
+          typingController = typing;
+        },
+      },
     });
-    if (!queuedFinal) return;
+    typingController?.markDispatchIdle();
+    if (!queuedFinal) {
+      await setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "",
+      });
+      return;
+    }
     if (shouldLogVerbose()) {
       const finalCount = counts.final;
       logVerbose(
