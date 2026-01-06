@@ -131,6 +131,7 @@ Example:
   - [Docs hubs (all pages linked)](https://docs.clawd.bot/hubs)
   - [FAQ](https://docs.clawd.bot/faq) ← *common questions answered*
   - [Configuration](https://docs.clawd.bot/configuration)
+  - [Updating / rollback](https://docs.clawd.bot/updating)
   - [Nix mode](https://docs.clawd.bot/nix)
   - [Clawd personal assistant setup](https://docs.clawd.bot/clawd)
   - [Skills](https://docs.clawd.bot/skills)
