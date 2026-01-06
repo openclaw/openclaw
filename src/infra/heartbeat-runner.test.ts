@@ -13,8 +13,11 @@ import {
 } from "./heartbeat-runner.js";
 
 describe("resolveHeartbeatIntervalMs", () => {
-  it("returns null when unset or invalid", () => {
-    expect(resolveHeartbeatIntervalMs({})).toBeNull();
+  it("returns default when unset", () => {
+    expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
+  });
+
+  it("returns null when invalid or zero", () => {
     expect(
       resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "0m" } } }),
     ).toBeNull();

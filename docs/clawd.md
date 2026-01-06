@@ -18,7 +18,7 @@ You’re putting an agent in a position to:
 Start conservative:
 - Always set `whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Keep heartbeats disabled until you trust the setup (omit `agent.heartbeat` or set `agent.heartbeat.every: "0m"`).
+- Heartbeats now default to every 30 minutes. Disable until you trust the setup by setting `agent.heartbeat.every: "0m"`.
 
 ## Prerequisites
 
@@ -161,7 +161,9 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-When `agent.heartbeat.every` is set to a positive interval, CLAWDBOT periodically runs a heartbeat prompt (default: `HEARTBEAT`).
+By default, CLAWDBOT runs a heartbeat every 30 minutes with the prompt:
+`Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
+Set `agent.heartbeat.every: "0m"` to disable.
 
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agent.heartbeat.ackMaxChars`), CLAWDBOT suppresses outbound delivery for that heartbeat.
 

@@ -10,6 +10,7 @@ import {
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_PROMPT,
+  resolveHeartbeatPrompt,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -339,7 +340,7 @@ export async function runWebHeartbeatOnce(opts: {
 
     const replyResult = await replyResolver(
       {
-        Body: HEARTBEAT_PROMPT,
+        Body: resolveHeartbeatPrompt(cfg.agent?.heartbeat?.prompt),
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,

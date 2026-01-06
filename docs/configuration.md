@@ -786,13 +786,16 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 `ZAI_API_KEY` (or legacy `Z_AI_API_KEY`) in the environment.
 
 `agent.heartbeat` configures periodic heartbeat runs:
-- `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set
-  `0m` to disable.
+- `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Default:
+  `30m`. Set `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
-- `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `imessage`, `none`). Default: `last`.
-- `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
-- `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
+- `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
+- `to`: optional recipient override (provider-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
+- `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
+
+Heartbeats run full agent turns. Shorter intervals burn more tokens; adjust `every`
+and/or `model` accordingly.
 
 `agent.bash` configures background bash defaults:
 - `backgroundMs`: time before auto-background (ms, default 10000)

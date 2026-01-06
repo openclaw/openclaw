@@ -1,7 +1,8 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  HEARTBEAT_PROMPT,
+  DEFAULT_HEARTBEAT_EVERY,
+  resolveHeartbeatPrompt as resolveHeartbeatPromptText,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
@@ -83,7 +84,8 @@ export function resolveHeartbeatIntervalMs(
   cfg: ClawdbotConfig,
   overrideEvery?: string,
 ) {
-  const raw = overrideEvery ?? cfg.agent?.heartbeat?.every;
+  const raw =
+    overrideEvery ?? cfg.agent?.heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY;
   if (!raw) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
@@ -98,9 +100,7 @@ export function resolveHeartbeatIntervalMs(
 }
 
 export function resolveHeartbeatPrompt(cfg: ClawdbotConfig) {
-  const raw = cfg.agent?.heartbeat?.prompt;
-  const trimmed = typeof raw === "string" ? raw.trim() : "";
-  return trimmed || HEARTBEAT_PROMPT;
+  return resolveHeartbeatPromptText(cfg.agent?.heartbeat?.prompt);
 }
 
 function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig) {

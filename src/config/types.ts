@@ -853,7 +853,7 @@ export type ClawdbotConfig = {
     typingIntervalSeconds?: number;
     /** Periodic background heartbeat runs. */
     heartbeat?: {
-      /** Heartbeat interval (duration string, default unit: minutes). */
+      /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
@@ -869,7 +869,7 @@ export type ClawdbotConfig = {
         | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
-      /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
+      /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time."). */
       prompt?: string;
       /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
       ackMaxChars?: number;

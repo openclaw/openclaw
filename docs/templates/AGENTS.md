@@ -115,7 +115,12 @@ Skills provide your tools. When you need one, check its `SKILL.md`. Keep local n
 
 ## 💓 Heartbeats - Be Proactive!
 
-When you receive a `HEARTBEAT` message, don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
+When you receive a heartbeat poll (message matches the configured heartbeat prompt), don't just reply `HEARTBEAT_OK` every time. Use heartbeats productively!
+
+Default heartbeat prompt:
+`Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
+
+You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small.
 
 **Things to check (rotate through these, 2-4 times per day):**
 - **Emails** - Any urgent unread messages?

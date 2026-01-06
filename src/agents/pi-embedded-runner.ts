@@ -12,6 +12,7 @@ import {
   SettingsManager,
   type Skill,
 } from "@mariozechner/pi-coding-agent";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -469,6 +470,9 @@ export async function compactEmbeddedPiSession(params: {
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
+            heartbeatPrompt: resolveHeartbeatPrompt(
+              params.config?.agent?.heartbeat?.prompt,
+            ),
             runtimeInfo,
             sandboxInfo,
             toolNames: tools.map((tool) => tool.name),
@@ -765,6 +769,9 @@ export async function runEmbeddedPiAgent(params: {
               extraSystemPrompt: params.extraSystemPrompt,
               ownerNumbers: params.ownerNumbers,
               reasoningTagHint,
+              heartbeatPrompt: resolveHeartbeatPrompt(
+                params.config?.agent?.heartbeat?.prompt,
+              ),
               runtimeInfo,
               sandboxInfo,
               toolNames: tools.map((tool) => tool.name),

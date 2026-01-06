@@ -115,7 +115,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Heartbeats
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
 - **Agent heartbeat** is global (`agent.heartbeat.*`) and runs in the main session.
-  - Uses `HEARTBEAT` prompt + `HEARTBEAT_OK` skip behavior.
+  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) + `HEARTBEAT_OK` skip behavior.
   - Delivery defaults to the last used provider (or configured target).
 
 ## Reconnect behavior

@@ -38,7 +38,7 @@ read_when:
 - Elevated mode docs live in [`docs/elevated.md`](https://docs.clawd.bot/elevated).
 
 ## Heartbeats
-- Heartbeat probe body is `HEARTBEAT`. Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
+- Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).
 
 ## Web chat UI
 - The web chat thinking selector mirrors the session's stored level from the inbound session store/config when the page loads.

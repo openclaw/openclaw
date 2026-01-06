@@ -14,7 +14,7 @@ Last updated: 2025-12-13
 ## Context
 
 Clawdbot already has:
-- A **gateway heartbeat runner** that runs the agent with `HEARTBEAT` and suppresses `HEARTBEAT_OK` ([`src/infra/heartbeat-runner.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/heartbeat-runner.ts)).
+- A **gateway heartbeat runner** that runs the agent with the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) and suppresses `HEARTBEAT_OK` ([`src/infra/heartbeat-runner.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/heartbeat-runner.ts)).
 - A lightweight, in-memory **system event queue** (`enqueueSystemEvent`) that is injected into the next **main session** turn (`drainSystemEvents` in [`src/auto-reply/reply.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/auto-reply/reply.ts)).
 - A WebSocket **Gateway** daemon that is intended to be always-on ([`docs/gateway.md`](https://docs.clawd.bot/gateway)).
 

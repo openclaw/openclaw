@@ -23,9 +23,11 @@ describe("ensureAgentWorkspace", () => {
 
     const identity = path.join(path.resolve(nested), "IDENTITY.md");
     const user = path.join(path.resolve(nested), "USER.md");
+    const heartbeat = path.join(path.resolve(nested), "HEARTBEAT.md");
     const bootstrap = path.join(path.resolve(nested), "BOOTSTRAP.md");
     await expect(fs.stat(identity)).resolves.toBeDefined();
     await expect(fs.stat(user)).resolves.toBeDefined();
+    await expect(fs.stat(heartbeat)).resolves.toBeDefined();
     await expect(fs.stat(bootstrap)).resolves.toBeDefined();
   });
 
