@@ -31,12 +31,12 @@ export function resolveBrewPathDirs(opts?: {
   }
 
   // Linuxbrew defaults.
+  dirs.push(path.join(homeDir, ".linuxbrew", "bin"));
+  dirs.push(path.join(homeDir, ".linuxbrew", "sbin"));
   dirs.push(
     "/home/linuxbrew/.linuxbrew/bin",
     "/home/linuxbrew/.linuxbrew/sbin",
   );
-  dirs.push(path.join(homeDir, ".linuxbrew", "bin"));
-  dirs.push(path.join(homeDir, ".linuxbrew", "sbin"));
 
   // macOS defaults (also used by some Linux setups).
   dirs.push("/opt/homebrew/bin", "/usr/local/bin");
@@ -60,8 +60,8 @@ export function resolveBrewExecutable(opts?: {
   if (prefix) candidates.push(path.join(prefix, "bin", "brew"));
 
   // Linuxbrew defaults.
-  candidates.push("/home/linuxbrew/.linuxbrew/bin/brew");
   candidates.push(path.join(homeDir, ".linuxbrew", "bin", "brew"));
+  candidates.push("/home/linuxbrew/.linuxbrew/bin/brew");
 
   // macOS defaults.
   candidates.push("/opt/homebrew/bin/brew", "/usr/local/bin/brew");
