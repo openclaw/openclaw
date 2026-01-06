@@ -77,6 +77,8 @@ export type AgentElevatedAllowFromConfig = {
 };
 
 export type WhatsAppConfig = {
+  /** Optional per-account WhatsApp configuration (multi-account). */
+  accounts?: Record<string, WhatsAppAccountConfig>;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
   /** Optional allowlist for WhatsApp group senders (E.164). */
@@ -89,6 +91,23 @@ export type WhatsAppConfig = {
    */
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+    }
+  >;
+};
+
+export type WhatsAppAccountConfig = {
+  /** If false, do not start this WhatsApp account provider. Default: true. */
+  enabled?: boolean;
+  /** Override auth directory (Baileys multi-file auth state). */
+  authDir?: string;
+  allowFrom?: string[];
+  groupAllowFrom?: string[];
+  groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
   groups?: Record<
     string,
@@ -488,6 +507,37 @@ export type RoutingConfig = {
     timeoutSeconds?: number;
   };
   groupChat?: GroupChatConfig;
+  /** Default agent id when no binding matches. Default: "main". */
+  defaultAgentId?: string;
+  agentToAgent?: {
+    /** Enable agent-to-agent messaging tools. Default: false. */
+    enabled?: boolean;
+    /** Allowlist of agent ids or patterns (implementation-defined). */
+    allow?: string[];
+  };
+  agents?: Record<
+    string,
+    {
+      workspace?: string;
+      agentDir?: string;
+      model?: string;
+      sandbox?: {
+        mode?: "off" | "non-main" | "all";
+        perSession?: boolean;
+        workspaceRoot?: string;
+      };
+    }
+  >;
+  bindings?: Array<{
+    agentId: string;
+    match: {
+      surface: string;
+      surfaceAccountId?: string;
+      peer?: { kind: "dm" | "group" | "channel"; id: string };
+      guildId?: string;
+      teamId?: string;
+    };
+  }>;
   queue?: {
     mode?: QueueMode;
     bySurface?: QueueModeBySurface;
@@ -836,6 +886,12 @@ export type ClawdbotConfig = {
     sandbox?: {
       /** Enable sandboxing for sessions. */
       mode?: "off" | "non-main" | "all";
+      /**
+       * Session tools visibility for sandboxed sessions.
+       * - "spawned": only allow session tools to target sessions spawned from this session (default)
+       * - "all": allow session tools to target any session
+       */
+      sessionToolsVisibility?: "spawned" | "all";
       /** Use one container per session (recommended for hard isolation). */
       perSession?: boolean;
       /** Root directory for sandbox workspaces. */

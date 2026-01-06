@@ -556,6 +556,7 @@ export function createClawdbotCodingTools(options?: {
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
       agentSurface: options?.surface,
+      sandboxed: !!sandbox,
       config: options?.config,
     }),
   ];

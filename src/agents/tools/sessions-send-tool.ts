@@ -33,6 +33,7 @@ const SessionsSendToolSchema = Type.Object({
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
   agentSurface?: string;
+  sandboxed?: boolean;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -47,11 +48,64 @@ export function createSessionsSendTool(opts?: {
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const visibility =
+        cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+      const requesterInternalKey =
+        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
+          ? resolveInternalSessionKey({
+              key: opts.agentSessionKey,
+              alias,
+              mainKey,
+            })
+          : undefined;
       const resolvedKey = resolveInternalSessionKey({
         key: sessionKey,
         alias,
         mainKey,
       });
+      const restrictToSpawned =
+        opts?.sandboxed === true &&
+        visibility === "spawned" &&
+        requesterInternalKey &&
+        !requesterInternalKey.toLowerCase().startsWith("subagent:");
+      if (restrictToSpawned) {
+        try {
+          const list = (await callGateway({
+            method: "sessions.list",
+            params: {
+              includeGlobal: false,
+              includeUnknown: false,
+              limit: 500,
+              spawnedBy: requesterInternalKey,
+            },
+          })) as { sessions?: Array<Record<string, unknown>> };
+          const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+          const ok = sessions.some((entry) => entry?.key === resolvedKey);
+          if (!ok) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
+              sessionKey: resolveDisplaySessionKey({
+                key: sessionKey,
+                alias,
+                mainKey,
+              }),
+            });
+          }
+        } catch {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
+            sessionKey: resolveDisplaySessionKey({
+              key: sessionKey,
+              alias,
+              mainKey,
+            }),
+          });
+        }
+      }
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" &&
         Number.isFinite(params.timeoutSeconds)

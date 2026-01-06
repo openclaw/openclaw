@@ -13,6 +13,7 @@ Primary goals:
 - Parallelize “research / long task / slow tool” work without blocking the main run.
 - Keep sub-agents isolated by default (session separation + optional sandboxing).
 - Keep the tool surface hard to misuse: sub-agents do **not** get session tools by default.
+- Avoid nested fan-out: sub-agents cannot spawn sub-agents.
 
 ## Tool
 
@@ -69,4 +70,3 @@ Sub-agents use a dedicated in-process queue lane:
 
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending “announce back” work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
-

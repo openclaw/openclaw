@@ -311,6 +311,7 @@ export const SessionsListParamsSchema = Type.Object(
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    spawnedBy: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -322,6 +323,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),

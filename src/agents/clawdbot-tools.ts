@@ -17,6 +17,7 @@ export function createClawdbotTools(options?: {
   browserControlUrl?: string;
   agentSessionKey?: string;
   agentSurface?: string;
+  sandboxed?: boolean;
   config?: ClawdbotConfig;
 }): AnyAgentTool[] {
   const imageTool = createImageTool({ config: options?.config });
@@ -28,15 +29,23 @@ export function createClawdbotTools(options?: {
     createDiscordTool(),
     createSlackTool(),
     createGatewayTool(),
-    createSessionsListTool(),
-    createSessionsHistoryTool(),
+    createSessionsListTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+    }),
+    createSessionsHistoryTool({
+      agentSessionKey: options?.agentSessionKey,
+      sandboxed: options?.sandboxed,
+    }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
       agentSurface: options?.agentSurface,
+      sandboxed: options?.sandboxed,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentSurface: options?.agentSurface,
+      sandboxed: options?.sandboxed,
     }),
     ...(imageTool ? [imageTool] : []),
   ];

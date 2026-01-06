@@ -160,6 +160,7 @@ async function runSubagentAnnounceFlow(params: {
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
   agentSurface?: string;
+  sandboxed?: boolean;
 }): AnyAgentTool {
   return {
     label: "Sessions",
@@ -185,6 +186,15 @@ export function createSessionsSpawnTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const requesterSessionKey = opts?.agentSessionKey;
+      if (
+        typeof requesterSessionKey === "string" &&
+        requesterSessionKey.trim().toLowerCase().startsWith("subagent:")
+      ) {
+        return jsonResult({
+          status: "forbidden",
+          error: "sessions_spawn is not allowed from sub-agent sessions",
+        });
+      }
       const requesterInternalKey = requesterSessionKey
         ? resolveInternalSessionKey({
             key: requesterSessionKey,
@@ -199,6 +209,17 @@ export function createSessionsSpawnTool(opts?: {
       });
 
       const childSessionKey = `subagent:${crypto.randomUUID()}`;
+      if (opts?.sandboxed === true) {
+        try {
+          await callGateway({
+            method: "sessions.patch",
+            params: { key: childSessionKey, spawnedBy: requesterInternalKey },
+            timeoutMs: 10_000,
+          });
+        } catch {
+          // best-effort; scoping relies on this metadata but spawning still works without it
+        }
+      }
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
         requesterSurface: opts?.agentSurface,

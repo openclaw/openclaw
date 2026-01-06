@@ -349,6 +349,52 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               }
             : { sessionId: randomUUID(), updatedAt: now };
 
+          if ("spawnedBy" in p) {
+            const raw = p.spawnedBy;
+            if (raw === null) {
+              if (existing?.spawnedBy) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "spawnedBy cannot be cleared once set",
+                  },
+                };
+              }
+            } else if (raw !== undefined) {
+              const trimmed = String(raw).trim();
+              if (!trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "invalid spawnedBy: empty",
+                  },
+                };
+              }
+              if (!key.startsWith("subagent:")) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message:
+                      "spawnedBy is only supported for subagent:* sessions",
+                  },
+                };
+              }
+              if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "spawnedBy cannot be changed once set",
+                  },
+                };
+              }
+              next.spawnedBy = trimmed;
+            }
+          }
+
           if ("thinkingLevel" in p) {
             const raw = p.thinkingLevel;
             if (raw === null) {
