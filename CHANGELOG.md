@@ -19,6 +19,7 @@
 - Configure: add OpenAI Codex (ChatGPT OAuth) auth choice (align with onboarding).
 - Doctor: suggest adding the workspace memory system when missing (opt-out via `--no-workspace-suggestions`).
 - Build: fix duplicate protocol export, align Codex OAuth options, and add proper-lockfile typings.
+- Build: install Bun in the Dockerfile so `pnpm build` can run Bun scripts. Thanks @loukotal for PR #284.
 - Typing indicators: stop typing once the reply dispatcher drains to prevent stuck typing across Discord/Telegram/WhatsApp.
 - Typing indicators: fix a race that could keep the typing indicator stuck after quick replies. Thanks @thewilloftheshadow for PR #270.
 - Google: merge consecutive messages to satisfy strict role alternation for Google provider models. Thanks @Asleep123 for PR #266.
