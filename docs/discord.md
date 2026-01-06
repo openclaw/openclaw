@@ -155,6 +155,7 @@ Notes:
   discord: {
     enabled: true,
     token: "abc.123",
+    groupPolicy: "open",
     mediaMaxMb: 8,
     actions: {
       reactions: true,
@@ -210,6 +211,7 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - `dm.allowFrom`: DM allowlist (user ids or names). Omit or set to `["*"]` to allow any DM sender.
 - `dm.groupEnabled`: enable group DMs (default `false`).
 - `dm.groupChannels`: optional allowlist for group DM channel ids or slugs.
+- `groupPolicy`: controls guild channel handling (`open|disabled|allowlist`); `allowlist` requires channel allowlists.
 - `guilds`: per-guild rules keyed by guild id (preferred) or slug.
 - `guilds."*"`: default per-guild settings applied when no explicit entry exists.
 - `guilds.<id>.slug`: optional friendly slug used for display names.

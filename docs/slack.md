@@ -145,6 +145,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     "enabled": true,
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
+    "groupPolicy": "open",
     "dm": {
       "enabled": true,
       "allowFrom": ["U123", "U456", "*"],
@@ -187,6 +188,10 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
+
+## Group policy
+- `slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).
+- `allowlist` requires channels to be listed in `slack.channels`.
 
 ## Delivery targets
 Use these with cron/CLI sends:

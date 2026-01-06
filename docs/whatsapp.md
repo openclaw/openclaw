@@ -49,6 +49,8 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Direct chats use E.164; groups use group JID.
 - **Allowlist**: `whatsapp.allowFrom` enforced for direct chats only.
   - If `whatsapp.allowFrom` is empty, default allowlist = self number (self-chat mode).
+- **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).
+  - `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
@@ -69,6 +71,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Groups
 - Groups map to `whatsapp:group:<jid>` sessions.
+- Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `open`).
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
@@ -118,6 +121,8 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Config quick map
 - `whatsapp.allowFrom` (DM allowlist).
+- `whatsapp.groupAllowFrom` (group sender allowlist).
+- `whatsapp.groupPolicy` (group policy).
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`

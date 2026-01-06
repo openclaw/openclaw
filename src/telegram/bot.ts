@@ -86,6 +86,7 @@ export type TelegramBotOptions = {
   runtime?: RuntimeEnv;
   requireMention?: boolean;
   allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
@@ -111,14 +112,46 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
-  const normalizedAllowFrom = (allowFrom ?? [])
-    .map((value) => String(value).trim())
-    .filter(Boolean)
-    .map((value) => value.replace(/^(telegram|tg):/i, ""));
-  const normalizedAllowFromLower = normalizedAllowFrom.map((value) =>
-    value.toLowerCase(),
-  );
-  const hasAllowFromWildcard = normalizedAllowFrom.includes("*");
+  const groupAllowFrom =
+    opts.groupAllowFrom ??
+    cfg.telegram?.groupAllowFrom ??
+    (cfg.telegram?.allowFrom && cfg.telegram.allowFrom.length > 0
+      ? cfg.telegram.allowFrom
+      : undefined) ??
+    (opts.allowFrom && opts.allowFrom.length > 0 ? opts.allowFrom : undefined);
+  const normalizeAllowFrom = (list?: Array<string | number>) => {
+    const entries = (list ?? [])
+      .map((value) => String(value).trim())
+      .filter(Boolean);
+    const hasWildcard = entries.includes("*");
+    const normalized = entries
+      .filter((value) => value !== "*")
+      .map((value) => value.replace(/^(telegram|tg):/i, ""));
+    const normalizedLower = normalized.map((value) => value.toLowerCase());
+    return {
+      entries: normalized,
+      entriesLower: normalizedLower,
+      hasWildcard,
+      hasEntries: entries.length > 0,
+    };
+  };
+  const isSenderAllowed = (params: {
+    allow: ReturnType<typeof normalizeAllowFrom>;
+    senderId?: string;
+    senderUsername?: string;
+  }) => {
+    const { allow, senderId, senderUsername } = params;
+    if (!allow.hasEntries) return true;
+    if (allow.hasWildcard) return true;
+    if (senderId && allow.entries.includes(senderId)) return true;
+    const username = senderUsername?.toLowerCase();
+    if (!username) return false;
+    return allow.entriesLower.some(
+      (entry) => entry === username || entry === `@${username}`,
+    );
+  };
+  const dmAllow = normalizeAllowFrom(allowFrom);
+  const groupAllow = normalizeAllowFrom(groupAllowFrom);
   const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
@@ -160,11 +193,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     };
 
     // allowFrom for direct chats
-    if (!isGroup && normalizedAllowFrom.length > 0) {
+    if (!isGroup && dmAllow.hasEntries) {
       const candidate = String(chatId);
-      const permitted =
-        hasAllowFromWildcard || normalizedAllowFrom.includes(candidate);
-      if (!permitted) {
+      if (!isSenderAllowed({ allow: dmAllow, senderId: candidate })) {
         logVerbose(
           `Blocked unauthorized telegram sender ${candidate} (not in allowFrom)`,
         );
@@ -173,20 +204,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
 
     const botUsername = primaryCtx.me?.username?.toLowerCase();
-    const allowFromList = normalizedAllowFrom;
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const senderUsername = msg.from?.username ?? "";
-    const senderUsernameLower = senderUsername.toLowerCase();
-    const commandAuthorized =
-      allowFromList.length === 0 ||
-      hasAllowFromWildcard ||
-      (senderId && allowFromList.includes(senderId)) ||
-      (senderUsername &&
-        normalizedAllowFromLower.some(
-          (entry) =>
-            entry === senderUsernameLower ||
-            entry === `@${senderUsernameLower}`,
-        ));
+    const commandAuthorized = isSenderAllowed({
+      allow: isGroup ? groupAllow : dmAllow,
+      senderId,
+      senderUsername,
+    });
     const wasMentioned =
       (Boolean(botUsername) && hasBotMention(msg, botUsername)) ||
       matchesMentionPatterns(msg.text ?? msg.caption ?? "", mentionRegexes);
@@ -388,7 +412,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         // Group policy filtering: controls how group messages are handled
         // - "open" (default): groups bypass allowFrom, only mention-gating applies
         // - "disabled": block all group messages entirely
-        // - "allowlist": only allow group messages from senders in allowFrom
+        // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
         const groupPolicy = cfg.telegram?.groupPolicy ?? "open";
         if (groupPolicy === "disabled") {
           logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
@@ -403,18 +427,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             );
             return;
           }
-          const senderIdAllowed = normalizedAllowFrom.includes(
-            String(senderId),
-          );
-          // Also check username if available (with or without @ prefix)
-          const senderUsername = msg.from?.username?.toLowerCase();
-          const usernameAllowed =
-            senderUsername != null &&
-            normalizedAllowFromLower.some(
-              (value) =>
-                value === senderUsername || value === `@${senderUsername}`,
+          if (!groupAllow.hasEntries) {
+            logVerbose(
+              "Blocked telegram group message (groupPolicy: allowlist, no groupAllowFrom)",
             );
-          if (!hasAllowFromWildcard && !senderIdAllowed && !usernameAllowed) {
+            return;
+          }
+          const senderUsername = msg.from?.username ?? "";
+          if (
+            !isSenderAllowed({
+              allow: groupAllow,
+              senderId: String(senderId),
+              senderUsername,
+            })
+          ) {
             logVerbose(
               `Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`,
             );

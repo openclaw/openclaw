@@ -55,6 +55,7 @@ export type MonitorSignalOpts = {
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
   allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
   mediaMaxMb?: number;
 };
 
@@ -97,6 +98,17 @@ function resolveAllowFrom(opts: MonitorSignalOpts): string[] {
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
+function resolveGroupAllowFrom(opts: MonitorSignalOpts): string[] {
+  const cfg = loadConfig();
+  const raw =
+    opts.groupAllowFrom ??
+    cfg.signal?.groupAllowFrom ??
+    (cfg.signal?.allowFrom && cfg.signal.allowFrom.length > 0
+      ? cfg.signal.allowFrom
+      : []);
+  return raw.map((entry) => String(entry).trim()).filter(Boolean);
+}
+
 function isAllowedSender(sender: string, allowFrom: string[]): boolean {
   if (allowFrom.length === 0) return true;
   if (allowFrom.includes("*")) return true;
@@ -105,6 +117,18 @@ function isAllowedSender(sender: string, allowFrom: string[]): boolean {
     .map((entry) => normalizeE164(entry));
   const normalizedSender = normalizeE164(sender);
   return normalizedAllow.includes(normalizedSender);
+}
+
+export function isSignalGroupAllowed(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  allowFrom: string[];
+  sender: string;
+}): boolean {
+  const { groupPolicy, allowFrom, sender } = params;
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
+  if (allowFrom.length === 0) return false;
+  return isAllowedSender(sender, allowFrom);
 }
 
 async function waitForSignalDaemonReady(params: {
@@ -222,6 +246,8 @@ export async function monitorSignalProvider(
   const baseUrl = resolveBaseUrl(opts);
   const account = resolveAccount(opts);
   const allowFrom = resolveAllowFrom(opts);
+  const groupAllowFrom = resolveGroupAllowFrom(opts);
+  const groupPolicy = cfg.signal?.groupPolicy ?? "open";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.signal?.mediaMaxMb ?? 8) * 1024 * 1024;
   const ignoreAttachments =
@@ -288,15 +314,37 @@ export async function monitorSignalProvider(
       if (account && normalizeE164(sender) === normalizeE164(account)) {
         return;
       }
-      const commandAuthorized = isAllowedSender(sender, allowFrom);
-      if (!commandAuthorized) {
-        logVerbose(`Blocked signal sender ${sender} (not in allowFrom)`);
-        return;
-      }
-
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
+      if (isGroup && groupPolicy === "disabled") {
+        logVerbose("Blocked signal group message (groupPolicy: disabled)");
+        return;
+      }
+      if (isGroup && groupPolicy === "allowlist") {
+        if (groupAllowFrom.length === 0) {
+          logVerbose(
+            "Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)",
+          );
+          return;
+        }
+        if (!isAllowedSender(sender, groupAllowFrom)) {
+          logVerbose(
+            `Blocked signal group sender ${sender} (not in groupAllowFrom)`,
+          );
+          return;
+        }
+      }
+
+      const commandAuthorized = isGroup
+        ? groupAllowFrom.length > 0
+          ? isAllowedSender(sender, groupAllowFrom)
+          : true
+        : isAllowedSender(sender, allowFrom);
+      if (!isGroup && !commandAuthorized) {
+        logVerbose(`Blocked signal sender ${sender} (not in allowFrom)`);
+        return;
+      }
       const messageText = (dataMessage.message ?? "").trim();
 
       let mediaPath: string | undefined;

@@ -266,10 +266,13 @@ describe("monitorIMessageProvider", () => {
     );
   });
 
-  it("honors allowFrom entries", async () => {
+  it("honors group allowlist when groupPolicy is allowlist", async () => {
     config = {
       ...config,
-      imessage: { allowFrom: ["chat_id:101"] },
+      imessage: {
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["chat_id:101"],
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -280,6 +283,35 @@ describe("monitorIMessageProvider", () => {
         message: {
           id: 3,
           chat_id: 202,
+          sender: "+15550003333",
+          is_from_me: false,
+          text: "@clawd hi",
+          is_group: true,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks group messages when groupPolicy is disabled", async () => {
+    config = {
+      ...config,
+      imessage: { groupPolicy: "disabled" },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 10,
+          chat_id: 303,
           sender: "+15550003333",
           is_from_me: false,
           text: "@clawd hi",

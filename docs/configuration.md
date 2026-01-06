@@ -186,8 +186,9 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 
 ### `whatsapp.allowFrom`
 
-Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (DMs only).
+Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (**DMs only**).
 If empty, the default allowlist is your own WhatsApp number (self-chat mode).
+For groups, use `whatsapp.groupPolicy` + `whatsapp.groupAllowFrom`.
 
 ```json5
 {
@@ -236,6 +237,51 @@ To respond **only** to specific text triggers (ignoring native @-mentions):
   }
 }
 ```
+
+### Group policy (per provider)
+
+Use `*.groupPolicy` to control whether group/room messages are accepted at all:
+
+```json5
+{
+  whatsapp: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15551234567"]
+  },
+  telegram: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["tg:123456789", "@alice"]
+  },
+  signal: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15551234567"]
+  },
+  imessage: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["chat_id:123"]
+  },
+  discord: {
+    groupPolicy: "allowlist",
+    guilds: {
+      "GUILD_ID": {
+        channels: { help: { allow: true } }
+      }
+    }
+  },
+  slack: {
+    groupPolicy: "allowlist",
+    channels: { "#general": { allow: true } }
+  }
+}
+```
+
+Notes:
+- `"open"` (default): groups bypass allowlists; mention-gating still applies.
+- `"disabled"`: block all group/room messages.
+- `"allowlist"`: only allow groups/rooms that match the configured allowlist.
+- WhatsApp/Telegram/Signal/iMessage use `groupAllowFrom` (fallback: explicit `allowFrom`).
+- Discord/Slack use channel allowlists (`discord.guilds.*.channels`, `slack.channels`).
+- Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
 
 ### `routing.queue`
 

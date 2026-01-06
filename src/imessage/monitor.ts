@@ -52,6 +52,7 @@ export type MonitorIMessageOpts = {
   cliPath?: string;
   dbPath?: string;
   allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
   includeAttachments?: boolean;
   mediaMaxMb?: number;
   requireMention?: boolean;
@@ -72,6 +73,17 @@ function resolveRuntime(opts: MonitorIMessageOpts): RuntimeEnv {
 function resolveAllowFrom(opts: MonitorIMessageOpts): string[] {
   const cfg = loadConfig();
   const raw = opts.allowFrom ?? cfg.imessage?.allowFrom ?? [];
+  return raw.map((entry) => String(entry).trim()).filter(Boolean);
+}
+
+function resolveGroupAllowFrom(opts: MonitorIMessageOpts): string[] {
+  const cfg = loadConfig();
+  const raw =
+    opts.groupAllowFrom ??
+    cfg.imessage?.groupAllowFrom ??
+    (cfg.imessage?.allowFrom && cfg.imessage.allowFrom.length > 0
+      ? cfg.imessage.allowFrom
+      : []);
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
@@ -116,6 +128,8 @@ export async function monitorIMessageProvider(
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "imessage");
   const allowFrom = resolveAllowFrom(opts);
+  const groupAllowFrom = resolveGroupAllowFrom(opts);
+  const groupPolicy = cfg.imessage?.groupPolicy ?? "open";
   const mentionRegexes = buildMentionRegexes(cfg);
   const includeAttachments =
     opts.includeAttachments ?? cfg.imessage?.includeAttachments ?? false;
@@ -140,12 +154,37 @@ export async function monitorIMessageProvider(
 
     const groupId = isGroup ? String(chatId) : undefined;
     if (isGroup) {
-      const groupPolicy = resolveProviderGroupPolicy({
+      if (groupPolicy === "disabled") {
+        logVerbose("Blocked iMessage group message (groupPolicy: disabled)");
+        return;
+      }
+      if (groupPolicy === "allowlist") {
+        if (groupAllowFrom.length === 0) {
+          logVerbose(
+            "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
+          );
+          return;
+        }
+        const allowed = isAllowedIMessageSender({
+          allowFrom: groupAllowFrom,
+          sender,
+          chatId: chatId ?? undefined,
+          chatGuid,
+          chatIdentifier,
+        });
+        if (!allowed) {
+          logVerbose(
+            `Blocked iMessage sender ${sender} (not in groupAllowFrom)`,
+          );
+          return;
+        }
+      }
+      const groupListPolicy = resolveProviderGroupPolicy({
         cfg,
         surface: "imessage",
         groupId,
       });
-      if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+      if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
         logVerbose(
           `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
         );
@@ -153,14 +192,14 @@ export async function monitorIMessageProvider(
       }
     }
 
-    const commandAuthorized = isAllowedIMessageSender({
+    const dmAuthorized = isAllowedIMessageSender({
       allowFrom,
       sender,
       chatId: chatId ?? undefined,
       chatGuid,
       chatIdentifier,
     });
-    if (!commandAuthorized) {
+    if (!isGroup && !dmAuthorized) {
       logVerbose(`Blocked iMessage sender ${sender} (not in allowFrom)`);
       return;
     }
@@ -177,6 +216,17 @@ export async function monitorIMessageProvider(
       overrideOrder: "before-config",
     });
     const canDetectMention = mentionRegexes.length > 0;
+    const commandAuthorized = isGroup
+      ? groupAllowFrom.length > 0
+        ? isAllowedIMessageSender({
+            allowFrom: groupAllowFrom,
+            sender,
+            chatId: chatId ?? undefined,
+            chatGuid,
+            chatIdentifier,
+          })
+        : true
+      : dmAuthorized;
     const shouldBypassMention =
       isGroup &&
       requireMention &&

@@ -25,7 +25,9 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
      - If you need a different public port/host, set `telegram.webhookUrl` to the externally reachable URL and use a reverse proxy to forward to `:8787`.
 4) Direct chats: user sends the first message; all subsequent turns land in the shared `main` session (default, no extra config).
 5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>`. When `telegram.groups` is set, it becomes a group allowlist (use `"*"` to allow all). Mention/command gating defaults come from `telegram.groups`.
-6) Optional allowlist: use `telegram.allowFrom` for direct chats by chat id (`123456789`, `telegram:123456789`, or `tg:123456789`; prefixes are case-insensitive).
+6) Optional allowlist:
+   - Direct chats: `telegram.allowFrom` by chat id (`123456789`, `telegram:123456789`, or `tg:123456789`; prefixes are case-insensitive).
+   - Groups: set `telegram.groupPolicy = "allowlist"` and list senders in `telegram.groupAllowFrom` (fallback: explicit `telegram.allowFrom`).
 
 ## Capabilities & limits (Bot API)
 - Sees only messages sent after it’s added to a chat; no pre-history access.
@@ -37,7 +39,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 - Library: grammY is the only client for send + gateway (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
 - Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention or a `routing.groupChat.mentionPatterns` match by default (override per chat in config).
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
-- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups` (group allowlist + mention defaults), `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
+- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups` (group allowlist + mention defaults), `telegram.allowFrom`, `telegram.groupAllowFrom`, `telegram.groupPolicy`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
   - Ack reactions are controlled globally via `messages.ackReaction` + `messages.ackReactionScope`.
   - Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
 
@@ -53,6 +55,8 @@ Example config:
       "123456789": { requireMention: false } // group chat id
     },
     allowFrom: ["123456789"], // direct chat ids allowed (or "*")
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["tg:123456789", "@alice"],
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
     webhookSecret: "mysecret",

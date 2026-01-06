@@ -1,6 +1,7 @@
 export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
 export type ReplyToMode = "off" | "first" | "all";
+export type GroupPolicy = "open" | "disabled" | "allowlist";
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
@@ -78,13 +79,15 @@ export type AgentElevatedAllowFromConfig = {
 export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Optional allowlist for WhatsApp group senders (E.164). */
+  groupAllowFrom?: string[];
   /**
    * Controls how group messages are handled:
    * - "open" (default): groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
-   * - "allowlist": only allow group messages from senders in allowFrom
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
-  groupPolicy?: "open" | "disabled" | "allowlist";
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   groups?: Record<
@@ -214,13 +217,15 @@ export type TelegramConfig = {
     }
   >;
   allowFrom?: Array<string | number>;
+  /** Optional allowlist for Telegram group senders (user ids or usernames). */
+  groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
    * - "open" (default): groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
-   * - "allowlist": only allow group messages from senders in allowFrom
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
-  groupPolicy?: "open" | "disabled" | "allowlist";
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -296,6 +301,13 @@ export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
   token?: string;
+  /**
+   * Controls how guild channel messages are handled:
+   * - "open" (default): guild channels bypass allowlists; mention-gating applies
+   * - "disabled": block all guild channel messages
+   * - "allowlist": only allow channels present in discord.guilds.*.channels
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -355,6 +367,13 @@ export type SlackConfig = {
   enabled?: boolean;
   botToken?: string;
   appToken?: string;
+  /**
+   * Controls how channel messages are handled:
+   * - "open" (default): channels bypass allowlists; mention-gating applies
+   * - "disabled": block all channel messages
+   * - "allowlist": only allow channels present in slack.channels
+   */
+  groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
@@ -387,6 +406,15 @@ export type SignalConfig = {
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
   allowFrom?: Array<string | number>;
+  /** Optional allowlist for Signal group senders (E.164). */
+  groupAllowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, no extra gating
+   * - "disabled": block all group messages
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -405,6 +433,15 @@ export type IMessageConfig = {
   region?: string;
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
+  /** Optional allowlist for group senders or chat_id targets. */
+  groupAllowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom; mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
   /** Max outbound media size in MB. */

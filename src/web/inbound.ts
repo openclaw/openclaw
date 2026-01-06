@@ -178,18 +178,30 @@ export async function monitorWebInbox(options: {
         configuredAllowFrom && configuredAllowFrom.length > 0
           ? configuredAllowFrom
           : defaultAllowFrom;
+      const groupAllowFrom =
+        cfg.whatsapp?.groupAllowFrom ??
+        (configuredAllowFrom && configuredAllowFrom.length > 0
+          ? configuredAllowFrom
+          : undefined);
       const isSamePhone = from === selfE164;
       const isSelfChat = isSelfChatMode(selfE164, configuredAllowFrom);
 
-      // Pre-compute normalized allowlist for filtering (used by both group and DM checks)
-      const hasWildcard = allowFrom?.includes("*") ?? false;
+      // Pre-compute normalized allowlists for filtering
+      const dmHasWildcard = allowFrom?.includes("*") ?? false;
       const normalizedAllowFrom =
-        allowFrom && allowFrom.length > 0 ? allowFrom.map(normalizeE164) : [];
+        allowFrom && allowFrom.length > 0
+          ? allowFrom.filter((entry) => entry !== "*").map(normalizeE164)
+          : [];
+      const groupHasWildcard = groupAllowFrom?.includes("*") ?? false;
+      const normalizedGroupAllowFrom =
+        groupAllowFrom && groupAllowFrom.length > 0
+          ? groupAllowFrom.filter((entry) => entry !== "*").map(normalizeE164)
+          : [];
 
       // Group policy filtering: controls how group messages are handled
       // - "open" (default): groups bypass allowFrom, only mention-gating applies
       // - "disabled": block all group messages entirely
-      // - "allowlist": only allow group messages from senders in allowFrom
+      // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
       const groupPolicy = cfg.whatsapp?.groupPolicy ?? "open";
       if (group && groupPolicy === "disabled") {
         logVerbose(`Blocked group message (groupPolicy: disabled)`);
@@ -198,9 +210,15 @@ export async function monitorWebInbox(options: {
       if (group && groupPolicy === "allowlist") {
         // For allowlist mode, the sender (participant) must be in allowFrom
         // If we can't resolve the sender E164, block the message for safety
+        if (!groupAllowFrom || groupAllowFrom.length === 0) {
+          logVerbose(
+            "Blocked group message (groupPolicy: allowlist, no groupAllowFrom)",
+          );
+          continue;
+        }
         const senderAllowed =
-          hasWildcard ||
-          (senderE164 != null && normalizedAllowFrom.includes(senderE164));
+          groupHasWildcard ||
+          (senderE164 != null && normalizedGroupAllowFrom.includes(senderE164));
         if (!senderAllowed) {
           logVerbose(
             `Blocked group message from ${senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
@@ -214,7 +232,7 @@ export async function monitorWebInbox(options: {
         !group && Array.isArray(allowFrom) && allowFrom.length > 0;
       if (!isSamePhone && allowlistEnabled) {
         const candidate = from;
-        if (!hasWildcard && !normalizedAllowFrom.includes(candidate)) {
+        if (!dmHasWildcard && !normalizedAllowFrom.includes(candidate)) {
           logVerbose(
             `Blocked unauthorized sender ${candidate} (not in allowFrom list)`,
           );

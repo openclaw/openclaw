@@ -598,7 +598,8 @@ export const ClawdbotSchema = z.object({
   whatsapp: z
     .object({
       allowFrom: z.array(z.string()).optional(),
-      groupPolicy: GroupPolicySchema.default("open").optional(),
+      groupAllowFrom: z.array(z.string()).optional(),
+      groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
       groups: z
         .record(
@@ -629,7 +630,8 @@ export const ClawdbotSchema = z.object({
         )
         .optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-      groupPolicy: GroupPolicySchema.default("open").optional(),
+      groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
       proxy: z.string().optional(),
@@ -642,6 +644,7 @@ export const ClawdbotSchema = z.object({
     .object({
       enabled: z.boolean().optional(),
       token: z.string().optional(),
+      groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
       slashCommand: z
         .object({
@@ -714,6 +717,7 @@ export const ClawdbotSchema = z.object({
       enabled: z.boolean().optional(),
       botToken: z.string().optional(),
       appToken: z.string().optional(),
+      groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
       reactionNotifications: z
@@ -777,6 +781,8 @@ export const ClawdbotSchema = z.object({
       ignoreStories: z.boolean().optional(),
       sendReadReceipts: z.boolean().optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
     })
@@ -791,6 +797,8 @@ export const ClawdbotSchema = z.object({
         .optional(),
       region: z.string().optional(),
       allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
+      groupPolicy: GroupPolicySchema.optional().default("open"),
       includeAttachments: z.boolean().optional(),
       mediaMaxMb: z.number().positive().optional(),
       textChunkLimit: z.number().int().positive().optional(),

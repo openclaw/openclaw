@@ -379,6 +379,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const groupDmChannels = normalizeAllowList(dmConfig?.groupChannels);
   const channelsConfig = cfg.slack?.channels;
   const dmEnabled = dmConfig?.enabled ?? true;
+  const groupPolicy = cfg.slack?.groupPolicy ?? "open";
   const reactionMode = cfg.slack?.reactionNotifications ?? "own";
   const reactionAllowlist = cfg.slack?.reactionAllowlist ?? [];
   const slashCommand = resolveSlackSlashCommandConfig(
@@ -517,7 +518,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         channelName: params.channelName,
         channels: channelsConfig,
       });
-      if (channelConfig?.allowed === false) return false;
+      const channelAllowed = channelConfig?.allowed !== false;
+      const channelAllowlistConfigured =
+        Boolean(channelsConfig) && Object.keys(channelsConfig ?? {}).length > 0;
+      if (
+        !isSlackRoomAllowedByPolicy({
+          groupPolicy,
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        return false;
+      }
+      if (!channelAllowed) return false;
     }
 
     return true;
@@ -1439,6 +1452,18 @@ type SlackRespondFn = (payload: {
   text: string;
   response_type?: "ephemeral" | "in_channel";
 }) => Promise<unknown>;
+
+export function isSlackRoomAllowedByPolicy(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  channelAllowlistConfigured: boolean;
+  channelAllowed: boolean;
+}): boolean {
+  const { groupPolicy, channelAllowlistConfigured, channelAllowed } = params;
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
+  if (!channelAllowlistConfigured) return false;
+  return channelAllowed;
+}
 
 async function deliverSlackSlashReplies(params: {
   replies: ReplyPayload[];

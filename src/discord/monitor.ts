@@ -141,6 +141,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const dmConfig = cfg.discord?.dm;
   const guildEntries = cfg.discord?.guilds;
+  const groupPolicy = cfg.discord?.groupPolicy ?? "open";
   const allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
@@ -159,7 +160,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
     );
   }
 
@@ -278,6 +279,32 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           channelSlug,
         });
       if (isGroupDm && !groupDmAllowed) return;
+
+      const channelAllowlistConfigured =
+        Boolean(guildInfo?.channels) &&
+        Object.keys(guildInfo?.channels ?? {}).length > 0;
+      const channelAllowed = channelConfig?.allowed !== false;
+      if (
+        isGuildMessage &&
+        !isDiscordGroupAllowedByPolicy({
+          groupPolicy,
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        if (groupPolicy === "disabled") {
+          logVerbose("discord: drop guild message (groupPolicy: disabled)");
+        } else if (!channelAllowlistConfigured) {
+          logVerbose(
+            "discord: drop guild message (groupPolicy: allowlist, no channel allowlist)",
+          );
+        } else {
+          logVerbose(
+            `Blocked discord channel ${message.channelId} not in guild channel allowlist (groupPolicy: allowlist)`,
+          );
+        }
+        return;
+      }
 
       if (isGuildMessage && channelConfig?.allowed === false) {
         logVerbose(
@@ -1167,6 +1194,18 @@ export function resolveDiscordChannelConfig(params: {
     };
   }
   return { allowed: true };
+}
+
+export function isDiscordGroupAllowedByPolicy(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  channelAllowlistConfigured: boolean;
+  channelAllowed: boolean;
+}): boolean {
+  const { groupPolicy, channelAllowlistConfigured, channelAllowed } = params;
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
+  if (!channelAllowlistConfigured) return false;
+  return channelAllowed;
 }
 
 export function resolveGroupDmAllow(params: {

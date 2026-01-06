@@ -711,10 +711,10 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("blocks group messages from senders not in allowFrom when groupPolicy is 'allowlist'", async () => {
+  it("blocks group messages from senders not in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
     mockLoadConfig.mockReturnValue({
       whatsapp: {
-        allowFrom: ["+1234"], // Does not include +999
+        groupAllowFrom: ["+1234"], // Does not include +999
         groupPolicy: "allowlist",
       },
       messages: {
@@ -746,16 +746,16 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
-    // Should NOT call onMessage because sender +999 not in allowFrom
+    // Should NOT call onMessage because sender +999 not in groupAllowFrom
     expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();
   });
 
-  it("allows group messages from senders in allowFrom when groupPolicy is 'allowlist'", async () => {
+  it("allows group messages from senders in groupAllowFrom when groupPolicy is 'allowlist'", async () => {
     mockLoadConfig.mockReturnValue({
       whatsapp: {
-        allowFrom: ["+15551234567"], // Includes the sender
+        groupAllowFrom: ["+15551234567"], // Includes the sender
         groupPolicy: "allowlist",
       },
       messages: {
@@ -787,7 +787,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
-    // Should call onMessage because sender is in allowFrom
+    // Should call onMessage because sender is in groupAllowFrom
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = onMessage.mock.calls[0][0];
     expect(payload.chatType).toBe("group");
@@ -799,7 +799,7 @@ describe("web monitor inbox", () => {
   it("allows all group senders with wildcard in groupPolicy allowlist", async () => {
     mockLoadConfig.mockReturnValue({
       whatsapp: {
-        allowFrom: ["*"], // Wildcard allows everyone
+        groupAllowFrom: ["*"], // Wildcard allows everyone
         groupPolicy: "allowlist",
       },
       messages: {
@@ -835,6 +835,45 @@ describe("web monitor inbox", () => {
     expect(onMessage).toHaveBeenCalledTimes(1);
     const payload = onMessage.mock.calls[0][0];
     expect(payload.chatType).toBe("group");
+
+    await listener.close();
+  });
+
+  it("blocks group messages when groupPolicy allowlist has no groupAllowFrom", async () => {
+    mockLoadConfig.mockReturnValue({
+      whatsapp: {
+        groupPolicy: "allowlist",
+      },
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+        timestampPrefix: false,
+      },
+    });
+
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "grp-allowlist-empty",
+            fromMe: false,
+            remoteJid: "11111@g.us",
+            participant: "999@s.whatsapp.net",
+          },
+          message: { conversation: "blocked by empty allowlist" },
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).not.toHaveBeenCalled();
 
     await listener.close();
   });

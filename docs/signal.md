@@ -50,8 +50,12 @@ You can still run Clawdbot on your own Signal account if your goal is “respond
     httpHost: "127.0.0.1",
     httpPort: 8080,
 
-    // Who is allowed to talk to the bot
-    allowFrom: ["+15557654321"] // your personal number (or "*")
+    // Who is allowed to talk to the bot (DMs)
+    allowFrom: ["+15557654321"], // your personal number (or "*")
+
+    // Group policy + allowlist
+    groupPolicy: "open",
+    groupAllowFrom: ["+15557654321"]
   }
 }
 ```

@@ -1,11 +1,11 @@
 ---
-summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/iMessage)"
+summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/Slack/Signal/iMessage)"
 read_when:
   - Changing group chat behavior or mention gating
 ---
 # Groups
 
-Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, iMessage.
+Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage.
 
 ## Session keys
 - Group sessions use `surface:group:<id>` session keys (rooms/channels use `surface:channel:<id>`).
@@ -16,32 +16,53 @@ Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Di
 - UI labels use `displayName` when available, formatted as `surface:<token>`.
 - `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
-## Group policy (WhatsApp & Telegram)
-Both WhatsApp and Telegram support a `groupPolicy` config to control how group messages are handled:
+## Group policy
+Control how group/room messages are handled per provider:
 
 ```json5
 {
   whatsapp: {
-    allowFrom: ["+15551234567"],
-    groupPolicy: "disabled"  // "open" | "disabled" | "allowlist"
+    groupPolicy: "disabled", // "open" | "disabled" | "allowlist"
+    groupAllowFrom: ["+15551234567"]
   },
   telegram: {
-    allowFrom: ["123456789", "@username"],
-    groupPolicy: "disabled"  // "open" | "disabled" | "allowlist"
+    groupPolicy: "disabled",
+    groupAllowFrom: ["123456789", "@username"]
+  },
+  signal: {
+    groupPolicy: "disabled",
+    groupAllowFrom: ["+15551234567"]
+  },
+  imessage: {
+    groupPolicy: "disabled",
+    groupAllowFrom: ["chat_id:123"]
+  },
+  discord: {
+    groupPolicy: "allowlist",
+    guilds: {
+      "GUILD_ID": { channels: { help: { allow: true } } }
+    }
+  },
+  slack: {
+    groupPolicy: "allowlist",
+    channels: { "#general": { allow: true } }
   }
 }
 ```
 
 | Policy | Behavior |
 |--------|----------|
-| `"open"` | Default. Groups bypass `allowFrom`, only mention-gating applies. |
+| `"open"` | Default. Groups bypass allowlists; mention-gating still applies. |
 | `"disabled"` | Block all group messages entirely. |
-| `"allowlist"` | Only allow group messages from senders listed in `allowFrom`. |
+| `"allowlist"` | Only allow groups/rooms that match the configured allowlist. |
 
 Notes:
-- `allowFrom` filters DMs by default. With `groupPolicy: "allowlist"`, it also filters group message senders.
 - `groupPolicy` is separate from mention-gating (which requires @mentions).
-- For Telegram `allowlist`, the sender can be matched by user ID (e.g., `"123456789"`, `"telegram:123456789"`, or `"tg:123456789"`; prefixes are case-insensitive) or username (e.g., `"@alice"` or `"alice"`).
+- WhatsApp/Telegram/Signal/iMessage: use `groupAllowFrom` (fallback: explicit `allowFrom`).
+- Discord: allowlist uses `discord.guilds.<id>.channels`.
+- Slack: allowlist uses `slack.channels`.
+- Group DMs are controlled separately (`discord.dm.*`, `slack.dm.*`).
+- Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
 
 ## Mention gating (default)
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
