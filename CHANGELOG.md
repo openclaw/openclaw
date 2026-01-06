@@ -90,6 +90,7 @@
 - Bash tool: inherit gateway PATH so Nix-provided tools resolve during commands. Thanks @joshp123 for PR #202.
 
 ### Maintenance
+- UI: add favicon.ico derived from the macOS app icon. Thanks @jeffersonwarrior for PR #305.
 - Tooling: replace tsx with bun for TypeScript execution. Thanks @obviyus for PR #278.
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
