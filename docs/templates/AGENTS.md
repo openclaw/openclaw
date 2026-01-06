@@ -120,7 +120,7 @@ When you receive a heartbeat poll (message matches the configured heartbeat prom
 Default heartbeat prompt:
 `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
 
-You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small.
+You are free to edit `HEARTBEAT.md` with a short checklist or reminders. Keep it small to limit token burn.
 
 **Things to check (rotate through these, 2-4 times per day):**
 - **Emails** - Any urgent unread messages?

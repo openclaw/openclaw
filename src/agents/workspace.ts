@@ -87,10 +87,9 @@ It does not define which tools exist; Clawdbot provides built-in tools internall
 Add whatever else you want the assistant to know about your local toolchain.
 `;
 
-const DEFAULT_HEARTBEAT_TEMPLATE = `# HEARTBEAT.md - Optional heartbeat notes
+const DEFAULT_HEARTBEAT_TEMPLATE = `# HEARTBEAT.md
 
-Keep this file small. Leave it empty unless you want a short checklist or reminders
-to follow during heartbeat runs.
+Keep this file empty unless you want a tiny checklist. Keep it small.
 `;
 
 const DEFAULT_BOOTSTRAP_TEMPLATE = `# BOOTSTRAP.md - First Run Ritual (delete after)
