@@ -150,9 +150,11 @@ describe("ensureClawdbotCliOnPath", () => {
       if (originalFlag === undefined)
         delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
       else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
-      if (originalHomebrewPrefix === undefined) delete process.env.HOMEBREW_PREFIX;
+      if (originalHomebrewPrefix === undefined)
+        delete process.env.HOMEBREW_PREFIX;
       else process.env.HOMEBREW_PREFIX = originalHomebrewPrefix;
-      if (originalHomebrewBrewFile === undefined) delete process.env.HOMEBREW_BREW_FILE;
+      if (originalHomebrewBrewFile === undefined)
+        delete process.env.HOMEBREW_BREW_FILE;
       else process.env.HOMEBREW_BREW_FILE = originalHomebrewBrewFile;
       if (originalXdgBinHome === undefined) delete process.env.XDG_BIN_HOME;
       else process.env.XDG_BIN_HOME = originalXdgBinHome;

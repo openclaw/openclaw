@@ -874,10 +874,7 @@ function buildSenderName(msg: TelegramMessage) {
   return name || undefined;
 }
 
-function buildSenderLabel(
-  msg: TelegramMessage,
-  senderId?: number | string,
-) {
+function buildSenderLabel(msg: TelegramMessage, senderId?: number | string) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
   let label = name;
@@ -887,9 +884,7 @@ function buildSenderLabel(
     label = username;
   }
   const normalizedSenderId =
-    senderId != null && `${senderId}`.trim()
-      ? `${senderId}`.trim()
-      : undefined;
+    senderId != null && `${senderId}`.trim() ? `${senderId}`.trim() : undefined;
   const fallbackId =
     normalizedSenderId ??
     (msg.from?.id != null ? String(msg.from.id) : undefined);

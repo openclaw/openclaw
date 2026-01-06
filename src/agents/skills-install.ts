@@ -132,8 +132,7 @@ async function resolveBrewBinDir(
   timeoutMs: number,
   brewExe?: string,
 ): Promise<string | undefined> {
-  const exe =
-    brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
+  const exe = brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
   if (!exe) return undefined;
 
   const prefixResult = await runCommandWithTimeout([exe, "--prefix"], {

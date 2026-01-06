@@ -31,7 +31,10 @@ export function resolveBrewPathDirs(opts?: {
   }
 
   // Linuxbrew defaults.
-  dirs.push("/home/linuxbrew/.linuxbrew/bin", "/home/linuxbrew/.linuxbrew/sbin");
+  dirs.push(
+    "/home/linuxbrew/.linuxbrew/bin",
+    "/home/linuxbrew/.linuxbrew/sbin",
+  );
   dirs.push(path.join(homeDir, ".linuxbrew", "bin"));
   dirs.push(path.join(homeDir, ".linuxbrew", "sbin"));
 
