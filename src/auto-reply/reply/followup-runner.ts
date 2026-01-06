@@ -82,9 +82,13 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
         });
         if (!result.ok) {
-          logVerbose(
-            `followup queue: route-reply failed: ${result.error ?? "unknown error"}`,
-          );
+          // Log error and fall back to dispatcher if available.
+          const errorMsg = result.error ?? "unknown error";
+          logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+          // Fallback: try the dispatcher if routing failed.
+          if (opts?.onBlockReply) {
+            await opts.onBlockReply(payload);
+          }
         }
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
