@@ -30,7 +30,7 @@ Inbound messages can steer the current run, wait for a followup turn, or do both
 Steer-backlog means you can get a followup response after the steered run, so
 streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
 one response per inbound message.
-Inline fix: `/queue collect` (per-session) or set `routing.queue.byProvider.discord: "collect"`.
+Send `/queue collect` as a standalone command (per-session) or set `routing.queue.byProvider.discord: "collect"`.
 
 Defaults (when unset in config):
 - All surfaces → `collect`
@@ -61,8 +61,7 @@ Summarize keeps a short bullet list of dropped messages and injects it as a synt
 Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 ## Per-session overrides
-- `/queue <mode>` as a standalone command stores the mode for the current session.
-- `/queue <mode>` embedded in a message applies **once** (no persistence).
+- Send `/queue <mode>` as a standalone command to store the mode for the current session.
 - Options can be combined: `/queue collect debounce:2s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
 

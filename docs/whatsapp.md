@@ -80,7 +80,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
-- `/activation mention|always` is owner-only.
+- `/activation mention|always` is owner-only and must be sent as a standalone message.
 - Owner = `whatsapp.allowFrom` (or self E.164 if unset).
 - **History injection**:
   - Recent messages (default 50) inserted under:

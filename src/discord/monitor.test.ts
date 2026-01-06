@@ -1,3 +1,4 @@
+import type { Guild } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
 import {
   allowListMatches,
@@ -12,8 +13,7 @@ import {
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
 
-const fakeGuild = (id: string, name: string) =>
-  ({ id, name }) as unknown as import("discord.js").Guild;
+const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
 const makeEntries = (
   entries: Record<string, Partial<DiscordGuildEntryResolved>>,

@@ -300,17 +300,6 @@ export type DiscordGuildEntry = {
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
-export type DiscordSlashCommandConfig = {
-  /** Enable handling for the configured slash command (default: false). */
-  enabled?: boolean;
-  /** Slash command name (default: "clawd"). */
-  name?: string;
-  /** Session key prefix for slash commands (default: "discord:slash"). */
-  sessionPrefix?: string;
-  /** Reply ephemerally (default: true). */
-  ephemeral?: boolean;
-};
-
 export type DiscordActionConfig = {
   reactions?: boolean;
   stickers?: boolean;
@@ -350,7 +339,6 @@ export type DiscordConfig = {
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
-  slashCommand?: DiscordSlashCommandConfig;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
@@ -575,6 +563,15 @@ export type MessagesConfig = {
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+};
+
+export type CommandsConfig = {
+  /** Enable native command registration when supported (default: false). */
+  native?: boolean;
+  /** Enable text command parsing (default: true). */
+  text?: boolean;
+  /** Enforce access-group allowlists/policies for commands (default: true). */
+  useAccessGroups?: boolean;
 };
 
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
@@ -998,6 +995,7 @@ export type ClawdbotConfig = {
   };
   routing?: RoutingConfig;
   messages?: MessagesConfig;
+  commands?: CommandsConfig;
   session?: SessionConfig;
   web?: WebConfig;
   whatsapp?: WhatsAppConfig;

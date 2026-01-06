@@ -28,6 +28,8 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 6) Allowlist + pairing:
    - Direct chats: `telegram.allowFrom` (chat ids) or pairing approvals via `clawdbot pairing approve --provider telegram <code>` (alias: `clawdbot telegram pairing approve <code>`).
    - Groups: set `telegram.groupPolicy = "allowlist"` and list senders in `telegram.groupAllowFrom` (fallback: explicit `telegram.allowFrom`).
+   - Commands respect group allowlists/policies by default; set `commands.useAccessGroups: false` to bypass.
+7) Native commands: set `commands.native: true` to register `/` commands; set `commands.native: false` to clear previously registered commands.
 
 ## Capabilities & limits (Bot API)
 - Sees only messages sent after it’s added to a chat; no pre-history access.
@@ -71,7 +73,7 @@ Example config:
 ## Group etiquette
 - Keep privacy mode off if you expect the bot to read all messages; with privacy on, it only sees commands/mentions.
 - Make the bot an admin if you need it to send in restricted groups or channels.
-- Mention the bot (`@yourbot`) or use a `routing.groupChat.mentionPatterns` trigger; per-group overrides live in `telegram.groups` if you want always-on behavior. If `telegram.groups` is set, add `"*"` to keep existing allow-all behavior.
+- Mention the bot (`@yourbot`), use a `routing.groupChat.mentionPatterns` trigger, or send a standalone `/...` command. Per-group overrides live in `telegram.groups` if you want always-on behavior; if `telegram.groups` is set, add `"*"` to keep existing allow-all behavior.
 
 ## Reply tags
 To request a threaded reply, the model can include one tag in its output:

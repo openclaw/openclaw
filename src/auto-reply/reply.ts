@@ -31,6 +31,7 @@ import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
+import { shouldHandleTextCommands } from "./commands-registry.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
@@ -38,6 +39,7 @@ import { applySessionHints } from "./reply/body.js";
 import { buildCommandContext, handleCommands } from "./reply/commands.js";
 import {
   handleDirectiveOnly,
+  type InlineDirectives,
   isDirectiveOnly,
   parseInlineDirectives,
   persistInlineDirectives,
@@ -48,7 +50,7 @@ import {
   defaultGroupActivation,
   resolveGroupRequireMention,
 } from "./reply/groups.js";
-import { stripMentions } from "./reply/mentions.js";
+import { stripMentions, stripStructuralPrefixes } from "./reply/mentions.js";
 import {
   createModelSelectionState,
   resolveContextTokens,
@@ -82,9 +84,6 @@ export type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 const BARE_SESSION_RESET_PROMPT =
   "A new session was started via /new or /reset. Say hi briefly (1-2 sentences) and ask what the user wants to do next. Do not mention internal steps, files, tools, or reasoning.";
-
-const CONTROL_COMMAND_PREFIX_RE =
-  /^\/(?:status|help|thinking|think|t|verbose|v|elevated|elev|model|queue|activation|send|restart|reset|new|compact)\b/i;
 
 function normalizeAllowToken(value?: string) {
   if (!value) return "";
@@ -254,7 +253,7 @@ export async function getReplyFromConfig(
   }
 
   const commandAuthorized = ctx.CommandAuthorized ?? true;
-  const commandAuth = resolveCommandAuthorization({
+  resolveCommandAuthorization({
     ctx,
     cfg,
     commandAuthorized,
@@ -281,7 +280,47 @@ export async function getReplyFromConfig(
   } = sessionState;
 
   const rawBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const parsedDirectives = parseInlineDirectives(rawBody);
+  const clearInlineDirectives = (cleaned: string): InlineDirectives => ({
+    cleaned,
+    hasThinkDirective: false,
+    thinkLevel: undefined,
+    rawThinkLevel: undefined,
+    hasVerboseDirective: false,
+    verboseLevel: undefined,
+    rawVerboseLevel: undefined,
+    hasElevatedDirective: false,
+    elevatedLevel: undefined,
+    rawElevatedLevel: undefined,
+    hasStatusDirective: false,
+    hasModelDirective: false,
+    rawModelDirective: undefined,
+    hasQueueDirective: false,
+    queueMode: undefined,
+    queueReset: false,
+    rawQueueMode: undefined,
+    debounceMs: undefined,
+    cap: undefined,
+    dropPolicy: undefined,
+    rawDebounce: undefined,
+    rawCap: undefined,
+    rawDrop: undefined,
+    hasQueueOptions: false,
+  });
+  let parsedDirectives = parseInlineDirectives(rawBody);
+  const hasDirective =
+    parsedDirectives.hasThinkDirective ||
+    parsedDirectives.hasVerboseDirective ||
+    parsedDirectives.hasElevatedDirective ||
+    parsedDirectives.hasStatusDirective ||
+    parsedDirectives.hasModelDirective ||
+    parsedDirectives.hasQueueDirective;
+  if (hasDirective) {
+    const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
+    const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
+    if (noMentions.trim().length > 0) {
+      parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+    }
+  }
   const directives = commandAuthorized
     ? parsedDirectives
     : {
@@ -468,6 +507,11 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     commandAuthorized,
   });
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg,
+    surface: command.surface,
+    commandSource: ctx.CommandSource,
+  });
   const isEmptyConfig = Object.keys(cfg).length === 0;
   if (
     command.isWhatsAppProvider &&
@@ -538,17 +582,12 @@ export async function getReplyFromConfig(
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const rawBodyTrimmed = (ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
-  const strippedCommandBody = isGroup
-    ? stripMentions(triggerBodyNormalized, ctx, cfg)
-    : triggerBodyNormalized;
   if (
-    !commandAuth.isAuthorizedSender &&
-    CONTROL_COMMAND_PREFIX_RE.test(strippedCommandBody.trim())
+    allowTextCommands &&
+    !commandAuthorized &&
+    !baseBodyTrimmedRaw &&
+    hasControlCommand(rawBody)
   ) {
-    typing.cleanup();
-    return undefined;
-  }
-  if (!commandAuthorized && !baseBodyTrimmedRaw && hasControlCommand(rawBody)) {
     typing.cleanup();
     return undefined;
   }

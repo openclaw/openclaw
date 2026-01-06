@@ -41,6 +41,7 @@ const onSpy = vi.fn();
 const stopSpy = vi.fn();
 const sendChatActionSpy = vi.fn();
 const setMessageReactionSpy = vi.fn(async () => undefined);
+const setMyCommandsSpy = vi.fn(async () => undefined);
 const sendMessageSpy = vi.fn(async () => ({ message_id: 77 }));
 const sendAnimationSpy = vi.fn(async () => ({ message_id: 78 }));
 const sendPhotoSpy = vi.fn(async () => ({ message_id: 79 }));
@@ -48,6 +49,7 @@ type ApiStub = {
   config: { use: (arg: unknown) => void };
   sendChatAction: typeof sendChatActionSpy;
   setMessageReaction: typeof setMessageReactionSpy;
+  setMyCommands: typeof setMyCommandsSpy;
   sendMessage: typeof sendMessageSpy;
   sendAnimation: typeof sendAnimationSpy;
   sendPhoto: typeof sendPhotoSpy;
@@ -56,6 +58,7 @@ const apiStub: ApiStub = {
   config: { use: useSpy },
   sendChatAction: sendChatActionSpy,
   setMessageReaction: setMessageReactionSpy,
+  setMyCommands: setMyCommandsSpy,
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
   sendPhoto: sendPhotoSpy,
@@ -95,6 +98,7 @@ describe("createTelegramBot", () => {
     sendAnimationSpy.mockReset();
     sendPhotoSpy.mockReset();
     setMessageReactionSpy.mockReset();
+    setMyCommandsSpy.mockReset();
   });
 
   it("installs grammY throttler", () => {
@@ -273,6 +277,16 @@ describe("createTelegramBot", () => {
     expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [
       { type: "emoji", emoji: "👀" },
     ]);
+  });
+
+  it("clears native commands when disabled", () => {
+    loadConfig.mockReturnValue({
+      commands: { native: false },
+    });
+
+    createTelegramBot({ token: "tok" });
+
+    expect(setMyCommandsSpy).toHaveBeenCalledWith([]);
   });
 
   it("skips group messages when requireMention is enabled and no mention matches", async () => {

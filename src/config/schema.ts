@@ -32,6 +32,7 @@ const GROUP_LABELS: Record<string, string> = {
   models: "Models",
   routing: "Routing",
   messages: "Messages",
+  commands: "Commands",
   session: "Session",
   cron: "Cron",
   hooks: "Hooks",
@@ -58,6 +59,7 @@ const GROUP_ORDER: Record<string, number> = {
   models: 50,
   routing: 60,
   messages: 70,
+  commands: 75,
   session: 80,
   cron: 90,
   hooks: 100,
@@ -94,6 +96,9 @@ const FIELD_LABELS: Record<string, string> = {
   "agent.model.fallbacks": "Model Fallbacks",
   "agent.imageModel.primary": "Image Model",
   "agent.imageModel.fallbacks": "Image Model Fallbacks",
+  "commands.native": "Native Commands",
+  "commands.text": "Text Commands",
+  "commands.useAccessGroups": "Use Access Groups",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
@@ -137,6 +142,11 @@ const FIELD_HELP: Record<string, string> = {
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agent.imageModel.fallbacks":
     "Ordered fallback image models (provider/model).",
+  "commands.native":
+    "Register native commands with connectors that support it (Discord/Slack/Telegram).",
+  "commands.text": "Allow text command parsing (slash commands only).",
+  "commands.useAccessGroups":
+    "Enforce access-group allowlists/policies for commands.",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "messages.ackReaction":

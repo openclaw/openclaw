@@ -248,7 +248,6 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    // Should merge into a single user message
     expect(contents).toHaveLength(1);
     expect(contents[0].role).toBe("user");
     expect(contents[0].parts).toHaveLength(2);
@@ -333,7 +332,6 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    // Should have 1 user + 1 merged model message
     expect(contents).toHaveLength(2);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
@@ -394,17 +392,16 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    // Tool result creates a user turn with functionResponse
-    // The next user message should be merged into it or there should be proper alternation
-    // Check that we don't have consecutive user messages
-    for (let i = 1; i < contents.length; i++) {
-      if (contents[i].role === "user" && contents[i - 1].role === "user") {
-        // If consecutive, they should have been merged
-        expect.fail("Consecutive user messages should be merged");
-      }
-    }
-    // The conversation should be valid for Gemini
-    expect(contents.length).toBeGreaterThan(0);
+    expect(contents).toHaveLength(3);
+    expect(contents[0].role).toBe("user");
+    expect(contents[1].role).toBe("model");
+    expect(contents[2].role).toBe("user");
+    const toolResponsePart = contents[2].parts?.find(
+      (part) =>
+        typeof part === "object" && part !== null && "functionResponse" in part,
+    );
+    const toolResponse = asRecord(toolResponsePart);
+    expect(toolResponse.functionResponse).toBeTruthy();
   });
 
   it("ensures function call comes after user turn, not after model turn", () => {
@@ -472,11 +469,14 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    // Consecutive model messages should be merged so function call is in same turn as text
     expect(contents).toHaveLength(2);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
-    // The model message should have both text and function call
-    expect(contents[1].parts?.length).toBe(2);
+    const toolCallPart = contents[1].parts?.find(
+      (part) =>
+        typeof part === "object" && part !== null && "functionCall" in part,
+    );
+    const toolCall = asRecord(toolCallPart);
+    expect(toolCall.functionCall).toBeTruthy();
   });
 });

@@ -572,6 +572,8 @@ Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authori
 | `/model <name>` | Switch AI model (see below) |
 | `/queue instant\|batch\|serial` | Message queuing mode |
 
+Commands are only recognized when the entire message is the command (slash required; no plain-text aliases).
+
 ### How do I switch models on the fly?
 
 Use `/model` to switch without restarting:

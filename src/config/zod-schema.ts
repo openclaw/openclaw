@@ -165,6 +165,14 @@ const MessagesSchema = z
   })
   .optional();
 
+const CommandsSchema = z
+  .object({
+    native: z.boolean().optional(),
+    text: z.boolean().optional(),
+    useAccessGroups: z.boolean().optional(),
+  })
+  .optional();
+
 const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -632,6 +640,7 @@ export const ClawdbotSchema = z.object({
     .optional(),
   routing: RoutingSchema,
   messages: MessagesSchema,
+  commands: CommandsSchema,
   session: SessionSchema,
   cron: z
     .object({
@@ -786,14 +795,6 @@ export const ClawdbotSchema = z.object({
       token: z.string().optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
-      slashCommand: z
-        .object({
-          enabled: z.boolean().optional(),
-          name: z.string().optional(),
-          sessionPrefix: z.string().optional(),
-          ephemeral: z.boolean().optional(),
-        })
-        .optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
       actions: z

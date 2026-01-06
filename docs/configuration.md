@@ -409,6 +409,27 @@ Controls how inbound messages behave when an agent run is already active.
 }
 ```
 
+### `commands` (chat command handling)
+
+Controls how chat commands are enabled across connectors.
+
+```json5
+{
+  commands: {
+    native: false,          // register native commands when supported
+    text: true,             // parse slash commands in chat messages
+    useAccessGroups: true   // enforce access-group allowlists/policies for commands
+  }
+}
+```
+
+Notes:
+- Text commands must be sent as a **standalone** message and use the leading `/` (no plain-text aliases).
+- `commands.text: false` disables parsing chat messages for commands.
+- `commands.native: true` registers native commands on supported connectors (Discord/Slack/Telegram). Platforms without native commands still rely on text commands.
+- `commands.native: false` skips native registration; Discord/Telegram clear previously registered commands on startup. Slack commands are managed in the Slack app.
+- `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
+
 ### `web` (WhatsApp web provider)
 
 WhatsApp runs through the gateway’s web provider. It starts automatically when a linked session exists.
@@ -480,12 +501,6 @@ Configure the Discord bot by setting the bot token and optional gating:
       moderation: false
     },
     replyToMode: "off",                     // off | first | all
-    slashCommand: {                         // user-installed app slash commands
-      enabled: true,
-      name: "clawd",
-      sessionPrefix: "discord:slash",
-      ephemeral: true
-    },
     dm: {
       enabled: true,                        // disable all DMs when false
       policy: "pairing",                    // pairing | allowlist | open | disabled

@@ -115,8 +115,15 @@ describe("trigger handling", () => {
     });
   });
 
-  it("reports status when /status appears inline", async () => {
+  it("ignores inline /status and runs the agent", async () => {
     await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
       const res = await getReplyFromConfig(
         {
           Body: "please /status now",
@@ -127,8 +134,8 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Status");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(text).not.toContain("Status");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
     });
   });
 
@@ -265,8 +272,15 @@ describe("trigger handling", () => {
     });
   });
 
-  it("rejects elevated inline directive for unapproved sender", async () => {
+  it("ignores inline elevated directive for unapproved sender", async () => {
     await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
       const cfg = {
         agent: {
           model: "anthropic/claude-opus-4-5",
@@ -293,8 +307,8 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("elevated is not available right now.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(text).not.toBe("elevated is not available right now.");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
     });
   });
 

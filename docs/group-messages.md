@@ -12,7 +12,7 @@ Note: `routing.groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/
 ## What’s implemented (2025-12-03)
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Defaults can be set in config (`whatsapp.groups`) and overridden per group via `/activation`. When `whatsapp.groups` is set, it also acts as a group allowlist (include `"*"` to allow all).
 - Group policy: `whatsapp.groupPolicy` controls whether group messages are accepted (`open|disabled|allowlist`). `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
-- Per-group sessions: session keys look like `whatsapp:group:<jid>` so commands such as `/verbose on` or `/think:high` are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
+- Per-group sessions: session keys look like `whatsapp:group:<jid>` so commands such as `/verbose on` or `/think high` (sent as standalone messages) are scoped to that group; personal DM state is untouched. Heartbeats are skipped for group threads.
 - Context injection: last N (default 50) group messages are prefixed under `[Chat messages since your last reply - for context]`, with the triggering line under `[Current message - respond to this]`.
 - Sender surfacing: every group batch now ends with `[from: Sender Name (+E164)]` so Pi knows who is speaking.
 - Ephemeral/view-once: we unwrap those before extracting text/mentions, so pings inside them still trigger.
@@ -52,13 +52,13 @@ Use the group chat command:
 - `/activation mention`
 - `/activation always`
 
-Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. `/status` in the group shows the current activation mode.
+Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## How to use
 1) Add Clawd UK (`+447700900123`) to the group.
 2) Say `@clawd …` (or `@clawd uk`, `@clawdbot`, or include the number). Anyone in the group can trigger it.
 3) The agent prompt will include recent group context plus the trailing `[from: …]` marker so it can address the right person.
-4) Session-level directives (`/verbose on`, `/think:high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; your personal DM session remains independent.
+4) Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
 ## Testing / verification
 - Automated: `pnpm test -- src/web/auto-reply.test.ts --runInBand` (covers mention gating, history injection, sender suffix).

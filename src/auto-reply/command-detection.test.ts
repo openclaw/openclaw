@@ -32,4 +32,11 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/status")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
   });
+
+  it("requires commands to be the full message", () => {
+    expect(hasControlCommand("hello /status")).toBe(false);
+    expect(hasControlCommand("/status please")).toBe(false);
+    expect(hasControlCommand("prefix /send on")).toBe(false);
+    expect(hasControlCommand("/send on")).toBe(true);
+  });
 });

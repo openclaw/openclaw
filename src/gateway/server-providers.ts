@@ -473,7 +473,6 @@ export function createProviderManager(
       token: discordToken.trim(),
       runtime: discordRuntimeEnv,
       abortSignal: discordAbort.signal,
-      slashCommand: cfg.discord?.slashCommand,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
       historyLimit: cfg.discord?.historyLimit,
     })
