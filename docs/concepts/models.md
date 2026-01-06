@@ -104,3 +104,5 @@ Output
 
 - Update [`docs/configuration.md`](/gateway/configuration) with `agent.models` + `agent.model` + `agent.imageModel`.
 - Keep this doc current when CLI surface or scan logic changes.
+- Note provider aliases like `z.ai/*` -> `zai/*` when relevant.
+- Provider ids in model refs are normalized to lowercase.
