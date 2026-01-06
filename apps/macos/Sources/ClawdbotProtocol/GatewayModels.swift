@@ -655,23 +655,27 @@ public struct SessionsListParams: Codable, Sendable {
     public let activeminutes: Int?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let spawnedby: String?
 
     public init(
         limit: Int?,
         activeminutes: Int?,
         includeglobal: Bool?,
-        includeunknown: Bool?
+        includeunknown: Bool?,
+        spawnedby: String?
     ) {
         self.limit = limit
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.spawnedby = spawnedby
     }
     private enum CodingKeys: String, CodingKey {
         case limit
         case activeminutes = "activeMinutes"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case spawnedby = "spawnedBy"
     }
 }
 
@@ -681,6 +685,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let verboselevel: AnyCodable?
     public let elevatedlevel: AnyCodable?
     public let model: AnyCodable?
+    public let spawnedby: AnyCodable?
     public let sendpolicy: AnyCodable?
     public let groupactivation: AnyCodable?
 
@@ -690,6 +695,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         verboselevel: AnyCodable?,
         elevatedlevel: AnyCodable?,
         model: AnyCodable?,
+        spawnedby: AnyCodable?,
         sendpolicy: AnyCodable?,
         groupactivation: AnyCodable?
     ) {
@@ -698,6 +704,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.verboselevel = verboselevel
         self.elevatedlevel = elevatedlevel
         self.model = model
+        self.spawnedby = spawnedby
         self.sendpolicy = sendpolicy
         self.groupactivation = groupactivation
     }
@@ -707,6 +714,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case verboselevel = "verboseLevel"
         case elevatedlevel = "elevatedLevel"
         case model
+        case spawnedby = "spawnedBy"
         case sendpolicy = "sendPolicy"
         case groupactivation = "groupActivation"
     }
