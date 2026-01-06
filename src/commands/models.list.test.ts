@@ -1,0 +1,159 @@
+import { describe, expect, it, vi } from "vitest";
+
+const loadConfig = vi.fn();
+const ensureClawdbotModelsJson = vi.fn().mockResolvedValue(undefined);
+const resolveClawdbotAgentDir = vi.fn().mockReturnValue("/tmp/clawdbot-agent");
+const ensureAuthProfileStore = vi.fn().mockReturnValue({});
+const listProfilesForProvider = vi.fn().mockReturnValue([]);
+const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
+const getCustomProviderApiKey = vi.fn().mockReturnValue(undefined);
+const discoverAuthStorage = vi.fn().mockReturnValue({});
+const discoverModels = vi.fn();
+
+vi.mock("../config/config.js", () => ({
+  CONFIG_PATH_CLAWDBOT: "/tmp/clawdbot.json",
+  loadConfig,
+}));
+
+vi.mock("../agents/models-config.js", () => ({
+  ensureClawdbotModelsJson,
+}));
+
+vi.mock("../agents/agent-paths.js", () => ({
+  resolveClawdbotAgentDir,
+}));
+
+vi.mock("../agents/auth-profiles.js", () => ({
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+}));
+
+vi.mock("../agents/model-auth.js", () => ({
+  resolveEnvApiKey,
+  getCustomProviderApiKey,
+}));
+
+vi.mock("@mariozechner/pi-coding-agent", () => ({
+  discoverAuthStorage,
+  discoverModels,
+}));
+
+function makeRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+  };
+}
+
+describe("models list/status", () => {
+  it("models status resolves z.ai alias to canonical zai", async () => {
+    loadConfig.mockReturnValue({ agent: { model: "z.ai/glm-4.7" } });
+    const runtime = makeRuntime();
+
+    const { modelsStatusCommand } = await import("./models/list.js");
+    await modelsStatusCommand({ json: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload.resolvedDefault).toBe("zai/glm-4.7");
+  });
+
+  it("models status plain outputs canonical zai model", async () => {
+    loadConfig.mockReturnValue({ agent: { model: "z.ai/glm-4.7" } });
+    const runtime = makeRuntime();
+
+    const { modelsStatusCommand } = await import("./models/list.js");
+    await modelsStatusCommand({ plain: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
+  });
+
+  it("models list outputs canonical zai key for configured z.ai model", async () => {
+    loadConfig.mockReturnValue({ agent: { model: "z.ai/glm-4.7" } });
+    const runtime = makeRuntime();
+
+    const model = {
+      provider: "zai",
+      id: "glm-4.7",
+      name: "GLM-4.7",
+      input: ["text"],
+      baseUrl: "https://api.z.ai/v1",
+      contextWindow: 128000,
+    };
+
+    discoverModels.mockReturnValue({
+      getAll: () => [model],
+      getAvailable: () => [model],
+    });
+
+    const { modelsListCommand } = await import("./models/list.js");
+    await modelsListCommand({ json: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload.models[0]?.key).toBe("zai/glm-4.7");
+  });
+
+  it("models list plain outputs canonical zai key", async () => {
+    loadConfig.mockReturnValue({ agent: { model: "z.ai/glm-4.7" } });
+    const runtime = makeRuntime();
+
+    const model = {
+      provider: "zai",
+      id: "glm-4.7",
+      name: "GLM-4.7",
+      input: ["text"],
+      baseUrl: "https://api.z.ai/v1",
+      contextWindow: 128000,
+    };
+
+    discoverModels.mockReturnValue({
+      getAll: () => [model],
+      getAvailable: () => [model],
+    });
+
+    const { modelsListCommand } = await import("./models/list.js");
+    await modelsListCommand({ plain: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    expect(runtime.log.mock.calls[0]?.[0]).toBe("zai/glm-4.7");
+  });
+
+  it("models list provider filter normalizes z.ai alias", async () => {
+    loadConfig.mockReturnValue({ agent: { model: "z.ai/glm-4.7" } });
+    const runtime = makeRuntime();
+
+    const models = [
+      {
+        provider: "zai",
+        id: "glm-4.7",
+        name: "GLM-4.7",
+        input: ["text"],
+        baseUrl: "https://api.z.ai/v1",
+        contextWindow: 128000,
+      },
+      {
+        provider: "openai",
+        id: "gpt-4.1-mini",
+        name: "GPT-4.1 mini",
+        input: ["text"],
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 128000,
+      },
+    ];
+
+    discoverModels.mockReturnValue({
+      getAll: () => models,
+      getAvailable: () => models,
+    });
+
+    const { modelsListCommand } = await import("./models/list.js");
+    await modelsListCommand({ all: true, provider: "z.ai", json: true }, runtime);
+
+    expect(runtime.log).toHaveBeenCalledTimes(1);
+    const payload = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
+    expect(payload.count).toBe(1);
+    expect(payload.models[0]?.key).toBe("zai/glm-4.7");
+  });
+});
