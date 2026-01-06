@@ -1,3 +1,5 @@
+import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
+
 export type OnboardMode = "local" | "remote";
 export type AuthChoice =
   | "oauth"
@@ -33,6 +35,7 @@ export type OnboardOptions = {
   tailscale?: TailscaleMode;
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
+  daemonRuntime?: GatewayDaemonRuntime;
   skipSkills?: boolean;
   skipHealth?: boolean;
   nodeManager?: NodeManagerChoice;

@@ -49,7 +49,7 @@ Some features are platform-specific:
 The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. For the CLI, prefer the Node runtime (most stable):
 
 ```bash
-pnpm clawdbot gateway
+clawdbot gateway
 ```
 
 ### How do I install on Linux without Homebrew?
@@ -187,7 +187,7 @@ OAuth needs the callback to reach the machine running the CLI. Options:
 
 5. **Start gateway:**
    ```bash
-   pnpm clawdbot gateway
+   clawdbot gateway
    ```
 
 **Note:** WhatsApp may notice the IP change and require re-authentication. If so, run `pnpm clawdbot login` again. Stop the old instance before starting the new one to avoid conflicts.
@@ -221,7 +221,7 @@ Key considerations:
 #!/bin/bash
 npm install -g pnpm
 cd /app
-pnpm clawdbot gateway
+clawdbot gateway
 ```
 
 **Container command:**
@@ -238,13 +238,19 @@ Yes! The terminal QR code login works fine over SSH. For long-running operation:
 - Use `pm2`, `systemd`, or a `launchd` plist to keep the gateway running.
 - Consider Tailscale for secure remote access.
 
+### I'm seeing `InvalidPnpmLockfile: failed to migrate lockfile: 'pnpm-lock.yaml'`
+
+This can be ignored. This is simply a package manager warning when using PNPM and BUN.
+
+It often shows up when switching between `pnpm install` and `bun install`. If installs/build/tests work, you can safely ignore it.
+
 ### bun binary vs Node runtime?
 
 Clawdbot can run as:
 - **bun binary (macOS app)** — Single executable, easy distribution, auto-restarts via launchd
-- **Node runtime** (`pnpm clawdbot gateway`) — More stable for WhatsApp
+- **Node runtime** (`clawdbot gateway`) — More stable for WhatsApp
 
-If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys).
+If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys) and can corrupt memory on reconnect. Baileys: https://github.com/WhiskeySockets/Baileys
 
 **For stability:** Use launchd (macOS) or the Clawdbot.app — they handle process supervision (auto-restart on crash).
 

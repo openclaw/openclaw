@@ -6,6 +6,8 @@ type GatewayProgramArgs = {
   workingDirectory?: string;
 };
 
+type GatewayRuntimePreference = "auto" | "node" | "bun";
+
 function isNodeRuntime(execPath: string): boolean {
   const base = path.basename(execPath).toLowerCase();
   return base === "node" || base === "node.exe";
@@ -114,23 +116,69 @@ function resolveRepoRootForDev(): string {
 }
 
 async function resolveBunPath(): Promise<string> {
-  // Bun is expected to be in PATH, resolve via which/where
+  const bunPath = await resolveBinaryPath("bun");
+  return bunPath;
+}
+
+async function resolveNodePath(): Promise<string> {
+  const nodePath = await resolveBinaryPath("node");
+  return nodePath;
+}
+
+async function resolveBinaryPath(binary: string): Promise<string> {
   const { execSync } = await import("node:child_process");
+  const cmd = process.platform === "win32" ? "where" : "which";
   try {
-    const bunPath = execSync("which bun", { encoding: "utf8" }).trim();
-    await fs.access(bunPath);
-    return bunPath;
+    const output = execSync(`${cmd} ${binary}`, { encoding: "utf8" }).trim();
+    const resolved = output.split(/\r?\n/)[0]?.trim();
+    if (!resolved) throw new Error("empty");
+    await fs.access(resolved);
+    return resolved;
   } catch {
-    throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
+    if (binary === "bun") {
+      throw new Error("Bun not found in PATH. Install bun: https://bun.sh");
+    }
+    throw new Error("Node not found in PATH. Install Node 22+.");
   }
 }
 
 export async function resolveGatewayProgramArguments(params: {
   port: number;
   dev?: boolean;
+  runtime?: GatewayRuntimePreference;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway-daemon", "--port", String(params.port)];
   const execPath = process.execPath;
+  const runtime = params.runtime ?? "auto";
+
+  if (runtime === "node") {
+    const nodePath = isNodeRuntime(execPath)
+      ? execPath
+      : await resolveNodePath();
+    const cliEntrypointPath = await resolveCliEntrypointPathForService();
+    return {
+      programArguments: [nodePath, cliEntrypointPath, ...gatewayArgs],
+    };
+  }
+
+  if (runtime === "bun") {
+    if (params.dev) {
+      const repoRoot = resolveRepoRootForDev();
+      const devCliPath = path.join(repoRoot, "src", "index.ts");
+      await fs.access(devCliPath);
+      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
+      return {
+        programArguments: [bunPath, devCliPath, ...gatewayArgs],
+        workingDirectory: repoRoot,
+      };
+    }
+
+    const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
+    const cliEntrypointPath = await resolveCliEntrypointPathForService();
+    return {
+      programArguments: [bunPath, cliEntrypointPath, ...gatewayArgs],
+    };
+  }
 
   if (!params.dev) {
     try {

@@ -34,7 +34,7 @@ The Gateway WebSocket stays loopback-only (`ws://127.0.0.1:18789`). The iOS node
 Bridge is enabled by default (disable via `CLAWDBOT_BRIDGE_ENABLED=0`).
 
 ```bash
-pnpm clawdbot gateway --port 18789 --verbose
+clawdbot gateway --port 18789 --verbose
 ```
 
 Confirm in logs you see something like:
