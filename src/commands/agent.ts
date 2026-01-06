@@ -598,12 +598,14 @@ export async function agentCommand(
         2,
       ),
     );
-    if (!deliver) return;
+    if (!deliver) {
+      return { payloads: normalizedPayloads, meta: result.meta };
+    }
   }
 
   if (payloads.length === 0) {
     runtime.log("No reply from agent.");
-    return;
+    return { payloads: [], meta: result.meta };
   }
 
   const deliveryTextLimit =
@@ -787,4 +789,11 @@ export async function agentCommand(
       }
     }
   }
+
+  const normalizedPayloads = payloads.map((p) => ({
+    text: p.text ?? "",
+    mediaUrl: p.mediaUrl ?? null,
+    mediaUrls: p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : undefined),
+  }));
+  return { payloads: normalizedPayloads, meta: result.meta };
 }

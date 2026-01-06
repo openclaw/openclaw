@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import { Command } from "commander";
-import { agentCommand } from "../commands/agent.js";
+import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
@@ -387,9 +387,7 @@ Examples:
 
   program
     .command("agent")
-    .description(
-      "Talk directly to the configured agent (no chat send; optional delivery)",
-    )
+    .description("Run an agent turn via the Gateway (use --local for embedded)")
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option(
       "-t, --to <number>",
@@ -404,6 +402,11 @@ Examples:
     .option(
       "--provider <provider>",
       "Delivery provider: whatsapp|telegram|discord|slack|signal|imessage (default: whatsapp)",
+    )
+    .option(
+      "--local",
+      "Run the embedded agent locally (requires provider API keys in your shell)",
+      false,
     )
     .option(
       "--deliver",
@@ -430,9 +433,9 @@ Examples:
         typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
-      void createDefaultDeps();
+      const deps = createDefaultDeps();
       try {
-        await agentCommand(opts, defaultRuntime);
+        await agentCliCommand(opts, defaultRuntime, deps);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
