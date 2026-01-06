@@ -10,7 +10,12 @@ import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
 import { statusCommand } from "../commands/status.js";
 import { updateCommand } from "../commands/update.js";
-import { readConfigFileSnapshot } from "../config/config.js";
+import {
+  isNixMode,
+  migrateLegacyConfig,
+  readConfigFileSnapshot,
+  writeConfigFile,
+} from "../config/config.js";
 import { danger, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
@@ -87,6 +92,26 @@ export function buildProgram() {
     if (actionCommand.name() === "doctor") return;
     const snapshot = await readConfigFileSnapshot();
     if (snapshot.legacyIssues.length === 0) return;
+    if (isNixMode) {
+      defaultRuntime.error(
+        danger(
+          "Legacy config entries detected while running in Nix mode. Update your Nix config to the latest schema and retry.",
+        ),
+      );
+      process.exit(1);
+    }
+    const migrated = migrateLegacyConfig(snapshot.parsed);
+    if (migrated.config) {
+      await writeConfigFile(migrated.config);
+      if (migrated.changes.length > 0) {
+        defaultRuntime.log(
+          `Migrated legacy config entries:\n${migrated.changes
+            .map((entry) => `- ${entry}`)
+            .join("\n")}`,
+        );
+      }
+      return;
+    }
     const issues = snapshot.legacyIssues
       .map((issue) => `- ${issue.path}: ${issue.message}`)
       .join("\n");
