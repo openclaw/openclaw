@@ -21,7 +21,7 @@
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.
 - Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
 - Docs: add ClawdHub guide and hubs link for browsing, install, and sync workflows.
-- Docs: add FAQ for PNPM/Bun lockfile migration warning; link AgentSkills spec + ClawdHub from skills docs.
+- Docs: add FAQ for PNPM/Bun lockfile migration warning; link AgentSkills spec + ClawdHub guide (`/clawdhub`) from skills docs.
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
 - Browser: fix `browser snapshot`/`browser act` timeouts under Bun by patching Playwright’s CDP WebSocket selection. Thanks @azade-c for PR #307.
 - Browser: add `--browser-profile` flag and honor profile in tabs routes + browser tool. Thanks @jamesgroat for PR #324.
