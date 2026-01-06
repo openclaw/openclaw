@@ -6,77 +6,63 @@ read_when:
 ---
 # iMessage (imsg)
 
-Status: external CLI integration. No daemon.
+Updated: 2026-01-06
 
-## Model
-- Clawdbot spawns `imsg rpc` as a child process.
-- JSON-RPC runs over stdin/stdout (one JSON object per line).
-- Gateway owns the process; no TCP port needed.
+Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 
-## Multi-account (Apple IDs)
-
-iMessage “multi-account” in one Gateway process is not currently supported in a meaningful way:
-- Messages accounts are owned by the signed-in macOS user session.
-- `imsg` reads the local Messages DB and sends via that user’s configured services.
-- There isn’t a robust “pick AppleID X as the sender” switch we can depend on.
-
-### Practical approach: multiple gateways on multiple Macs/users
-
-If you need two iMessage identities:
-- Run one Gateway on each macOS user/machine that’s signed into the desired Apple ID.
-- Connect to the desired Gateway remotely (Tailscale preferred; SSH tunnel is the universal fallback).
-
-See:
-- `docs/remote.md` (SSH tunnel to `127.0.0.1:18789`)
-- `docs/discovery.md` (bridge vs SSH transport model)
-
-### Could we do “iMessage over SSH” from a single Gateway?
-
-Maybe, but it’s a new design:
-- Outbound could theoretically pipe `imsg rpc` over SSH (stdio bridge).
-- Inbound still needs a remote watcher (DB polling / event stream) and a transport back to the main Gateway.
-
-That’s closer to “remote provider instances” (or “multi-gateway aggregation”) than a small config tweak.
+## What it is
+- iMessage provider backed by `imsg` on macOS.
+- Deterministic routing: replies always go back to iMessage.
+- DMs share the agent's main session; groups are isolated (`imessage:group:<chat_id>`).
 
 ## Requirements
 - macOS with Messages signed in.
-- Full Disk Access for Clawdbot + the `imsg` binary (Messages DB access).
-- Automation permission for Messages when sending.
+- Full Disk Access for Clawdbot + `imsg` (Messages DB access).
+- Automation permission when sending.
 
-## Config
+## Setup (fast path)
+1) Ensure Messages is signed in on this Mac.
+2) Configure iMessage and start the gateway.
 
+Example:
 ```json5
 {
   imessage: {
     enabled: true,
     cliPath: "imsg",
-    dbPath: "~/Library/Messages/chat.db",
-    dmPolicy: "pairing", // pairing | allowlist | open | disabled
-    allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
-    groupPolicy: "open",
-    groupAllowFrom: ["chat_id:123"],
-    includeAttachments: false,
-    mediaMaxMb: 16,
-    service: "auto",
-    region: "US"
+    dmPolicy: "pairing",
+    allowFrom: ["+15555550123"]
   }
 }
 ```
 
-Notes:
-- `allowFrom` accepts handles (phone/email) or `chat_id:<id>` entries.
-- Default: `imessage.dmPolicy="pairing"` — unknown DM senders get a pairing code (approve via `clawdbot pairing approve --provider imessage <code>`). `"open"` requires `allowFrom=["*"]`.
-- `groupPolicy` controls group handling (`open|disabled|allowlist`).
-- `groupAllowFrom` accepts the same entries as `allowFrom`.
-- `service` defaults to `auto` (use `imessage` or `sms` to pin).
-- `region` is only used for SMS targeting.
+## Access control (DMs + groups)
+DMs:
+- Default: `imessage.dmPolicy = "pairing"`.
+- Unknown senders receive a pairing code; messages are ignored until approved.
+- Approve via:
+  - `clawdbot pairing list --provider imessage`
+  - `clawdbot pairing approve --provider imessage <CODE>`
+- Pairing is the default token exchange for iMessage DMs. Details: https://docs.clawd.bot/pairing
 
-## Addressing / targets
+Groups:
+- `imessage.groupPolicy = open | allowlist | disabled`.
+- `imessage.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
+- Mention gating uses `routing.groupChat.mentionPatterns` (iMessage has no native mention metadata).
 
+## How it works (behavior)
+- `imsg` streams message events; the gateway normalizes them into the shared provider envelope.
+- Replies always route back to the same chat id or handle.
+
+## Media + limits
+- Optional attachment ingestion via `imessage.includeAttachments`.
+- Media cap via `imessage.mediaMaxMb`.
+
+## Addressing / delivery targets
 Prefer `chat_id` for stable routing:
 - `chat_id:123` (preferred)
-- `chat_guid:...` (fallback)
-- `chat_identifier:...` (fallback)
+- `chat_guid:...`
+- `chat_identifier:...`
 - direct handles: `imessage:+1555` / `sms:+1555` / `user@example.com`
 
 List chats:
@@ -84,11 +70,24 @@ List chats:
 imsg chats --limit 20
 ```
 
-## Group chat behavior
-- Group messages set `ChatType=group`, `GroupSubject`, and `GroupMembers`.
-- Group activation respects `imessage.groups."*".requireMention` and `routing.groupChat.mentionPatterns` (patterns are required to detect mentions on iMessage). When `imessage.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
-- Replies go back to the same `chat_id` (group or direct).
+## Configuration reference (iMessage)
+Full configuration: https://docs.clawd.bot/configuration
 
-## Troubleshooting
-- `clawdbot gateway call providers.status --params '{"probe":true}'`
-- Verify `imsg` is on PATH and has access to Messages DB.
+Provider options:
+- `imessage.enabled`: enable/disable provider startup.
+- `imessage.cliPath`: path to `imsg`.
+- `imessage.dbPath`: Messages DB path.
+- `imessage.service`: `imessage | sms | auto`.
+- `imessage.region`: SMS region.
+- `imessage.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
+- `imessage.allowFrom`: DM allowlist (handles or `chat_id:*`). `open` requires `"*"`.
+- `imessage.groupPolicy`: `open | allowlist | disabled` (default: open).
+- `imessage.groupAllowFrom`: group sender allowlist.
+- `imessage.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
+- `imessage.includeAttachments`: ingest attachments into context.
+- `imessage.mediaMaxMb`: inbound/outbound media cap (MB).
+- `imessage.textChunkLimit`: outbound chunk size (chars).
+
+Related global options:
+- `routing.groupChat.mentionPatterns`.
+- `messages.responsePrefix`.

@@ -3,32 +3,34 @@ summary: "Loopback WebChat static host and Gateway WS usage for chat UI"
 read_when:
   - Debugging or configuring WebChat access
 ---
-# WebChat (SwiftUI + Gateway WS)
+# WebChat (Gateway WebSocket UI)
 
-Updated: 2025-12-17
+Updated: 2026-01-06
+
+Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 
 ## What it is
-- A native SwiftUI chat UI (macOS app / iOS) that talks directly to the Gateway WebSocket.
-- No embedded browser/WKWebView and no bundled static WebChat HTTP server.
-- Data plane is entirely Gateway WS: methods `chat.history`, `chat.send`, `chat.abort`; events `chat`, `agent`, `presence`, `tick`, `health`.
+- A native chat UI for the gateway (no embedded browser and no local static server).
+- Uses the same sessions and routing rules as other providers.
+- Deterministic routing: replies always go back to WebChat.
 
-## How it connects
-- The UI performs Gateway WS `connect`, then calls `chat.history` for bootstrap and `chat.send` for sends; it listens to `chat/agent/presence/tick/health` events.
-- History comes from the Gateway via `chat.history` (no local session file watching).
-- If Gateway WS is unavailable, the UI surfaces the error and blocks send.
+## How it works (behavior)
+- The UI connects to the Gateway WebSocket and uses `chat.history` + `chat.send`.
+- History is always fetched from the gateway (no local file watching).
+- If the gateway is unreachable, WebChat is read-only.
 
 ## Remote use
-- In remote mode, the macOS app forwards the Gateway WebSocket control port via SSH and uses that for the SwiftUI chat UI.
-- You generally should not need to manage tunnels manually; see `RemoteTunnelManager` in the app.
+- Remote mode tunnels the gateway WebSocket over SSH/Tailscale.
+- You do not need to run a separate WebChat server.
 
-## Config
-- WebChat does not have a separate HTTP port/config anymore.
-- Gateway WS is configured via the app’s gateway endpoint settings (`GatewayEndpointStore`) or `clawdbot gateway --port` when running locally.
+## Configuration reference (WebChat)
+Full configuration: https://docs.clawd.bot/configuration
 
-## Failure handling
-- UI errors when the Gateway handshake fails or the WS drops.
-- No fallback transport; the Gateway WS is required.
+Provider options:
+- No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.
 
-## Dev notes
-- macOS glue: [`apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift) + [`apps/macos/Sources/Clawdbot/WebChatManager.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/WebChatManager.swift).
-- Remote tunnel helper: [`apps/macos/Sources/Clawdbot/RemotePortTunnel.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/RemotePortTunnel.swift).
+Related global options:
+- `gateway.port`, `gateway.bind`: WebSocket host/port.
+- `gateway.auth.mode`, `gateway.auth.token`, `gateway.auth.password`: WebSocket auth.
+- `gateway.remote.url`, `gateway.remote.token`, `gateway.remote.password`: remote gateway target.
+- `session.*`: session storage and main key defaults.

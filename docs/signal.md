@@ -6,117 +6,88 @@ read_when:
 ---
 # Signal (signal-cli)
 
-Status: external CLI integration only. No libsignal embedding.
+Updated: 2026-01-06
 
-## Why
-- Signal OSS stack is GPL/AGPL; not compatible with Clawdbot MIT if bundled.
-- signal-cli is unofficial; must stay up to date (Signal server churn).
+Status: external CLI integration. Gateway talks to `signal-cli` over HTTP JSON-RPC + SSE.
 
-## The “number model” (important)
-- Clawdbot is a **device** connected via `signal-cli`.
-- If you run `signal-cli` on **your personal Signal account**, Clawdbot will **not** respond to messages sent from that same account (loop protection: ignore sender==account).
-  - Result: you **cannot** “text yourself” to chat with the AI.
-- For “I text her, she texts me back” you want a **separate Signal account/number for the bot**:
-  - Bot number runs `signal-cli` (linked device)
-  - Your personal number is in `signal.allowFrom`
-  - You DM the bot number; Clawdbot replies back to you
+## What it is
+- Signal provider via `signal-cli` (not embedded libsignal).
+- Deterministic routing: replies always go back to Signal.
+- DMs share the agent's main session; groups are isolated (`signal:group:<groupId>`).
 
-You can still run Clawdbot on your own Signal account if your goal is “respond to other people as me”, but not for self-chat.
+## The number model (important)
+- The gateway connects to a **Signal device** (the `signal-cli` account).
+- If you run the bot on **your personal Signal account**, it will ignore your own messages (loop protection).
+- For "I text the bot and it replies," use a **separate bot number**.
 
-## Model
-- Run `signal-cli` as separate process (user-installed).
-- Prefer `daemon --http=127.0.0.1:PORT` for JSON-RPC + SSE.
-- Alternative: `jsonRpc` mode over stdin/stdout.
+## Setup (fast path)
+1) Install `signal-cli` (Java required).
+2) Link a bot account:
+   - `signal-cli link -n "Clawdbot"` then scan the QR in Signal.
+3) Configure Signal and start the gateway.
 
-## Quickstart (bot number)
-1) Install `signal-cli` (keep Java installed).
-   - If you use the CLI wizard, it can auto-install to `~/.clawdbot/tools/signal-cli/...`.
-   - If you want a pinned version (example: `v0.13.22`), install manually:
-     - Download the release asset for your platform from GitHub (tag `v0.13.22`).
-     - Extract it somewhere stable (example: `~/.clawdbot/tools/signal-cli/0.13.22/`).
-     - Set `signal.cliPath` to the extracted `signal-cli` binary path.
-2) Link the bot account as a device:
-   - Run: `signal-cli link -n "Clawdbot"`
-   - Scan QR in Signal: Settings → Linked Devices → Link New Device
-   - Verify: `signal-cli listAccounts` includes the bot E.164
-3) Configure `~/.clawdbot/clawdbot.json`:
+Example:
 ```json5
 {
   signal: {
     enabled: true,
-    account: "+15551234567", // bot number (recommended)
+    account: "+15551234567",
     cliPath: "signal-cli",
-    autoStart: true,
-    httpHost: "127.0.0.1",
-    httpPort: 8080,
-
-    // Who is allowed to talk to the bot (DMs)
-    dmPolicy: "pairing", // pairing | allowlist | open | disabled
-    allowFrom: ["+15557654321"], // your personal number ("open" requires ["*"])
-
-    // Group policy + allowlist
-    groupPolicy: "open",
-    groupAllowFrom: ["+15557654321"]
+    dmPolicy: "pairing",
+    allowFrom: ["+15557654321"]
   }
 }
 ```
-4) Run gateway; sanity probe:
-   - `clawdbot gateway call providers.status --params '{"probe":true}'`
-   - Expect `signal.probe.ok=true` and `signal.probe.version`.
-5) DM the bot number from your phone; Clawdbot replies.
 
-## DM pairing
-- Default: `signal.dmPolicy="pairing"` — unknown DM senders get a pairing code.
-- Approve via: `clawdbot pairing approve --provider signal <code>`.
+## Access control (DMs + groups)
+DMs:
+- Default: `signal.dmPolicy = "pairing"`.
+- Unknown senders receive a pairing code; messages are ignored until approved.
+- Approve via:
+  - `clawdbot pairing list --provider signal`
+  - `clawdbot pairing approve --provider signal <CODE>`
+- Pairing is the default token exchange for Signal DMs. Details: https://docs.clawd.bot/pairing
 
-## “Do I need a separate number?”
-- If you want “I text her and she texts me back”, yes: **use a separate Signal account/number for the bot**.
-- Your personal account can run `signal-cli`, but you can’t self-chat (Signal loop protection; Clawdbot ignores sender==account).
+Groups:
+- `signal.groupPolicy = open | allowlist | disabled`.
+- `signal.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
 
-If you have a second phone:
-- Create/activate the bot number on that phone.
-- Run `signal-cli link -n "Clawdbot"` on your Mac, scan the QR on the bot phone.
-- Put your personal number in `signal.allowFrom`, then DM the bot number from your personal phone.
+## How it works (behavior)
+- `signal-cli` runs as a daemon; the gateway reads events via SSE.
+- Inbound messages are normalized into the shared provider envelope.
+- Replies always route back to the same number or group.
 
-## Endpoints (daemon --http)
-- `POST /api/v1/rpc` JSON-RPC request (single or batch).
-- `GET /api/v1/events` SSE stream of `receive` notifications.
-- `GET /api/v1/check` health probe (200 = up).
+## Media + limits
+- Attachments supported (base64 fetched from `signal-cli`).
+- Default cap: `signal.mediaMaxMb`.
+- Use `signal.ignoreAttachments` to skip downloading media.
 
-## Multi-account
-- Start daemon without `-a`.
-- Include `params.account` (E164) on JSON-RPC calls.
-- SSE `?account=+E164` filters events; no param = all accounts.
+## Delivery targets (CLI/cron)
+- DMs: `signal:+15551234567` (or plain E.164).
+- Groups: `signal:group:<groupId>`.
+- Usernames: `username:<name>` (if supported by your Signal account).
 
-## Troubleshooting
-- Gateway log coloring: `signal-cli: ...` lines are classified by severity; red means “treat this as an error”.
-- `Failed to initialize HTTP Server` typically means the daemon can’t bind the HTTP port (already in use). Stop the other daemon or change `signal.httpPort`.
+## Configuration reference (Signal)
+Full configuration: https://docs.clawd.bot/configuration
 
-## Minimal RPC surface
-- `send` (recipient/groupId/username, message, attachments).
-- `listGroups` (map group IDs).
-- `subscribeReceive` / `unsubscribeReceive` (if manual receive).
-- `startLink` / `finishLink` (optional device link flow).
+Provider options:
+- `signal.enabled`: enable/disable provider startup.
+- `signal.account`: E.164 for the bot account.
+- `signal.cliPath`: path to `signal-cli`.
+- `signal.httpUrl`: full daemon URL (overrides host/port).
+- `signal.httpHost`, `signal.httpPort`: daemon bind (default 127.0.0.1:8080).
+- `signal.autoStart`: auto-spawn daemon (default true if `httpUrl` unset).
+- `signal.receiveMode`: `on-start | manual`.
+- `signal.ignoreAttachments`: skip attachment downloads.
+- `signal.ignoreStories`: ignore stories from the daemon.
+- `signal.sendReadReceipts`: forward read receipts.
+- `signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
+- `signal.allowFrom`: DM allowlist (E.164). `open` requires `"*"`.
+- `signal.groupPolicy`: `open | allowlist | disabled` (default: open).
+- `signal.groupAllowFrom`: group sender allowlist.
+- `signal.textChunkLimit`: outbound chunk size (chars).
+- `signal.mediaMaxMb`: inbound/outbound media cap (MB).
 
-## Addressing (send targets)
-- Direct: `signal:+15551234567` (or plain `+15551234567`)
-- Groups: `signal:group:<groupId>`
-- Usernames: `username:<name>` / `u:<name>`
-
-## Process plan (Clawdbot adapter)
-1) Detect `signal-cli` binary; refuse if missing.
-2) Launch daemon (HTTP preferred), store PID.
-3) Poll `/api/v1/check` until ready.
-4) Open SSE stream; parse `event: receive`.
-5) Translate receive payload into Clawdbot provider model.
-6) On SSE disconnect, backoff + reconnect.
-
-## Storage
-- signal-cli data lives in `$XDG_DATA_HOME/signal-cli/data` or
-  `$HOME/.local/share/signal-cli/data`.
-
-## References (local)
-- `~/Projects/oss/signal-cli/README.md`
-- `~/Projects/oss/signal-cli/man/signal-cli-jsonrpc.5.adoc`
-- `~/Projects/oss/signal-cli/src/main/java/org/asamk/signal/http/HttpServerHandler.java`
-- `~/Projects/oss/signal-cli/src/main/java/org/asamk/signal/jsonrpc/SignalJsonRpcDispatcherHandler.java`
+Related global options:
+- `routing.groupChat.mentionPatterns` (Signal does not support native mentions).
+- `messages.responsePrefix`.
