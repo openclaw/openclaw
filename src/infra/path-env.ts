@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { resolveBrewPathDirs } from "./brew.js";
+
 type EnsureClawdbotPathOpts = {
   execPath?: string;
   cwd?: string;
@@ -74,6 +76,8 @@ function candidateBinDirs(opts: EnsureClawdbotPathOpts): string[] {
     process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
   if (isDirectory(miseShims)) candidates.push(miseShims);
+
+  candidates.push(...resolveBrewPathDirs({ homeDir }));
 
   // Common global install locations (macOS first).
   if (platform === "darwin") {

@@ -56,6 +56,7 @@
 - Docs: add group chat participation guidance to the AGENTS template.
 - Gmail: stop restart loop when `gog gmail watch serve` fails to bind (address already in use).
 - Linux: auto-attempt lingering during onboarding (try without sudo, fallback to sudo) and prompt on install/restart to keep the gateway alive after logout/idle. Thanks @tobiasbischoff for PR #237.
+- Skills: add Linuxbrew paths to gateway PATH bootstrap so the Skills UI can run brew installers under systemd/minimal environments.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
 - TUI: add `/elev` alias for `/elevated`.
 - Logging: redact sensitive tokens in verbose tool summaries by default (configurable patterns).

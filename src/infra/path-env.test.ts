@@ -111,4 +111,52 @@ describe("ensureClawdbotCliOnPath", () => {
       await fs.rm(tmp, { recursive: true, force: true });
     }
   });
+
+  it("prepends Linuxbrew dirs when present", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-path-"));
+    const originalPath = process.env.PATH;
+    const originalFlag = process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+    const originalHomebrewPrefix = process.env.HOMEBREW_PREFIX;
+    const originalHomebrewBrewFile = process.env.HOMEBREW_BREW_FILE;
+    const originalXdgBinHome = process.env.XDG_BIN_HOME;
+    try {
+      const execDir = path.join(tmp, "exec");
+      await fs.mkdir(execDir, { recursive: true });
+
+      const linuxbrewBin = path.join(tmp, ".linuxbrew", "bin");
+      const linuxbrewSbin = path.join(tmp, ".linuxbrew", "sbin");
+      await fs.mkdir(linuxbrewBin, { recursive: true });
+      await fs.mkdir(linuxbrewSbin, { recursive: true });
+
+      process.env.PATH = "/usr/bin";
+      delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      delete process.env.HOMEBREW_PREFIX;
+      delete process.env.HOMEBREW_BREW_FILE;
+      delete process.env.XDG_BIN_HOME;
+
+      ensureClawdbotCliOnPath({
+        execPath: path.join(execDir, "node"),
+        cwd: tmp,
+        homeDir: tmp,
+        platform: "linux",
+      });
+
+      const updated = process.env.PATH ?? "";
+      const parts = updated.split(path.delimiter);
+      expect(parts[0]).toBe(linuxbrewBin);
+      expect(parts[1]).toBe(linuxbrewSbin);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalFlag === undefined)
+        delete process.env.CLAWDBOT_PATH_BOOTSTRAPPED;
+      else process.env.CLAWDBOT_PATH_BOOTSTRAPPED = originalFlag;
+      if (originalHomebrewPrefix === undefined) delete process.env.HOMEBREW_PREFIX;
+      else process.env.HOMEBREW_PREFIX = originalHomebrewPrefix;
+      if (originalHomebrewBrewFile === undefined) delete process.env.HOMEBREW_BREW_FILE;
+      else process.env.HOMEBREW_BREW_FILE = originalHomebrewBrewFile;
+      if (originalXdgBinHome === undefined) delete process.env.XDG_BIN_HOME;
+      else process.env.XDG_BIN_HOME = originalXdgBinHome;
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveBrewExecutable } from "../infra/brew.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -129,9 +130,13 @@ function buildInstallCommand(
 
 async function resolveBrewBinDir(
   timeoutMs: number,
+  brewExe?: string,
 ): Promise<string | undefined> {
-  if (!hasBinary("brew")) return undefined;
-  const prefixResult = await runCommandWithTimeout(["brew", "--prefix"], {
+  const exe =
+    brewExe ?? (hasBinary("brew") ? "brew" : resolveBrewExecutable());
+  if (!exe) return undefined;
+
+  const prefixResult = await runCommandWithTimeout([exe, "--prefix"], {
     timeoutMs: Math.min(timeoutMs, 30_000),
   });
   if (prefixResult.code === 0) {
@@ -194,7 +199,9 @@ export async function installSkill(
       code: null,
     };
   }
-  if (spec.kind === "brew" && !hasBinary("brew")) {
+
+  const brewExe = hasBinary("brew") ? "brew" : resolveBrewExecutable();
+  if (spec.kind === "brew" && !brewExe) {
     return {
       ok: false,
       message: "brew not installed",
@@ -204,9 +211,9 @@ export async function installSkill(
     };
   }
   if (spec.kind === "uv" && !hasBinary("uv")) {
-    if (hasBinary("brew")) {
+    if (brewExe) {
       const brewResult = await runCommandWithTimeout(
-        ["brew", "install", "uv"],
+        [brewExe, "install", "uv"],
         {
           timeoutMs,
         },
@@ -240,10 +247,14 @@ export async function installSkill(
     };
   }
 
+  if (spec.kind === "brew" && brewExe && command.argv[0] === "brew") {
+    command.argv[0] = brewExe;
+  }
+
   if (spec.kind === "go" && !hasBinary("go")) {
-    if (hasBinary("brew")) {
+    if (brewExe) {
       const brewResult = await runCommandWithTimeout(
-        ["brew", "install", "go"],
+        [brewExe, "install", "go"],
         {
           timeoutMs,
         },
@@ -269,8 +280,8 @@ export async function installSkill(
   }
 
   let env: NodeJS.ProcessEnv | undefined;
-  if (spec.kind === "go" && hasBinary("brew")) {
-    const brewBin = await resolveBrewBinDir(timeoutMs);
+  if (spec.kind === "go" && brewExe) {
+    const brewBin = await resolveBrewBinDir(timeoutMs, brewExe);
     if (brewBin) env = { GOBIN: brewBin };
   }
 
