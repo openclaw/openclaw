@@ -500,7 +500,7 @@ function orderProfilesByMode(
   }
 
   // Sort available profiles by lastUsed (oldest first = round-robin)
-  // Then by type (oauth preferred over api_key)
+  // Then by lastUsed (oldest first = round-robin within type)
   const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
     const typeScore = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
@@ -508,14 +508,14 @@ function orderProfilesByMode(
     return { profileId, typeScore, lastUsed };
   });
 
-  // Primary sort: lastUsed (oldest first for round-robin)
-  // Secondary sort: type preference (oauth > api_key)
+  // Primary sort: type preference (oauth > api_key).
+  // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .sort((a, b) => {
-      // First by lastUsed (oldest first)
-      if (a.lastUsed !== b.lastUsed) return a.lastUsed - b.lastUsed;
-      // Then by type
-      return a.typeScore - b.typeScore;
+      // First by type (oauth > api_key)
+      if (a.typeScore !== b.typeScore) return a.typeScore - b.typeScore;
+      // Then by lastUsed (oldest first)
+      return a.lastUsed - b.lastUsed;
     })
     .map((entry) => entry.profileId);
 
