@@ -32,10 +32,19 @@ export type OAuthCredential = OAuthCredentials & {
 
 export type AuthProfileCredential = ApiKeyCredential | OAuthCredential;
 
+/** Per-profile usage statistics for round-robin and cooldown tracking */
+export type ProfileUsageStats = {
+  lastUsed?: number;
+  cooldownUntil?: number;
+  errorCount?: number;
+};
+
 export type AuthProfileStore = {
   version: number;
   profiles: Record<string, AuthProfileCredential>;
   lastGood?: Record<string, string>;
+  /** Usage statistics per profile for round-robin rotation */
+  usageStats?: Record<string, ProfileUsageStats>;
 };
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
@@ -183,6 +192,10 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
       record.lastGood && typeof record.lastGood === "object"
         ? (record.lastGood as Record<string, string>)
         : undefined,
+    usageStats:
+      record.usageStats && typeof record.usageStats === "object"
+        ? (record.usageStats as Record<string, ProfileUsageStats>)
+        : undefined,
   };
 }
 
@@ -300,6 +313,7 @@ export function saveAuthProfileStore(store: AuthProfileStore): void {
     version: AUTH_STORE_VERSION,
     profiles: store.profiles,
     lastGood: store.lastGood ?? undefined,
+    usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
 }
@@ -320,6 +334,85 @@ export function listProfilesForProvider(
   return Object.entries(store.profiles)
     .filter(([, cred]) => cred.provider === provider)
     .map(([id]) => id);
+}
+
+/**
+ * Check if a profile is currently in cooldown (due to rate limiting or errors).
+ */
+export function isProfileInCooldown(
+  store: AuthProfileStore,
+  profileId: string,
+): boolean {
+  const stats = store.usageStats?.[profileId];
+  if (!stats?.cooldownUntil) return false;
+  return Date.now() < stats.cooldownUntil;
+}
+
+/**
+ * Mark a profile as successfully used. Resets error count and updates lastUsed.
+ */
+export function markAuthProfileUsed(params: {
+  store: AuthProfileStore;
+  profileId: string;
+}): void {
+  const { store, profileId } = params;
+  if (!store.profiles[profileId]) return;
+
+  store.usageStats = store.usageStats ?? {};
+  store.usageStats[profileId] = {
+    ...store.usageStats[profileId],
+    lastUsed: Date.now(),
+    errorCount: 0,
+    cooldownUntil: undefined,
+  };
+  saveAuthProfileStore(store);
+}
+
+/**
+ * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
+ * Cooldown times: 1min, 5min, 25min, max 1 hour.
+ */
+export function markAuthProfileCooldown(params: {
+  store: AuthProfileStore;
+  profileId: string;
+}): void {
+  const { store, profileId } = params;
+  if (!store.profiles[profileId]) return;
+
+  store.usageStats = store.usageStats ?? {};
+  const existing = store.usageStats[profileId] ?? {};
+  const errorCount = (existing.errorCount ?? 0) + 1;
+
+  // Exponential backoff: 1min, 5min, 25min, capped at 1h
+  const backoffMs = Math.min(
+    60 * 60 * 1000, // 1 hour max
+    60 * 1000 * Math.pow(5, Math.min(errorCount - 1, 3)),
+  );
+
+  store.usageStats[profileId] = {
+    ...existing,
+    errorCount,
+    cooldownUntil: Date.now() + backoffMs,
+  };
+  saveAuthProfileStore(store);
+}
+
+/**
+ * Clear cooldown for a profile (e.g., manual reset).
+ */
+export function clearAuthProfileCooldown(params: {
+  store: AuthProfileStore;
+  profileId: string;
+}): void {
+  const { store, profileId } = params;
+  if (!store.usageStats?.[profileId]) return;
+
+  store.usageStats[profileId] = {
+    ...store.usageStats[profileId],
+    errorCount: 0,
+    cooldownUntil: undefined,
+  };
+  saveAuthProfileStore(store);
 }
 
 export function resolveAuthProfileOrder(params: {
@@ -376,14 +469,50 @@ function orderProfilesByMode(
   order: string[],
   store: AuthProfileStore,
 ): string[] {
-  const scored = order.map((profileId) => {
+  const now = Date.now();
+
+  // Partition into available and in-cooldown
+  const available: string[] = [];
+  const inCooldown: string[] = [];
+
+  for (const profileId of order) {
+    if (isProfileInCooldown(store, profileId)) {
+      inCooldown.push(profileId);
+    } else {
+      available.push(profileId);
+    }
+  }
+
+  // Sort available profiles by lastUsed (oldest first = round-robin)
+  // Then by type (oauth preferred over api_key)
+  const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
-    const score = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
-    return { profileId, score };
+    const typeScore = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
+    const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
+    return { profileId, typeScore, lastUsed };
   });
-  return scored
-    .sort((a, b) => a.score - b.score)
+
+  // Primary sort: lastUsed (oldest first for round-robin)
+  // Secondary sort: type preference (oauth > api_key)
+  const sorted = scored
+    .sort((a, b) => {
+      // First by lastUsed (oldest first)
+      if (a.lastUsed !== b.lastUsed) return a.lastUsed - b.lastUsed;
+      // Then by type
+      return a.typeScore - b.typeScore;
+    })
     .map((entry) => entry.profileId);
+
+  // Append cooldown profiles at the end (sorted by cooldown expiry, soonest first)
+  const cooldownSorted = inCooldown
+    .map((profileId) => ({
+      profileId,
+      cooldownUntil: store.usageStats?.[profileId]?.cooldownUntil ?? now,
+    }))
+    .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
+    .map((entry) => entry.profileId);
+
+  return [...sorted, ...cooldownSorted];
 }
 
 export async function resolveApiKeyForProfile(params: {
