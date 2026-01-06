@@ -680,7 +680,10 @@ function describeReplyContext(rawMessage: proto.IMessage | undefined): {
   const location = extractLocationData(quoted);
   const locationText = location ? formatLocationText(location) : undefined;
   const text = extractText(quoted);
-  let body = [text, locationText].filter(Boolean).join("\n").trim();
+  let body: string | undefined = [text, locationText]
+    .filter(Boolean)
+    .join("\n")
+    .trim();
   if (!body) body = extractMediaPlaceholder(quoted);
   if (!body) {
     const quotedType = quoted ? getContentType(quoted) : undefined;
