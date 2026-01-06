@@ -25,11 +25,15 @@ function applyPatchIfNeeded(opts) {
     throw new Error(`missing patch: ${patchPath}`);
   }
 
-  const targetDir = path.resolve(opts.targetDir);
+  let targetDir = path.resolve(opts.targetDir);
   if (!fs.existsSync(targetDir) || !fs.statSync(targetDir).isDirectory()) {
     console.warn(`[postinstall] skip missing target: ${targetDir}`);
     return;
   }
+
+  // Resolve symlinks to avoid "beyond a symbolic link" errors from git apply
+  // (bun/pnpm use symlinks in node_modules)
+  targetDir = fs.realpathSync(targetDir);
 
   const gitArgsBase = ["apply", "--unsafe-paths", "--whitespace=nowarn"];
   const reverseCheck = [
