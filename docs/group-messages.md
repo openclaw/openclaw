@@ -52,7 +52,7 @@ Use the group chat command:
 - `/activation mention`
 - `/activation always`
 
-Only the owner number (from `whatsapp.allowFrom`, defaulting to the bot’s own E.164 when unset) can change this. `/status` in the group shows the current activation mode.
+Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. `/status` in the group shows the current activation mode.
 
 ## How to use
 1) Add Clawd UK (`+447700900123`) to the group.
