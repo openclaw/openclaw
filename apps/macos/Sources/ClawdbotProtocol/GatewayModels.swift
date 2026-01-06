@@ -369,6 +369,43 @@ public struct SendParams: Codable, Sendable {
     }
 }
 
+public struct PollParams: Codable, Sendable {
+    public let to: String
+    public let question: String
+    public let options: [String]
+    public let maxselections: Int?
+    public let durationhours: Int?
+    public let provider: String?
+    public let idempotencykey: String
+
+    public init(
+        to: String,
+        question: String,
+        options: [String],
+        maxselections: Int?,
+        durationhours: Int?,
+        provider: String?,
+        idempotencykey: String
+    ) {
+        self.to = to
+        self.question = question
+        self.options = options
+        self.maxselections = maxselections
+        self.durationhours = durationhours
+        self.provider = provider
+        self.idempotencykey = idempotencykey
+    }
+    private enum CodingKeys: String, CodingKey {
+        case to
+        case question
+        case options
+        case maxselections = "maxSelections"
+        case durationhours = "durationHours"
+        case provider
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
 public struct AgentParams: Codable, Sendable {
     public let message: String
     public let to: String?
