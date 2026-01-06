@@ -492,6 +492,9 @@ The gateway runs under a supervisor that auto-restarts it. You need to stop the 
 # Check if running
 launchctl list | grep clawdbot
 
+# Stop (disable does NOT stop a running job)
+clawdbot gateway stop
+
 # Stop and disable
 launchctl disable gui/$UID/com.clawdbot.gateway
 launchctl bootout gui/$UID/com.clawdbot.gateway
@@ -499,6 +502,9 @@ launchctl bootout gui/$UID/com.clawdbot.gateway
 # Re-enable later
 launchctl enable gui/$UID/com.clawdbot.gateway
 launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.gateway.plist
+
+# Or just restart
+clawdbot gateway restart
 ```
 
 **Linux (systemd)**
@@ -508,7 +514,11 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.gateway.plist
 systemctl list-units | grep -i clawdbot
 
 # Stop and disable
-sudo systemctl disable --now clawdbot
+clawdbot gateway stop
+systemctl --user disable --now clawdbot-gateway.service
+
+# Or just restart
+clawdbot gateway restart
 ```
 
 **pm2 (if used)**

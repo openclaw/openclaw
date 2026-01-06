@@ -4,7 +4,6 @@ import { defaultRuntime } from "../runtime.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-
 async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
