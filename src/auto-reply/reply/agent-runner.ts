@@ -106,6 +106,7 @@ export async function runReplyAgent(params: {
   const streamedPayloadKeys = new Set<string>();
   const pendingStreamedPayloadKeys = new Set<string>();
   const pendingBlockTasks = new Set<Promise<void>>();
+  const pendingToolTasks = new Set<Promise<void>>();
   let didStreamBlockReply = false;
   const buildPayloadKey = (payload: ReplyPayload) => {
     const text = payload.text?.trim() ?? "";
@@ -312,33 +313,42 @@ export async function runReplyAgent(params: {
                 : undefined,
             shouldEmitToolResult,
             onToolResult: opts?.onToolResult
-              ? async (payload) => {
-                  let text = payload.text;
-                  if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-                    const stripped = stripHeartbeatToken(text, {
-                      mode: "message",
+              ? (payload) => {
+                  const task = (async () => {
+                    let text = payload.text;
+                    if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+                      const stripped = stripHeartbeatToken(text, {
+                        mode: "message",
+                      });
+                      if (stripped.didStrip && !didLogHeartbeatStrip) {
+                        didLogHeartbeatStrip = true;
+                        logVerbose(
+                          "Stripped stray HEARTBEAT_OK token from reply",
+                        );
+                      }
+                      if (
+                        stripped.shouldSkip &&
+                        (payload.mediaUrls?.length ?? 0) === 0
+                      ) {
+                        return;
+                      }
+                      text = stripped.text;
+                    }
+                    if (!isHeartbeat) {
+                      await typing.startTypingOnText(text);
+                    }
+                    await opts.onToolResult?.({
+                      text,
+                      mediaUrls: payload.mediaUrls,
                     });
-                    if (stripped.didStrip && !didLogHeartbeatStrip) {
-                      didLogHeartbeatStrip = true;
-                      logVerbose(
-                        "Stripped stray HEARTBEAT_OK token from reply",
-                      );
-                    }
-                    if (
-                      stripped.shouldSkip &&
-                      (payload.mediaUrls?.length ?? 0) === 0
-                    ) {
-                      return;
-                    }
-                    text = stripped.text;
-                  }
-                  if (!isHeartbeat) {
-                    await typing.startTypingOnText(text);
-                  }
-                  await opts.onToolResult?.({
-                    text,
-                    mediaUrls: payload.mediaUrls,
-                  });
+                  })()
+                    .catch((err) => {
+                      logVerbose(`tool result delivery failed: ${String(err)}`);
+                    })
+                    .finally(() => {
+                      pendingToolTasks.delete(task);
+                    });
+                  pendingToolTasks.add(task);
                 }
               : undefined,
           }),
@@ -377,6 +387,9 @@ export async function runReplyAgent(params: {
     if (payloadArray.length === 0) return finalizeWithFollowup(undefined);
     if (pendingBlockTasks.size > 0) {
       await Promise.allSettled(pendingBlockTasks);
+    }
+    if (pendingToolTasks.size > 0) {
+      await Promise.allSettled(pendingToolTasks);
     }
 
     const sanitizedPayloads = isHeartbeat
