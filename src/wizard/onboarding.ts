@@ -604,7 +604,9 @@ export async function runOnboardingWizard(
 
   await writeConfigFile(nextConfig);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  await ensureWorkspaceAndSessions(workspaceDir, runtime);
+  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+  });
 
   nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });

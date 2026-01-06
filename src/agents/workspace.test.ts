@@ -36,4 +36,17 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
     expect(await fs.readFile(agentsPath, "utf-8")).toBe("custom");
   });
+
+  it("does not recreate BOOTSTRAP.md once workspace exists", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    const agentsPath = path.join(dir, "AGENTS.md");
+    const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
+
+    await fs.writeFile(agentsPath, "custom", "utf-8");
+    await fs.rm(bootstrapPath, { force: true });
+
+    await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
+
+    await expect(fs.stat(bootstrapPath)).rejects.toBeDefined();
+  });
 });

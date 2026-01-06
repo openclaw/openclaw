@@ -9,7 +9,7 @@ CLAWDBOT runs a single embedded agent runtime derived from **p-mono** (internal 
 
 ## Workspace (required)
 
-You must set an agent home directory via `agent.workspace`. CLAWDBOT uses this as the agent’s **only** working directory (`cwd`) for tools and context.
+CLAWDBOT uses a single agent workspace directory (`agent.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
 
 Recommended: use `clawdbot setup` to create `~/.clawdbot/clawdbot.json` if missing and initialize the workspace files.
 
@@ -30,6 +30,14 @@ Inside `agent.workspace`, CLAWDBOT expects these user-editable files:
 On the first turn of a new session, CLAWDBOT injects the contents of these files directly into the agent context.
 
 If a file is missing, CLAWDBOT injects a single “missing file” marker line (and `clawdbot setup` will create a safe default template).
+
+`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.
+
+To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
+
+```json5
+{ agent: { skipBootstrap: true } }
+```
 
 ## Built-in tools (internal)
 

@@ -616,6 +616,18 @@ Default: `~/clawd`.
 If `agent.sandbox` is enabled, non-main sessions can override this with their
 own per-session workspaces under `agent.sandbox.workspaceRoot`.
 
+### `agent.skipBootstrap`
+
+Disables automatic creation of the workspace bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, and `BOOTSTRAP.md`).
+
+Use this for pre-seeded deployments where your workspace files come from a repo.
+
+```json5
+{
+  agent: { skipBootstrap: true }
+}
+```
+
 ### `agent.userTimezone`
 
 Sets the user’s timezone for **system prompt context** (not for timestamps in

@@ -268,9 +268,9 @@ describe("doctor", () => {
         parsed: {
           gateway: { mode: "local", bind: "loopback" },
           agent: {
-            workspace: "/Users/steipete/clawdbot",
+            workspace: "/Users/steipete/clawd",
             sandbox: {
-              workspaceRoot: "/Users/steipete/clawdbot/sandboxes",
+              workspaceRoot: "/Users/steipete/clawd/sandboxes",
               docker: {
                 image: "clawdbot-sandbox",
                 containerPrefix: "clawdbot-sbx",
@@ -282,9 +282,9 @@ describe("doctor", () => {
         config: {
           gateway: { mode: "local", bind: "loopback" },
           agent: {
-            workspace: "/Users/steipete/clawdbot",
+            workspace: "/Users/steipete/clawd",
             sandbox: {
-              workspaceRoot: "/Users/steipete/clawdbot/sandboxes",
+              workspaceRoot: "/Users/steipete/clawd/sandboxes",
               docker: {
                 image: "clawdbot-sandbox",
                 containerPrefix: "clawdbot-sbx",
@@ -365,8 +365,8 @@ describe("doctor", () => {
     const sandbox = agent.sandbox as Record<string, unknown>;
     const docker = sandbox.docker as Record<string, unknown>;
 
-    expect(agent.workspace).toBe("/Users/steipete/clawdbot");
-    expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawdbot/sandboxes");
+    expect(agent.workspace).toBe("/Users/steipete/clawd");
+    expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawd/sandboxes");
     expect(docker.image).toBe("clawdbot-sandbox");
     expect(docker.containerPrefix).toBe("clawdbot-sbx");
   });

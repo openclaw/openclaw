@@ -85,7 +85,7 @@ Now message the assistant number from your allowlisted phone.
 
 Clawd reads operating instructions and “memory” from its workspace directory.
 
-By default, Clawdbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`) automatically on setup/first agent run.
+By default, Clawdbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it).
 
 Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up.
 
@@ -99,6 +99,16 @@ Optional: choose a different workspace with `agent.workspace` (supports `~`).
 {
   agent: {
     workspace: "~/clawd"
+  }
+}
+```
+
+If you already ship your own workspace files from a repo, you can disable bootstrap file creation entirely:
+
+```json5
+{
+  agent: {
+    skipBootstrap: true
   }
 }
 ```
