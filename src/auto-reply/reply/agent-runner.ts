@@ -349,9 +349,7 @@ export async function runReplyAgent(params: {
       const isContextOverflow =
         /context.*overflow|too large|context window/i.test(message);
       const isSessionCorruption =
-        /function call turn comes immediately after|INVALID_ARGUMENT.*function/i.test(
-          message,
-        );
+        /function call turn comes immediately after/i.test(message);
 
       // Auto-recover from Gemini session corruption by resetting the session
       if (isSessionCorruption && sessionKey && sessionStore && storePath) {
@@ -360,19 +358,26 @@ export async function runReplyAgent(params: {
           `Session history corrupted (Gemini function call ordering). Resetting session: ${sessionKey}`,
         );
 
-        // Delete transcript file if it exists
-        if (corruptedSessionId) {
-          const transcriptPath = resolveSessionTranscriptPath(corruptedSessionId);
-          try {
-            fs.unlinkSync(transcriptPath);
-          } catch {
-            // Ignore if file doesn't exist
+        try {
+          // Delete transcript file if it exists
+          if (corruptedSessionId) {
+            const transcriptPath =
+              resolveSessionTranscriptPath(corruptedSessionId);
+            try {
+              fs.unlinkSync(transcriptPath);
+            } catch {
+              // Ignore if file doesn't exist
+            }
           }
-        }
 
-        // Remove session entry from store
-        delete sessionStore[sessionKey];
-        await saveSessionStore(storePath, sessionStore);
+          // Remove session entry from store
+          delete sessionStore[sessionKey];
+          await saveSessionStore(storePath, sessionStore);
+        } catch (cleanupErr) {
+          defaultRuntime.error(
+            `Failed to reset corrupted session ${sessionKey}: ${String(cleanupErr)}`,
+          );
+        }
 
         return finalizeWithFollowup({
           text: "⚠️ Session history was corrupted. I've reset the conversation - please try again!",
