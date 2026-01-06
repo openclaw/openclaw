@@ -15,6 +15,7 @@
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
+- Gateway/CLI: stop forcing localhost URL in remote mode so remote gateway config works. Thanks @oswalpalash for PR #293.
 - Onboarding: prompt immediately for OpenAI Codex redirect URL on remote/headless logins.
 - Configure: add OpenAI Codex (ChatGPT OAuth) auth choice (align with onboarding).
 - Doctor: suggest adding the workspace memory system when missing (opt-out via `--no-workspace-suggestions`).

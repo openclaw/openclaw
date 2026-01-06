@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
@@ -8,6 +8,10 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 describe("gateway tool defaults", () => {
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+  });
+
   it("leaves url undefined so callGateway can use config", () => {
     const opts = resolveGatewayOptions();
     expect(opts.url).toBeUndefined();
