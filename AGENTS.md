@@ -32,7 +32,9 @@
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
 - PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
-- When working on a PR: add a changelog entry with the PR ID and thank the contributor.
+- PR review flow: when given a PR link, review via `gh pr view`/`gh pr diff` and do **not** change branches.
+- PR merge flow: create a temp branch from `main`, merge the PR branch into it, apply fixes, add changelog entry (include PR # + thanks), commit, merge back to `main`, delete the temp branch, and end on `main`.
+- When working on a PR: add a changelog entry with the PR number and thank the contributor.
 - When working on an issue: reference the issue in the changelog entry.
 - When merging a PR: leave a PR comment that explains exactly what we did.
 - When merging a PR from a new contributor: add their avatar to the README “Thanks to all clawtributors” thumbnail list.
