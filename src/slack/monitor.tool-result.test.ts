@@ -189,11 +189,19 @@ describe("monitorSlackProvider tool results", () => {
     const client = getSlackClient() as {
       assistant?: { threads?: { setStatus?: ReturnType<typeof vi.fn> } };
     };
-    expect(client.assistant?.threads?.setStatus).toHaveBeenCalledWith({
+    const setStatus = client.assistant?.threads?.setStatus;
+    expect(setStatus).toHaveBeenCalledTimes(2);
+    expect(setStatus).toHaveBeenNthCalledWith(1, {
       token: "bot-token",
       channel_id: "C1",
       thread_ts: "123",
       status: "is typing...",
+    });
+    expect(setStatus).toHaveBeenNthCalledWith(2, {
+      token: "bot-token",
+      channel_id: "C1",
+      thread_ts: "123",
+      status: "",
     });
   });
 

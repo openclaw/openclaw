@@ -19,8 +19,7 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import type { TypingController } from "../auto-reply/reply/typing.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -451,42 +450,35 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       );
     }
 
-    let typingController: TypingController | undefined;
-    const dispatcher = createReplyDispatcher({
-      responsePrefix: cfg.messages?.responsePrefix,
-      deliver: async (payload) => {
-        await deliverReplies({
-          replies: [payload],
-          chatId: String(chatId),
-          token: opts.token,
-          runtime,
-          bot,
-          replyToMode,
-          textLimit,
-        });
-      },
-      onIdle: () => {
-        typingController?.markDispatchIdle();
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          danger(`telegram ${info.kind} reply failed: ${String(err)}`),
-        );
-      },
-    });
+    const { dispatcher, replyOptions, markDispatchIdle } =
+      createReplyDispatcherWithTyping({
+        responsePrefix: cfg.messages?.responsePrefix,
+        deliver: async (payload) => {
+          await deliverReplies({
+            replies: [payload],
+            chatId: String(chatId),
+            token: opts.token,
+            runtime,
+            bot,
+            replyToMode,
+            textLimit,
+          });
+        },
+        onError: (err, info) => {
+          runtime.error?.(
+            danger(`telegram ${info.kind} reply failed: ${String(err)}`),
+          );
+        },
+        onReplyStart: sendTyping,
+      });
 
     const { queuedFinal } = await dispatchReplyFromConfig({
       ctx: ctxPayload,
       cfg,
       dispatcher,
-      replyOptions: {
-        onReplyStart: sendTyping,
-        onTypingController: (typing) => {
-          typingController = typing;
-        },
-      },
+      replyOptions,
     });
-    typingController?.markDispatchIdle();
+    markDispatchIdle();
     if (!queuedFinal) return;
   };
 

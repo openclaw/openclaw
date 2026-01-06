@@ -1,6 +1,7 @@
 import { stripHeartbeatToken } from "../heartbeat.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
-import type { ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
 
@@ -20,6 +21,20 @@ export type ReplyDispatcherOptions = {
   onHeartbeatStrip?: () => void;
   onIdle?: () => void;
   onError?: ReplyDispatchErrorHandler;
+};
+
+type ReplyDispatcherWithTypingOptions = Omit<
+  ReplyDispatcherOptions,
+  "onIdle"
+> & {
+  onReplyStart?: () => Promise<void> | void;
+  onIdle?: () => void;
+};
+
+type ReplyDispatcherWithTypingResult = {
+  dispatcher: ReplyDispatcher;
+  replyOptions: Pick<GetReplyOptions, "onReplyStart" | "onTypingController">;
+  markDispatchIdle: () => void;
 };
 
 export type ReplyDispatcher = {
@@ -105,5 +120,33 @@ export function createReplyDispatcher(
     sendFinalReply: (payload) => enqueue("final", payload),
     waitForIdle: () => sendChain,
     getQueuedCounts: () => ({ ...queuedCounts }),
+  };
+}
+
+export function createReplyDispatcherWithTyping(
+  options: ReplyDispatcherWithTypingOptions,
+): ReplyDispatcherWithTypingResult {
+  const { onReplyStart, onIdle, ...dispatcherOptions } = options;
+  let typingController: TypingController | undefined;
+  const dispatcher = createReplyDispatcher({
+    ...dispatcherOptions,
+    onIdle: () => {
+      typingController?.markDispatchIdle();
+      onIdle?.();
+    },
+  });
+
+  return {
+    dispatcher,
+    replyOptions: {
+      onReplyStart,
+      onTypingController: (typing) => {
+        typingController = typing;
+      },
+    },
+    markDispatchIdle: () => {
+      typingController?.markDispatchIdle();
+      onIdle?.();
+    },
   };
 }

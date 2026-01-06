@@ -33,8 +33,10 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import type { TypingController } from "../auto-reply/reply/typing.js";
+import {
+  createReplyDispatcher,
+  createReplyDispatcherWithTyping,
+} from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
@@ -797,43 +799,36 @@ export function createDiscordMessageHandler(params: {
       }
 
       let didSendReply = false;
-      let typingController: TypingController | undefined;
-      const dispatcher = createReplyDispatcher({
-        responsePrefix: cfg.messages?.responsePrefix,
-        deliver: async (payload) => {
-          await deliverDiscordReply({
-            replies: [payload],
-            target: replyTarget,
-            token,
-            rest: client.rest,
-            runtime,
-            replyToMode,
-            textLimit,
-          });
-          didSendReply = true;
-        },
-        onIdle: () => {
-          typingController?.markDispatchIdle();
-        },
-        onError: (err, info) => {
-          runtime.error?.(
-            danger(`discord ${info.kind} reply failed: ${String(err)}`),
-          );
-        },
-      });
+      const { dispatcher, replyOptions, markDispatchIdle } =
+        createReplyDispatcherWithTyping({
+          responsePrefix: cfg.messages?.responsePrefix,
+          deliver: async (payload) => {
+            await deliverDiscordReply({
+              replies: [payload],
+              target: replyTarget,
+              token,
+              rest: client.rest,
+              runtime,
+              replyToMode,
+              textLimit,
+            });
+            didSendReply = true;
+          },
+          onError: (err, info) => {
+            runtime.error?.(
+              danger(`discord ${info.kind} reply failed: ${String(err)}`),
+            );
+          },
+          onReplyStart: () => sendTyping(message),
+        });
 
       const { queuedFinal, counts } = await dispatchReplyFromConfig({
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions: {
-          onReplyStart: () => sendTyping(message),
-          onTypingController: (typing) => {
-            typingController = typing;
-          },
-        },
+        replyOptions,
       });
-      typingController?.markDispatchIdle();
+      markDispatchIdle();
       if (!queuedFinal) {
         if (
           isGuildMessage &&
