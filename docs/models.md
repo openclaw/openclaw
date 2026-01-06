@@ -77,6 +77,7 @@ Output
 - Image routing uses `agent.imageModel` **only when configured** and the primary
   model lacks image input.
 - Persist last successful provider/model to session entry; auth profile success is global.
+- See `docs/model-failover.md` for auth profile rotation, cooldowns, and timeout handling.
 
 ## Tests
 

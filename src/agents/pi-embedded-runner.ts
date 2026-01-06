@@ -24,7 +24,11 @@ import {
 } from "../process/command-queue.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { markAuthProfileGood, markAuthProfileUsed, markAuthProfileCooldown } from "./auth-profiles.js";
+import {
+  markAuthProfileCooldown,
+  markAuthProfileGood,
+  markAuthProfileUsed,
+} from "./auth-profiles.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -955,14 +959,18 @@ export async function runEmbeddedPiAgent(params: {
             (params.config?.agent?.model?.fallbacks?.length ?? 0) > 0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
-          
+
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate = (!aborted && (authFailure || rateLimitFailure)) || timedOut;
-          
+          const shouldRotate =
+            (!aborted && (authFailure || rateLimitFailure)) || timedOut;
+
           if (shouldRotate) {
             // Mark current profile for cooldown before rotating
             if (lastProfileId) {
-              markAuthProfileCooldown({ store: authStore, profileId: lastProfileId });
+              markAuthProfileCooldown({
+                store: authStore,
+                profileId: lastProfileId,
+              });
               if (timedOut) {
                 log.warn(
                   `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
@@ -973,15 +981,17 @@ export async function runEmbeddedPiAgent(params: {
             if (rotated) {
               continue;
             }
-            if (fallbackConfigured && !timedOut) {
+            if (fallbackConfigured) {
               const message =
                 lastAssistant?.errorMessage?.trim() ||
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant)
                   : "") ||
-                (rateLimitFailure
-                  ? "LLM request rate limited."
-                  : "LLM request unauthorized.");
+                (timedOut
+                  ? "LLM request timed out."
+                  : rateLimitFailure
+                    ? "LLM request rate limited."
+                    : "LLM request unauthorized.");
               throw new Error(message);
             }
           }
