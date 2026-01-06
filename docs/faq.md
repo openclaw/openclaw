@@ -573,6 +573,7 @@ Quick reference (send these in chat):
 |---------|--------|
 | `/help` | Show available commands |
 | `/status` | Health + session info |
+| `/stop` | Abort the current run |
 | `/new` or `/reset` | Reset the session |
 | `/compact [notes]` | Compact session context |
 | `/restart` | Restart Clawdbot |
