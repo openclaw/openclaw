@@ -1,7 +1,7 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
@@ -400,28 +400,11 @@ export async function monitorSignalProvider(
         },
       });
 
-      const replyResult = await getReplyFromConfig(
-        ctxPayload,
-        {
-          onToolResult: (payload) => {
-            dispatcher.sendToolResult(payload);
-          },
-          onBlockReply: (payload) => {
-            dispatcher.sendBlockReply(payload);
-          },
-        },
+      const { queuedFinal } = await dispatchReplyFromConfig({
+        ctx: ctxPayload,
         cfg,
-      );
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-      let queuedFinal = false;
-      for (const reply of replies) {
-        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-      }
-      await dispatcher.waitForIdle();
+        dispatcher,
+      });
       if (!queuedFinal) return;
     };
 

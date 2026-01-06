@@ -9,6 +9,7 @@ import {
   HEARTBEAT_PROMPT,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   normalizeMentionText,
@@ -1193,8 +1194,8 @@ export async function monitorWebProvider(
         },
       });
 
-      const replyResult = await (replyResolver ?? getReplyFromConfig)(
-        {
+      const { queuedFinal } = await dispatchReplyFromConfig({
+        ctx: {
           Body: combinedBody,
           From: msg.from,
           To: msg.to,
@@ -1217,31 +1218,16 @@ export async function monitorWebProvider(
           WasMentioned: msg.wasMentioned,
           Surface: "whatsapp",
         },
-        {
+        cfg,
+        dispatcher,
+        replyResolver,
+        replyOptions: {
           onReplyStart: msg.sendComposing,
           onTypingController: (typing) => {
             typingController = typing;
           },
-          onToolResult: (payload) => {
-            dispatcher.sendToolResult(payload);
-          },
-          onBlockReply: (payload) => {
-            dispatcher.sendBlockReply(payload);
-          },
         },
-      );
-
-      const replyList = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-
-      let queuedFinal = false;
-      for (const replyPayload of replyList) {
-        queuedFinal = dispatcher.sendFinalReply(replyPayload) || queuedFinal;
-      }
-      await dispatcher.waitForIdle();
+      });
       typingController?.markDispatchIdle();
       if (!queuedFinal) {
         if (shouldClearGroupHistory && didSendReply) {

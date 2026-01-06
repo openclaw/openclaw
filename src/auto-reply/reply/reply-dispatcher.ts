@@ -22,7 +22,7 @@ export type ReplyDispatcherOptions = {
   onError?: ReplyDispatchErrorHandler;
 };
 
-type ReplyDispatcher = {
+export type ReplyDispatcher = {
   sendToolResult: (payload: ReplyPayload) => boolean;
   sendBlockReply: (payload: ReplyPayload) => boolean;
   sendFinalReply: (payload: ReplyPayload) => boolean;
