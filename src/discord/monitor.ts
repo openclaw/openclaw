@@ -662,9 +662,9 @@ export function createDiscordMessageHandler(params: {
 
       const media = await resolveMedia(message, mediaMaxBytes);
       const text =
-        message.content?.trim() ??
-        media?.placeholder ??
-        message.embeds?.[0]?.description ??
+        message.content?.trim() ||
+        media?.placeholder ||
+        message.embeds?.[0]?.description ||
         "";
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
