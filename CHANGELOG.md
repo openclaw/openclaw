@@ -7,6 +7,7 @@
 ### Breaking
 - Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
 - Model config schema changes (auth profiles + model lists); doctor auto-migrates and the gateway rewrites legacy configs on startup.
+- Commands: gate all slash commands to authorized senders; add `/compact` to manually compact session context.
 
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
@@ -18,10 +19,10 @@
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Connections settings now use a custom sidebar to avoid toolbar toggle issues, with rounded styling and full-width row hit targets.
 - macOS: drop deprecated `afterMs` from agent wait params to match gateway schema.
-- Auth: add OpenAI Codex OAuth support and migrate legacy oauth.json into auth-profiles.json.
+- Auth: add OpenAI Codex OAuth support and migrate legacy oauth.json into auth.json.
 - Model: `/model` list shows auth source (masked key or OAuth email) per provider.
 - Model: `/model list` is an alias for `/model`.
-- Model: `/model` output now includes auth source location (env/auth-profiles.json/models.json).
+- Model: `/model` output now includes auth source location (env/auth.json/models.json).
 - Model: avoid duplicate `missing (missing)` auth labels in `/model` list output.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.

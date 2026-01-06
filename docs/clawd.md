@@ -147,6 +147,7 @@ Example:
 - Session files: `~/.clawdbot/sessions/{{SessionId}}.jsonl`
 - Session metadata (token usage, last route, etc): `~/.clawdbot/sessions/sessions.json` (legacy: `~/.clawdbot/sessions.json`)
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, the agent replies with a short hello to confirm the reset.
+- `/compact [instructions]` compacts the session context and reports the remaining context budget.
 
 ## Heartbeats (proactive mode)
 

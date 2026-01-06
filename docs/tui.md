@@ -55,6 +55,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/activation <mention|always>`
 - `/deliver <on|off>`
 - `/new` or `/reset`
+- `/compact [instructions]`
 - `/abort`
 - `/settings`
 - `/exit`

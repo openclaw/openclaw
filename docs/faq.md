@@ -302,7 +302,7 @@ Claude Opus has a 200k token context window, and Clawdbot uses **autocompaction*
 
 Practical tips:
 - Keep `AGENTS.md` focused, not bloated.
-- Use `/new` to reset the session when context gets stale.
+- Use `/compact` to shrink older context or `/new` to reset when it gets stale.
 - For large memory/notes collections, use search tools like `qmd` rather than loading everything.
 
 ### Where are my memory files?
@@ -551,6 +551,9 @@ Quick reference (send these in chat):
 |---------|--------|
 | `/status` | Health + session info |
 | `/new` or `/reset` | Reset the session |
+| `/compact` | Compact session context |
+
+Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authorization on other surfaces).
 | `/think <level>` | Set thinking level (off\|minimal\|low\|medium\|high) |
 | `/verbose on\|off` | Toggle verbose mode |
 | `/elevated on\|off` | Toggle elevated bash mode (approved senders only) |
