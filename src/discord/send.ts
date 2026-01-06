@@ -1,4 +1,4 @@
-import { PermissionsBitField, REST, Routes } from "discord.js";
+import { ChannelType, PermissionsBitField, REST, Routes } from "discord.js";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type {
@@ -24,6 +24,24 @@ const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
 const DISCORD_POLL_MIN_ANSWERS = 2;
 const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
+const DISCORD_MISSING_PERMISSIONS = 50013;
+const DISCORD_CANNOT_DM = 50007;
+
+export class DiscordSendError extends Error {
+  kind?: "missing-permissions" | "dm-blocked";
+  channelId?: string;
+  missingPermissions?: string[];
+
+  constructor(message: string, opts?: Partial<DiscordSendError>) {
+    super(message);
+    this.name = "DiscordSendError";
+    if (opts) Object.assign(this, opts);
+  }
+
+  override toString() {
+    return this.message;
+  }
+}
 
 type DiscordRecipient =
   | {
@@ -78,6 +96,7 @@ export type DiscordPermissionsSummary = {
   permissions: string[];
   raw: string;
   isDm: boolean;
+  channelType?: number;
 };
 
 export type DiscordMessageQuery = {
@@ -251,6 +270,80 @@ function normalizePollInput(input: DiscordPollInput): RESTAPIPoll {
   };
 }
 
+function getDiscordErrorCode(err: unknown) {
+  if (!err || typeof err !== "object") return undefined;
+  const candidate =
+    "code" in err && err.code !== undefined
+      ? err.code
+      : "rawError" in err && err.rawError && typeof err.rawError === "object"
+        ? (err.rawError as { code?: unknown }).code
+        : undefined;
+  if (typeof candidate === "number") return candidate;
+  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
+    return Number(candidate);
+  }
+  return undefined;
+}
+
+function isThreadChannelType(channelType?: number) {
+  return (
+    channelType === ChannelType.GuildNewsThread ||
+    channelType === ChannelType.GuildPublicThread ||
+    channelType === ChannelType.GuildPrivateThread
+  );
+}
+
+async function buildDiscordSendError(
+  err: unknown,
+  ctx: {
+    channelId: string;
+    rest: REST;
+    token: string;
+    hasMedia: boolean;
+  },
+) {
+  if (err instanceof DiscordSendError) return err;
+  const code = getDiscordErrorCode(err);
+  if (code === DISCORD_CANNOT_DM) {
+    return new DiscordSendError(
+      "discord dm failed: user blocks dms or privacy settings disallow it",
+      { kind: "dm-blocked" },
+    );
+  }
+  if (code !== DISCORD_MISSING_PERMISSIONS) return err;
+
+  let missing: string[] = [];
+  try {
+    const permissions = await fetchChannelPermissionsDiscord(ctx.channelId, {
+      rest: ctx.rest,
+      token: ctx.token,
+    });
+    const current = new Set(permissions.permissions);
+    const required = ["ViewChannel", "SendMessages"];
+    if (isThreadChannelType(permissions.channelType)) {
+      required.push("SendMessagesInThreads");
+    }
+    if (ctx.hasMedia) {
+      required.push("AttachFiles");
+    }
+    missing = required.filter((permission) => !current.has(permission));
+  } catch {
+    /* ignore permission probe errors */
+  }
+
+  const missingLabel = missing.length
+    ? `missing permissions in channel ${ctx.channelId}: ${missing.join(", ")}`
+    : `missing permissions in channel ${ctx.channelId}`;
+  return new DiscordSendError(
+    `${missingLabel}. bot might be muted or blocked by role/channel overrides`,
+    {
+      kind: "missing-permissions",
+      channelId: ctx.channelId,
+      missingPermissions: missing,
+    },
+  );
+}
+
 async function resolveChannelId(
   rest: REST,
   recipient: DiscordRecipient,
@@ -374,17 +467,25 @@ export async function sendMessageDiscord(
   let result:
     | { id: string; channel_id: string }
     | { id: string | null; channel_id: string };
-
-  if (opts.mediaUrl) {
-    result = await sendDiscordMedia(
-      rest,
+  try {
+    if (opts.mediaUrl) {
+      result = await sendDiscordMedia(
+        rest,
+        channelId,
+        text,
+        opts.mediaUrl,
+        opts.replyTo,
+      );
+    } else {
+      result = await sendDiscordText(rest, channelId, text, opts.replyTo);
+    }
+  } catch (err) {
+    throw await buildDiscordSendError(err, {
       channelId,
-      text,
-      opts.mediaUrl,
-      opts.replyTo,
-    );
-  } else {
-    result = await sendDiscordText(rest, channelId, text, opts.replyTo);
+      rest,
+      token,
+      hasMedia: Boolean(opts.mediaUrl),
+    });
   }
 
   return {
@@ -512,6 +613,7 @@ export async function fetchChannelPermissionsDiscord(
   const token = resolveToken(opts.token);
   const rest = opts.rest ?? new REST({ version: "10" }).setToken(token);
   const channel = (await rest.get(Routes.channel(channelId))) as APIChannel;
+  const channelType = "type" in channel ? channel.type : undefined;
   const guildId = "guild_id" in channel ? channel.guild_id : undefined;
   if (!guildId) {
     return {
@@ -519,6 +621,7 @@ export async function fetchChannelPermissionsDiscord(
       permissions: [],
       raw: "0",
       isDm: true,
+      channelType,
     };
   }
 
@@ -573,6 +676,7 @@ export async function fetchChannelPermissionsDiscord(
     permissions: permissions.toArray(),
     raw: permissions.bitfield.toString(),
     isDm: false,
+    channelType,
   };
 }
 
