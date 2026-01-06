@@ -51,6 +51,7 @@ Group messages require a mention unless overridden per group. Defaults live per 
 Notes:
 - `mentionPatterns` are case-insensitive regexes.
 - Surfaces that provide explicit mentions still pass; patterns are a fallback.
+- Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `discord.guilds."*"` (overridable per guild/channel).
 
 ## Activation (owner-only)

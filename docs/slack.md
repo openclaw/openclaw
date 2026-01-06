@@ -158,6 +158,6 @@ Slack tool actions can be gated with `slack.actions.*`:
 | emojiList | enabled | Custom emoji list |
 
 ## Notes
-- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`).
+- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
 - Attachments are downloaded to the media store when permitted and under the size limit.
