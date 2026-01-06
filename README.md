@@ -42,6 +42,7 @@ cd clawdbot
 
 bun install
 bun run build
+bun run ui:install
 bun run ui:build
 bun run clawdbot onboard
 ```
