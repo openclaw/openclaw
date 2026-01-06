@@ -213,3 +213,31 @@ index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6e
      }));
  }
  function mapStopReason(status) {
+diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
+--- a/dist/providers/google-gemini-cli.js
++++ b/dist/providers/google-gemini-cli.js
+@@ -168,7 +168,12 @@ async function* streamCompletion(params, options) {
+                         break; // Success, exit retry loop
+                     }
+                     const errorText = await response.text();
+-                    // Check if retryable
++                    // PATCH: Fail immediately on 429 to let caller rotate accounts
++                    if (response.status === 429) {
++                        console.log(`[pi-ai] 429 rate limit - failing fast to rotate account`);
++                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
++                    }
++                    // Check if retryable (non-429 errors)
+                     if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
+                         // Use server-provided delay or exponential backoff
+                         const serverDelay = extractRetryDelay(errorText);
+@@ -183,6 +188,10 @@ async function* streamCompletion(params, options) {
+                     if (error instanceof Error && error.message === "Request was aborted") {
+                         throw error;
+                     }
++                    // PATCH: Don't retry 429 errors - let caller rotate accounts
++                    if (error instanceof Error && error.message.includes("429")) {
++                        throw error;
++                    }
+                     lastError = error instanceof Error ? error : new Error(String(error));
+                     // Network errors are retryable
+                     if (attempt < MAX_RETRIES) {

@@ -355,23 +355,26 @@ export function isProfileInCooldown(
 
 /**
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
+ * Re-reads the store from disk to avoid overwriting concurrent updates.
  */
 export function markAuthProfileUsed(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
 }): void {
-  const { store, profileId, agentDir } = params;
-  if (!store.profiles[profileId]) return;
+  const { profileId, agentDir } = params;
+  // Re-read from disk to get fresh usageStats from other sessions
+  const freshStore = ensureAuthProfileStore(agentDir);
+  if (!freshStore.profiles[profileId]) return;
 
-  store.usageStats = store.usageStats ?? {};
-  store.usageStats[profileId] = {
-    ...store.usageStats[profileId],
+  freshStore.usageStats = freshStore.usageStats ?? {};
+  freshStore.usageStats[profileId] = {
+    ...freshStore.usageStats[profileId],
     lastUsed: Date.now(),
     errorCount: 0,
     cooldownUntil: undefined,
   };
-  saveAuthProfileStore(store, agentDir);
+  saveAuthProfileStore(freshStore, agentDir);
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
@@ -385,47 +388,53 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
 /**
  * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
+ * Re-reads the store from disk to avoid overwriting concurrent updates.
  */
 export function markAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
 }): void {
-  const { store, profileId, agentDir } = params;
-  if (!store.profiles[profileId]) return;
+  const { profileId, agentDir } = params;
+  // Re-read from disk to get fresh usageStats from other sessions
+  const freshStore = ensureAuthProfileStore(agentDir);
+  if (!freshStore.profiles[profileId]) return;
 
-  store.usageStats = store.usageStats ?? {};
-  const existing = store.usageStats[profileId] ?? {};
+  freshStore.usageStats = freshStore.usageStats ?? {};
+  const existing = freshStore.usageStats[profileId] ?? {};
   const errorCount = (existing.errorCount ?? 0) + 1;
 
   // Exponential backoff: 1min, 5min, 25min, capped at 1h
   const backoffMs = calculateAuthProfileCooldownMs(errorCount);
 
-  store.usageStats[profileId] = {
+  freshStore.usageStats[profileId] = {
     ...existing,
     errorCount,
     cooldownUntil: Date.now() + backoffMs,
   };
-  saveAuthProfileStore(store, agentDir);
+  saveAuthProfileStore(freshStore, agentDir);
 }
 
 /**
  * Clear cooldown for a profile (e.g., manual reset).
+ * Re-reads the store from disk to avoid overwriting concurrent updates.
  */
 export function clearAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
 }): void {
-  const { store, profileId, agentDir } = params;
-  if (!store.usageStats?.[profileId]) return;
+  const { profileId, agentDir } = params;
+  // Re-read from disk to get fresh usageStats from other sessions
+  const freshStore = ensureAuthProfileStore(agentDir);
+  if (!freshStore.usageStats?.[profileId]) return;
 
-  store.usageStats[profileId] = {
-    ...store.usageStats[profileId],
+  freshStore.usageStats[profileId] = {
+    ...freshStore.usageStats[profileId],
     errorCount: 0,
     cooldownUntil: undefined,
   };
-  saveAuthProfileStore(store, agentDir);
+  saveAuthProfileStore(freshStore, agentDir);
 }
 
 export function resolveAuthProfileOrder(params: {
@@ -591,11 +600,13 @@ export function markAuthProfileGood(params: {
   profileId: string;
   agentDir?: string;
 }): void {
-  const { store, provider, profileId, agentDir } = params;
-  const profile = store.profiles[profileId];
+  const { provider, profileId, agentDir } = params;
+  // Re-read from disk to avoid overwriting concurrent updates
+  const freshStore = ensureAuthProfileStore(agentDir);
+  const profile = freshStore.profiles[profileId];
   if (!profile || profile.provider !== provider) return;
-  store.lastGood = { ...store.lastGood, [provider]: profileId };
-  saveAuthProfileStore(store, agentDir);
+  freshStore.lastGood = { ...freshStore.lastGood, [provider]: profileId };
+  saveAuthProfileStore(freshStore, agentDir);
 }
 
 export function resolveAuthStorePathForDisplay(): string {
