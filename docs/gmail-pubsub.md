@@ -11,10 +11,12 @@ Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> Clawdbot webhook
 
 ## Prereqs
 
-- `gcloud` installed and logged in.
-- `gog` (gogcli) installed and authorized for the Gmail account.
-- Clawdbot hooks enabled (see [`docs/webhook.md`](https://docs.clawd.bot/webhook)).
-- `tailscale` logged in if you want a public HTTPS endpoint via Funnel.
+- `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
+- `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
+- Clawdbot hooks enabled (see [`docs/webhook.md`](/webhook)).
+- `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
+  Other tunnel services can work, but are DIY/unsupported and require manual wiring.
+  Right now, Tailscale is what we support.
 
 Example hook config (enable Gmail preset mapping):
 
@@ -30,7 +32,7 @@ Example hook config (enable Gmail preset mapping):
 ```
 
 To customize payload handling, add `hooks.mappings` or a JS/TS transform module
-under `hooks.transformsDir` (see [`docs/webhook.md`](https://docs.clawd.bot/webhook)).
+under `hooks.transformsDir` (see [`docs/webhook.md`](/webhook)).
 
 ## Wizard (recommended)
 
@@ -135,9 +137,10 @@ Notes:
 
 Recommended: `clawdbot hooks gmail run` wraps the same flow and auto-renews the watch.
 
-## Expose the handler (dev)
+## Expose the handler (dev, unsupported hack)
 
-For local testing, tunnel the handler and use the public URL in the push subscription:
+If you insist on a non-Tailscale tunnel, wire it manually and use the public URL in the push
+subscription (unsupported, no guardrails):
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:8788 --no-autoupdate
