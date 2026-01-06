@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyModelAliasDefaults } from "./defaults.js";
+import { applyLoggingDefaults, applyModelAliasDefaults } from "./defaults.js";
 import type { ClawdbotConfig } from "./types.js";
 
 describe("applyModelAliasDefaults", () => {
@@ -72,5 +72,19 @@ describe("applyModelAliasDefaults", () => {
       "gemini-flash",
       "google/gemini-3-flash-preview",
     );
+  });
+});
+
+describe("applyLoggingDefaults", () => {
+  it("defaults redactSensitive to tools", () => {
+    const result = applyLoggingDefaults({ logging: {} });
+    expect(result.logging?.redactSensitive).toBe("tools");
+  });
+
+  it("preserves explicit redactSensitive", () => {
+    const result = applyLoggingDefaults({
+      logging: { redactSensitive: "off" },
+    });
+    expect(result.logging?.redactSensitive).toBe("off");
   });
 });
