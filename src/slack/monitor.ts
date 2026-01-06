@@ -30,6 +30,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
@@ -374,6 +378,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   };
 
   const dmConfig = cfg.slack?.dm;
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   const allowFrom = normalizeAllowList(dmConfig?.allowFrom);
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = normalizeAllowList(dmConfig?.groupChannels);
@@ -578,16 +583,62 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       return;
     }
 
-    if (isDirectMessage && allowFrom.length > 0) {
-      const permitted = allowListMatches({
-        allowList: normalizeAllowListLower(allowFrom),
-        id: message.user,
-      });
-      if (!permitted) {
-        logVerbose(
-          `Blocked unauthorized slack sender ${message.user} (not in allowFrom)`,
-        );
+    const storeAllowFrom = await readProviderAllowFromStore("slack").catch(
+      () => [],
+    );
+    const effectiveAllowFrom = normalizeAllowList([
+      ...allowFrom,
+      ...storeAllowFrom,
+    ]);
+    const effectiveAllowFromLower = normalizeAllowListLower(effectiveAllowFrom);
+
+    if (isDirectMessage) {
+      if (!dmEnabled || dmPolicy === "disabled") {
+        logVerbose("slack: drop dm (dms disabled)");
         return;
+      }
+      if (dmPolicy !== "open") {
+        const permitted = allowListMatches({
+          allowList: effectiveAllowFromLower,
+          id: message.user,
+        });
+        if (!permitted) {
+          if (dmPolicy === "pairing") {
+            const sender = await resolveUserName(message.user);
+            const senderName = sender?.name ?? undefined;
+            const { code } = await upsertProviderPairingRequest({
+              provider: "slack",
+              id: message.user,
+              meta: { name: senderName },
+            });
+            logVerbose(
+              `slack pairing request sender=${message.user} name=${senderName ?? "unknown"} code=${code}`,
+            );
+            try {
+              await sendMessageSlack(
+                message.channel,
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider slack <code>",
+                ].join("\n"),
+                { token: botToken, client: app.client },
+              );
+            } catch (err) {
+              logVerbose(
+                `slack pairing reply failed for ${message.user}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked unauthorized slack sender ${message.user} (dmPolicy=${dmPolicy})`,
+            );
+          }
+          return;
+        }
       }
     }
 
@@ -606,7 +657,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           matchesMentionPatterns(message.text ?? "", mentionRegexes)));
     const sender = await resolveUserName(message.user);
     const senderName = sender?.name ?? message.user;
-    const allowList = normalizeAllowListLower(allowFrom);
+    const allowList = effectiveAllowFromLower;
     const commandAuthorized =
       allowList.length === 0 ||
       allowListMatches({
@@ -1301,19 +1352,55 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             }
           }
 
-          if (isDirectMessage && allowFrom.length > 0) {
-            const sender = await resolveUserName(command.user_id);
-            const permitted = allowListMatches({
-              allowList: normalizeAllowListLower(allowFrom),
-              id: command.user_id,
-              name: sender?.name ?? undefined,
-            });
-            if (!permitted) {
+          if (isDirectMessage) {
+            if (!dmEnabled || dmPolicy === "disabled") {
               await respond({
-                text: "You are not authorized to use this command.",
+                text: "Slack DMs are disabled.",
                 response_type: "ephemeral",
               });
               return;
+            }
+            if (dmPolicy !== "open") {
+              const storeAllowFrom = await readProviderAllowFromStore(
+                "slack",
+              ).catch(() => []);
+              const effectiveAllowFrom = normalizeAllowList([
+                ...allowFrom,
+                ...storeAllowFrom,
+              ]);
+              const sender = await resolveUserName(command.user_id);
+              const permitted = allowListMatches({
+                allowList: normalizeAllowListLower(effectiveAllowFrom),
+                id: command.user_id,
+                name: sender?.name ?? undefined,
+              });
+              if (!permitted) {
+                if (dmPolicy === "pairing") {
+                  const senderName = sender?.name ?? undefined;
+                  const { code } = await upsertProviderPairingRequest({
+                    provider: "slack",
+                    id: command.user_id,
+                    meta: { name: senderName },
+                  });
+                  await respond({
+                    text: [
+                      "Clawdbot: access not configured.",
+                      "",
+                      `Pairing code: ${code}`,
+                      "",
+                      "Ask the bot owner to approve with:",
+                      "clawdbot pairing approve --provider slack <code>",
+                    ].join("\n"),
+                    response_type: "ephemeral",
+                  });
+                } else {
+                  await respond({
+                    text: "You are not authorized to use this command.",
+                    response_type: "ephemeral",
+                  });
+                }
+                return;
+              }
             }
           }
 

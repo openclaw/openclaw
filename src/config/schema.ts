@@ -101,6 +101,12 @@ const FIELD_LABELS: Record<string, string> = {
   "messages.ackReactionScope": "Ack Reaction Scope",
   "talk.apiKey": "Talk API Key",
   "telegram.botToken": "Telegram Bot Token",
+  "telegram.dmPolicy": "Telegram DM Policy",
+  "whatsapp.dmPolicy": "WhatsApp DM Policy",
+  "signal.dmPolicy": "Signal DM Policy",
+  "imessage.dmPolicy": "iMessage DM Policy",
+  "discord.dm.policy": "Discord DM Policy",
+  "slack.dm.policy": "Slack DM Policy",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
   "slack.appToken": "Slack App Token",
@@ -137,6 +143,18 @@ const FIELD_HELP: Record<string, string> = {
     "Emoji reaction used to acknowledge inbound messages (empty disables).",
   "messages.ackReactionScope":
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
+  "telegram.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
+  "whatsapp.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
+  "signal.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires signal.allowFrom=["*"].',
+  "imessage.dmPolicy":
+    'Direct message access control ("pairing" recommended). "open" requires imessage.allowFrom=["*"].',
+  "discord.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires discord.dm.allowFrom=["*"].',
+  "slack.dm.policy":
+    'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

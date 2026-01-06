@@ -8,6 +8,10 @@ import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
 import { signalCheck, signalRpcRequest, streamSignalEvents } from "./client.js";
@@ -110,7 +114,7 @@ function resolveGroupAllowFrom(opts: MonitorSignalOpts): string[] {
 }
 
 function isAllowedSender(sender: string, allowFrom: string[]): boolean {
-  if (allowFrom.length === 0) return true;
+  if (allowFrom.length === 0) return false;
   if (allowFrom.includes("*")) return true;
   const normalizedAllow = allowFrom
     .map((entry) => entry.replace(/^signal:/i, ""))
@@ -245,6 +249,7 @@ export async function monitorSignalProvider(
   const textLimit = resolveTextChunkLimit(cfg, "signal");
   const baseUrl = resolveBaseUrl(opts);
   const account = resolveAccount(opts);
+  const dmPolicy = cfg.signal?.dmPolicy ?? "pairing";
   const allowFrom = resolveAllowFrom(opts);
   const groupAllowFrom = resolveGroupAllowFrom(opts);
   const groupPolicy = cfg.signal?.groupPolicy ?? "open";
@@ -317,18 +322,67 @@ export async function monitorSignalProvider(
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
+      const storeAllowFrom = await readProviderAllowFromStore("signal").catch(
+        () => [],
+      );
+      const effectiveDmAllow = [...allowFrom, ...storeAllowFrom];
+      const effectiveGroupAllow = [...groupAllowFrom, ...storeAllowFrom];
+      const dmAllowed =
+        dmPolicy === "open" ? true : isAllowedSender(sender, effectiveDmAllow);
+
+      if (!isGroup) {
+        if (dmPolicy === "disabled") return;
+        if (!dmAllowed) {
+          if (dmPolicy === "pairing") {
+            const senderId = normalizeE164(sender);
+            const { code } = await upsertProviderPairingRequest({
+              provider: "signal",
+              id: senderId,
+              meta: {
+                name: envelope.sourceName ?? undefined,
+              },
+            });
+            logVerbose(
+              `signal pairing request sender=${senderId} code=${code}`,
+            );
+            try {
+              await sendMessageSignal(
+                senderId,
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider signal <code>",
+                ].join("\n"),
+                { baseUrl, account, maxBytes: mediaMaxBytes },
+              );
+            } catch (err) {
+              logVerbose(
+                `signal pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked signal sender ${sender} (dmPolicy=${dmPolicy})`,
+            );
+          }
+          return;
+        }
+      }
       if (isGroup && groupPolicy === "disabled") {
         logVerbose("Blocked signal group message (groupPolicy: disabled)");
         return;
       }
       if (isGroup && groupPolicy === "allowlist") {
-        if (groupAllowFrom.length === 0) {
+        if (effectiveGroupAllow.length === 0) {
           logVerbose(
             "Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)",
           );
           return;
         }
-        if (!isAllowedSender(sender, groupAllowFrom)) {
+        if (!isAllowedSender(sender, effectiveGroupAllow)) {
           logVerbose(
             `Blocked signal group sender ${sender} (not in groupAllowFrom)`,
           );
@@ -337,14 +391,10 @@ export async function monitorSignalProvider(
       }
 
       const commandAuthorized = isGroup
-        ? groupAllowFrom.length > 0
-          ? isAllowedSender(sender, groupAllowFrom)
+        ? effectiveGroupAllow.length > 0
+          ? isAllowedSender(sender, effectiveGroupAllow)
           : true
-        : isAllowedSender(sender, allowFrom);
-      if (!isGroup && !commandAuthorized) {
-        logVerbose(`Blocked signal sender ${sender} (not in allowFrom)`);
-        return;
-      }
+        : dmAllowed;
       const messageText = (dataMessage.message ?? "").trim();
 
       let mediaPath: string | undefined;

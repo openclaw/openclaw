@@ -2,6 +2,7 @@ export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
+export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
@@ -79,6 +80,8 @@ export type AgentElevatedAllowFromConfig = {
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
   /** Optional allowlist for WhatsApp group senders (E.164). */
@@ -105,6 +108,8 @@ export type WhatsAppAccountConfig = {
   enabled?: boolean;
   /** Override auth directory (Baileys multi-file auth state). */
   authDir?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
@@ -222,6 +227,14 @@ export type HooksConfig = {
 };
 
 export type TelegramConfig = {
+  /**
+   * Controls how Telegram direct chats (DMs) are handled:
+   * - "pairing" (default): unknown senders get a pairing code; owner must approve
+   * - "allowlist": only allow senders in allowFrom (or paired allow store)
+   * - "open": allow all inbound DMs (requires allowFrom to include "*")
+   * - "disabled": ignore all inbound DMs
+   */
+  dmPolicy?: DmPolicy;
   /** If false, do not start the Telegram provider. Default: true. */
   enabled?: boolean;
   botToken?: string;
@@ -257,6 +270,8 @@ export type TelegramConfig = {
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
   /** Allowlist for DM senders (ids or names). */
   allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
@@ -344,6 +359,8 @@ export type DiscordConfig = {
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
   enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
   /** Allowlist for DM senders (ids). */
   allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
@@ -424,6 +441,8 @@ export type SignalConfig = {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
   /** Optional allowlist for Signal group senders (E.164). */
   groupAllowFrom?: Array<string | number>;
@@ -450,6 +469,8 @@ export type IMessageConfig = {
   service?: "imessage" | "sms" | "auto";
   /** Optional default region (used when sending SMS). */
   region?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
   /** Optional allowlist for group senders or chat_id targets. */

@@ -21,6 +21,21 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+const { readTelegramAllowFromStore, upsertTelegramPairingRequest } = vi.hoisted(
+  () => ({
+    readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
+    upsertTelegramPairingRequest: vi.fn(async () => ({
+      code: "PAIRCODE",
+      created: true,
+    })),
+  }),
+);
+
+vi.mock("./pairing-store.js", () => ({
+  readTelegramAllowFromStore,
+  upsertTelegramPairingRequest,
+}));
+
 const useSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
@@ -73,7 +88,9 @@ vi.mock("../auto-reply/reply.js", () => {
 
 describe("createTelegramBot", () => {
   beforeEach(() => {
-    loadConfig.mockReturnValue({});
+    loadConfig.mockReturnValue({
+      telegram: { dmPolicy: "open", allowFrom: ["*"] },
+    });
     loadWebMedia.mockReset();
     sendAnimationSpy.mockReset();
     sendPhotoSpy.mockReset();
@@ -128,6 +145,46 @@ describe("createTelegramBot", () => {
     } finally {
       process.env.TZ = originalTz;
     }
+  });
+
+  it("requests pairing by default for unknown DM senders", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({ telegram: { dmPolicy: "pairing" } });
+    readTelegramAllowFromStore.mockResolvedValue([]);
+    upsertTelegramPairingRequest.mockResolvedValue({
+      code: "PAIRME12",
+      created: true,
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 1234, type: "private" },
+        text: "hello",
+        date: 1736380800,
+        from: { id: 999, username: "random" },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+    expect(sendMessageSpy.mock.calls[0]?.[0]).toBe(1234);
+    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain(
+      "Pairing code:",
+    );
+    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("PAIRME12");
   });
 
   it("triggers typing cue via onReplyStart", async () => {
@@ -397,7 +454,10 @@ describe("createTelegramBot", () => {
       await opts?.onToolResult?.({ text: "tool result" });
       return { text: "final reply" };
     });
-    loadConfig.mockReturnValue({ messages: { responsePrefix: "PFX" } });
+    loadConfig.mockReturnValue({
+      telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      messages: { responsePrefix: "PFX" },
+    });
 
     createTelegramBot({ token: "tok" });
     const handler = onSpy.mock.calls[0][1] as (

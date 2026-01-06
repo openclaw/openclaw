@@ -19,6 +19,11 @@ const mockLoadConfig = vi.fn().mockReturnValue({
   },
 });
 
+const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
+const upsertPairingRequestMock = vi
+  .fn()
+  .mockResolvedValue({ code: "PAIRCODE", created: true });
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -26,6 +31,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
     loadConfig: () => mockLoadConfig(),
   };
 });
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertProviderPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
+}));
 
 vi.mock("./session.js", () => {
   const { EventEmitter } = require("node:events");
@@ -64,6 +76,11 @@ import { monitorWebInbox } from "./inbound.js";
 describe("web monitor inbox", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readAllowFromStoreMock.mockResolvedValue([]);
+    upsertPairingRequestMock.mockResolvedValue({
+      code: "PAIRCODE",
+      created: true,
+    });
   });
 
   afterEach(() => {
@@ -564,6 +581,10 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     // Should NOT send read receipts for blocked senders (privacy + avoids Baileys Bad MAC churn).
     expect(sock.readMessages).not.toHaveBeenCalled();
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Pairing code: PAIRCODE"),
+    });
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
@@ -980,105 +1001,118 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
-});
-it("defaults to self-only when no config is present", async () => {
-  // No config file => allowFrom should be derived from selfE164
-  mockLoadConfig.mockReturnValue({});
 
-  const onMessage = vi.fn();
-  const listener = await monitorWebInbox({ verbose: false, onMessage });
-  const sock = await createWaSocket();
+  it("locks down when no config is present (pairing for unknown senders)", async () => {
+    // No config file => locked-down defaults apply (pairing for unknown senders)
+    mockLoadConfig.mockReturnValue({});
 
-  // Message from someone else should be blocked
-  const upsertBlocked = {
-    type: "notify",
-    messages: [
-      {
-        key: {
-          id: "no-config-1",
-          fromMe: false,
-          remoteJid: "999@s.whatsapp.net",
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+
+    // Message from someone else should be blocked
+    const upsertBlocked = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "no-config-1",
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "ping" },
+          messageTimestamp: 1_700_000_000,
         },
-        message: { conversation: "ping" },
-        messageTimestamp: 1_700_000_000,
-      },
-    ],
-  };
+      ],
+    };
 
-  sock.ev.emit("messages.upsert", upsertBlocked);
-  await new Promise((resolve) => setImmediate(resolve));
-  expect(onMessage).not.toHaveBeenCalled();
+    sock.ev.emit("messages.upsert", upsertBlocked);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Pairing code: PAIRCODE"),
+    });
 
-  // Message from self should be allowed
-  const upsertSelf = {
-    type: "notify",
-    messages: [
-      {
-        key: {
-          id: "no-config-2",
-          fromMe: false,
-          remoteJid: "123@s.whatsapp.net",
+    // Message from self should be allowed
+    const upsertSelf = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "no-config-2",
+            fromMe: false,
+            remoteJid: "123@s.whatsapp.net",
+          },
+          message: { conversation: "self ping" },
+          messageTimestamp: 1_700_000_001,
         },
-        message: { conversation: "self ping" },
-        messageTimestamp: 1_700_000_001,
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsertSelf);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "self ping",
+        from: "+123",
+        to: "+123",
+      }),
+    );
+
+    // Reset mock for other tests
+    mockLoadConfig.mockReturnValue({
+      whatsapp: {
+        allowFrom: ["*"],
       },
-    ],
-  };
+      messages: {
+        messagePrefix: undefined,
+        responsePrefix: undefined,
+      },
+    });
 
-  sock.ev.emit("messages.upsert", upsertSelf);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  expect(onMessage).toHaveBeenCalledTimes(1);
-  expect(onMessage).toHaveBeenCalledWith(
-    expect.objectContaining({ body: "self ping", from: "+123", to: "+123" }),
-  );
-
-  // Reset mock for other tests
-  mockLoadConfig.mockReturnValue({
-    whatsapp: {
-      allowFrom: ["*"],
-    },
-    messages: {
-      messagePrefix: undefined,
-      responsePrefix: undefined,
-    },
+    await listener.close();
   });
 
-  await listener.close();
-});
+  it("handles append messages by marking them read but skipping auto-reply", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
 
-it("handles append messages by marking them read but skipping auto-reply", async () => {
-  const onMessage = vi.fn();
-  const listener = await monitorWebInbox({ verbose: false, onMessage });
-  const sock = await createWaSocket();
+    const upsert = {
+      type: "append",
+      messages: [
+        {
+          key: {
+            id: "history1",
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "old message" },
+          messageTimestamp: 1_700_000_000,
+          pushName: "History Sender",
+        },
+      ],
+    };
 
-  const upsert = {
-    type: "append",
-    messages: [
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // Verify it WAS marked as read
+    expect(sock.readMessages).toHaveBeenCalledWith([
       {
-        key: { id: "history1", fromMe: false, remoteJid: "999@s.whatsapp.net" },
-        message: { conversation: "old message" },
-        messageTimestamp: 1_700_000_000,
-        pushName: "History Sender",
+        remoteJid: "999@s.whatsapp.net",
+        id: "history1",
+        participant: undefined,
+        fromMe: false,
       },
-    ],
-  };
+    ]);
 
-  sock.ev.emit("messages.upsert", upsert);
-  await new Promise((resolve) => setImmediate(resolve));
+    // Verify it WAS NOT passed to onMessage
+    expect(onMessage).not.toHaveBeenCalled();
 
-  // Verify it WAS marked as read
-  expect(sock.readMessages).toHaveBeenCalledWith([
-    {
-      remoteJid: "999@s.whatsapp.net",
-      id: "history1",
-      participant: undefined,
-      fromMe: false,
-    },
-  ]);
-
-  // Verify it WAS NOT passed to onMessage
-  expect(onMessage).not.toHaveBeenCalled();
-
-  await listener.close();
+    await listener.close();
+  });
 });

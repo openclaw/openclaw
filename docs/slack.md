@@ -148,6 +148,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     "groupPolicy": "open",
     "dm": {
       "enabled": true,
+      "policy": "pairing",
       "allowFrom": ["U123", "U456", "*"],
       "groupEnabled": false,
       "groupChannels": ["G123"]
@@ -188,6 +189,11 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
+
+## DM security (pairing)
+- Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.
+- Approve via: `clawdbot pairing approve --provider slack <code>`.
+- To allow anyone: set `slack.dm.policy="open"` and `slack.dm.allowFrom=["*"]`.
 
 ## Group policy
 - `slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).

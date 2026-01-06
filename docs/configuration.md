@@ -184,15 +184,28 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 }
 ```
 
+### `whatsapp.dmPolicy`
+
+Controls how WhatsApp direct chats (DMs) are handled:
+- `"pairing"` (default): unknown senders get a pairing code; owner must approve
+- `"allowlist"`: only allow senders in `whatsapp.allowFrom` (or paired allow store)
+- `"open"`: allow all inbound DMs (**requires** `whatsapp.allowFrom` to include `"*"`)
+- `"disabled"`: ignore all inbound DMs
+
+Pairing approvals:
+- `clawdbot pairing list --provider whatsapp`
+- `clawdbot pairing approve --provider whatsapp <code>`
+
 ### `whatsapp.allowFrom`
 
 Allowlist of E.164 phone numbers that may trigger WhatsApp auto-replies (**DMs only**).
-If empty, the default allowlist is your own WhatsApp number (self-chat mode).
+If empty and `whatsapp.dmPolicy="pairing"`, unknown senders will receive a pairing code.
 For groups, use `whatsapp.groupPolicy` + `whatsapp.groupAllowFrom`.
 
 ```json5
 {
   whatsapp: {
+    dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "+447700900123"],
     textChunkLimit: 4000 // optional outbound chunk size (chars)
   }
@@ -338,8 +351,9 @@ Set `telegram.enabled: false` to disable automatic startup.
   telegram: {
     enabled: true,
     botToken: "your-bot-token",
-    requireMention: true,
-    allowFrom: ["123456789"],
+    dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
+    allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
+    groups: { "*": { requireMention: true } },
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
     webhookUrl: "https://example.com/telegram-webhook",
@@ -385,7 +399,8 @@ Configure the Discord bot by setting the bot token and optional gating:
     },
     dm: {
       enabled: true,                        // disable all DMs when false
-      allowFrom: ["1234567890", "steipete"], // optional DM allowlist (ids or names)
+      policy: "pairing",                    // pairing | allowlist | open | disabled
+      allowFrom: ["1234567890", "steipete"], // optional DM allowlist ("open" requires ["*"])
       groupEnabled: false,                 // enable group DMs
       groupChannels: ["clawd-dm"]          // optional group DM allowlist
     },
@@ -426,7 +441,8 @@ Slack runs in Socket Mode and requires both a bot token and app token:
     appToken: "xapp-...",
     dm: {
       enabled: true,
-      allowFrom: ["U123", "U456", "*"],
+      policy: "pairing", // pairing | allowlist | open | disabled
+      allowFrom: ["U123", "U456", "*"], // optional; "open" requires ["*"]
       groupEnabled: false,
       groupChannels: ["G123"]
     },
@@ -481,6 +497,7 @@ Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
     enabled: true,
     cliPath: "imsg",
     dbPath: "~/Library/Messages/chat.db",
+    dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
     includeAttachments: false,
     mediaMaxMb: 16,

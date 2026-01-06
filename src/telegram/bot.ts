@@ -35,6 +35,10 @@ import {
 } from "../providers/location.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
+import {
+  readTelegramAllowFromStore,
+  upsertTelegramPairingRequest,
+} from "./pairing-store.js";
 
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;
@@ -111,6 +115,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
+  const dmPolicy = cfg.telegram?.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
   const groupAllowFrom =
     opts.groupAllowFrom ??
@@ -150,8 +155,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       (entry) => entry === username || entry === `@${username}`,
     );
   };
-  const dmAllow = normalizeAllowFrom(allowFrom);
-  const groupAllow = normalizeAllowFrom(groupAllowFrom);
   const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
@@ -177,10 +180,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const processMessage = async (
     primaryCtx: TelegramContext,
     allMedia: Array<{ path: string; contentType?: string }>,
+    storeAllowFrom: string[],
   ) => {
     const msg = primaryCtx.message;
     const chatId = msg.chat.id;
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const effectiveDmAllow = normalizeAllowFrom([
+      ...(allowFrom ?? []),
+      ...storeAllowFrom,
+    ]);
+    const effectiveGroupAllow = normalizeAllowFrom([
+      ...(groupAllowFrom ?? []),
+      ...storeAllowFrom,
+    ]);
 
     const sendTyping = async () => {
       try {
@@ -192,14 +204,70 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     };
 
-    // allowFrom for direct chats
-    if (!isGroup && dmAllow.hasEntries) {
-      const candidate = String(chatId);
-      if (!isSenderAllowed({ allow: dmAllow, senderId: candidate })) {
-        logVerbose(
-          `Blocked unauthorized telegram sender ${candidate} (not in allowFrom)`,
-        );
-        return;
+    // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
+    if (!isGroup) {
+      if (dmPolicy === "disabled") return;
+
+      if (dmPolicy !== "open") {
+        const candidate = String(chatId);
+        const senderUsername = msg.from?.username ?? "";
+        const allowed =
+          effectiveDmAllow.hasWildcard ||
+          (effectiveDmAllow.hasEntries &&
+            isSenderAllowed({
+              allow: effectiveDmAllow,
+              senderId: candidate,
+              senderUsername,
+            }));
+        if (!allowed) {
+          if (dmPolicy === "pairing") {
+            try {
+              const from = msg.from as
+                | {
+                    first_name?: string;
+                    last_name?: string;
+                    username?: string;
+                  }
+                | undefined;
+              const { code } = await upsertTelegramPairingRequest({
+                chatId: candidate,
+                username: from?.username,
+                firstName: from?.first_name,
+                lastName: from?.last_name,
+              });
+              logger.info(
+                {
+                  chatId: candidate,
+                  username: from?.username,
+                  firstName: from?.first_name,
+                  lastName: from?.last_name,
+                  code,
+                },
+                "telegram pairing request",
+              );
+              await bot.api.sendMessage(
+                chatId,
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot telegram pairing approve <code>",
+                ].join("\n"),
+              );
+            } catch (err) {
+              logVerbose(
+                `telegram pairing reply failed for chat ${chatId}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy})`,
+            );
+          }
+          return;
+        }
       }
     }
 
@@ -207,7 +275,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const senderUsername = msg.from?.username ?? "";
     const commandAuthorized = isSenderAllowed({
-      allow: isGroup ? groupAllow : dmAllow,
+      allow: isGroup ? effectiveGroupAllow : effectiveDmAllow,
       senderId,
       senderUsername,
     });
@@ -407,6 +475,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const chatId = msg.chat.id;
       const isGroup =
         msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
 
       if (isGroup) {
         // Group policy filtering: controls how group messages are handled
@@ -419,6 +488,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           return;
         }
         if (groupPolicy === "allowlist") {
+          const effectiveGroupAllow = normalizeAllowFrom([
+            ...(groupAllowFrom ?? []),
+            ...storeAllowFrom,
+          ]);
           // For allowlist mode, the sender (msg.from.id) must be in allowFrom
           const senderId = msg.from?.id;
           if (senderId == null) {
@@ -427,7 +500,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             );
             return;
           }
-          if (!groupAllow.hasEntries) {
+          if (!effectiveGroupAllow.hasEntries) {
             logVerbose(
               "Blocked telegram group message (groupPolicy: allowlist, no groupAllowFrom)",
             );
@@ -436,7 +509,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           const senderUsername = msg.from?.username ?? "";
           if (
             !isSenderAllowed({
-              allow: groupAllow,
+              allow: effectiveGroupAllow,
               senderId: String(senderId),
               senderUsername,
             })
@@ -510,7 +583,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const allMedia = media
         ? [{ path: media.path, contentType: media.contentType }]
         : [];
-      await processMessage(ctx, allMedia);
+      await processMessage(ctx, allMedia, storeAllowFrom);
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));
     }
@@ -538,7 +611,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
       }
 
-      await processMessage(primaryEntry.ctx, allMedia);
+      const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
+      await processMessage(primaryEntry.ctx, allMedia, storeAllowFrom);
     } catch (err) {
       runtime.error?.(danger(`media group handler failed: ${String(err)}`));
     }

@@ -93,6 +93,18 @@ vi.mock("../daemon/service.js", () => ({
   }),
 }));
 
+vi.mock("../telegram/pairing-store.js", () => ({
+  readTelegramAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../telegram/token.js", () => ({
+  resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
+}));
+
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
     log: () => {},

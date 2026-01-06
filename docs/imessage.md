@@ -26,6 +26,7 @@ Status: external CLI integration. No daemon.
     enabled: true,
     cliPath: "imsg",
     dbPath: "~/Library/Messages/chat.db",
+    dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "user@example.com", "chat_id:123"],
     groupPolicy: "open",
     groupAllowFrom: ["chat_id:123"],
@@ -39,6 +40,7 @@ Status: external CLI integration. No daemon.
 
 Notes:
 - `allowFrom` accepts handles (phone/email) or `chat_id:<id>` entries.
+- Default: `imessage.dmPolicy="pairing"` — unknown DM senders get a pairing code (approve via `clawdbot pairing approve --provider imessage <code>`). `"open"` requires `allowFrom=["*"]`.
 - `groupPolicy` controls group handling (`open|disabled|allowlist`).
 - `groupAllowFrom` accepts the same entries as `allowFrom`.
 - `service` defaults to `auto` (use `imessage` or `sms` to pin).

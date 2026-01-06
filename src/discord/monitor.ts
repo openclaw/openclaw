@@ -41,6 +41,10 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -142,6 +146,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const dmConfig = cfg.discord?.dm;
   const guildEntries = cfg.discord?.guilds;
   const groupPolicy = cfg.discord?.groupPolicy ?? "open";
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   const allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
@@ -160,7 +165,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))}`,
     );
   }
 
@@ -208,6 +213,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
       if (isDirectMessage && !dmEnabled) {
         logVerbose("discord: drop dm (dms disabled)");
+        return;
+      }
+      if (isDirectMessage && dmPolicy === "disabled") {
+        logVerbose("discord: drop dm (dmPolicy: disabled)");
         return;
       }
       const botId = client.user?.id;
@@ -386,22 +395,58 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         }
       }
 
-      if (isDirectMessage && Array.isArray(allowFrom) && allowFrom.length > 0) {
-        const allowList = normalizeDiscordAllowList(allowFrom, [
+      if (isDirectMessage && dmPolicy !== "open") {
+        const storeAllowFrom = await readProviderAllowFromStore(
+          "discord",
+        ).catch(() => []);
+        const effectiveAllowFrom = Array.from(
+          new Set([...(allowFrom ?? []), ...storeAllowFrom]),
+        );
+        const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
           "discord:",
           "user:",
         ]);
         const permitted =
-          allowList &&
+          allowList != null &&
           allowListMatches(allowList, {
             id: message.author.id,
             name: message.author.username,
             tag: message.author.tag,
           });
         if (!permitted) {
-          logVerbose(
-            `Blocked unauthorized discord sender ${message.author.id} (not in allowFrom)`,
-          );
+          if (dmPolicy === "pairing") {
+            const { code } = await upsertProviderPairingRequest({
+              provider: "discord",
+              id: message.author.id,
+              meta: {
+                username: message.author.username,
+                tag: message.author.tag,
+              },
+            });
+            logVerbose(
+              `discord pairing request sender=${message.author.id} tag=${message.author.tag} code=${code}`,
+            );
+            try {
+              await message.reply(
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider discord <code>",
+                ].join("\n"),
+              );
+            } catch (err) {
+              logVerbose(
+                `discord pairing reply failed for ${message.author.id}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked unauthorized discord sender ${message.author.id} (dmPolicy=${dmPolicy})`,
+            );
+          }
           return;
         }
       }

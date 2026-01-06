@@ -7,6 +7,8 @@ const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
 const reactMock = vi.fn();
 let config: Record<string, unknown> = {};
+const readAllowFromStoreMock = vi.fn();
+const upsertPairingRequestMock = vi.fn();
 const getSlackHandlers = () =>
   (
     globalThis as {
@@ -30,6 +32,13 @@ vi.mock("../auto-reply/reply.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMock(...args),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertProviderPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -89,13 +98,17 @@ beforeEach(() => {
       ackReaction: "👀",
       ackReactionScope: "group-mentions",
     },
-    slack: { dm: { enabled: true }, groupDm: { enabled: false } },
+    slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
     routing: { allowFrom: [] },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();
   updateLastRouteMock.mockReset();
   reactMock.mockReset();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock
+    .mockReset()
+    .mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
 describe("monitorSlackProvider tool results", () => {
@@ -140,8 +153,7 @@ describe("monitorSlackProvider tool results", () => {
     config = {
       messages: { responsePrefix: "PFX" },
       slack: {
-        dm: { enabled: true },
-        groupDm: { enabled: false },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         channels: { C1: { allow: true, requireMention: true } },
       },
       routing: {
@@ -290,5 +302,45 @@ describe("monitorSlackProvider tool results", () => {
       timestamp: "456",
       name: "👀",
     });
+  });
+
+  it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
+    config = {
+      ...config,
+      slack: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
+    };
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "123",
+        channel: "C1",
+        channel_type: "im",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Pairing code: PAIRCODE",
+    );
   });
 });

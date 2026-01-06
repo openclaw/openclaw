@@ -47,8 +47,10 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Inbox listeners are detached on shutdown to avoid accumulating event handlers in tests/restarts.
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
-- **Allowlist**: `whatsapp.allowFrom` enforced for direct chats only.
-  - If `whatsapp.allowFrom` is empty, default allowlist = self number (self-chat mode).
+- **DM policy**: `whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
+  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`).
+  - Open: requires `whatsapp.allowFrom` to include `"*"`.
+  - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
 - **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).
   - `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
@@ -120,6 +122,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Logged-out => stop and require re-link.
 
 ## Config quick map
+- `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `whatsapp.allowFrom` (DM allowlist).
 - `whatsapp.groupAllowFrom` (group sender allowlist).
 - `whatsapp.groupPolicy` (group policy).

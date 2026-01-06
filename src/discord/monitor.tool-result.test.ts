@@ -6,6 +6,8 @@ const sendMock = vi.fn();
 const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
 let config: Record<string, unknown> = {};
+const readAllowFromStoreMock = vi.fn();
+const upsertPairingRequestMock = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -21,6 +23,13 @@ vi.mock("../auto-reply/reply.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendMessageDiscord: (...args: unknown[]) => sendMock(...args),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertProviderPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -53,7 +62,10 @@ vi.mock("discord.js", () => {
       }
     }
     login = vi.fn().mockResolvedValue(undefined);
-    destroy = vi.fn().mockResolvedValue(undefined);
+    destroy = vi.fn().mockImplementation(async () => {
+      handlers.clear();
+      Client.lastClient = null;
+    });
   }
 
   return {
@@ -98,12 +110,16 @@ async function waitForClient() {
 beforeEach(() => {
   config = {
     messages: { responsePrefix: "PFX" },
-    discord: { dm: { enabled: true } },
+    discord: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
     routing: { allowFrom: [] },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();
   updateLastRouteMock.mockReset();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock
+    .mockReset()
+    .mockResolvedValue({ code: "PAIRCODE", created: true });
 });
 
 describe("monitorDiscordProvider tool results", () => {
@@ -152,7 +168,7 @@ describe("monitorDiscordProvider tool results", () => {
     config = {
       messages: { responsePrefix: "PFX" },
       discord: {
-        dm: { enabled: true },
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         guilds: { "*": { requireMention: true } },
       },
       routing: {
@@ -201,5 +217,51 @@ describe("monitorDiscordProvider tool results", () => {
 
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+  });
+
+  it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
+    config = {
+      ...config,
+      discord: { dm: { enabled: true, policy: "pairing", allowFrom: [] } },
+    };
+
+    const controller = new AbortController();
+    const run = monitorDiscordProvider({
+      token: "token",
+      abortSignal: controller.signal,
+    });
+
+    const discord = await import("discord.js");
+    const client = await waitForClient();
+    if (!client) throw new Error("Discord client not created");
+
+    const reply = vi.fn().mockResolvedValue(undefined);
+    client.emit(discord.Events.MessageCreate, {
+      id: "m3",
+      content: "hello",
+      author: { id: "u1", bot: false, username: "Ada", tag: "Ada#1" },
+      channelId: "c1",
+      channel: {
+        type: discord.ChannelType.DM,
+        isSendable: () => false,
+      },
+      guild: undefined,
+      mentions: { has: () => false },
+      attachments: { first: () => undefined },
+      type: discord.MessageType.Default,
+      createdTimestamp: Date.now(),
+      reply,
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledTimes(1);
+    expect(String(reply.mock.calls[0]?.[0] ?? "")).toContain(
+      "Pairing code: PAIRCODE",
+    );
   });
 });

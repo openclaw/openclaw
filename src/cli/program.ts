@@ -30,7 +30,9 @@ import { registerGatewayCli } from "./gateway-cli.js";
 import { registerHooksCli } from "./hooks-cli.js";
 import { registerModelsCli } from "./models-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
+import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
+import { registerTelegramCli } from "./telegram-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
 
 export { forceFreePort };
@@ -507,6 +509,8 @@ Examples:
   registerCronCli(program);
   registerDnsCli(program);
   registerHooksCli(program);
+  registerPairingCli(program);
+  registerTelegramCli(program);
 
   program
     .command("status")

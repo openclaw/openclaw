@@ -7,6 +7,8 @@ const stopMock = vi.fn();
 const sendMock = vi.fn();
 const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
+const readAllowFromStoreMock = vi.fn();
+const upsertPairingRequestMock = vi.fn();
 
 let config: Record<string, unknown> = {};
 let notificationHandler:
@@ -28,6 +30,13 @@ vi.mock("../auto-reply/reply.js", () => ({
 
 vi.mock("./send.js", () => ({
   sendMessageIMessage: (...args: unknown[]) => sendMock(...args),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: (...args: unknown[]) =>
+    readAllowFromStoreMock(...args),
+  upsertProviderPairingRequest: (...args: unknown[]) =>
+    upsertPairingRequestMock(...args),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -63,7 +72,11 @@ async function waitForSubscribe() {
 
 beforeEach(() => {
   config = {
-    imessage: { groups: { "*": { requireMention: true } } },
+    imessage: {
+      dmPolicy: "open",
+      allowFrom: ["*"],
+      groups: { "*": { requireMention: true } },
+    },
     session: { mainKey: "main" },
     routing: {
       groupChat: { mentionPatterns: ["@clawd"] },
@@ -79,6 +92,10 @@ beforeEach(() => {
   sendMock.mockReset().mockResolvedValue({ messageId: "ok" });
   replyMock.mockReset().mockResolvedValue({ text: "ok" });
   updateLastRouteMock.mockReset();
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  upsertPairingRequestMock
+    .mockReset()
+    .mockResolvedValue({ code: "PAIRCODE", created: true });
   notificationHandler = undefined;
   closeResolve = undefined;
 });
@@ -232,6 +249,44 @@ describe("monitorIMessageProvider", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
     expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+  });
+
+  it("defaults to dmPolicy=pairing behavior when allowFrom is empty", async () => {
+    config = {
+      ...config,
+      imessage: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+        groups: { "*": { requireMention: true } },
+      },
+    };
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 99,
+          chat_id: 77,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalled();
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Pairing code: PAIRCODE",
+    );
   });
 
   it("delivers group replies when mentioned", async () => {

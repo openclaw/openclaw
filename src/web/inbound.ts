@@ -17,6 +17,10 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
+import {
   formatLocationText,
   type NormalizedLocation,
 } from "../providers/location.js";
@@ -168,16 +172,14 @@ export async function monitorWebInbox(options: {
       // Filter unauthorized senders early to prevent wasted processing
       // and potential session corruption from Bad MAC errors
       const cfg = loadConfig();
+      const dmPolicy = cfg.whatsapp?.dmPolicy ?? "pairing";
       const configuredAllowFrom = cfg.whatsapp?.allowFrom;
-      // Without user config, default to self-only DM access so the owner can talk to themselves
-      const defaultAllowFrom =
-        (!configuredAllowFrom || configuredAllowFrom.length === 0) && selfE164
-          ? [selfE164]
-          : undefined;
-      const allowFrom =
-        configuredAllowFrom && configuredAllowFrom.length > 0
-          ? configuredAllowFrom
-          : defaultAllowFrom;
+      const storeAllowFrom = await readProviderAllowFromStore("whatsapp").catch(
+        () => [],
+      );
+      const allowFrom = Array.from(
+        new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
+      );
       const groupAllowFrom =
         cfg.whatsapp?.groupAllowFrom ??
         (configuredAllowFrom && configuredAllowFrom.length > 0
@@ -227,16 +229,53 @@ export async function monitorWebInbox(options: {
         }
       }
 
-      // DM allowlist filtering (unchanged behavior)
-      const allowlistEnabled =
-        !group && Array.isArray(allowFrom) && allowFrom.length > 0;
-      if (!isSamePhone && allowlistEnabled) {
-        const candidate = from;
-        if (!dmHasWildcard && !normalizedAllowFrom.includes(candidate)) {
-          logVerbose(
-            `Blocked unauthorized sender ${candidate} (not in allowFrom list)`,
-          );
+      // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
+      if (!group) {
+        if (dmPolicy === "disabled") {
+          logVerbose("Blocked dm (dmPolicy: disabled)");
           continue;
+        }
+        if (dmPolicy !== "open" && !isSamePhone) {
+          const candidate = from;
+          const allowed =
+            dmHasWildcard ||
+            (normalizedAllowFrom.length > 0 &&
+              normalizedAllowFrom.includes(candidate));
+          if (!allowed) {
+            if (dmPolicy === "pairing") {
+              const { code } = await upsertProviderPairingRequest({
+                provider: "whatsapp",
+                id: candidate,
+                meta: {
+                  name: (msg.pushName ?? "").trim() || undefined,
+                },
+              });
+              logVerbose(
+                `whatsapp pairing request sender=${candidate} name=${msg.pushName ?? "unknown"} code=${code}`,
+              );
+              try {
+                await sock.sendMessage(remoteJid, {
+                  text: [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot pairing approve --provider whatsapp <code>",
+                  ].join("\n"),
+                });
+              } catch (err) {
+                logVerbose(
+                  `whatsapp pairing reply failed for ${candidate}: ${String(err)}`,
+                );
+              }
+            } else {
+              logVerbose(
+                `Blocked unauthorized sender ${candidate} (dmPolicy=${dmPolicy})`,
+              );
+            }
+            continue;
+          }
         }
       }
 
