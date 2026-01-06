@@ -7,6 +7,8 @@ read_when:
 ---
 # Models CLI plan
 
+See [`docs/model-failover.md`](https://docs.clawd.bot/model-failover) for how auth profiles rotate (OAuth vs API keys), cooldowns, and how that interacts with model fallbacks.
+
 Goal: give clear model visibility + control (configured vs available), plus scan tooling
 that prefers tool-call + image-capable models and maintains ordered fallbacks.
 

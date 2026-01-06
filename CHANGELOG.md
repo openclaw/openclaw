@@ -105,6 +105,7 @@
 - Bash tool: inherit gateway PATH so Nix-provided tools resolve during commands. Thanks @joshp123 for PR #202.
 - Delivery chunking: keep Markdown fenced code blocks valid when splitting long replies (close + reopen fences).
 - Auth: prefer OAuth profiles over API keys during round-robin selection (prevents OAuth “lost after one message” when both are configured).
+- Models: extend `clawdbot models` status output with a masked auth overview (profiles, env sources, and OAuth counts).
 
 ### Maintenance
 - Agent: add `skipBootstrap` config option. Thanks @onutc for PR #292.

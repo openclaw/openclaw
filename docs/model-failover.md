@@ -13,6 +13,18 @@ Clawdbot handles failures in two stages:
 
 This doc explains the runtime rules and the data that backs them.
 
+## Auth storage (keys + OAuth)
+
+Clawdbot uses **auth profiles** for both API keys and OAuth tokens.
+
+- Secrets live in `~/.clawdbot/agent/auth-profiles.json` (default agent; multi-agent stores under `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`).
+- Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
+- Legacy import-only OAuth file: `~/.clawdbot/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
+
+Credential types:
+- `type: "api_key"` → `{ provider, key }`
+- `type: "oauth"` → `{ provider, access, refresh, expires, email? }` (+ `projectId`/`enterpriseUrl` for some providers)
+
 ## Profile IDs
 
 OAuth logins create distinct profiles so multiple accounts can coexist.
@@ -30,9 +42,15 @@ When a provider has multiple profiles, Clawdbot chooses an order like this:
 3) **Stored profiles**: entries in `auth-profiles.json` for the provider.
 
 If no explicit order is configured, Clawdbot uses a round‑robin order:
-- **Primary key:** `usageStats.lastUsed` (oldest first).
-- **Secondary key:** profile type (OAuth before API keys).
+- **Primary key:** profile type (**OAuth before API keys**).
+- **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
 - **Cooldown profiles** are moved to the end, ordered by soonest cooldown expiry.
+
+### Why OAuth can “look lost”
+
+If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
+- Pin with `auth.order[provider] = ["provider:profileId"]`, or
+- Use a per-session override via `/model …` with a profile override (when supported by your UI/chat surface).
 
 ## Cooldowns
 

@@ -32,6 +32,11 @@ New install? Start here: https://docs.clawd.bot/getting-started
 
 Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.clawd.bot/onboarding).
 
+## Models (selection + auth)
+
+- Models config + CLI: https://docs.clawd.bot/models
+- Auth profile rotation (OAuth vs API keys) + fallbacks: https://docs.clawd.bot/model-failover
+
 ## Recommended setup (from source)
 
 Do **not** download prebuilt binaries. Run from source.
