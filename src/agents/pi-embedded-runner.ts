@@ -923,7 +923,7 @@ export async function runEmbeddedPiAgent(params: {
             try {
               await waitForCompactionRetry();
             } catch (err) {
-              // Capture AbortError from waitForCompactionRetry to enable fallback/rotation
+              // Capture AbortError from waitForCompactionRetry to enable fallback/rotation.
               if (isAbortError(err)) {
                 if (!promptError) promptError = err;
               } else {
