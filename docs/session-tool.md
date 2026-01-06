@@ -12,6 +12,7 @@ Goal: small, hard-to-misuse tool surface so agents can list sessions, fetch hist
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
+- `sessions_spawn`
 
 ## Key Model
 - Main direct chat bucket is always the literal key `"main"`.
@@ -117,3 +118,18 @@ Runtime override (per session entry):
 Enforcement points:
 - `chat.send` / `agent` (gateway)
 - auto-reply delivery logic
+
+## sessions_spawn
+Spawn a sub-agent run in an isolated session and announce the result back to the requester chat surface.
+
+Parameters:
+- `task` (required)
+- `label?` (optional; used for logs/UI)
+- `timeoutSeconds?` (default 0; 0 = fire-and-forget)
+- `cleanup?` (`delete|keep`, default `delete`)
+
+Behavior:
+- Starts a new `subagent:<uuid>` session with `deliver: false`.
+- Sub-agents default to the full tool surface **minus session tools** (configurable via `agent.subagents.tools`).
+- After completion (or best-effort wait), Clawdbot runs a sub-agent **announce step** and posts the result to the requester chat surface.
+- Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
