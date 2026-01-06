@@ -4,10 +4,14 @@
 
 ## Unreleased
 
+### Breaking
+- Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
+
 ### Fixes
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - Linux: auto-attempt lingering during onboarding (try without sudo, fallback to sudo) and prompt on install/restart to keep the gateway alive after logout/idle. Thanks @tobiasbischoff for PR #237.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
+- Logging: redact sensitive tokens in verbose tool summaries by default (configurable patterns).
 - macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Connections settings now use a custom sidebar to avoid toolbar toggle issues, with rounded styling and full-width row hit targets.
@@ -16,6 +20,7 @@
 - Model: `/model` list shows auth source (masked key or OAuth email) per provider.
 - Model: `/model list` is an alias for `/model`.
 - Model: `/model` output now includes auth source location (env/auth.json/models.json).
+- Model: avoid duplicate `missing (missing)` auth labels in `/model` list output.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Control UI: show a reading indicator bubble while the assistant is responding.
@@ -27,11 +32,15 @@
 - Block streaming: preserve leading indentation in block replies (lists, indented fences).
 - Docs: document systemd lingering and logged-in session requirements on macOS/Windows.
 - Auto-reply: unify tool/block/final delivery across providers and apply consistent heartbeat/prefix handling. Thanks @MSch for PR #225 (superseded commit 92c953d0749143eb2a3f31f3cd6ad0e8eabf48c3).
+- Heartbeat: make HEARTBEAT_OK ack padding configurable across heartbeat and cron delivery. (#238) — thanks @jalehman
+- WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
+- Skills: add 1Password CLI skill with op examples.
 - Lint: organize imports and wrap long lines in reply commands.
+- Deps: update to latest across the repo.
 
 ## 2026.1.5-3
 

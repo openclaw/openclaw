@@ -44,6 +44,10 @@ export type LoggingConfig = {
     | "debug"
     | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
+  /** Redact sensitive tokens in tool summaries. Default: "tools". */
+  redactSensitive?: "off" | "tools";
+  /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
+  redactPatterns?: string[];
 };
 
 export type WebReconnectConfig = {
@@ -445,7 +449,6 @@ export type RoutingConfig = {
 export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
-  timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
 };
 
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
@@ -672,6 +675,8 @@ export type ClawdbotConfig = {
     imageModel?: string;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
+    /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
+    userTimezone?: string;
     /** Optional allowlist for /model (provider/model or model-only). */
     allowedModels?: string[];
     /** Optional model aliases for /model (alias -> provider/model). */
@@ -726,6 +731,8 @@ export type ClawdbotConfig = {
       to?: string;
       /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
       prompt?: string;
+      /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
+      ackMaxChars?: number;
     };
     /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
     maxConcurrent?: number;

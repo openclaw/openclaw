@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
 
 type ToolDisplayActionSpec = {
@@ -193,7 +194,7 @@ export function resolveToolDisplay(params: {
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const parts: string[] = [];
   if (display.verb) parts.push(display.verb);
-  if (display.detail) parts.push(display.detail);
+  if (display.detail) parts.push(redactToolDetail(display.detail));
   if (parts.length === 0) return undefined;
   return parts.join(" · ");
 }

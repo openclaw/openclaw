@@ -141,6 +141,9 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
+- Tool summaries can be redacted to avoid leaking secrets:
+  - `logging.redactSensitive` (`off` | `tools`, default: `tools`)
+  - `logging.redactPatterns` (array of regex strings; overrides defaults)
 
 ```json5
 {
@@ -148,7 +151,13 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
     level: "info",
     file: "/tmp/clawdbot/clawdbot.log",
     consoleLevel: "info",
-    consoleStyle: "pretty"
+    consoleStyle: "pretty",
+    redactSensitive: "tools",
+    redactPatterns: [
+      // Example: override defaults with your own rules.
+      "\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1",
+      "/\\bsk-[A-Za-z0-9_-]{8,}\\b/gi"
+    ]
   }
 }
 ```
@@ -432,16 +441,26 @@ Default: `~/clawd`.
 If `agent.sandbox` is enabled, non-main sessions can override this with their
 own per-session workspaces under `agent.sandbox.workspaceRoot`.
 
+### `agent.userTimezone`
+
+Sets the user’s timezone for **system prompt context** (not for timestamps in
+message envelopes). If unset, Clawdbot uses the host timezone at runtime.
+
+```json5
+{
+  agent: { userTimezone: "America/Chicago" }
+}
+```
+
 ### `messages`
 
-Controls inbound/outbound prefixes and timestamps.
+Controls inbound/outbound prefixes.
 
 ```json5
 {
   messages: {
     messagePrefix: "[clawdbot]",
-    responsePrefix: "🦞",
-    timestampPrefix: "Europe/London"
+    responsePrefix: "🦞"
   }
 }
 ```
@@ -560,6 +579,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
+- `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
 
 `agent.bash` configures background bash defaults:
 - `backgroundMs`: time before auto-background (ms, default 10000)

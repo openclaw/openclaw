@@ -144,10 +144,14 @@ export async function monitorWebInbox(options: {
         continue;
       const group = isJidGroup(remoteJid);
       const participantJid = msg.key?.participant ?? undefined;
-      const senderE164 = participantJid ? jidToE164(participantJid) : null;
       const from = group ? remoteJid : jidToE164(remoteJid);
       // Skip if we still can't resolve an id to key conversation
       if (!from) continue;
+      const senderE164 = group
+        ? participantJid
+          ? jidToE164(participantJid)
+          : null
+        : from;
       let groupSubject: string | undefined;
       let groupParticipants: string[] | undefined;
       if (group) {

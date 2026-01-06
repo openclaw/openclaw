@@ -142,6 +142,19 @@ export function applyModelAliasDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
+export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const logging = cfg.logging;
+  if (!logging) return cfg;
+  if (logging.redactSensitive) return cfg;
+  return {
+    ...cfg,
+    logging: {
+      ...logging,
+      redactSensitive: "tools",
+    },
+  };
+}
+
 export function resetSessionDefaultsWarningForTests() {
   defaultWarnState = { warned: false };
 }

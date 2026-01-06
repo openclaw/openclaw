@@ -16,7 +16,6 @@ const mockLoadConfig = vi.fn().mockReturnValue({
   messages: {
     messagePrefix: undefined,
     responsePrefix: undefined,
-    timestampPrefix: false,
   },
 });
 
@@ -480,7 +479,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -536,7 +534,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -576,7 +573,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -592,7 +588,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -628,7 +623,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -643,7 +637,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -685,7 +678,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -709,7 +701,11 @@ describe("web monitor inbox", () => {
 
     // Should call onMessage for authorized senders
     expect(onMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ body: "authorized message", from: "+999" }),
+      expect.objectContaining({
+        body: "authorized message",
+        from: "+999",
+        senderE164: "+999",
+      }),
     );
 
     // Reset mock for other tests
@@ -720,7 +716,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -737,7 +732,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -773,7 +767,6 @@ describe("web monitor inbox", () => {
       messages: {
         messagePrefix: undefined,
         responsePrefix: undefined,
-        timestampPrefix: false,
       },
     });
 
@@ -840,7 +833,6 @@ it("defaults to self-only when no config is present", async () => {
     messages: {
       messagePrefix: undefined,
       responsePrefix: undefined,
-      timestampPrefix: false,
     },
   });
 
