@@ -121,7 +121,7 @@ Then reinstall deps + restart:
 ```bash
 pnpm install
 pnpm build
-pnpm clawdbot gateway restart
+clawdbot gateway restart
 ```
 
 If you want to go back to latest later:

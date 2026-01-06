@@ -76,7 +76,7 @@ Send these as standalone messages so they register.
 ## Inspecting
 - `pnpm clawdbot status` — shows store path and recent sessions.
 - `pnpm clawdbot sessions --json` — dumps every entry (filter with `--active <minutes>`).
-- `pnpm clawdbot gateway call sessions.list --params '{}'` — fetch sessions from the running gateway (use `--url`/`--token` for remote gateway access).
+- `clawdbot gateway call sessions.list --params '{}'` — fetch sessions from the running gateway (use `--url`/`--token` for remote gateway access).
 - Send `/status` as a standalone message in chat to see whether the agent is reachable, how much of the session context is used, current thinking/verbose toggles, and when your WhatsApp web creds were last refreshed (helps spot relink needs).
 - Send `/compact` (optional instructions) as a standalone message to summarize older context and free up window space.
 - JSONL transcripts can be opened directly to review full turns.

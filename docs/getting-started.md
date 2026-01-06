@@ -64,6 +64,7 @@ What you’ll choose:
 - **Auth**: Anthropic OAuth or OpenAI OAuth (recommended), API key (optional), or skip for now
 - **Providers**: WhatsApp QR login, bot tokens, etc.
 - **Daemon**: optional background install (launchd/systemd/Task Scheduler)
+  - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
 
 Wizard doc: https://docs.clawd.bot/wizard
 
@@ -79,10 +80,18 @@ Headless/server tip: do OAuth on a normal machine first, then copy `oauth.json` 
 If the wizard didn’t start it for you:
 
 ```bash
-bun run clawdbot gateway --port 18789 --verbose
+# If you installed the CLI (npm/pnpm link --global):
+clawdbot gateway --port 18789 --verbose
+# From this repo:
+node dist/entry.js gateway --port 18789 --verbose
 ```
 
 Dashboard (local loopback): `http://127.0.0.1:18789/`
+
+⚠️ **WhatsApp + Bun warning:** Baileys (WhatsApp Web library) uses a WebSocket
+path that is currently incompatible with Bun and can cause memory corruption on
+reconnect. If you use WhatsApp, run the Gateway with **Node** until this is
+resolved. Baileys: https://github.com/WhiskeySockets/Baileys
 
 ## 5) Pair + connect your first chat surface
 

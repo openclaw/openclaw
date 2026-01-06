@@ -60,6 +60,11 @@ import { setupProviders } from "./onboard-providers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
 import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  GATEWAY_DAEMON_RUNTIME_OPTIONS,
+  type GatewayDaemonRuntime,
+} from "./daemon-runtime.js";
+import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
@@ -502,11 +507,13 @@ async function maybeInstallDaemon(params: {
   runtime: RuntimeEnv;
   port: number;
   gatewayToken?: string;
+  daemonRuntime?: GatewayDaemonRuntime;
 }) {
   const service = resolveGatewayService();
   const loaded = await service.isLoaded({ env: process.env });
   let shouldCheckLinger = false;
   let shouldInstall = true;
+  let daemonRuntime = params.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (loaded) {
     const action = guardCancel(
       await select({
@@ -531,11 +538,25 @@ async function maybeInstallDaemon(params: {
   }
 
   if (shouldInstall) {
+    if (!params.daemonRuntime) {
+      daemonRuntime = guardCancel(
+        await select({
+          message: "Gateway daemon runtime",
+          options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+          initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+        }),
+        params.runtime,
+      ) as GatewayDaemonRuntime;
+    }
     const devMode =
       process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
       process.argv[1]?.endsWith(".ts");
     const { programArguments, workingDirectory } =
-      await resolveGatewayProgramArguments({ port: params.port, dev: devMode });
+      await resolveGatewayProgramArguments({
+        port: params.port,
+        dev: devMode,
+        runtime: daemonRuntime,
+      });
     const environment: Record<string, string | undefined> = {
       PATH: process.env.PATH,
       CLAWDBOT_GATEWAY_TOKEN: params.gatewayToken,

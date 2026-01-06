@@ -81,6 +81,7 @@ It does **not** install or change anything on the remote host.
      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
    - Windows: Scheduled Task
      - Runs on user logon; headless/system services are not configured by default.
+   - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
@@ -120,6 +121,8 @@ clawdbot onboard --non-interactive \
   --anthropic-api-key "$ANTHROPIC_API_KEY" \
   --gateway-port 18789 \
   --gateway-bind loopback \
+  --install-daemon \
+  --daemon-runtime node \
   --skip-skills
 ```
 

@@ -30,6 +30,10 @@ import type {
   OnboardMode,
   OnboardOptions,
 } from "./onboard-types.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  isGatewayDaemonRuntime,
+} from "./daemon-runtime.js";
 import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 
 export async function runNonInteractiveOnboarding(
@@ -223,13 +227,24 @@ export async function runNonInteractiveOnboarding(
     skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
   });
 
+  const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
+
   if (opts.installDaemon) {
+    if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
+      runtime.error("Invalid --daemon-runtime (use node or bun)");
+      runtime.exit(1);
+      return;
+    }
     const service = resolveGatewayService();
     const devMode =
       process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
       process.argv[1]?.endsWith(".ts");
     const { programArguments, workingDirectory } =
-      await resolveGatewayProgramArguments({ port, dev: devMode });
+      await resolveGatewayProgramArguments({
+        port,
+        dev: devMode,
+        runtime: daemonRuntimeRaw,
+      });
     const environment: Record<string, string | undefined> = {
       PATH: process.env.PATH,
       CLAWDBOT_GATEWAY_TOKEN: gatewayToken,
@@ -260,6 +275,7 @@ export async function runNonInteractiveOnboarding(
           authChoice,
           gateway: { port, bind, authMode, tailscaleMode },
           installDaemon: Boolean(opts.installDaemon),
+          daemonRuntime: opts.installDaemon ? daemonRuntimeRaw : undefined,
           skipSkills: Boolean(opts.skipSkills),
           skipHealth: Boolean(opts.skipHealth),
         },

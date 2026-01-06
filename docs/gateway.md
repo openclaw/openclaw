@@ -14,11 +14,11 @@ Last updated: 2025-12-09
 
 ## How to run (local)
 ```bash
-pnpm clawdbot gateway --port 18789
+clawdbot gateway --port 18789
 # for full debug/trace logs in stdio:
-pnpm clawdbot gateway --port 18789 --verbose
+clawdbot gateway --port 18789 --verbose
 # if the port is busy, terminate listeners then start:
-pnpm clawdbot gateway --force
+clawdbot gateway --force
 # dev loop (auto-reload on TS changes):
 pnpm gateway:watch
 ```
