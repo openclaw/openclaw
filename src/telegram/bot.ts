@@ -380,7 +380,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     const ctxPayload = {
       Body: body,
-      From: isGroup ? `group:${chatId}` : `telegram:${chatId}`,
+      From: isGroup
+        ? messageThreadId
+          ? `telegram:group:${chatId}:topic:${messageThreadId}`
+          : `group:${chatId}`
+        : `telegram:${chatId}`,
       To: `telegram:${chatId}`,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,

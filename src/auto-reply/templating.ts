@@ -27,6 +27,10 @@ export type MsgContext = {
   Surface?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
+  /** Telegram forum topic thread ID */
+  MessageThreadId?: number;
+  /** Whether this is a Telegram forum supergroup */
+  IsForum?: boolean;
 };
 
 export type TemplateContext = MsgContext & {
