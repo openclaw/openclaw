@@ -13,6 +13,14 @@ The Control UI is a small **Vite + Lit** single-page app served by the Gateway:
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+## Quick open (local)
+
+If the Gateway is running on the same computer, open:
+
+- http://127.0.0.1:18789/ (or http://localhost:18789/)
+
+If the page fails to load, start the Gateway first: `clawdbot gateway`.
+
 Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.token`
 - `connect.params.auth.password`
