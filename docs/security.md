@@ -137,28 +137,56 @@ We're considering a `readOnlyMode` flag that prevents the AI from:
 - Executing shell commands
 - Sending messages
 
-## Container Isolation (Recommended)
+## Sandboxing Principles (Recommended)
 
-For maximum security, run CLAWDBOT in a container with limited access:
+If you let an agent execute commands, your best defense is to **reduce the blast
+radius**:
+- keep the filesystem the agent can touch small
+- default to “no network”
+- run with least privileges (no root, no caps, no new privileges)
+- keep “escape hatches” (like host-elevated bash) gated behind explicit allowlists
 
-```yaml
-# docker-compose.yml
-services:
-  clawdbot:
-    build: .
-    volumes:
-      - ./clawd-sandbox:/home/clawd  # Limited filesystem
-      - /tmp/clawdbot:/tmp/clawdbot    # Logs
-    environment:
-      - CLAWDBOT_SANDBOX=true
-    network_mode: bridge  # Limited network
-```
+Clawdbot supports two complementary sandboxing approaches:
 
-### Per-session sandbox (Clawdbot-native)
+### Option A: Run the full Gateway in Docker (containerized deployment)
 
-Clawdbot can also run **non-main sessions** inside per-session Docker containers
-(`agent.sandbox`). This keeps the gateway on your host while isolating agent
-tools in a hard wall container. See `docs/configuration.md` for the full config.
+This runs the Gateway (and its provider integrations) inside a Docker container.
+If you do this right, the container becomes the “host boundary”, and you only
+expose what you explicitly mount in.
+
+Docs: `docs/docker.md` (Docker Compose setup + onboarding).
+
+Hardening reminders:
+- Don’t mount your entire home directory.
+- Don’t pass long-lived secrets the agent doesn’t need.
+- Treat mounted volumes as “reachable by the agent”.
+
+### Option B: Per-session tool sandbox (host Gateway + Docker-isolated tools)
+
+This keeps the Gateway on your host, but runs **tool execution** for selected
+sessions inside per-session Docker containers (`agent.sandbox`).
+
+Typical usage: `agent.sandbox.mode: "non-main"` so group/channel sessions get a
+hard wall, while your main/admin session can keep full host access.
+
+What it isolates:
+- `bash` runs via `docker exec` inside the sandbox container.
+- file tools (`read`/`write`/`edit`) are restricted to the sandbox workspace.
+- sandbox paths enforce “no escape” and block symlink tricks.
+
+Default container hardening (configurable via `agent.sandbox.docker`):
+- read-only root filesystem
+- `--security-opt no-new-privileges`
+- `capDrop: ["ALL"]`
+- network `"none"` by default
+- per-session workspace mounted at `/workspace`
+
+Docs:
+- `docs/configuration.md` → `agent.sandbox`
+- `docs/docker.md` → “Per-session Agent Sandbox”
+
+Important: `agent.elevated` is an explicit escape hatch that runs bash on the
+host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
 
 Expose only the services your AI needs:
 - ✅ WhatsApp Web session (Baileys) / Telegram Bot API / etc.

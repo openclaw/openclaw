@@ -88,7 +88,7 @@ container. The gateway stays on your host, but the tool execution is isolated:
 - Workspace per session under `~/.clawdbot/sandboxes`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
-- Default allow: `bash`, `process`, `read`, `write`, `edit`
+- Default allow: `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`
 - Default deny: `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`
 
 ### Enable sandboxing
