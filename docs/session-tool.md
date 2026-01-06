@@ -126,6 +126,7 @@ Spawn a sub-agent run in an isolated session and announce the result back to the
 Parameters:
 - `task` (required)
 - `label?` (optional; used for logs/UI)
+- `model?` (optional; overrides the sub-agent model; invalid values error)
 - `timeoutSeconds?` (default 0; 0 = fire-and-forget)
 - `cleanup?` (`delete|keep`, default `delete`)
 

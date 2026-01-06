@@ -223,9 +223,7 @@ describe("subagents", () => {
           | undefined;
         const message = params?.message ?? "";
         const reply =
-          message === "Sub-agent announce step."
-            ? "ANNOUNCE_SKIP"
-            : "done";
+          message === "Sub-agent announce step." ? "ANNOUNCE_SKIP" : "done";
         replyByRunId.set(runId, reply);
         return {
           runId,
@@ -277,5 +275,36 @@ describe("subagents", () => {
       key: expect.stringContaining("subagent:"),
       model: "claude-haiku-4-5",
     });
+  });
+
+  it("sessions_spawn fails when model override is invalid", async () => {
+    callGatewayMock.mockReset();
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        throw new Error("invalid model: bad-model");
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "main",
+      agentProvider: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call4", {
+      task: "do thing",
+      timeoutSeconds: 1,
+      model: "bad-model",
+    });
+    expect(result.details).toMatchObject({ status: "error" });
+    expect(
+      String((result.details as { error?: string }).error ?? ""),
+    ).toContain("invalid model");
+    expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
 });
