@@ -21,7 +21,7 @@ export function modelKey(provider: string, model: string) {
   return `${provider}/${model}`;
 }
 
-function normalizeProvider(provider: string): string {
+export function normalizeProviderId(provider: string): string {
   const normalized = provider.trim().toLowerCase();
   if (normalized === "z.ai" || normalized === "z-ai") return "zai";
   return normalized;
@@ -35,10 +35,10 @@ export function parseModelRef(
   if (!trimmed) return null;
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    return { provider: normalizeProvider(defaultProvider), model: trimmed };
+    return { provider: normalizeProviderId(defaultProvider), model: trimmed };
   }
   const providerRaw = trimmed.slice(0, slash).trim();
-  const provider = normalizeProvider(providerRaw);
+  const provider = normalizeProviderId(providerRaw);
   const model = trimmed.slice(slash + 1).trim();
   if (!provider || !model) return null;
   return { provider, model };

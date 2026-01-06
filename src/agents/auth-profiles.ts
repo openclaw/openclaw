@@ -12,6 +12,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { normalizeProviderId } from "./model-selection.js";
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = "auth-profiles.json";
@@ -378,8 +379,9 @@ export function listProfilesForProvider(
   store: AuthProfileStore,
   provider: string,
 ): string[] {
+  const providerKey = normalizeProviderId(provider);
   return Object.entries(store.profiles)
-    .filter(([, cred]) => cred.provider === provider)
+    .filter(([, cred]) => normalizeProviderId(cred.provider) === providerKey)
     .map(([id]) => id);
 }
 
@@ -539,17 +541,26 @@ export function resolveAuthProfileOrder(params: {
   preferredProfile?: string;
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
-  const configuredOrder = cfg?.auth?.order?.[provider];
+  const providerKey = normalizeProviderId(provider);
+  const configuredOrder =
+    cfg?.auth?.order?.[providerKey] ??
+    cfg?.auth?.order?.[provider] ??
+    (providerKey === "zai"
+      ? (cfg?.auth?.order?.["z.ai"] ?? cfg?.auth?.order?.["z-ai"])
+      : undefined);
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
-        .filter(([, profile]) => profile.provider === provider)
+        .filter(
+          ([, profile]) =>
+            normalizeProviderId(profile.provider) === providerKey,
+        )
         .map(([profileId]) => profileId)
     : [];
   const baseOrder =
     configuredOrder ??
     (explicitProfiles.length > 0
       ? explicitProfiles
-      : listProfilesForProvider(store, provider));
+      : listProfilesForProvider(store, providerKey));
   if (baseOrder.length === 0) return [];
 
   const filtered = baseOrder.filter((profileId) => {

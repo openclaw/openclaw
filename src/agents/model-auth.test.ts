@@ -163,4 +163,40 @@ describe("getApiKeyForModel", () => {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("throws when ZAI API key is missing", async () => {
+    const previousZai = process.env.ZAI_API_KEY;
+    const previousLegacy = process.env.Z_AI_API_KEY;
+
+    try {
+      delete process.env.ZAI_API_KEY;
+      delete process.env.Z_AI_API_KEY;
+
+      vi.resetModules();
+      const { resolveApiKeyForProvider } = await import("./model-auth.js");
+
+      let error: unknown = null;
+      try {
+        await resolveApiKeyForProvider({
+          provider: "zai",
+          store: { version: 1, profiles: {} },
+        });
+      } catch (err) {
+        error = err;
+      }
+
+      expect(String(error)).toContain('No API key found for provider "zai".');
+    } finally {
+      if (previousZai === undefined) {
+        delete process.env.ZAI_API_KEY;
+      } else {
+        process.env.ZAI_API_KEY = previousZai;
+      }
+      if (previousLegacy === undefined) {
+        delete process.env.Z_AI_API_KEY;
+      } else {
+        process.env.Z_AI_API_KEY = previousLegacy;
+      }
+    }
+  });
 });
