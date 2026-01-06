@@ -5,6 +5,12 @@
 - Tests: colocated `*.test.ts`.
 - Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
 
+## Docs Linking (Mintlify)
+- Docs are hosted on Mintlify (docs.clawd.bot).
+- Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
+- Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
+- README (GitHub): keep absolute docs URLs (`https://docs.clawd.bot/...`) so links work on GitHub.
+
 ## Build, Test, and Development Commands
 - Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
