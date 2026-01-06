@@ -342,6 +342,7 @@ public struct SendParams: Codable, Sendable {
     public let mediaurl: String?
     public let gifplayback: Bool?
     public let provider: String?
+    public let accountid: String?
     public let idempotencykey: String
 
     public init(
@@ -350,6 +351,7 @@ public struct SendParams: Codable, Sendable {
         mediaurl: String?,
         gifplayback: Bool?,
         provider: String?,
+        accountid: String?,
         idempotencykey: String
     ) {
         self.to = to
@@ -357,6 +359,7 @@ public struct SendParams: Codable, Sendable {
         self.mediaurl = mediaurl
         self.gifplayback = gifplayback
         self.provider = provider
+        self.accountid = accountid
         self.idempotencykey = idempotencykey
     }
     private enum CodingKeys: String, CodingKey {
@@ -365,6 +368,7 @@ public struct SendParams: Codable, Sendable {
         case mediaurl = "mediaUrl"
         case gifplayback = "gifPlayback"
         case provider
+        case accountid = "accountId"
         case idempotencykey = "idempotencyKey"
     }
 }
@@ -376,6 +380,7 @@ public struct PollParams: Codable, Sendable {
     public let maxselections: Int?
     public let durationhours: Int?
     public let provider: String?
+    public let accountid: String?
     public let idempotencykey: String
 
     public init(
@@ -385,6 +390,7 @@ public struct PollParams: Codable, Sendable {
         maxselections: Int?,
         durationhours: Int?,
         provider: String?,
+        accountid: String?,
         idempotencykey: String
     ) {
         self.to = to
@@ -393,6 +399,7 @@ public struct PollParams: Codable, Sendable {
         self.maxselections = maxselections
         self.durationhours = durationhours
         self.provider = provider
+        self.accountid = accountid
         self.idempotencykey = idempotencykey
     }
     private enum CodingKeys: String, CodingKey {
@@ -402,6 +409,7 @@ public struct PollParams: Codable, Sendable {
         case maxselections = "maxSelections"
         case durationhours = "durationHours"
         case provider
+        case accountid = "accountId"
         case idempotencykey = "idempotencyKey"
     }
 }
@@ -413,7 +421,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionkey: String?
     public let thinking: String?
     public let deliver: Bool?
-    public let channel: String?
+    public let provider: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -426,7 +434,7 @@ public struct AgentParams: Codable, Sendable {
         sessionkey: String?,
         thinking: String?,
         deliver: Bool?,
-        channel: String?,
+        provider: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
@@ -438,7 +446,7 @@ public struct AgentParams: Codable, Sendable {
         self.sessionkey = sessionkey
         self.thinking = thinking
         self.deliver = deliver
-        self.channel = channel
+        self.provider = provider
         self.timeout = timeout
         self.lane = lane
         self.extrasystemprompt = extrasystemprompt
@@ -451,7 +459,7 @@ public struct AgentParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case thinking
         case deliver
-        case channel
+        case provider
         case timeout
         case lane
         case extrasystemprompt = "extraSystemPrompt"
@@ -1025,33 +1033,41 @@ public struct WebLoginStartParams: Codable, Sendable {
     public let force: Bool?
     public let timeoutms: Int?
     public let verbose: Bool?
+    public let accountid: String?
 
     public init(
         force: Bool?,
         timeoutms: Int?,
-        verbose: Bool?
+        verbose: Bool?,
+        accountid: String?
     ) {
         self.force = force
         self.timeoutms = timeoutms
         self.verbose = verbose
+        self.accountid = accountid
     }
     private enum CodingKeys: String, CodingKey {
         case force
         case timeoutms = "timeoutMs"
         case verbose
+        case accountid = "accountId"
     }
 }
 
 public struct WebLoginWaitParams: Codable, Sendable {
     public let timeoutms: Int?
+    public let accountid: String?
 
     public init(
-        timeoutms: Int?
+        timeoutms: Int?,
+        accountid: String?
     ) {
         self.timeoutms = timeoutms
+        self.accountid = accountid
     }
     private enum CodingKeys: String, CodingKey {
         case timeoutms = "timeoutMs"
+        case accountid = "accountId"
     }
 }
 
