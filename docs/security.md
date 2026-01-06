@@ -33,7 +33,7 @@ Clawdbot’s stance:
 
 ## DM access model (pairing / allowlist / open / disabled)
 
-Many providers support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed.
+All current DM-capable providers (Telegram/WhatsApp/Signal/iMessage/Discord/Slack) support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed.
 
 - `pairing` (default): unknown senders receive a short pairing code and the bot ignores their message until approved.
 - `allowlist`: unknown senders are blocked (no pairing handshake).
