@@ -192,13 +192,9 @@ export async function monitorWebInbox(options: {
         new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
       );
       const defaultAllowFrom =
-        combinedAllowFrom.length === 0 && selfE164
-          ? [selfE164]
-          : undefined;
+        combinedAllowFrom.length === 0 && selfE164 ? [selfE164] : undefined;
       const allowFrom =
-        combinedAllowFrom.length > 0
-          ? combinedAllowFrom
-          : defaultAllowFrom;
+        combinedAllowFrom.length > 0 ? combinedAllowFrom : defaultAllowFrom;
       const groupAllowFrom =
         account.groupAllowFrom ??
         (configuredAllowFrom && configuredAllowFrom.length > 0
