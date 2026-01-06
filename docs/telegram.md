@@ -25,7 +25,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
      - If you need a different public port/host, set `telegram.webhookUrl` to the externally reachable URL and use a reverse proxy to forward to `:8787`.
 4) Direct chats: user sends the first message; all subsequent turns land in the shared `main` session (default, no extra config).
 5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>`. When `telegram.groups` is set, it becomes a group allowlist (use `"*"` to allow all). Mention/command gating defaults come from `telegram.groups`.
-6) Optional allowlist: use `telegram.allowFrom` for direct chats by chat id (`123456789` or `telegram:123456789`).
+6) Optional allowlist: use `telegram.allowFrom` for direct chats by chat id (`123456789`, `telegram:123456789`, or `tg:123456789`; prefixes are case-insensitive).
 
 ## Capabilities & limits (Bot API)
 - Sees only messages sent after it’s added to a chat; no pre-history access.

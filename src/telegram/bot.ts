@@ -86,6 +86,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
+  const normalizedAllowFrom = (allowFrom ?? [])
+    .map((value) => String(value).trim())
+    .filter(Boolean)
+    .map((value) => value.replace(/^(telegram|tg):/i, ""));
+  const normalizedAllowFromLower = normalizedAllowFrom.map((value) =>
+    value.toLowerCase(),
+  );
+  const hasAllowFromWildcard = normalizedAllowFrom.includes("*");
   const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
@@ -127,14 +135,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     };
 
     // allowFrom for direct chats
-    if (!isGroup && Array.isArray(allowFrom) && allowFrom.length > 0) {
+    if (!isGroup && normalizedAllowFrom.length > 0) {
       const candidate = String(chatId);
-      const allowed = allowFrom.map(String);
-      const allowedWithPrefix = allowFrom.map((v) => `telegram:${String(v)}`);
       const permitted =
-        allowed.includes(candidate) ||
-        allowedWithPrefix.includes(`telegram:${candidate}`) ||
-        allowed.includes("*");
+        hasAllowFromWildcard || normalizedAllowFrom.includes(candidate);
       if (!permitted) {
         logVerbose(
           `Blocked unauthorized telegram sender ${candidate} (not in allowFrom)`,
@@ -144,21 +148,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
 
     const botUsername = primaryCtx.me?.username?.toLowerCase();
-    const allowFromList = Array.isArray(allowFrom)
-      ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
-      : [];
+    const allowFromList = normalizedAllowFrom;
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const senderUsername = msg.from?.username ?? "";
+    const senderUsernameLower = senderUsername.toLowerCase();
     const commandAuthorized =
       allowFromList.length === 0 ||
-      allowFromList.includes("*") ||
+      hasAllowFromWildcard ||
       (senderId && allowFromList.includes(senderId)) ||
-      (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
       (senderUsername &&
-        allowFromList.some(
+        normalizedAllowFromLower.some(
           (entry) =>
-            entry.toLowerCase() === senderUsername.toLowerCase() ||
-            entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
+            entry === senderUsernameLower || entry === `@${senderUsernameLower}`,
         ));
     const wasMentioned =
       (Boolean(botUsername) && hasBotMention(msg, botUsername)) ||
@@ -350,10 +351,47 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const isGroup =
         msg.chat.type === "group" || msg.chat.type === "supergroup";
 
-      // Group policy check - skip disallowed groups early
       if (isGroup) {
-        const groupPolicy = resolveGroupPolicy(chatId);
-        if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+        // Group policy filtering: controls how group messages are handled
+        // - "open" (default): groups bypass allowFrom, only mention-gating applies
+        // - "disabled": block all group messages entirely
+        // - "allowlist": only allow group messages from senders in allowFrom
+        const groupPolicy = cfg.telegram?.groupPolicy ?? "open";
+        if (groupPolicy === "disabled") {
+          logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
+          return;
+        }
+        if (groupPolicy === "allowlist") {
+          // For allowlist mode, the sender (msg.from.id) must be in allowFrom
+          const senderId = msg.from?.id;
+          if (senderId == null) {
+            logVerbose(
+              `Blocked telegram group message (no sender ID, groupPolicy: allowlist)`,
+            );
+            return;
+          }
+          const senderIdAllowed = normalizedAllowFrom.includes(
+            String(senderId),
+          );
+          // Also check username if available (with or without @ prefix)
+          const senderUsername = msg.from?.username?.toLowerCase();
+          const usernameAllowed =
+            senderUsername != null &&
+            normalizedAllowFromLower.some(
+              (value) =>
+                value === senderUsername || value === `@${senderUsername}`,
+            );
+          if (!hasAllowFromWildcard && !senderIdAllowed && !usernameAllowed) {
+            logVerbose(
+              `Blocked telegram group message from ${senderId} (groupPolicy: allowlist)`,
+            );
+            return;
+          }
+        }
+
+        // Group allowlist based on configured group IDs.
+        const groupAllowlist = resolveGroupPolicy(chatId);
+        if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
           logger.info(
             { chatId, title: msg.chat.title, reason: "not-allowed" },
             "skipping group message",

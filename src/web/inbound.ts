@@ -176,16 +176,44 @@ export async function monitorWebInbox(options: {
       const isSamePhone = from === selfE164;
       const isSelfChat = isSelfChatMode(selfE164, configuredAllowFrom);
 
+      // Pre-compute normalized allowlist for filtering (used by both group and DM checks)
+      const hasWildcard = allowFrom?.includes("*") ?? false;
+      const normalizedAllowFrom =
+        allowFrom && allowFrom.length > 0 ? allowFrom.map(normalizeE164) : [];
+
+      // Group policy filtering: controls how group messages are handled
+      // - "open" (default): groups bypass allowFrom, only mention-gating applies
+      // - "disabled": block all group messages entirely
+      // - "allowlist": only allow group messages from senders in allowFrom
+      const groupPolicy = cfg.whatsapp?.groupPolicy ?? "open";
+      if (group && groupPolicy === "disabled") {
+        logVerbose(`Blocked group message (groupPolicy: disabled)`);
+        continue;
+      }
+      if (group && groupPolicy === "allowlist") {
+        // For allowlist mode, the sender (participant) must be in allowFrom
+        // If we can't resolve the sender E164, block the message for safety
+        const senderAllowed =
+          hasWildcard ||
+          (senderE164 != null && normalizedAllowFrom.includes(senderE164));
+        if (!senderAllowed) {
+          logVerbose(
+            `Blocked group message from ${senderE164 ?? "unknown sender"} (groupPolicy: allowlist)`,
+          );
+          continue;
+        }
+      }
+
+      // DM allowlist filtering (unchanged behavior)
       const allowlistEnabled =
         !group && Array.isArray(allowFrom) && allowFrom.length > 0;
       if (!isSamePhone && allowlistEnabled) {
         const candidate = from;
-        const allowedList = allowFrom.map(normalizeE164);
-        if (!allowFrom.includes("*") && !allowedList.includes(candidate)) {
+        if (!hasWildcard && !normalizedAllowFrom.includes(candidate)) {
           logVerbose(
             `Blocked unauthorized sender ${candidate} (not in allowFrom list)`,
           );
-          continue; // Skip processing entirely
+          continue;
         }
       }
 

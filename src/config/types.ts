@@ -78,6 +78,13 @@ export type AgentElevatedAllowFromConfig = {
 export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in allowFrom
+   */
+  groupPolicy?: "open" | "disabled" | "allowlist";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   groups?: Record<
@@ -207,6 +214,13 @@ export type TelegramConfig = {
     }
   >;
   allowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in allowFrom
+   */
+  groupPolicy?: "open" | "disabled" | "allowlist";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;

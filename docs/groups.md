@@ -16,6 +16,33 @@ Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Di
 - UI labels use `displayName` when available, formatted as `surface:<token>`.
 - `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
+## Group policy (WhatsApp & Telegram)
+Both WhatsApp and Telegram support a `groupPolicy` config to control how group messages are handled:
+
+```json5
+{
+  whatsapp: {
+    allowFrom: ["+15551234567"],
+    groupPolicy: "disabled"  // "open" | "disabled" | "allowlist"
+  },
+  telegram: {
+    allowFrom: ["123456789", "@username"],
+    groupPolicy: "disabled"  // "open" | "disabled" | "allowlist"
+  }
+}
+```
+
+| Policy | Behavior |
+|--------|----------|
+| `"open"` | Default. Groups bypass `allowFrom`, only mention-gating applies. |
+| `"disabled"` | Block all group messages entirely. |
+| `"allowlist"` | Only allow group messages from senders listed in `allowFrom`. |
+
+Notes:
+- `allowFrom` filters DMs by default. With `groupPolicy: "allowlist"`, it also filters group message senders.
+- `groupPolicy` is separate from mention-gating (which requires @mentions).
+- For Telegram `allowlist`, the sender can be matched by user ID (e.g., `"123456789"`, `"telegram:123456789"`, or `"tg:123456789"`; prefixes are case-insensitive) or username (e.g., `"@alice"` or `"alice"`).
+
 ## Mention gating (default)
 Group messages require a mention unless overridden per group. Defaults live per subsystem under `*.groups."*"`.
 
