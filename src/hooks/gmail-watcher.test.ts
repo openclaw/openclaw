@@ -8,7 +8,9 @@ describe("gmail watcher", () => {
         "listen tcp 127.0.0.1:8788: bind: address already in use",
       ),
     ).toBe(true);
-    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(true);
+    expect(isAddressInUseError("EADDRINUSE: address already in use")).toBe(
+      true,
+    );
     expect(isAddressInUseError("some other error")).toBe(false);
   });
 });
