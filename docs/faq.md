@@ -3,7 +3,7 @@ summary: "Frequently asked questions about Clawdbot setup, configuration, and us
 ---
 # FAQ 🦞
 
-Common questions from the community. For detailed configuration, see [Configuration](https://docs.clawd.bot/configuration).
+Common questions from the community. For detailed configuration, see [Configuration](/configuration).
 
 ## Installation & Setup
 
@@ -307,7 +307,7 @@ Per-group activation can be changed by the owner:
 - `/activation mention` — respond only when mentioned (default)
 - `/activation always` — respond to all messages
 
-See [Groups](https://docs.clawd.bot/groups) for details.
+See [Groups](/groups) for details.
 
 ---
 
@@ -344,7 +344,7 @@ cat ~/.clawdbot/clawdbot.json | grep workspace
 - **Telegram** — Via Bot API (grammY).
 - **Discord** — Bot integration.
 - **iMessage** — Via `imsg` CLI (macOS only).
-- **Signal** — Via `signal-cli` (see [Signal](https://docs.clawd.bot/signal)).
+- **Signal** — Via `signal-cli` (see [Signal](/signal)).
 - **WebChat** — Browser-based chat UI.
 
 ### Discord: Bot works in channels but not DMs?
@@ -586,7 +586,7 @@ Quick reference (send these in chat):
 
 Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authorization on other surfaces).
 Commands are only recognized when the entire message is the command (slash required; no plain-text aliases).
-Full list + config: https://docs.clawd.bot/slash-commands
+Full list + config: [Slash commands](/slash-commands)
 
 ### How do I switch models on the fly?
 

@@ -5,95 +5,221 @@ read_when: "Setting up Slack or debugging Slack socket mode"
 
 # Slack (socket mode)
 
-Updated: 2026-01-06
+## Setup
+1) Create a Slack app (From scratch) in https://api.slack.com/apps.
+2) **Socket Mode** → toggle on. Then go to **Basic Information** → **App-Level Tokens** → **Generate Token and Scopes** with scope `connections:write`. Copy the **App Token** (`xapp-...`).
+3) **OAuth & Permissions** → add bot token scopes (use the manifest below). Click **Install to Workspace**. Copy the **Bot User OAuth Token** (`xoxb-...`).
+4) **Event Subscriptions** → enable events and subscribe to:
+   - `message.*` (includes edits/deletes/thread broadcasts)
+   - `app_mention`
+   - `reaction_added`, `reaction_removed`
+   - `member_joined_channel`, `member_left_channel`
+   - `channel_rename`
+   - `pin_added`, `pin_removed`
+5) Invite the bot to channels you want it to read.
+6) Slash Commands → create `/clawd` if you use `slack.slashCommand`. If you enable `commands.native`, add slash commands for the built-in chat commands (same names as `/help`).
+7) App Home → enable the **Messages Tab** so users can DM the bot.
 
-Status: production-ready for DMs + channels via Slack Socket Mode.
+Use the manifest below so scopes and events stay in sync.
 
-## What it is
-- Slack bot provider owned by the Gateway.
-- Socket Mode only (no inbound HTTP server required).
-- Deterministic routing: replies always go back to Slack.
+## Manifest (optional)
+Use this Slack app manifest to create the app quickly (adjust the name/command if you want).
 
-## Setup (fast path)
-1) Create a Slack app.
-2) Enable **Socket Mode** and create an **App Token** (`xapp-...`).
-3) Install the app to your workspace and copy the **Bot Token** (`xoxb-...`).
-4) Add required scopes + events (see Slack app manifest if needed).
-5) Configure tokens and start the gateway.
-
-Example:
-```json5
+```json
 {
-  slack: {
-    enabled: true,
-    botToken: "xoxb-...",
-    appToken: "xapp-...",
-    dm: { policy: "pairing" },
-    channels: { "#general": { allow: true, requireMention: true } }
+  "display_information": {
+    "name": "Clawdbot",
+    "description": "Slack connector for Clawdbot"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Clawdbot",
+      "always_online": false
+    },
+    "app_home": {
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    },
+    "slash_commands": [
+      {
+        "command": "/clawd",
+        "description": "Send a message to Clawdbot",
+        "should_escape": false
+      }
+    ]
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "chat:write",
+        "channels:history",
+        "channels:read",
+        "groups:history",
+        "groups:read",
+        "groups:write",
+        "im:history",
+        "im:read",
+        "im:write",
+        "mpim:history",
+        "mpim:read",
+        "mpim:write",
+        "users:read",
+        "app_mentions:read",
+        "reactions:read",
+        "reactions:write",
+        "pins:read",
+        "pins:write",
+        "emoji:read",
+        "commands",
+        "files:read",
+        "files:write"
+      ]
+    }
+  },
+  "settings": {
+    "socket_mode_enabled": true,
+    "event_subscriptions": {
+      "bot_events": [
+        "app_mention",
+        "message.channels",
+        "message.groups",
+        "message.im",
+        "message.mpim",
+        "reaction_added",
+        "reaction_removed",
+        "member_joined_channel",
+        "member_left_channel",
+        "channel_rename",
+        "pin_added",
+        "pin_removed"
+      ]
+    }
   }
 }
 ```
 
-## Access control (DMs + channels)
-DMs:
-- Default: `slack.dm.policy = "pairing"`.
-- Unknown senders receive a pairing code; messages are ignored until approved.
-- Approve via:
-  - `clawdbot pairing list --provider slack`
-  - `clawdbot pairing approve --provider slack <CODE>`
-- Pairing is the default token exchange for Slack DMs. Details: https://docs.clawd.bot/pairing
+If you enable `commands.native`, add one `slash_commands` entry per command you want to expose (matching the `/help` list).
 
-Channels:
-- `slack.groupPolicy = open | allowlist | disabled`.
-- `slack.channels` acts as the allowlist when `groupPolicy = allowlist`.
-- Mentions are required by default unless overridden per channel.
+## Scopes (current vs optional)
+Slack's Conversations API is type-scoped: you only need the scopes for the
+conversation types you actually touch (channels, groups, im, mpim). See
+https://api.slack.com/docs/conversations-api for the overview.
 
-## How it works (behavior)
-- Inbound messages are normalized into the shared provider envelope.
-- Replies always route back to the same channel or DM.
-- Threading: replies to a message stay in that thread if it was a thread message.
+### Required by current code
+- `chat:write` (send/update/delete messages via `chat.postMessage`)
+  https://api.slack.com/methods/chat.postMessage
+- `im:write` (open DMs via `conversations.open` for user DMs)
+  https://api.slack.com/methods/conversations.open
+- `channels:history`, `groups:history`, `im:history`, `mpim:history`
+  (`conversations.history` in [`src/slack/actions.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/actions.ts))
+  https://api.slack.com/methods/conversations.history
+- `channels:read`, `groups:read`, `im:read`, `mpim:read`
+  (`conversations.info` in [`src/slack/monitor.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/monitor.ts))
+  https://api.slack.com/methods/conversations.info
+- `users:read` (`users.info` in [`src/slack/monitor.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/monitor.ts) + [`src/slack/actions.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/actions.ts))
+  https://api.slack.com/methods/users.info
+- `reactions:read`, `reactions:write` (`reactions.get` / `reactions.add`)
+  https://api.slack.com/methods/reactions.get
+  https://api.slack.com/methods/reactions.add
+- `pins:read`, `pins:write` (`pins.list` / `pins.add` / `pins.remove`)
+  https://api.slack.com/scopes/pins:read
+  https://api.slack.com/scopes/pins:write
+- `emoji:read` (`emoji.list`)
+  https://api.slack.com/scopes/emoji:read
+- `files:write` (uploads via `files.uploadV2`)
+  https://api.slack.com/messaging/files/uploading
 
-## Commands
-- Text commands: `commands.text = true` (standalone `/...` messages).
-- Slack slash command: configure `slack.slashCommand` (separate from `commands.native`).
+### Not needed today (but likely future)
+- `mpim:write` (only if we add group-DM open/DM start via `conversations.open`)
+- `groups:write` (only if we add private-channel management: create/rename/invite/archive)
+- `chat:write.public` (only if we want to post to channels the bot isn't in)
+  https://api.slack.com/scopes/chat:write.public
+- `users:read.email` (only if we need email fields from `users.info`)
+  https://api.slack.com/changelog/2017-04-narrowing-email-access
+- `files:read` (only if we start listing/reading file metadata)
 
-## Media + limits
-- Files supported up to `slack.mediaMaxMb` (default 20 MB).
-- Outbound chunking controlled by `slack.textChunkLimit`.
+## Config
+Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
 
-## Delivery targets (CLI/cron)
-- DMs: `user:<id>`
-- Channels: `channel:<id>`
+```json
+{
+  "slack": {
+    "enabled": true,
+    "botToken": "xoxb-...",
+    "appToken": "xapp-...",
+    "groupPolicy": "open",
+    "dm": {
+      "enabled": true,
+      "policy": "pairing",
+      "allowFrom": ["U123", "U456", "*"],
+      "groupEnabled": false,
+      "groupChannels": ["G123"]
+    },
+    "channels": {
+      "C123": { "allow": true, "requireMention": true },
+      "#general": { "allow": true, "requireMention": false }
+    },
+    "reactionNotifications": "own",
+    "reactionAllowlist": ["U123"],
+    "actions": {
+      "reactions": true,
+      "messages": true,
+      "pins": true,
+      "memberInfo": true,
+      "emojiList": true
+    },
+    "slashCommand": {
+      "enabled": true,
+      "name": "clawd",
+      "sessionPrefix": "slack:slash",
+      "ephemeral": true
+    },
+    "textChunkLimit": 4000,
+    "mediaMaxMb": 20
+  }
+}
+```
 
-## Configuration reference (Slack)
-Full configuration: https://docs.clawd.bot/configuration
+Tokens can also be supplied via env vars:
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
 
-Provider options:
-- `slack.enabled`: enable/disable provider startup.
-- `slack.botToken`: bot token (env: `SLACK_BOT_TOKEN`).
-- `slack.appToken`: app token (env: `SLACK_APP_TOKEN`).
-- `slack.groupPolicy`: `open | allowlist | disabled` (default: open).
-- `slack.channels`: channel allowlist + per-channel `requireMention`.
-- `slack.textChunkLimit`: outbound chunk size (chars).
-- `slack.mediaMaxMb`: inbound/outbound media cap (MB).
-- `slack.reactionNotifications`: `off | own | all | allowlist`.
-- `slack.reactionAllowlist`: user allowlist for reaction notifications.
-- `slack.actions.reactions`: enable reaction tool actions.
-- `slack.actions.messages`: enable message read/send/edit/delete actions.
-- `slack.actions.pins`: enable pin actions.
-- `slack.actions.search`: enable search actions.
-- `slack.actions.permissions`: enable permission inspection actions.
-- `slack.actions.memberInfo`: enable member info actions.
-- `slack.actions.channelInfo`: enable channel info actions.
-- `slack.actions.emojiList`: enable emoji list actions.
-- `slack.slashCommand.*`: configure the Slack slash command endpoint (`name`, `sessionPrefix`, `ephemeral`).
-- `slack.dm.enabled`: enable/disable DMs.
-- `slack.dm.policy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `slack.dm.allowFrom`: DM allowlist (ids/usernames). `open` requires `"*"`.
-- `slack.dm.groupEnabled`: enable group DMs.
-- `slack.dm.groupChannels`: group DM allowlist.
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
 
-Related global options:
-- `routing.groupChat.mentionPatterns`.
-- `commands.text`, `commands.useAccessGroups`.
-- `messages.responsePrefix`, `messages.ackReaction`, `messages.ackReactionScope`.
+## Sessions + routing
+- DMs share the `main` session (like WhatsApp/Telegram).
+- Channels map to `slack:channel:<channelId>` sessions.
+- Slash commands use `slack:slash:<userId>` sessions.
+- Native command registration is controlled by `commands.native`; text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
+- Full command list + config: [Slash commands](/slash-commands)
+
+## DM security (pairing)
+- Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.
+- Approve via: `clawdbot pairing approve --provider slack <code>`.
+- To allow anyone: set `slack.dm.policy="open"` and `slack.dm.allowFrom=["*"]`.
+
+## Group policy
+- `slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).
+- `allowlist` requires channels to be listed in `slack.channels`.
+
+## Delivery targets
+Use these with cron/CLI sends:
+- `user:<id>` for DMs
+- `channel:<id>` for channels
+
+## Tool actions
+Slack tool actions can be gated with `slack.actions.*`:
+
+| Action group | Default | Notes |
+| --- | --- | --- |
+| reactions | enabled | React + list reactions |
+| messages | enabled | Read/send/edit/delete |
+| pins | enabled | Pin/unpin/list |
+| memberInfo | enabled | Member info |
+| emojiList | enabled | Custom emoji list |
+
+## Notes
+- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
+- Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
+- Attachments are downloaded to the media store when permitted and under the size limit.

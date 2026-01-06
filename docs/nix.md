@@ -91,5 +91,5 @@ packaging and Nix builds (which do not rely on a full Xcode toolchain).
 ## Related
 
 - [nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) — full setup guide
-- [Wizard](https://docs.clawd.bot/wizard) — non-Nix CLI setup
-- [Docker](https://docs.clawd.bot/docker) — containerized setup
+- [Wizard](/wizard) — non-Nix CLI setup
+- [Docker](/docker) — containerized setup

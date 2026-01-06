@@ -13,7 +13,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
   - Shows native notifications for Clawdbot/clawdbot events.
   - Owns TCC prompts (Notifications, Accessibility, Screen Recording, Automation/AppleScript, Microphone, Speech Recognition).
   - Runs (or connects to) the **Gateway** and exposes itself as a **node** so agents can reach macOS‑only features.
-  - Hosts **PeekabooBridge** for UI automation (consumed by `peekaboo`; see [`docs/mac/peekaboo.md`](https://docs.clawd.bot/mac/peekaboo)).
+  - Hosts **PeekabooBridge** for UI automation (consumed by `peekaboo`; see [`docs/mac/peekaboo.md`](/mac/peekaboo)).
   - Installs a single CLI (`clawdbot`) by symlinking the bundled binary.
 
 ## High-level design

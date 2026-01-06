@@ -14,13 +14,13 @@ It is used in two places:
 1) **DM pairing** (who is allowed to talk to the bot)
 2) **Node pairing** (which devices/nodes are allowed to join the gateway network)
 
-Security context: https://docs.clawd.bot/security
+Security context: [Security](/security)
 
 ## 1) DM pairing (inbound chat access)
 
 When a provider is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
 
-Default DM policies are documented in: https://docs.clawd.bot/security
+Default DM policies are documented in: [Security](/security)
 
 ### Approve a sender
 
@@ -64,7 +64,7 @@ Stored under `~/.clawdbot/nodes/`:
 
 ### Details
 
-Full protocol + design notes: https://docs.clawd.bot/gateway/pairing
+Full protocol + design notes: [Gateway pairing](/gateway/pairing)
 
 ### Source of truth (code)
 
@@ -74,12 +74,12 @@ Full protocol + design notes: https://docs.clawd.bot/gateway/pairing
 
 ## Related docs
 
-- Security model + prompt injection: https://docs.clawd.bot/security
-- Updating safely (run doctor): https://docs.clawd.bot/updating
+- Security model + prompt injection: [Security](/security)
+- Updating safely (run doctor): [Updating](/updating)
 - Provider configs:
-  - Telegram: https://docs.clawd.bot/telegram
-  - WhatsApp: https://docs.clawd.bot/whatsapp
-  - Signal: https://docs.clawd.bot/signal
-  - iMessage: https://docs.clawd.bot/imessage
-  - Discord: https://docs.clawd.bot/discord
-  - Slack: https://docs.clawd.bot/slack
+  - Telegram: [Telegram](/telegram)
+  - WhatsApp: [WhatsApp](/whatsapp)
+  - Signal: [Signal](/signal)
+  - iMessage: [iMessage](/imessage)
+  - Discord: [Discord](/discord)
+  - Slack: [Slack](/slack)

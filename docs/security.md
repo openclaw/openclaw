@@ -50,7 +50,7 @@ clawdbot pairing list --provider <provider>
 clawdbot pairing approve --provider <provider> <code>
 ```
 
-Details + files on disk: https://docs.clawd.bot/pairing
+Details + files on disk: [Pairing](/pairing)
 
 ## Allowlists (DM + groups) — terminology
 
@@ -64,7 +64,7 @@ Clawdbot has two separate “who can trigger me?” layers:
     - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot *inside* a group session (WhatsApp/Telegram/Signal/iMessage).
     - `discord.guilds` / `slack.channels`: per-surface allowlists + mention defaults.
 
-Details: https://docs.clawd.bot/configuration and https://docs.clawd.bot/groups
+Details: [Configuration](/configuration) and [Groups](/groups)
 
 ## Prompt injection (what it is, why it matters)
 
@@ -139,8 +139,8 @@ We're considering a `readOnlyMode` flag that prevents the AI from:
 
 Two complementary approaches:
 
-- **Run the full Gateway in Docker** (container boundary): https://docs.clawd.bot/docker
-- **Per-session tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): https://docs.clawd.bot/configuration
+- **Run the full Gateway in Docker** (container boundary): [Docker](/docker)
+- **Per-session tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): [Configuration](/configuration)
 
 Note: to prevent cross-agent access, keep `perSession: true` so each session gets
 its own container + workspace. `perSession: false` shares a single container.

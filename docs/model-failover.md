@@ -85,9 +85,9 @@ timeouts that exhausted profile rotation.
 
 ## Related config
 
-See [`docs/configuration.md`](https://docs.clawd.bot/configuration) for:
+See [`docs/configuration.md`](/configuration) for:
 - `auth.profiles` / `auth.order`
 - `agent.model.primary` / `agent.model.fallbacks`
 - `agent.imageModel` routing
 
-See [`docs/models.md`](https://docs.clawd.bot/models) for the broader model selection and fallback overview.
+See [`docs/models.md`](/models) for the broader model selection and fallback overview.

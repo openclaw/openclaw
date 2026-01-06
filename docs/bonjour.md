@@ -155,5 +155,5 @@ Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\\DDD` 
 
 ## Related docs
 
-- Discovery policy and transport selection: [`docs/discovery.md`](https://docs.clawd.bot/discovery)
-- Node pairing + approvals: [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing)
+- Discovery policy and transport selection: [`docs/discovery.md`](/discovery)
+- Node pairing + approvals: [`docs/gateway/pairing.md`](/gateway/pairing)

@@ -35,7 +35,7 @@ read_when:
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command); the tool output itself is not forwarded. These tool summaries are sent as soon as each tool finishes (separate bubbles), not as streaming deltas. If you toggle `/verbose on|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## Related
-- Elevated mode docs live in [`docs/elevated.md`](https://docs.clawd.bot/elevated).
+- Elevated mode docs live in [`docs/elevated.md`](/elevated).
 
 ## Heartbeats
 - Heartbeat probe body is the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Inline directives in a heartbeat message apply as usual (but avoid changing session defaults from heartbeats).

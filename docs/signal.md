@@ -46,7 +46,7 @@ DMs:
 - Approve via:
   - `clawdbot pairing list --provider signal`
   - `clawdbot pairing approve --provider signal <CODE>`
-- Pairing is the default token exchange for Signal DMs. Details: https://docs.clawd.bot/pairing
+- Pairing is the default token exchange for Signal DMs. Details: [Pairing](/pairing)
 
 Groups:
 - `signal.groupPolicy = open | allowlist | disabled`.
@@ -68,7 +68,7 @@ Groups:
 - Usernames: `username:<name>` (if supported by your Signal account).
 
 ## Configuration reference (Signal)
-Full configuration: https://docs.clawd.bot/configuration
+Full configuration: [Configuration](/configuration)
 
 Provider options:
 - `signal.enabled`: enable/disable provider startup.

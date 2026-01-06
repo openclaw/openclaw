@@ -43,7 +43,7 @@ Recent gateway logs show repeated `cron.add` failures with invalid parameters (m
 - [x] Fix UI CronStatus type to match gateway (`jobs` instead of `jobCount`).
 - [x] Update cron UI provider select to include Discord/Slack/Signal/iMessage.
 - [x] Update macOS CronJobEditor provider picker + enum to include Slack/Signal/iMessage.
-- [x] Document cron compatibility normalization policy in [`docs/cron-jobs.md`](https://docs.clawd.bot/cron-jobs).
+- [x] Document cron compatibility normalization policy in [`docs/cron-jobs.md`](/cron-jobs).
 
 ### Phase 2 — Input normalization + tooling hardening
 - [x] Add shared cron input normalization helpers (`normalizeCronJobCreate`/`normalizeCronJobPatch`).

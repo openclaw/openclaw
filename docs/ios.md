@@ -61,7 +61,7 @@ If browse works, but the iOS node can’t connect, try resolving one instance:
 dns-sd -L "<instance name>" _clawdbot-bridge._tcp local.
 ```
 
-More debugging notes: [`docs/bonjour.md`](https://docs.clawd.bot/bonjour).
+More debugging notes: [`docs/bonjour.md`](/bonjour).
 
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
@@ -70,7 +70,7 @@ If the iOS node and the gateway are on different networks but connected via Tail
 1) Set up a DNS-SD zone (example `clawdbot.internal.`) on the gateway host and publish `_clawdbot-bridge._tcp` records.
 2) Configure Tailscale split DNS for `clawdbot.internal` pointing at that DNS server.
 
-Details and example CoreDNS config: [`docs/bonjour.md`](https://docs.clawd.bot/bonjour).
+Details and example CoreDNS config: [`docs/bonjour.md`](/bonjour).
 
 ### 3) Connect from the iOS node app
 
@@ -102,7 +102,7 @@ clawdbot nodes approve <requestId>
 
 After approval, the iOS node receives/stores the token and reconnects authenticated.
 
-Pairing details: [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing).
+Pairing details: [`docs/gateway/pairing.md`](/gateway/pairing).
 
 ### 5) Verify the node is connected
 
@@ -169,7 +169,7 @@ The response includes `{ format, base64 }` image data (default `format="jpeg"`; 
 
 - **iOS in background:** all `canvas.*` commands fail fast with `NODE_BACKGROUND_UNAVAILABLE` (bring the iOS node app to foreground).
 - **Return to default scaffold:** `canvas.navigate` with `{"url":""}` or `{"url":"/"}` returns to the built-in scaffold page.
-- **mDNS blocked:** some networks block multicast; use a different LAN or plan a tailnet-capable bridge (see [`docs/discovery.md`](https://docs.clawd.bot/discovery)).
+- **mDNS blocked:** some networks block multicast; use a different LAN or plan a tailnet-capable bridge (see [`docs/discovery.md`](/discovery)).
 - **Wrong node selector:** `--node` can be the node id (UUID), display name (e.g. `iOS Node`), IP, or an unambiguous prefix. If it’s ambiguous, the CLI will tell you.
 - **Stale pairing / Keychain cleared:** if the pairing token is missing (or iOS Keychain was wiped), the node must pair again; approve a new pending request.
 - **App reinstall but no reconnect:** the node restores `instanceId` + last bridge preference from Keychain; if it still comes up “unpaired”, verify Keychain persistence on your device/simulator and re-pair once.
@@ -195,8 +195,8 @@ Non-goals (v1):
 
 ### Current repo reality (constraints we respect)
 - The Gateway WebSocket server binds to `127.0.0.1:18789` ([`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts)) with an optional `CLAWDBOT_GATEWAY_TOKEN`.
-- The Gateway exposes a Canvas file server (`canvasHost`) on `canvasHost.port` (default `18793`), so nodes can `canvas.navigate` to `http://<lanHost>:18793/__clawdbot__/canvas/` and auto-reload on file changes ([`docs/configuration.md`](https://docs.clawd.bot/configuration)).
-- macOS “Canvas” is controlled via the Gateway node protocol (`canvas.*`), matching iOS/Android ([`docs/mac/canvas.md`](https://docs.clawd.bot/mac/canvas)).
+- The Gateway exposes a Canvas file server (`canvasHost`) on `canvasHost.port` (default `18793`), so nodes can `canvas.navigate` to `http://<lanHost>:18793/__clawdbot__/canvas/` and auto-reload on file changes ([`docs/configuration.md`](/configuration)).
+- macOS “Canvas” is controlled via the Gateway node protocol (`canvas.*`), matching iOS/Android ([`docs/mac/canvas.md`](/mac/canvas)).
 - Voice wake forwards via `GatewayChannel` to Gateway `agent` (mac app: `VoiceWakeForwarder` → `GatewayConnection.sendAgent`).
 
 ### Recommended topology (B): Gateway-owned Bridge + loopback Gateway
@@ -237,7 +237,7 @@ Desired behavior:
 - If the Swift UI is present: show alert with Approve/Reject/Later.
 - If the Swift UI is not present: `clawdbot` CLI can list pending requests and approve/reject.
 
-See [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing) for the API/events and storage.
+See [`docs/gateway/pairing.md`](/gateway/pairing) for the API/events and storage.
 
 CLI (headless approvals):
 - `clawdbot nodes pending`
@@ -366,7 +366,7 @@ open Clawdbot.xcodeproj
 
 ## Related docs
 
-- [`docs/gateway.md`](https://docs.clawd.bot/gateway) (gateway runbook)
-- [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing) (approval + storage)
-- [`docs/bonjour.md`](https://docs.clawd.bot/bonjour) (discovery debugging)
-- [`docs/discovery.md`](https://docs.clawd.bot/discovery) (LAN vs tailnet vs SSH)
+- [`docs/gateway.md`](/gateway) (gateway runbook)
+- [`docs/gateway/pairing.md`](/gateway/pairing) (approval + storage)
+- [`docs/bonjour.md`](/bonjour) (discovery debugging)
+- [`docs/discovery.md`](/discovery) (LAN vs tailnet vs SSH)

@@ -5,83 +5,152 @@ read_when:
 ---
 # WhatsApp (web provider)
 
-Updated: 2026-01-06
+Updated: 2025-12-23
 
-Status: WhatsApp Web via Baileys. Gateway owns the session(s).
+Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
-## What it is
-- WhatsApp Web connection managed by the Gateway.
-- Deterministic routing: replies always return to WhatsApp.
-- DMs share the agent's main session; groups are isolated (`whatsapp:group:<jid>`).
+## Goals
+- Multiple WhatsApp accounts (multi-account) in one Gateway process.
+- Deterministic routing: replies return to WhatsApp, no model routing.
+- Model sees enough context to understand quoted replies.
 
-## Setup (fast path)
-1) Use a real mobile number (WhatsApp blocks most VoIP numbers).
-2) Run `clawdbot login` and scan the QR (Linked Devices).
-3) Start the gateway; the WhatsApp provider starts when a linked session exists.
-4) Lock down DMs and groups (pairing + allowlists are default-safe).
+## Architecture (who owns what)
+- **Gateway** owns the Baileys socket and inbox loop.
+- **CLI / macOS app** talk to the gateway; no direct Baileys use.
+- **Active listener** is required for outbound sends; otherwise send fails fast.
 
-Multi-account:
-- `clawdbot login --account <id>`
-- Configure `whatsapp.accounts.<id>` for per-account settings.
+## Getting a phone number
 
-## Access control (DMs + groups)
-DMs:
-- Default: `whatsapp.dmPolicy = "pairing"`.
-- Unknown senders get a pairing code and are ignored until approved.
-- Approve via:
-  - `clawdbot pairing list --provider whatsapp`
-  - `clawdbot pairing approve --provider whatsapp <CODE>`
-- Pairing is the default token exchange for WhatsApp DMs. Details: https://docs.clawd.bot/pairing
+WhatsApp requires a real mobile number for verification. VoIP and virtual numbers are usually blocked.
 
-Groups:
-- `whatsapp.groupPolicy = open | allowlist | disabled`.
-- `whatsapp.groups` sets per-group defaults and becomes an allowlist when present (use `"*"` to allow all).
-- Mention gating defaults to `requireMention: true` unless overridden.
+**Recommended approaches:**
+- **Local eSIM** from your country's mobile carrier (most reliable)
+  - Austria: [hot.at](https://www.hot.at)
+  - UK: [giffgaff](https://www.giffgaff.com) — free SIM, no contract
+- **Prepaid SIM** — cheap, just needs to receive one SMS for verification
 
-## How it works (behavior)
-- Inbound messages are normalized into the shared provider envelope with reply context.
-- Group replies require a mention by default (native mentions or `routing.groupChat.mentionPatterns`).
-- Recent group history can be injected for context (see `routing.groupChat.historyLimit`).
+**Avoid:** TextNow, Google Voice, most "free SMS" services — WhatsApp blocks these aggressively.
 
-## Reply delivery
-- Standard WhatsApp messages (no threaded replies).
-- Text chunking is applied to stay within limits.
+**Tip:** The number only needs to receive one verification SMS. After that, WhatsApp Web sessions persist via `creds.json`.
 
-## Media
-- Images/video/audio/documents supported.
-- Default cap: 5 MB per item (override via `agent.mediaMaxMb`).
-- Oversize media returns a warning instead of sending.
+**WhatsApp Business:** You can use WhatsApp Business on the same phone with a different number. This is a great option if you want to keep your personal WhatsApp separate — just install WhatsApp Business and register it with Clawdbot's dedicated number.
 
-## Delivery targets (CLI/cron)
-- DMs: E.164 (`+15551234567`).
-- Groups: group JID (`12345-678@g.us`).
+## Login + credentials
+- Login command: `clawdbot login` (QR via Linked Devices).
+- Multi-account login: `clawdbot login --account <id>` (`<id>` = `accountId`).
+- Default account (when `--account` is omitted): `default` if present, otherwise the first configured account id (sorted).
+- Credentials stored in `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`.
+- Backup copy at `creds.json.bak` (restored on corruption).
+- Legacy compatibility: older installs stored Baileys files directly in `~/.clawdbot/credentials/`.
+- Logout: `clawdbot logout` (or `--account <id>`) deletes WhatsApp auth state (but keeps shared `oauth.json`).
+- Logged-out socket => error instructs re-link.
 
-## Configuration reference (WhatsApp)
-Full configuration: https://docs.clawd.bot/configuration
+## Inbound flow (DM + group)
+- WhatsApp events come from `messages.upsert` (Baileys).
+- Inbox listeners are detached on shutdown to avoid accumulating event handlers in tests/restarts.
+- Status/broadcast chats are ignored.
+- Direct chats use E.164; groups use group JID.
+- **DM policy**: `whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
+  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`).
+  - Open: requires `whatsapp.allowFrom` to include `"*"`.
+  - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
+- **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).
+  - `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
+- **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
+- Read receipts sent for non-self-chat DMs.
 
-Provider options:
-- `whatsapp.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
-- `whatsapp.allowFrom`: DM allowlist (E.164). `open` requires `"*"`.
-- `whatsapp.groupPolicy`: `open | allowlist | disabled` (default: open).
-- `whatsapp.groupAllowFrom`: group sender allowlist (E.164).
-- `whatsapp.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
-- `whatsapp.textChunkLimit`: outbound chunk size (chars).
-- `whatsapp.accounts`: per-account overrides:
-  - `whatsapp.accounts.<id>.enabled`
-  - `whatsapp.accounts.<id>.authDir`
-  - `whatsapp.accounts.<id>.dmPolicy`
-  - `whatsapp.accounts.<id>.allowFrom`
-  - `whatsapp.accounts.<id>.groupPolicy`
-  - `whatsapp.accounts.<id>.groupAllowFrom`
-  - `whatsapp.accounts.<id>.groups`
-  - `whatsapp.accounts.<id>.textChunkLimit`
+## Message normalization (what the model sees)
+- `Body` is the current message body with envelope.
+- Quoted reply context is **always appended**:
+  ```
+  [Replying to +1555 id:ABC123]
+  <quoted text or <media:...>>
+  [/Replying]
+  ```
+- Reply metadata also set:
+  - `ReplyToId` = stanzaId
+  - `ReplyToBody` = quoted body or media placeholder
+  - `ReplyToSender` = E.164 when known
+- Media-only inbound messages use placeholders:
+  - `<media:image|video|audio|document|sticker>`
 
-Runtime options (WhatsApp web provider):
-- `web.enabled`: enable/disable provider startup.
-- `web.heartbeatSeconds`: gateway heartbeat cadence.
-- `web.reconnect.*`: reconnect backoff (`initialMs`, `maxMs`, `factor`, `jitter`, `maxAttempts`).
+## Groups
+- Groups map to `agent:<agentId>:whatsapp:group:<jid>` sessions.
+- Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `open`).
+- Activation modes:
+  - `mention` (default): requires @mention or regex match.
+  - `always`: always triggers.
+- `/activation mention|always` is owner-only and must be sent as a standalone message.
+- Owner = `whatsapp.allowFrom` (or self E.164 if unset).
+- **History injection**:
+  - Recent messages (default 50) inserted under:
+    `[Chat messages since your last reply - for context]`
+  - Current message under:
+    `[Current message - respond to this]`
+  - Sender suffix appended: `[from: Name (+E164)]`
+- Group metadata cached 5 min (subject + participants).
 
-Related global options:
-- `routing.groupChat.mentionPatterns`, `routing.groupChat.historyLimit`.
-- `commands.text`, `commands.useAccessGroups`.
-- `messages.responsePrefix`, `messages.ackReaction`, `messages.ackReactionScope`.
+## Reply delivery (threading)
+- WhatsApp Web sends standard messages (no quoted reply threading in the current gateway).
+- Reply tags are ignored on this provider.
+
+## Outbound send (text + media)
+- Uses active web listener; error if gateway not running.
+- Text chunking: 4k max per message.
+- Media:
+  - Image/video/audio/document supported.
+  - Audio sent as PTT; `audio/ogg` => `audio/ogg; codecs=opus`.
+  - Caption only on first media item.
+  - Media fetch supports HTTP(S) and local paths.
+  - Animated GIFs: WhatsApp expects MP4 with `gifPlayback: true` for inline looping.
+    - CLI: `clawdbot send --media <mp4> --gif-playback`
+    - Gateway: `send` params include `gifPlayback: true`
+
+## Media limits + optimization
+- Default cap: 5 MB (per media item).
+- Override: `agent.mediaMaxMb`.
+- Images are auto-optimized to JPEG under cap (resize + quality sweep).
+- Oversize media => error; media reply falls back to text warning.
+
+## Heartbeats
+- **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
+- **Agent heartbeat** is global (`agent.heartbeat.*`) and runs in the main session.
+  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) + `HEARTBEAT_OK` skip behavior.
+  - Delivery defaults to the last used provider (or configured target).
+
+## Reconnect behavior
+- Backoff policy: `web.reconnect`:
+  - `initialMs`, `maxMs`, `factor`, `jitter`, `maxAttempts`.
+- If maxAttempts reached, web monitoring stops (degraded).
+- Logged-out => stop and require re-link.
+
+## Config quick map
+- `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
+- `whatsapp.allowFrom` (DM allowlist).
+- `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
+- `whatsapp.groupAllowFrom` (group sender allowlist).
+- `whatsapp.groupPolicy` (group policy).
+- `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
+- `routing.groupChat.mentionPatterns`
+- `routing.groupChat.historyLimit`
+- `messages.messagePrefix` (inbound prefix)
+- `messages.responsePrefix` (outbound prefix)
+- `agent.mediaMaxMb`
+- `agent.heartbeat.every`
+- `agent.heartbeat.model` (optional override)
+- `agent.heartbeat.target`
+- `agent.heartbeat.to`
+- `session.*` (scope, idle, store, mainKey)
+- `web.enabled` (disable provider startup when false)
+- `web.heartbeatSeconds`
+- `web.reconnect.*`
+
+## Logs + troubleshooting
+- Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
+- Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
+- Troubleshooting guide: [`docs/troubleshooting.md`](/troubleshooting).
+
+## Tests
+- [`src/web/auto-reply.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/auto-reply.test.ts) (mention gating, history injection, reply flow)
+- [`src/web/monitor-inbox.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/monitor-inbox.test.ts) (inbound parsing + reply context)
+- [`src/web/outbound.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/outbound.test.ts) (send mapping + media)

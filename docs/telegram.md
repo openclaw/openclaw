@@ -43,7 +43,7 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 - Approve via:
   - `clawdbot pairing list --provider telegram`
   - `clawdbot pairing approve --provider telegram <CODE>`
-- Pairing is the default token exchange used for Telegram DMs. Details: https://docs.clawd.bot/pairing
+- Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/pairing)
 
 Group gating:
 - `telegram.groupPolicy = open | allowlist | disabled`.
@@ -68,7 +68,7 @@ Controlled by `telegram.replyToMode`:
 - Example: `clawdbot send --provider telegram --to 123456789 "hi"`.
 
 ## Configuration reference (Telegram)
-Full configuration: https://docs.clawd.bot/configuration
+Full configuration: [Configuration](/configuration)
 
 Provider options:
 - `telegram.enabled`: enable/disable provider startup.

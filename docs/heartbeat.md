@@ -96,7 +96,7 @@ bloat.
 - Handle mundane tasks (triage inboxes, summarize queues, refresh notes).
 - Nudge on open loops or reminders.
 - Background monitoring (health checks, status polling, low-priority alerts).
-- Scheduled routines (use [Cron jobs](https://docs.clawd.bot/cron-jobs) when you
+- Scheduled routines (use [Cron jobs](/cron-jobs) when you
   need exact schedules or isolated runs).
 
 ## Wake hook

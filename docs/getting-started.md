@@ -17,7 +17,7 @@ Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It set
 - workspace bootstrap + skills
 - optional background daemon
 
-If you want the deeper reference pages, jump to: [Wizard](https://docs.clawd.bot/wizard), [Setup](https://docs.clawd.bot/setup), [Pairing](https://docs.clawd.bot/pairing), [Security](https://docs.clawd.bot/security).
+If you want the deeper reference pages, jump to: [Wizard](/wizard), [Setup](/setup), [Pairing](/pairing), [Security](/security).
 
 ## 0) Prereqs
 
@@ -66,7 +66,7 @@ What you’ll choose:
 - **Daemon**: optional background install (launchd/systemd/Task Scheduler)
   - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
 
-Wizard doc: https://docs.clawd.bot/wizard
+Wizard doc: [Wizard](/wizard)
 
 ### Auth: where it lives (important)
 
@@ -103,13 +103,13 @@ bun run clawdbot login
 
 Scan via WhatsApp → Settings → Linked Devices.
 
-WhatsApp doc: https://docs.clawd.bot/whatsapp
+WhatsApp doc: [WhatsApp](/whatsapp)
 
 ### Telegram / Discord / others
 
 The wizard can write tokens/config for you. If you prefer manual config, start with:
-- Telegram: https://docs.clawd.bot/telegram
-- Discord: https://docs.clawd.bot/discord
+- Telegram: [Telegram](/telegram)
+- Discord: [Discord](/discord)
 
 ## 6) DM safety (pairing approvals)
 
@@ -122,7 +122,7 @@ bun run clawdbot pairing list --provider telegram
 bun run clawdbot pairing approve --provider telegram <CODE>
 ```
 
-Pairing doc: https://docs.clawd.bot/pairing
+Pairing doc: [Pairing](/pairing)
 
 ## 7) Verify end-to-end
 
@@ -137,6 +137,6 @@ If `health` shows “no auth configured”, go back to the wizard and set OAuth/
 
 ## Next steps (optional, but great)
 
-- macOS menu bar app + voice wake: https://docs.clawd.bot/macos
-- iOS/Android nodes (Canvas/camera/voice): https://docs.clawd.bot/nodes
-- Remote access (SSH tunnel / Tailscale Serve): https://docs.clawd.bot/remote and https://docs.clawd.bot/tailscale
+- macOS menu bar app + voice wake: [macOS app](/macos)
+- iOS/Android nodes (Canvas/camera/voice): [Nodes](/nodes)
+- Remote access (SSH tunnel / Tailscale Serve): [Remote access](/remote) and [Tailscale](/tailscale)

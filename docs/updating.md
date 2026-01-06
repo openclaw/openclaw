@@ -71,7 +71,7 @@ Typical things it does:
 - Detect and migrate older gateway services (launchd/systemd/schtasks) to current Clawdbot services.
 - On Linux, ensure systemd user lingering (so the Gateway survives logout).
 
-Details: https://docs.clawd.bot/doctor
+Details: [Doctor](/doctor)
 
 ## Start / stop / restart the Gateway
 
@@ -88,7 +88,7 @@ If you’re supervised:
 - Linux systemd user service: `systemctl --user restart clawdbot-gateway.service`
 - Windows: restart the `Clawdbot Gateway` Scheduled Task (Task Scheduler)
 
-Runbook + exact service labels: https://docs.clawd.bot/gateway
+Runbook + exact service labels: [Gateway runbook](/gateway)
 
 ## Rollback / pinning (when something breaks)
 
@@ -134,5 +134,5 @@ git pull
 ## If you’re stuck
 
 - Run `clawdbot doctor` again and read the output carefully (it often tells you the fix).
-- Check: https://docs.clawd.bot/troubleshooting
+- Check: [Troubleshooting](/troubleshooting)
 - Ask in Discord: https://discord.gg/clawd
