@@ -10,6 +10,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Start here
 
 - [Index](https://docs.clawd.bot)
+- [Getting Started](https://docs.clawd.bot/getting-started)
 - [Onboarding](https://docs.clawd.bot/onboarding)
 - [Wizard](https://docs.clawd.bot/wizard)
 - [Setup](https://docs.clawd.bot/setup)
