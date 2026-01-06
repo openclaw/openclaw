@@ -366,6 +366,7 @@ export async function monitorIMessageProvider(
       SenderName: sender,
       SenderId: sender,
       Provider: "imessage",
+      Surface: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
       Timestamp: createdAt,
       MediaPath: mediaPath,
