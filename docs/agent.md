@@ -99,4 +99,4 @@ At minimum, set:
 
 ---
 
-*Next: [Group Chats](./group-messages.md)* 🦞
+*Next: [Group Chats](group-messages)* 🦞

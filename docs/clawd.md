@@ -81,7 +81,7 @@ clawdbot gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-## Give the agent a workspace (AGENTS.md)
+## Give the agent a workspace (AGENTS)
 
 Clawd reads operating instructions and “memory” from its workspace directory.
 
@@ -191,12 +191,12 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 
 ## Next steps
 
-- WebChat: [WebChat](./webchat.md)
-- Gateway ops: [Gateway runbook](./gateway.md)
-- Cron + wakeups: [Cron + wakeups](./cron.md)
-- macOS menu bar companion: [Clawdbot macOS app](./macos.md)
-- iOS node app: [iOS app](./ios.md)
-- Android node app: [Android app](./android.md)
-- Windows status: [Windows app](./windows.md)
-- Linux status: [Linux app](./linux.md)
-- Security: [Security](./security.md)
+- WebChat: [WebChat](webchat)
+- Gateway ops: [Gateway runbook](gateway)
+- Cron + wakeups: [Cron + wakeups](cron)
+- macOS menu bar companion: [Clawdbot macOS app](macos)
+- iOS node app: [iOS app](ios)
+- Android node app: [Android app](android)
+- Windows status: [Windows app](windows)
+- Linux status: [Linux app](linux)
+- Security: [Security](security)
