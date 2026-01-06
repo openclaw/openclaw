@@ -33,7 +33,7 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 
 ## Recommended setup (from source)
 
-Do **not** download prebuilt binaries. Build from source.
+Do **not** download prebuilt binaries. Run from source.
 
 ```bash
 # Clone this repo
@@ -41,11 +41,12 @@ git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 
 bun install
-bun run build
 bun run ui:install
 bun run ui:build
 bun run clawdbot onboard
 ```
+
+Note: `bun run build` is optional here (it produces `dist/` for running via Node / the packaged `clawdbot` binary). `bun run clawdbot ...` runs TypeScript directly.
 
 ## Quick start (from source)
 
