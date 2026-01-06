@@ -437,25 +437,35 @@ export class ClawdbotApp extends LitElement {
       clearTimeout(this.chatScrollTimeout);
       this.chatScrollTimeout = null;
     }
-    this.chatScrollFrame = requestAnimationFrame(() => {
-      this.chatScrollFrame = null;
-      const container = this.querySelector(".chat-thread") as HTMLElement | null;
-      if (!container) return;
-      const distanceFromBottom =
-        container.scrollHeight - container.scrollTop - container.clientHeight;
-      const shouldStick = force || distanceFromBottom < 140;
-      if (!shouldStick) return;
-      if (force) this.chatHasAutoScrolled = true;
-      container.scrollTop = container.scrollHeight;
-      this.chatScrollTimeout = window.setTimeout(() => {
-        this.chatScrollTimeout = null;
-        const latest = this.querySelector(".chat-thread") as HTMLElement | null;
-        if (!latest) return;
-        const latestDistanceFromBottom =
-          latest.scrollHeight - latest.scrollTop - latest.clientHeight;
-        if (!force && latestDistanceFromBottom >= 180) return;
-        latest.scrollTop = latest.scrollHeight;
-      }, 120);
+    // Wait for Lit render to complete, then scroll
+    void this.updateComplete.then(() => {
+      this.chatScrollFrame = requestAnimationFrame(() => {
+        this.chatScrollFrame = null;
+        if (force) {
+          // Force scroll window to bottom unconditionally
+          this.chatHasAutoScrolled = true;
+          window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+          // Retry after images/content load
+          this.chatScrollTimeout = window.setTimeout(() => {
+            this.chatScrollTimeout = null;
+            window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+          }, 150);
+          return;
+        }
+        // Stick to bottom if already near bottom
+        const distanceFromBottom =
+          document.body.scrollHeight - window.scrollY - window.innerHeight;
+        const shouldStick = distanceFromBottom < 200;
+        if (!shouldStick) return;
+        window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+        this.chatScrollTimeout = window.setTimeout(() => {
+          this.chatScrollTimeout = null;
+          const latestDistanceFromBottom =
+            document.body.scrollHeight - window.scrollY - window.innerHeight;
+          if (latestDistanceFromBottom >= 250) return;
+          window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+        }, 120);
+      });
     });
   }
 
@@ -689,7 +699,7 @@ export class ClawdbotApp extends LitElement {
     if (this.tab === "nodes") await loadNodes(this);
     if (this.tab === "chat") {
       await Promise.all([loadChatHistory(this), loadSessions(this)]);
-      this.scheduleChatScroll();
+      this.scheduleChatScroll(!this.chatHasAutoScrolled);
     }
     if (this.tab === "config") {
       await loadConfigSchema(this);
