@@ -374,11 +374,11 @@ export async function compactEmbeddedPiSession(params: {
         };
       }
       try {
-        const apiKey = await getApiKeyForModel({
+        const apiKeyInfo = await getApiKeyForModel({
           model,
           cfg: params.config,
         });
-        authStorage.setRuntimeApiKey(model.provider, apiKey.apiKey);
+        authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
       } catch (err) {
         return {
           ok: false,
