@@ -41,21 +41,21 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 
 Do **not** download prebuilt binaries. Run from source.
 
-Prefer **Bun**. `pnpm` is also supported (see https://docs.clawd.bot/getting-started).
+Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
 
 ```bash
 # Clone this repo
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 
-bun install
-bun run ui:install
-bun run ui:build
-bun run build
-bun run clawdbot onboard
+pnpm install
+pnpm ui:install
+pnpm ui:build
+pnpm build
+pnpm clawdbot onboard
 ```
 
-Note: `bun run clawdbot ...` runs TypeScript directly. `bun run build` produces `dist/` for running via Node / the packaged `clawdbot` binary.
+Note: `pnpm clawdbot ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `clawdbot` binary.
 
 ## Quick start (TL;DR)
 
@@ -64,23 +64,23 @@ Runtime: **Node ≥22**.
 Full beginner guide (auth, pairing, providers): https://docs.clawd.bot/getting-started
 
 ```bash
-bun run clawdbot onboard
+pnpm clawdbot onboard
 
-bun run clawdbot gateway --port 18789 --verbose
+pnpm clawdbot gateway --port 18789 --verbose
 
 # Dev loop (auto-reload on TS changes)
-bun run gateway:watch
+pnpm gateway:watch
 
 # Send a message
-bun run clawdbot send --to +1234567890 --message "Hello from Clawdbot"
+pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 
 # Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
-bun run clawdbot agent --message "Ship checklist" --thinking high
+pnpm clawdbot agent --message "Ship checklist" --thinking high
 ```
 
 Upgrading? https://docs.clawd.bot/updating (and run `clawdbot doctor`).
 
-If you run from source, prefer `bun run clawdbot …` or `pnpm clawdbot …` (not global `clawdbot`).
+If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
 
 ## Security defaults (DM access)
 
