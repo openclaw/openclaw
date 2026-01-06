@@ -31,12 +31,11 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("discord.js", () => {
   const handlers = new Map<string, Set<(...args: unknown[]) => void>>();
-  let lastClient: Client | null = null;
-
   class Client {
+    static lastClient: Client | null = null;
     user = { id: "bot-id", tag: "bot#1" };
     constructor() {
-      lastClient = this;
+      Client.lastClient = this;
     }
     on(event: string, handler: (...args: unknown[]) => void) {
       if (!handlers.has(event)) handlers.set(event, new Set());
@@ -50,7 +49,7 @@ vi.mock("discord.js", () => {
     }
     emit(event: string, ...args: unknown[]) {
       for (const handler of handlers.get(event) ?? []) {
-        void handler(...args);
+        void Promise.resolve(handler(...args));
       }
     }
     login = vi.fn().mockResolvedValue(undefined);
@@ -59,7 +58,7 @@ vi.mock("discord.js", () => {
 
   return {
     Client,
-    __getLastClient: () => lastClient,
+    __getLastClient: () => Client.lastClient,
     Events: {
       ClientReady: "ready",
       Error: "error",

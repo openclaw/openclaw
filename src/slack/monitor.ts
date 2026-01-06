@@ -700,6 +700,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
+    // Only thread replies if the incoming message was in a thread.
+    const incomingThreadTs = message.thread_ts;
+
     const dispatcher = createReplyDispatcher({
       responsePrefix: cfg.messages?.responsePrefix,
       deliver: async (payload) => {
@@ -709,6 +712,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           token: botToken,
           runtime,
           textLimit,
+          threadTs: incomingThreadTs,
         });
       },
       onError: (err, info) => {
@@ -1379,6 +1383,7 @@ async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   textLimit: number;
+  threadTs?: string;
 }) {
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
@@ -1389,12 +1394,11 @@ async function deliverReplies(params: {
 
     if (mediaList.length === 0) {
       for (const chunk of chunkText(text, chunkLimit)) {
-        const threadTs = undefined;
         const trimmed = chunk.trim();
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
-          threadTs,
+          threadTs: params.threadTs,
         });
       }
     } else {
@@ -1402,11 +1406,10 @@ async function deliverReplies(params: {
       for (const mediaUrl of mediaList) {
         const caption = first ? text : "";
         first = false;
-        const threadTs = undefined;
         await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
-          threadTs,
+          threadTs: params.threadTs,
         });
       }
     }
