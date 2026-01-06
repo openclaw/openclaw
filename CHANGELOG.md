@@ -51,10 +51,12 @@
 - WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.
 - Slack: keep auto-replies in the original thread when responding to thread messages. Thanks @scald for PR #251.
 - Discord: surface missing-permission hints (muted/role overrides) when replies fail.
+- Discord: use channel IDs for DMs instead of user IDs. Thanks @VACInc for PR #261.
 - Docs: clarify Slack manifest scopes (current vs optional) with references. Thanks @jarvis-medmatic for PR #235.
 - Control UI: avoid Slack config ReferenceError by reading slack config snapshots. Thanks @sreekaransrinath for PR #249.
 - Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks @regenrek for PR #242.
 - Telegram: gate groups via `telegram.groups` allowlist (align with WhatsApp/iMessage). Thanks @kitze for PR #241.
+- Telegram: support media groups (multi-image messages). Thanks @obviyus for PR #220.
 - Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
 - Auto-reply: track compaction count in session status; verbose mode announces auto-compactions.
 - Telegram: send GIF media as animations (auto-play) and improve filename sniffing.
