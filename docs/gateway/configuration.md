@@ -15,6 +15,8 @@ If the file is missing, CLAWDBOT uses safe-ish defaults (embedded Pi agent + per
 - tune the embedded agent (`agent`) and session behavior (`session`)
 - set the agent's identity (`identity`)
 
+> **New to configuration?** Check out the [Configuration Examples](/gateway/configuration-examples) guide for complete examples with detailed explanations!
+
 ## Schema + UI hints
 
 The Gateway exposes a JSON Schema representation of the config via `config.schema` for UI editors.

@@ -570,6 +570,7 @@
           "gateway/pairing",
           "gateway/gateway-lock",
           "gateway/configuration",
+          "gateway/configuration-examples",
           "gateway/background-process",
           "gateway/health",
           "gateway/heartbeat",

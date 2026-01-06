@@ -149,6 +149,7 @@ Example:
   - [Docs hubs (all pages linked)](https://docs.clawd.bot/start/hubs)
   - [FAQ](https://docs.clawd.bot/start/faq) ← *common questions answered*
   - [Configuration](https://docs.clawd.bot/gateway/configuration)
+  - [Configuration examples](https://docs.clawd.bot/gateway/configuration-examples)
   - [Slash commands](https://docs.clawd.bot/tools/slash-commands)
   - [Multi-agent routing](https://docs.clawd.bot/concepts/multi-agent)
   - [Updating / rollback](https://docs.clawd.bot/install/updating)
