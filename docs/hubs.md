@@ -80,7 +80,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Tools surface](https://docs.clawd.bot/tools)
 - [Bash tool](https://docs.clawd.bot/bash)
 - [Elevated mode](https://docs.clawd.bot/elevated)
-- [Cron + wakeups](https://docs.clawd.bot/cron)
+- [Cron jobs](https://docs.clawd.bot/cron-jobs)
 - [Thinking + verbose](https://docs.clawd.bot/thinking)
 - [Models](https://docs.clawd.bot/models)
 - [Agent send CLI](https://docs.clawd.bot/agent-send)

@@ -8,17 +8,28 @@ read_when:
 Heartbeat runs periodic agent turns in the **main session** so the model can
 surface anything that needs attention without spamming the user.
 
+## Defaults
+- Interval: `30m` (set `agent.heartbeat.every` to change, `0m` disables).
+- Prompt body (configurable via `agent.heartbeat.prompt`):
+  `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
+- Heartbeat prompt text is sent **verbatim** as the user message. Clawdbot does
+  not append extra body text. The system prompt includes a Heartbeats section
+  and the run is flagged as a heartbeat internally.
+
 ## Prompt contract
-- Heartbeat body defaults to: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.` (configurable via `agent.heartbeat.prompt`).
 - If nothing needs attention, the model should reply `HEARTBEAT_OK`.
 - During heartbeat runs, Clawdbot treats `HEARTBEAT_OK` as an ack when it appears at
   the **start or end** of the reply. Clawdbot strips the token and discards the
   reply if the remaining content is **≤ `ackMaxChars`** (default: 30).
 - If `HEARTBEAT_OK` is in the **middle** of a reply, it is not treated specially.
 - For alerts, do **not** include `HEARTBEAT_OK`; return only the alert text.
-- Heartbeat prompt text is sent **verbatim** as the user message. Clawdbot does
-  not append extra body text. The system prompt includes a Heartbeats section
-  and the run is flagged as a heartbeat internally.
+
+## Prompt overrides
+- Overriding `agent.heartbeat.prompt` **replaces** the default body. Nothing is
+  merged for you.
+- If you still want `HEARTBEAT.md` instructions, keep a line like
+  `Read HEARTBEAT.md if exists` in your custom prompt.
+- `HEARTBEAT_OK` handling stays the same; changing the prompt won’t break acks.
 
 ### Stray `HEARTBEAT_OK` outside heartbeats
 If the model accidentally includes `HEARTBEAT_OK` at the start or end of a
@@ -63,9 +74,9 @@ and final replies:
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
 
 ## Cost awareness
-Heartbeats run full agent turns. Shorter intervals burn more tokens. If you
-don’t need frequent checks, increase `every`, pick a cheaper `model`, or set
-`target: "none"` to keep results internal.
+Heartbeats run full agent turns. Shorter intervals burn more tokens. Be
+intentional about `every`, keep `HEARTBEAT.md` tiny, and consider a cheaper
+`model` or `target: "none"` if you only want internal state updates.
 
 ## HEARTBEAT.md (optional)
 If a `HEARTBEAT.md` file exists in the workspace, the default prompt tells the
@@ -85,6 +96,8 @@ bloat.
 - Handle mundane tasks (triage inboxes, summarize queues, refresh notes).
 - Nudge on open loops or reminders.
 - Background monitoring (health checks, status polling, low-priority alerts).
+- Scheduled routines (use [Cron jobs](https://docs.clawd.bot/cron-jobs) when you
+  need exact schedules or isolated runs).
 
 ## Wake hook
 - The gateway exposes a heartbeat wake hook so cron/jobs/webhooks can request an
