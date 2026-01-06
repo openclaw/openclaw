@@ -102,11 +102,7 @@ function extractCompactInstructions(params: {
   const trimmed = stripped.trim();
   if (!trimmed) return undefined;
   const lowered = trimmed.toLowerCase();
-  const prefix = lowered.startsWith("/compact")
-    ? "/compact"
-    : lowered.startsWith("compact")
-      ? "compact"
-      : null;
+  const prefix = lowered.startsWith("/compact") ? "/compact" : null;
   if (!prefix) return undefined;
   let rest = trimmed.slice(prefix.length).trimStart();
   if (rest.startsWith(":")) rest = rest.slice(1).trimStart();
@@ -197,9 +193,7 @@ export async function handleCommands(params: {
 
   const resetRequested =
     command.commandBodyNormalized === "/reset" ||
-    command.commandBodyNormalized === "reset" ||
-    command.commandBodyNormalized === "/new" ||
-    command.commandBodyNormalized === "new";
+    command.commandBodyNormalized === "/new";
   if (resetRequested && !command.isAuthorizedSender) {
     logVerbose(
       `Ignoring /reset from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
@@ -300,7 +294,6 @@ export async function handleCommands(params: {
 
   if (
     command.commandBodyNormalized === "/restart" ||
-    command.commandBodyNormalized === "restart" ||
     command.commandBodyNormalized.startsWith("/restart ")
   ) {
     if (!command.isAuthorizedSender) {
@@ -320,7 +313,6 @@ export async function handleCommands(params: {
 
   const helpRequested =
     command.commandBodyNormalized === "/help" ||
-    command.commandBodyNormalized === "help" ||
     /(?:^|\s)\/help(?=$|\s|:)\b/i.test(command.commandBodyNormalized);
   if (helpRequested) {
     if (!command.isAuthorizedSender) {
@@ -335,7 +327,6 @@ export async function handleCommands(params: {
   const statusRequested =
     directives.hasStatusDirective ||
     command.commandBodyNormalized === "/status" ||
-    command.commandBodyNormalized === "status" ||
     command.commandBodyNormalized.startsWith("/status ");
   if (statusRequested) {
     if (!command.isAuthorizedSender) {
@@ -383,9 +374,7 @@ export async function handleCommands(params: {
 
   const compactRequested =
     command.commandBodyNormalized === "/compact" ||
-    command.commandBodyNormalized === "compact" ||
-    command.commandBodyNormalized.startsWith("/compact ") ||
-    command.commandBodyNormalized.startsWith("compact ");
+    command.commandBodyNormalized.startsWith("/compact ");
   if (compactRequested) {
     if (!command.isAuthorizedSender) {
       logVerbose(
