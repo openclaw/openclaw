@@ -4,6 +4,7 @@ import { defaultRuntime } from "../runtime.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
+
 async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
     const res = (await callGatewayFromCli("cron.status", opts, {})) as {
@@ -155,7 +156,7 @@ export function registerCronCli(program: Command) {
       .option("--deliver", "Deliver agent output", false)
       .option(
         "--channel <channel>",
-        "Delivery channel (last|whatsapp|telegram|discord|signal|imessage)",
+        "Delivery channel (last|whatsapp|telegram|discord|slack|signal|imessage)",
         "last",
       )
       .option(
@@ -414,7 +415,7 @@ export function registerCronCli(program: Command) {
       .option("--deliver", "Deliver agent output", false)
       .option(
         "--channel <channel>",
-        "Delivery channel (last|whatsapp|telegram|discord|signal|imessage)",
+        "Delivery channel (last|whatsapp|telegram|discord|slack|signal|imessage)",
       )
       .option(
         "--to <dest>",

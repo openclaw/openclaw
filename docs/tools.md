@@ -139,7 +139,7 @@ Core actions:
 
 Notes:
 - `add` expects a full cron job object (same schema as `cron.add` RPC).
-- `update` uses `{ jobId, patch }`.
+- `update` uses `{ id, patch }`.
 
 ### `gateway`
 Restart the running Gateway process (in-place).
