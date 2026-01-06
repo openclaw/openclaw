@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
+import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import {
   type ActiveWebSendOptions,
-  type PollOptions,
   getActiveWebListener,
 } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
@@ -86,11 +86,10 @@ export async function sendMessageWhatsApp(
     throw err;
   }
 }
-
 export async function sendPollWhatsApp(
   to: string,
-  poll: PollOptions,
-  options: { verbose: boolean },
+  poll: PollInput,
+  _options: { verbose: boolean },
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = randomUUID();
   const startedAt = Date.now();
@@ -107,12 +106,18 @@ export async function sendPollWhatsApp(
   });
   try {
     const jid = toWhatsappJid(to);
-    outboundLog.info(`Sending poll -> ${jid}: "${poll.question}"`);
+    const normalized = normalizePollInput(poll, { maxOptions: 12 });
+    outboundLog.info(`Sending poll -> ${jid}: "${normalized.question}"`);
     logger.info(
-      { jid, question: poll.question, optionCount: poll.options.length },
+      {
+        jid,
+        question: normalized.question,
+        optionCount: normalized.options.length,
+        maxSelections: normalized.maxSelections,
+      },
       "sending poll",
     );
-    const result = await active.sendPoll(to, poll);
+    const result = await active.sendPoll(to, normalized);
     const messageId =
       (result as { messageId?: string })?.messageId ?? "unknown";
     const durationMs = Date.now() - startedAt;

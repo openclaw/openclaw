@@ -388,10 +388,10 @@ Examples:
 
   program
     .command("poll")
-    .description("Create a WhatsApp poll in a chat or group")
+    .description("Create a poll via WhatsApp or Discord")
     .requiredOption(
-      "-t, --to <jid>",
-      "Recipient JID (e.g. +15555550123 or group JID)",
+      "-t, --to <id>",
+      "Recipient: WhatsApp JID/number or Discord channel/user",
     )
     .requiredOption("-q, --question <text>", "Poll question")
     .requiredOption(
@@ -401,9 +401,16 @@ Examples:
       [] as string[],
     )
     .option(
-      "-s, --selectable-count <n>",
+      "-s, --max-selections <n>",
       "How many options can be selected (default: 1)",
-      "1",
+    )
+    .option(
+      "--duration-hours <n>",
+      "Poll duration in hours (Discord only, default: 24)",
+    )
+    .option(
+      "--provider <provider>",
+      "Delivery provider: whatsapp|discord (default: whatsapp)",
     )
     .option("--dry-run", "Print payload and skip sending", false)
     .option("--json", "Output result as JSON", false)
@@ -414,24 +421,14 @@ Examples:
 Examples:
   clawdbot poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
   clawdbot poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
-  clawdbot poll --to +15555550123 -q "Favorite color?" -o "Red" -o "Blue" --json`,
+  clawdbot poll --to channel:123456789 -q "Snack?" -o "Pizza" -o "Sushi" --provider discord
+  clawdbot poll --to channel:123456789 -q "Plan?" -o "A" -o "B" --provider discord --duration-hours 48`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
       const deps = createDefaultDeps();
       try {
-        await pollCommand(
-          {
-            to: opts.to,
-            question: opts.question,
-            options: opts.option,
-            selectableCount: Number.parseInt(opts.selectableCount, 10) || 1,
-            json: opts.json,
-            dryRun: opts.dryRun,
-          },
-          deps,
-          defaultRuntime,
-        );
+        await pollCommand(opts, deps, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

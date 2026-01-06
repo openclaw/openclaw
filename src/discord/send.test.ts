@@ -596,7 +596,7 @@ describe("sendPollDiscord", () => {
       "channel:789",
       {
         question: "Lunch?",
-        answers: ["Pizza", "Sushi"],
+        options: ["Pizza", "Sushi"],
       },
       {
         rest,

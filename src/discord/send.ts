@@ -14,6 +14,11 @@ import type {
 
 import { chunkText } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
+import {
+  normalizePollDurationHours,
+  normalizePollInput,
+  type PollInput,
+} from "../polls.js";
 import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -21,7 +26,6 @@ const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
 const DISCORD_MAX_EMOJI_BYTES = 256 * 1024;
 const DISCORD_MAX_STICKER_BYTES = 512 * 1024;
-const DISCORD_POLL_MIN_ANSWERS = 2;
 const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
 const DISCORD_MISSING_PERMISSIONS = 50013;
@@ -64,13 +68,6 @@ type DiscordSendOpts = {
 export type DiscordSendResult = {
   messageId: string;
   channelId: string;
-};
-
-export type DiscordPollInput = {
-  question: string;
-  answers: string[];
-  allowMultiselect?: boolean;
-  durationHours?: number;
 };
 
 export type DiscordReactOpts = {
@@ -238,34 +235,19 @@ function normalizeEmojiName(raw: string, label: string) {
   return name;
 }
 
-function normalizePollInput(input: DiscordPollInput): RESTAPIPoll {
-  const question = input.question.trim();
-  if (!question) {
-    throw new Error("Poll question is required");
-  }
-  const answers = (input.answers ?? [])
-    .map((answer) => answer.trim())
-    .filter(Boolean);
-  if (answers.length < DISCORD_POLL_MIN_ANSWERS) {
-    throw new Error("Polls require at least 2 answers");
-  }
-  if (answers.length > DISCORD_POLL_MAX_ANSWERS) {
-    throw new Error("Polls support up to 10 answers");
-  }
-  const durationRaw =
-    typeof input.durationHours === "number" &&
-    Number.isFinite(input.durationHours)
-      ? Math.floor(input.durationHours)
-      : 24;
-  const duration = Math.min(
-    Math.max(durationRaw, 1),
-    DISCORD_POLL_MAX_DURATION_HOURS,
-  );
+function normalizeDiscordPollInput(input: PollInput): RESTAPIPoll {
+  const poll = normalizePollInput(input, {
+    maxOptions: DISCORD_POLL_MAX_ANSWERS,
+  });
+  const duration = normalizePollDurationHours(poll.durationHours, {
+    defaultHours: 24,
+    maxHours: DISCORD_POLL_MAX_DURATION_HOURS,
+  });
   return {
-    question: { text: question },
-    answers: answers.map((answer) => ({ poll_media: { text: answer } })),
+    question: { text: poll.question },
+    answers: poll.options.map((answer) => ({ poll_media: { text: answer } })),
     duration,
-    allow_multiselect: input.allowMultiselect ?? false,
+    allow_multiselect: poll.maxSelections > 1,
     layout_type: PollLayoutType.Default,
   };
 }
@@ -519,7 +501,7 @@ export async function sendStickerDiscord(
 
 export async function sendPollDiscord(
   to: string,
-  poll: DiscordPollInput,
+  poll: PollInput,
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
   const token = resolveToken(opts.token);
@@ -527,7 +509,7 @@ export async function sendPollDiscord(
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(rest, recipient);
   const content = opts.content?.trim();
-  const payload = normalizePollInput(poll);
+  const payload = normalizeDiscordPollInput(poll);
   const res = (await rest.post(Routes.channelMessages(channelId), {
     body: {
       content: content || undefined,

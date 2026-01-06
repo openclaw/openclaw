@@ -203,12 +203,13 @@ export const PollParamsSchema = Type.Object(
     to: NonEmptyString,
     question: NonEmptyString,
     options: Type.Array(NonEmptyString, { minItems: 2, maxItems: 12 }),
-    selectableCount: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    maxSelections: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    durationHours: Type.Optional(Type.Integer({ minimum: 1 })),
+    provider: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
 );
-
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
