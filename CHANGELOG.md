@@ -37,6 +37,7 @@
 - Gmail: stop restart loop when `gog gmail watch serve` fails to bind (address already in use).
 - Linux: auto-attempt lingering during onboarding (try without sudo, fallback to sudo) and prompt on install/restart to keep the gateway alive after logout/idle. Thanks @tobiasbischoff for PR #237.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
+- TUI: add `/elev` alias for `/elevated`.
 - Logging: redact sensitive tokens in verbose tool summaries by default (configurable patterns).
 - macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
