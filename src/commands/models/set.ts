@@ -8,15 +8,17 @@ export async function modelsSetCommand(modelRaw: string, runtime: RuntimeEnv) {
     const key = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agent?.models };
     if (!nextModels[key]) nextModels[key] = {};
+    const existingModel = cfg.agent?.model as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
     return {
       ...cfg,
       agent: {
         ...cfg.agent,
         model: {
-          ...((cfg.agent?.model as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(existingModel?.fallbacks
+            ? { fallbacks: existingModel.fallbacks }
+            : undefined),
           primary: key,
         },
         models: nextModels,

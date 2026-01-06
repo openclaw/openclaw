@@ -49,7 +49,7 @@ vi.mock("discord.js", () => {
     }
     emit(event: string, ...args: unknown[]) {
       for (const handler of handlers.get(event) ?? []) {
-        void Promise.resolve(handler(...args));
+        Promise.resolve(handler(...args)).catch(() => {});
       }
     }
     login = vi.fn().mockResolvedValue(undefined);

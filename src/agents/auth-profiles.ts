@@ -143,10 +143,26 @@ export function loadAuthProfileStore(): AuthProfileStore {
     };
     for (const [provider, cred] of Object.entries(legacy)) {
       const profileId = `${provider}:default`;
-      store.profiles[profileId] = {
-        ...cred,
-        provider: cred.provider ?? (provider as OAuthProvider),
-      };
+      if (cred.type === "api_key") {
+        store.profiles[profileId] = {
+          type: "api_key",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          key: cred.key,
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      } else {
+        store.profiles[profileId] = {
+          type: "oauth",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          access: cred.access,
+          refresh: cred.refresh,
+          expires: cred.expires,
+          ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
+          ...(cred.projectId ? { projectId: cred.projectId } : {}),
+          ...(cred.accountId ? { accountId: cred.accountId } : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      }
     }
     return store;
   }
@@ -162,17 +178,35 @@ export function ensureAuthProfileStore(): AuthProfileStore {
 
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
   const legacy = coerceLegacyStore(legacyRaw);
-  const store = legacy
-    ? {
-        version: AUTH_STORE_VERSION,
-        profiles: Object.fromEntries(
-          Object.entries(legacy).map(([provider, cred]) => [
-            `${provider}:default`,
-            { ...cred, provider: cred.provider ?? (provider as OAuthProvider) },
-          ]),
-        ),
+  const store: AuthProfileStore = {
+    version: AUTH_STORE_VERSION,
+    profiles: {},
+  };
+  if (legacy) {
+    for (const [provider, cred] of Object.entries(legacy)) {
+      const profileId = `${provider}:default`;
+      if (cred.type === "api_key") {
+        store.profiles[profileId] = {
+          type: "api_key",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          key: cred.key,
+          ...(cred.email ? { email: cred.email } : {}),
+        };
+      } else {
+        store.profiles[profileId] = {
+          type: "oauth",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          access: cred.access,
+          refresh: cred.refresh,
+          expires: cred.expires,
+          ...(cred.enterpriseUrl ? { enterpriseUrl: cred.enterpriseUrl } : {}),
+          ...(cred.projectId ? { projectId: cred.projectId } : {}),
+          ...(cred.accountId ? { accountId: cred.accountId } : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
       }
-    : { version: AUTH_STORE_VERSION, profiles: {} };
+    }
+  }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
   const shouldWrite = legacy !== null || mergedOAuth;
@@ -291,7 +325,7 @@ export function markAuthProfileGood(params: {
   const { store, provider, profileId } = params;
   const profile = store.profiles[profileId];
   if (!profile || profile.provider !== provider) return;
-  store.lastGood = { ...(store.lastGood ?? {}), [provider]: profileId };
+  store.lastGood = { ...store.lastGood, [provider]: profileId };
   saveAuthProfileStore(store);
 }
 

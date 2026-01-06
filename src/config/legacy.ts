@@ -244,7 +244,8 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
           : {};
 
       const ensureModel = (rawKey?: string) => {
-        const key = String(rawKey ?? "").trim();
+        if (typeof rawKey !== "string") return;
+        const key = rawKey.trim();
         if (!key) return;
         if (!models[key]) models[key] = {};
       };
@@ -255,11 +256,13 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       for (const key of legacyModelFallbacks) ensureModel(key);
       for (const key of legacyImageModelFallbacks) ensureModel(key);
       for (const target of Object.values(legacyAliases)) {
-        ensureModel(String(target ?? ""));
+        if (typeof target !== "string") continue;
+        ensureModel(target);
       }
 
       for (const [alias, targetRaw] of Object.entries(legacyAliases)) {
-        const target = String(targetRaw ?? "").trim();
+        if (typeof targetRaw !== "string") continue;
+        const target = targetRaw.trim();
         if (!target) continue;
         const entry =
           models[target] && typeof models[target] === "object"

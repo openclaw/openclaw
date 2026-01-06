@@ -337,10 +337,14 @@ export async function runOnboardingWizard(
           agent: {
             ...nextConfig.agent,
             model: {
-              ...((nextConfig.agent?.model as {
-                primary?: string;
-                fallbacks?: string[];
-              }) ?? {}),
+              ...(nextConfig.agent?.model &&
+              "fallbacks" in (nextConfig.agent.model as Record<string, unknown>)
+                ? {
+                    fallbacks: (
+                      nextConfig.agent.model as { fallbacks?: string[] }
+                    ).fallbacks,
+                  }
+                : undefined),
               primary: "google-antigravity/claude-opus-4-5-thinking",
             },
             models: {
