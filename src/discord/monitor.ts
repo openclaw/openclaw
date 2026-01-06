@@ -18,6 +18,10 @@ import {
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -140,6 +144,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord");
+  const mentionRegexes = buildMentionRegexes(cfg);
   const historyLimit = Math.max(
     0,
     opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
@@ -202,13 +207,15 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         return;
       }
       const botId = client.user?.id;
-      const wasMentioned =
-        !isDirectMessage && Boolean(botId && message.mentions.has(botId));
       const forwardedSnapshot = resolveForwardedSnapshot(message);
       const forwardedText = forwardedSnapshot
         ? resolveDiscordSnapshotText(forwardedSnapshot.snapshot)
         : "";
       const baseText = resolveDiscordMessageText(message, forwardedText);
+      const wasMentioned =
+        !isDirectMessage &&
+        (Boolean(botId && message.mentions.has(botId)) ||
+          matchesMentionPatterns(baseText, mentionRegexes));
       if (shouldLogVerbose()) {
         logVerbose(
           `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${baseText ? "yes" : "no"}`,
@@ -309,8 +316,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(baseText);
-      if (isGuildMessage && resolvedRequireMention) {
-        if (botId && !wasMentioned && !shouldBypassMention) {
+      const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
+      if (isGuildMessage && resolvedRequireMention && canDetectMention) {
+        if (!wasMentioned && !shouldBypassMention) {
           logVerbose(
             `discord: drop guild message (mention required, botId=${botId})`,
           );

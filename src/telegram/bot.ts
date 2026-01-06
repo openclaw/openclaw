@@ -7,6 +7,10 @@ import { Bot, InputFile, webhookCallback } from "grammy";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -67,6 +71,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.telegram?.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
+  const mentionRegexes = buildMentionRegexes(cfg);
   const resolveGroupRequireMention = (chatId: string | number) => {
     const groupId = String(chatId);
     const groupConfig = cfg.telegram?.groups?.[groupId];
@@ -132,7 +137,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
           ));
       const wasMentioned =
-        Boolean(botUsername) && hasBotMention(msg, botUsername);
+        (Boolean(botUsername) && hasBotMention(msg, botUsername)) ||
+        matchesMentionPatterns(msg.text ?? msg.caption ?? "", mentionRegexes);
       const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
         (ent) => ent.type === "mention",
       );
@@ -143,7 +149,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(msg.text ?? msg.caption ?? "");
-      if (isGroup && resolveGroupRequireMention(chatId) && botUsername) {
+      const canDetectMention =
+        Boolean(botUsername) || mentionRegexes.length > 0;
+      if (isGroup && resolveGroupRequireMention(chatId) && canDetectMention) {
         if (!wasMentioned && !shouldBypassMention) {
           logger.info(
             { chatId, reason: "no-mention" },
@@ -196,7 +204,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ReplyToBody: replyTarget?.body,
         ReplyToSender: replyTarget?.sender,
         Timestamp: msg.date ? msg.date * 1000 : undefined,
-        WasMentioned: isGroup && botUsername ? wasMentioned : undefined,
+        WasMentioned: isGroup ? wasMentioned : undefined,
         MediaPath: media?.path,
         MediaType: media?.contentType,
         MediaUrl: media?.path,

@@ -126,6 +126,73 @@ describe("createTelegramBot", () => {
     expect(sendChatActionSpy).toHaveBeenCalledWith(42, "typing");
   });
 
+  it("accepts group messages when mentionPatterns match (without @botUsername)", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      identity: { name: "Bert" },
+      routing: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      telegram: { groups: { "*": { requireMention: true } } },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "bert: introduce yourself",
+        date: 1736380800,
+        message_id: 1,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.WasMentioned).toBe(true);
+  });
+
+  it("skips group messages when requireMention is enabled and no mention matches", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      routing: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      telegram: { groups: { "*": { requireMention: true } } },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "hello everyone",
+        date: 1736380800,
+        message_id: 2,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+  });
+
   it("includes reply-to context when a Telegram reply is received", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();

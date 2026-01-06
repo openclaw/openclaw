@@ -9,6 +9,10 @@ import {
   HEARTBEAT_PROMPT,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
+import {
+  buildMentionRegexes,
+  normalizeMentionText,
+} from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -147,17 +151,7 @@ type MentionConfig = {
 };
 
 function buildMentionConfig(cfg: ReturnType<typeof loadConfig>): MentionConfig {
-  const gc = cfg.routing?.groupChat;
-  const mentionRegexes =
-    gc?.mentionPatterns
-      ?.map((p) => {
-        try {
-          return new RegExp(p, "i");
-        } catch {
-          return null;
-        }
-      })
-      .filter((r): r is RegExp => Boolean(r)) ?? [];
+  const mentionRegexes = buildMentionRegexes(cfg);
   return { mentionRegexes, allowFrom: cfg.whatsapp?.allowFrom };
 }
 
@@ -166,10 +160,8 @@ function isBotMentioned(
   mentionCfg: MentionConfig,
 ): boolean {
   const clean = (text: string) =>
-    text
-      // Remove zero-width and directionality markers WhatsApp injects around display names
-      .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
-      .toLowerCase();
+    // Remove zero-width and directionality markers WhatsApp injects around display names
+    normalizeMentionText(text);
 
   const isSelfChat = isSelfChatMode(msg.selfE164, mentionCfg.allowFrom);
 
@@ -212,9 +204,7 @@ function debugMention(
   const details = {
     from: msg.from,
     body: msg.body,
-    bodyClean: msg.body
-      .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
-      .toLowerCase(),
+    bodyClean: normalizeMentionText(msg.body),
     mentionedJids: msg.mentionedJids ?? null,
     selfJid: msg.selfJid ?? null,
     selfE164: msg.selfE164 ?? null,

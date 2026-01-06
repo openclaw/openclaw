@@ -6,6 +6,10 @@ import bolt from "@slack/bolt";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -379,6 +383,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.slashCommand ?? cfg.slack?.slashCommand,
   );
   const textLimit = resolveTextChunkLimit(cfg, "slack");
+  const mentionRegexes = buildMentionRegexes(cfg);
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.slack?.mediaMaxMb ?? 20) * 1024 * 1024;
 
@@ -581,7 +586,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const wasMentioned =
       opts.wasMentioned ??
       (!isDirectMessage &&
-        Boolean(botUserId && message.text?.includes(`<@${botUserId}>`)));
+        (Boolean(botUserId && message.text?.includes(`<@${botUserId}>`)) ||
+          matchesMentionPatterns(message.text ?? "", mentionRegexes)));
     const sender = await resolveUserName(message.user);
     const senderName = sender?.name ?? message.user;
     const allowList = normalizeAllowListLower(allowFrom);
@@ -600,9 +606,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(message.text ?? "");
+    const canDetectMention = Boolean(botUserId) || mentionRegexes.length > 0;
     if (
       isRoom &&
       channelConfig?.requireMention &&
+      canDetectMention &&
       !wasMentioned &&
       !shouldBypassMention
     ) {
