@@ -59,8 +59,3 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
 Runbook: [`docs/mac/remote.md`](https://docs.clawd.bot/mac/remote).
-
-## Legacy control channel
-
-Older builds experimented with a newline-delimited TCP control channel on the same port.
-That API is deprecated and should not be relied on. (Historical reference: [`docs/control-api.md`](https://docs.clawd.bot/control-api).)

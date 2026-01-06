@@ -66,7 +66,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Logging](https://docs.clawd.bot/logging)
 - [Dashboard](https://docs.clawd.bot/dashboard)
 - [Control UI](https://docs.clawd.bot/control-ui)
-- [Control API (legacy)](https://docs.clawd.bot/control-api)
 - [Remote access](https://docs.clawd.bot/remote)
 - [Remote gateway README](https://docs.clawd.bot/remote-gateway-readme)
 - [Tailscale](https://docs.clawd.bot/tailscale)
