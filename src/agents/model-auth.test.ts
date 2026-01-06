@@ -40,7 +40,19 @@ describe("getApiKeyForModel", () => {
         api: "openai-codex-responses",
       } as Model<Api>;
 
-      const apiKey = await getApiKeyForModel({ model });
+      const apiKey = await getApiKeyForModel({
+        model,
+        cfg: {
+          auth: {
+            profiles: {
+              "openai-codex:default": {
+                provider: "openai-codex",
+                mode: "oauth",
+              },
+            },
+          },
+        },
+      });
       expect(apiKey.apiKey).toBe(oauthFixture.access);
 
       const authProfiles = await fs.readFile(

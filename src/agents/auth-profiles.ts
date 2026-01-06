@@ -251,12 +251,17 @@ export function resolveAuthProfileOrder(params: {
   preferredProfile?: string;
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
-  const configuredOrder = cfg?.auth?.order?.[provider] ?? [];
+  const configuredOrder = cfg?.auth?.order?.[provider];
+  const explicitProfiles = cfg?.auth?.profiles
+    ? Object.entries(cfg.auth.profiles)
+        .filter(([, profile]) => profile.provider === provider)
+        .map(([profileId]) => profileId)
+    : [];
   const lastGood = store.lastGood?.[provider];
   const order =
-    configuredOrder.length > 0
-      ? configuredOrder
-      : listProfilesForProvider(store, provider);
+    configuredOrder ??
+    (explicitProfiles.length > 0 ? explicitProfiles : undefined);
+  if (!order) return [];
 
   const filtered = order.filter((profileId) => {
     const cred = store.profiles[profileId];
