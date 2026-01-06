@@ -35,6 +35,11 @@ import { readTelegramAllowFromStore } from "../telegram/pairing-store.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164, resolveUserPath, sleep } from "../utils.js";
 import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  GATEWAY_DAEMON_RUNTIME_OPTIONS,
+  type GatewayDaemonRuntime,
+} from "./daemon-runtime.js";
+import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
@@ -45,11 +50,6 @@ import {
   guardCancel,
   printWizardHeader,
 } from "./onboard-helpers.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "./daemon-runtime.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
