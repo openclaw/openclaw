@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
 import { Command } from "commander";
+import { describe, expect, it } from "vitest";
 
 describe("browser CLI --browser-profile flag", () => {
   it("parses --browser-profile from parent command options", () => {
@@ -17,7 +17,14 @@ describe("browser CLI --browser-profile flag", () => {
       capturedProfile = parent?.browserProfile;
     });
 
-    program.parse(["node", "test", "browser", "--browser-profile", "onasset", "status"]);
+    program.parse([
+      "node",
+      "test",
+      "browser",
+      "--browser-profile",
+      "onasset",
+      "status",
+    ]);
 
     expect(capturedProfile).toBe("onasset");
   });
