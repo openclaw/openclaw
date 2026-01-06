@@ -33,6 +33,7 @@ Inline text like `hello /status` is ignored.
 Text + native (when enabled):
 - `/help`
 - `/status`
+- `/stop`
 - `/restart`
 - `/activation mention|always` (groups only)
 - `/send on|off|inherit` (owner-only)
@@ -50,4 +51,5 @@ Text-only:
 
 - **Text commands** run in the normal chat session (DMs share `main`, groups have their own session).
 - **Native commands** use isolated sessions: `discord:slash:<userId>`, `slack:slash:<userId>`, `telegram:slash:<userId>`.
+- **`/stop`** targets the active chat session so it can abort the current run.
 - **Slack:** `slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).

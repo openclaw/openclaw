@@ -28,6 +28,12 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     textAliases: ["/status"],
   },
   {
+    key: "stop",
+    nativeName: "stop",
+    description: "Stop the current run.",
+    textAliases: ["/stop"],
+  },
+  {
     key: "restart",
     nativeName: "restart",
     description: "Restart Clawdbot.",

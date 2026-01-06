@@ -33,6 +33,7 @@ export type MsgContext = {
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
+  CommandTargetSessionKey?: string;
 };
 
 export type TemplateContext = MsgContext & {

@@ -1178,6 +1178,7 @@ function createDiscordNativeCommand(params: {
         From: isDirectMessage ? `discord:${user.id}` : `group:${channelId}`,
         To: `slash:${user.id}`,
         SessionKey: `agent:${route.agentId}:${sessionPrefix}:${user.id}`,
+        CommandTargetSessionKey: route.sessionKey,
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         GroupSubject: isGuild ? interaction.guild?.name : undefined,

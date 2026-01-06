@@ -30,6 +30,7 @@
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: flag error payloads and improve Bun socket error messaging. Thanks @emanuelst for PR #331.
+- Commands: add `/stop` to the registry and route native aborts to the active chat session. Thanks @nachoiacovino for PR #295.
 - Commands: unify native + text chat commands behind `commands.*` config (Discord/Slack/Telegram). Thanks @thewilloftheshadow for PR #275.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.

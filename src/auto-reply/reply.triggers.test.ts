@@ -81,6 +81,23 @@ describe("trigger handling", () => {
     });
   });
 
+  it("handles /stop without invoking the agent", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/stop",
+          From: "+1003",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("⚙️ Agent was aborted.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("restarts even with prefix/whitespace", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(

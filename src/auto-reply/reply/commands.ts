@@ -22,6 +22,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { triggerClawdbotRestart } from "../../infra/restart.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
 import { resolveHeartbeatSeconds } from "../../web/reconnect.js";
@@ -46,6 +47,21 @@ import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
+
+function resolveSessionEntryForKey(
+  store: Record<string, SessionEntry> | undefined,
+  sessionKey: string | undefined,
+) {
+  if (!store || !sessionKey) return {};
+  const direct = store[sessionKey];
+  if (direct) return { entry: direct, key: sessionKey };
+  const parsed = parseAgentSessionKey(sessionKey);
+  const legacyKey = parsed?.rest;
+  if (legacyKey && store[legacyKey]) {
+    return { entry: store[legacyKey], key: legacyKey };
+  }
+  return {};
+}
 
 export type CommandContext = {
   surface: string;
@@ -147,6 +163,29 @@ export function buildCommandContext(params: {
     from: auth.from,
     to: auth.to,
   };
+}
+
+function resolveAbortTarget(params: {
+  ctx: MsgContext;
+  sessionKey?: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+}) {
+  const targetSessionKey =
+    params.ctx.CommandTargetSessionKey?.trim() || params.sessionKey;
+  const { entry, key } = resolveSessionEntryForKey(
+    params.sessionStore,
+    targetSessionKey,
+  );
+  if (entry && key) return { entry, key, sessionId: entry.sessionId };
+  if (params.sessionEntry && params.sessionKey) {
+    return {
+      entry: params.sessionEntry,
+      key: params.sessionKey,
+      sessionId: params.sessionEntry.sessionId,
+    };
+  }
+  return { entry: undefined, key: targetSessionKey, sessionId: undefined };
 }
 
 export async function handleCommands(params: {
@@ -375,6 +414,36 @@ export async function handleCommands(params: {
     return { shouldContinue: false, reply: { text: statusText } };
   }
 
+  const stopRequested = command.commandBodyNormalized === "/stop";
+  if (allowTextCommands && stopRequested) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /stop from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    const abortTarget = resolveAbortTarget({
+      ctx,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+    });
+    if (abortTarget.sessionId) {
+      abortEmbeddedPiRun(abortTarget.sessionId);
+    }
+    if (abortTarget.entry && sessionStore && abortTarget.key) {
+      abortTarget.entry.abortedLastRun = true;
+      abortTarget.entry.updatedAt = Date.now();
+      sessionStore[abortTarget.key] = abortTarget.entry;
+      if (storePath) {
+        await saveSessionStore(storePath, sessionStore);
+      }
+    } else if (command.abortKey) {
+      setAbortMemory(command.abortKey, true);
+    }
+    return { shouldContinue: false, reply: { text: "⚙️ Agent was aborted." } };
+  }
+
   const compactRequested =
     command.commandBodyNormalized === "/compact" ||
     command.commandBodyNormalized.startsWith("/compact ");
@@ -455,10 +524,19 @@ export async function handleCommands(params: {
 
   const abortRequested = isAbortTrigger(command.rawBodyNormalized);
   if (allowTextCommands && abortRequested) {
-    if (sessionEntry && sessionStore && sessionKey) {
-      sessionEntry.abortedLastRun = true;
-      sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = sessionEntry;
+    const abortTarget = resolveAbortTarget({
+      ctx,
+      sessionKey,
+      sessionEntry,
+      sessionStore,
+    });
+    if (abortTarget.sessionId) {
+      abortEmbeddedPiRun(abortTarget.sessionId);
+    }
+    if (abortTarget.entry && sessionStore && abortTarget.key) {
+      abortTarget.entry.abortedLastRun = true;
+      abortTarget.entry.updatedAt = Date.now();
+      sessionStore[abortTarget.key] = abortTarget.entry;
       if (storePath) {
         await saveSessionStore(storePath, sessionStore);
       }

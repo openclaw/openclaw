@@ -16,12 +16,14 @@ describe("commands registry", () => {
   it("exposes native specs", () => {
     const specs = listNativeCommandSpecs();
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
   });
 
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/help")).toBe(true);
     expect(detection.regex.test("/status")).toBe(true);
+    expect(detection.regex.test("/stop")).toBe(true);
     expect(detection.regex.test("try /status")).toBe(false);
   });
 

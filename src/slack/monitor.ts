@@ -1562,6 +1562,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         MessageSid: command.trigger_id,
         Timestamp: Date.now(),
         SessionKey: `agent:${route.agentId}:${slashCommand.sessionPrefix}:${command.user_id}`,
+        CommandTargetSessionKey: route.sessionKey,
         AccountId: route.accountId,
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
