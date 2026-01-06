@@ -105,7 +105,7 @@ Legacy agent dir (pre multi-agent):
 
 Overrides:
 - OAuth dir (legacy import only): `CLAWDBOT_OAUTH_DIR`
-- Agent dir (legacy/default agent only): `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
+- Agent dir (default agent root override): `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
@@ -1023,7 +1023,7 @@ Notes:
   `google-generative-ai`
 - Use `authHeader: true` + `headers` for custom auth needs.
 - Override the agent config root with `CLAWDBOT_AGENT_DIR` (or `PI_CODING_AGENT_DIR`)
-  if you want `models.json` stored elsewhere.
+  if you want `models.json` stored elsewhere (default: `~/.clawdbot/agents/main/agent`).
 
 ### `session`
 
