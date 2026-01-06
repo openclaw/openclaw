@@ -31,6 +31,21 @@ import { extractReplyToTag } from "./reply-tags.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 
+const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+
+const isBunFetchSocketError = (message?: string) =>
+  Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
+
+const formatBunFetchSocketError = (message: string) => {
+  const trimmed = message.trim();
+  return [
+    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
+    "```",
+    trimmed || "Unknown error",
+    "```",
+  ].join("\n");
+};
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -403,19 +418,8 @@ export async function runReplyAgent(params: {
       : payloadArray.flatMap((payload) => {
           let text = payload.text;
 
-          if (payload.isError) {
-            // Handle Bun fetch socket connection error that may indicate a context length issue
-            // Error source: https://github.com/oven-sh/bun/blob/main/src/bun.js/webcore/fetch/FetchTasklet.zig
-            const isBunFetchSocketError =
-              text ===
-              "The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()";
-
-            if (isBunFetchSocketError) {
-              text = `⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:
-              \`\`\`
-              ${text || "Unknown error"}
-              \`\`\``;
-            }
+          if (payload.isError && text && isBunFetchSocketError(text)) {
+            text = formatBunFetchSocketError(text);
           }
 
           if (!text || !text.includes("HEARTBEAT_OK"))
