@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -63,6 +64,27 @@ function run(cmd, args) {
   });
 }
 
+function runSync(cmd, args) {
+  const result = spawnSync(cmd, args, {
+    cwd: uiDir,
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (result.signal) process.exit(1);
+  if ((result.status ?? 1) !== 0) process.exit(result.status ?? 1);
+}
+
+function depsInstalled() {
+  try {
+    const require = createRequire(path.join(uiDir, "package.json"));
+    require.resolve("vite");
+    require.resolve("dompurify");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const [, , action, ...rest] = process.argv;
 if (!action) {
   usage();
@@ -95,8 +117,14 @@ if (action !== "install" && !script) {
 
 if (runner.kind === "bun") {
   if (action === "install") run(runner.cmd, ["install", ...rest]);
-  else run(runner.cmd, ["run", script, ...rest]);
+  else {
+    if (!depsInstalled()) runSync(runner.cmd, ["install"]);
+    run(runner.cmd, ["run", script, ...rest]);
+  }
 } else {
   if (action === "install") run(runner.cmd, ["install", ...rest]);
-  else run(runner.cmd, ["run", script, ...rest]);
+  else {
+    if (!depsInstalled()) runSync(runner.cmd, ["install"]);
+    run(runner.cmd, ["run", script, ...rest]);
+  }
 }
