@@ -10,7 +10,12 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-import { loginAnthropic, type OAuthCredentials } from "@mariozechner/pi-ai";
+import {
+  loginAnthropic,
+  loginOpenAICodex,
+  type OAuthCredentials,
+  type OAuthProvider,
+} from "@mariozechner/pi-ai";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -54,6 +59,10 @@ import {
 import { setupProviders } from "./onboard-providers.js";
 import { promptRemoteGatewayConfig } from "./onboard-remote.js";
 import { setupSkills } from "./onboard-skills.js";
+import {
+  applyOpenAICodexModelDefault,
+  OPENAI_CODEX_DEFAULT_MODEL,
+} from "./openai-codex-model-default.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 type WizardSection =
@@ -234,6 +243,7 @@ async function promptAuthConfig(
       message: "Model/auth choice",
       options: [
         { value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" },
+        { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
         {
           value: "antigravity",
           label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
@@ -244,7 +254,7 @@ async function promptAuthConfig(
       ],
     }),
     runtime,
-  ) as "oauth" | "antigravity" | "apiKey" | "minimax" | "skip";
+  ) as "oauth" | "openai-codex" | "antigravity" | "apiKey" | "minimax" | "skip";
 
   let next = cfg;
 
@@ -284,6 +294,79 @@ async function promptAuthConfig(
       }
     } catch (err) {
       spin.stop("OAuth failed");
+      runtime.error(String(err));
+    }
+  } else if (authChoice === "openai-codex") {
+    const isRemote = isRemoteEnvironment();
+    note(
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, paste the redirect URL back here.",
+          ].join("\n")
+        : [
+            "Browser will open for OpenAI authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "OpenAI OAuth uses localhost:1455 for the callback.",
+          ].join("\n"),
+      "OpenAI Codex OAuth",
+    );
+    const spin = spinner();
+    spin.start("Starting OAuth flow…");
+    let manualCodePromise: Promise<string> | undefined;
+    try {
+      const creds = await loginOpenAICodex({
+        onAuth: async ({ url }) => {
+          if (isRemote) {
+            spin.message("OAuth URL ready (see below)…");
+            runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
+            manualCodePromise = text({
+              message: "Paste the redirect URL (or authorization code)",
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }).then((value) => String(guardCancel(value, runtime)));
+          } else {
+            spin.message("Complete sign-in in browser…");
+            await openUrl(url);
+            runtime.log(`Open: ${url}`);
+          }
+        },
+        onPrompt: async (prompt) => {
+          if (manualCodePromise) return manualCodePromise;
+          const code = guardCancel(
+            await text({
+              message: prompt.message,
+              placeholder: prompt.placeholder,
+              validate: (value) => (value?.trim() ? undefined : "Required"),
+            }),
+            runtime,
+          );
+          return String(code);
+        },
+        onProgress: (msg) => spin.message(msg),
+      });
+      spin.stop("OpenAI OAuth complete");
+      if (creds) {
+        await writeOAuthCredentials(
+          "openai-codex" as unknown as OAuthProvider,
+          creds,
+        );
+        next = applyAuthProfileConfig(next, {
+          profileId: "openai-codex:default",
+          provider: "openai-codex",
+          mode: "oauth",
+        });
+        const applied = applyOpenAICodexModelDefault(next);
+        next = applied.next;
+        if (applied.changed) {
+          note(
+            `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+            "Model configured",
+          );
+        }
+      }
+    } catch (err) {
+      spin.stop("OpenAI OAuth failed");
       runtime.error(String(err));
     }
   } else if (authChoice === "antigravity") {
