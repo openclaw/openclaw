@@ -289,11 +289,12 @@ Details: [Security guide](https://docs.clawdbot.com/security) · [Docker + sandb
 
 - Link the device: `pnpm clawdbot login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
+- If `whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
 ### [Telegram](https://docs.clawdbot.com/telegram)
 
 - Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
-- Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`), `telegram.allowFrom`, or `telegram.webhookUrl` as needed.
+- Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `telegram.allowFrom` or `telegram.webhookUrl` as needed.
 
 ```json5
 {
@@ -327,6 +328,7 @@ Details: [Security guide](https://docs.clawdbot.com/security) · [Docker + sandb
 ### [iMessage](https://docs.clawdbot.com/imessage)
 
 - macOS only; Messages must be signed in.
+- If `imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
 ### [WebChat](https://docs.clawdbot.com/webchat)
 
