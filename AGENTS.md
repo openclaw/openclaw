@@ -7,7 +7,9 @@
 
 ## Build, Test, and Development Commands
 - Install deps: `pnpm install`
-- Run CLI in dev: `pnpm clawdbot ...` (bun entry) or `pnpm dev` for `src/index.ts`.
+- Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
+- Run CLI in dev: `pnpm clawdbot ...` (bun) or `pnpm dev`.
+- Node remains supported for running built output (`dist/*`) and production installs.
 - Type-check/build: `pnpm build` (tsc)
 - Lint/format: `pnpm lint` (biome check), `pnpm format` (biome format)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
