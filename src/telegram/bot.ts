@@ -375,8 +375,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const body = formatAgentEnvelope({
       provider: "Telegram",
       from: isGroup
-        ? buildGroupLabel(msg, chatId)
-        : buildSenderLabel(msg, chatId),
+        ? buildGroupFromLabel(msg, chatId, senderId)
+        : buildSenderLabel(msg, senderId || chatId),
       timestamp: msg.date ? msg.date * 1000 : undefined,
       body: `${bodyText}${replySuffix}`,
     });
@@ -874,7 +874,10 @@ function buildSenderName(msg: TelegramMessage) {
   return name || undefined;
 }
 
-function buildSenderLabel(msg: TelegramMessage, chatId: number | string) {
+function buildSenderLabel(
+  msg: TelegramMessage,
+  senderId?: number | string,
+) {
   const name = buildSenderName(msg);
   const username = msg.from?.username ? `@${msg.from.username}` : undefined;
   let label = name;
@@ -883,14 +886,33 @@ function buildSenderLabel(msg: TelegramMessage, chatId: number | string) {
   } else if (!name && username) {
     label = username;
   }
-  const idPart = `id:${chatId}`;
-  return label ? `${label} ${idPart}` : idPart;
+  const normalizedSenderId =
+    senderId != null && `${senderId}`.trim()
+      ? `${senderId}`.trim()
+      : undefined;
+  const fallbackId =
+    normalizedSenderId ??
+    (msg.from?.id != null ? String(msg.from.id) : undefined);
+  const idPart = fallbackId ? `id:${fallbackId}` : undefined;
+  if (label && idPart) return `${label} ${idPart}`;
+  if (label) return label;
+  return idPart ?? "id:unknown";
 }
 
 function buildGroupLabel(msg: TelegramMessage, chatId: number | string) {
   const title = msg.chat?.title;
   if (title) return `${title} id:${chatId}`;
   return `group:${chatId}`;
+}
+
+function buildGroupFromLabel(
+  msg: TelegramMessage,
+  chatId: number | string,
+  senderId?: number | string,
+) {
+  const groupLabel = buildGroupLabel(msg, chatId);
+  const senderLabel = buildSenderLabel(msg, senderId);
+  return `${groupLabel} from ${senderLabel}`;
 }
 
 function hasBotMention(msg: TelegramMessage, botUsername: string) {
