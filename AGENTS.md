@@ -6,7 +6,9 @@
 - Docs: `docs/` (images, queue, Pi config). Built output lives in `dist/`.
 
 ## Build, Test, and Development Commands
+- Runtime baseline: Node **22+** (keep Node + Bun paths working).
 - Install deps: `pnpm install`
+- Also supported: `bun install` (keep `pnpm-lock.yaml` + Bun patching in sync when touching deps/patches).
 - Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
 - Run CLI in dev: `pnpm clawdbot ...` (bun) or `pnpm dev`.
 - Node remains supported for running built output (`dist/*`) and production installs.
@@ -38,6 +40,10 @@
 - When working on an issue: reference the issue in the changelog entry.
 - When merging a PR: leave a PR comment that explains exactly what we did.
 - When merging a PR from a new contributor: add their avatar to the README “Thanks to all clawtributors” thumbnail list.
+
+### PR Workflow (Review vs Land)
+- **Review mode (PR link only):** read `gh pr view/diff`; **do not** switch branches; **do not** change code.
+- **Landing mode:** create an integration branch from `main`, merge PR head into it, apply fixes, add changelog (+ thanks + PR #), commit, merge back to `main`, then `git switch main` (never stay on a topic branch after landing).
 
 ## Security & Configuration Tips
 - Web provider stores creds at `~/.clawdbot/credentials/`; rerun `clawdbot login` if logged out.
