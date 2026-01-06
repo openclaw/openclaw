@@ -385,20 +385,85 @@ def main():
         
         title = speech.get("title", "Untitled")
         text = extract_summary_text(speech)
+        duration = speech.get("duration", 0)
+        created = speech.get("created_at")
         
-        # Output data for agent to process and sync
-        output = {
-            "action": "sync_to_twenty",
-            "title": title,
-            "speech_id": args.speech_id,
-            "transcript_text": text,
-            "contact": args.contact,
-            "company": args.company,
-            "twenty_api_url": twenty_url
+        # Format date
+        date_str = ""
+        if created:
+            try:
+                dt = datetime.fromtimestamp(created)
+                date_str = dt.strftime("%Y-%m-%d %H:%M")
+            except:
+                date_str = str(created)
+        
+        # Build markdown note
+        markdown = f"""# Meeting Transcript: {title}
+
+**Date:** {date_str}
+**Duration:** {duration // 60}m {duration % 60}s
+**Source:** Otter.ai
+
+## Transcript
+
+{text[:3000]}{"..." if len(text) > 3000 else ""}
+
+---
+*Synced from Otter.ai on {datetime.now().strftime("%Y-%m-%d %H:%M")}*
+"""
+        
+        # Create note in Twenty
+        headers = {
+            "Authorization": f"Bearer {twenty_token}",
+            "Content-Type": "application/json"
         }
         
-        print(json.dumps(output, indent=2))
-        print("\n[Agent should process this and create Twenty CRM note]", file=sys.stderr)
+        note_data = {
+            "title": f"Transcript: {title}",
+            "bodyV2": {
+                "blocknote": "",
+                "markdown": markdown
+            }
+        }
+        
+        resp = requests.post(
+            f"{twenty_url}/rest/notes",
+            headers=headers,
+            json=note_data
+        )
+        
+        if resp.status_code >= 400:
+            print(f"Error creating note: {resp.status_code} {resp.text}", file=sys.stderr)
+            sys.exit(1)
+        
+        result = resp.json()
+        note_id = result.get("data", {}).get("createNote", {}).get("id")
+        
+        # Link to engagement if company specified
+        if args.company and note_id:
+            # Search for engagement by company name
+            eng_resp = requests.get(
+                f"{twenty_url}/rest/engagements",
+                headers=headers
+            )
+            if eng_resp.status_code == 200:
+                engagements = eng_resp.json().get("data", {}).get("engagements", [])
+                company_lower = args.company.lower()
+                for eng in engagements:
+                    if company_lower in eng.get("name", "").lower():
+                        # Link note to engagement
+                        requests.post(
+                            f"{twenty_url}/rest/noteTargets",
+                            headers=headers,
+                            json={"noteId": note_id, "engagementId": eng.get("id")}
+                        )
+                        print(f"Linked to engagement: {eng.get('name')}")
+                        break
+        
+        print(f"✅ Created note in Twenty: {title}")
+        print(f"   Note ID: {note_id}")
+        if args.json:
+            print(json.dumps({"note_id": note_id, "title": title}))
 
 
 if __name__ == "__main__":
