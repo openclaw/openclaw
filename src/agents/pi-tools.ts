@@ -9,6 +9,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import type { ClawdbotConfig } from "../config/config.js";
 import { detectMime } from "../media/mime.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import {
   type BashToolDefaults,
@@ -340,11 +341,6 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
   "sessions_spawn",
 ];
 
-function isSubagentSessionKey(sessionKey?: string): boolean {
-  const key = sessionKey?.trim().toLowerCase() ?? "";
-  return key.startsWith("subagent:");
-}
-
 function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
   const configured = cfg?.agent?.subagents?.tools;
   const deny = [
@@ -488,28 +484,31 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
-function normalizeSurface(surface?: string): string | undefined {
-  const trimmed = surface?.trim().toLowerCase();
+function normalizeMessageProvider(
+  messageProvider?: string,
+): string | undefined {
+  const trimmed = messageProvider?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
 }
 
-function shouldIncludeDiscordTool(surface?: string): boolean {
-  const normalized = normalizeSurface(surface);
+function shouldIncludeDiscordTool(messageProvider?: string): boolean {
+  const normalized = normalizeMessageProvider(messageProvider);
   if (!normalized) return false;
   return normalized === "discord" || normalized.startsWith("discord:");
 }
 
-function shouldIncludeSlackTool(surface?: string): boolean {
-  const normalized = normalizeSurface(surface);
+function shouldIncludeSlackTool(messageProvider?: string): boolean {
+  const normalized = normalizeMessageProvider(messageProvider);
   if (!normalized) return false;
   return normalized === "slack" || normalized.startsWith("slack:");
 }
 
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
-  surface?: string;
+  messageProvider?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  agentDir?: string;
   config?: ClawdbotConfig;
 }): AnyAgentTool[] {
   const bashToolName = "bash";
@@ -555,13 +554,14 @@ export function createClawdbotCodingTools(options?: {
     ...createClawdbotTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
-      agentSurface: options?.surface,
+      agentProvider: options?.messageProvider,
+      agentDir: options?.agentDir,
       sandboxed: !!sandbox,
       config: options?.config,
     }),
   ];
-  const allowDiscord = shouldIncludeDiscordTool(options?.surface);
-  const allowSlack = shouldIncludeSlackTool(options?.surface);
+  const allowDiscord = shouldIncludeDiscordTool(options?.messageProvider);
+  const allowSlack = shouldIncludeSlackTool(options?.messageProvider);
   const filtered = tools.filter((tool) => {
     if (tool.name === "discord") return allowDiscord;
     if (tool.name === "slack") return allowSlack;

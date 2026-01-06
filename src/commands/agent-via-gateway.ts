@@ -127,7 +127,7 @@ export async function agentViaGatewayCommand(
     sessionId: opts.sessionId,
   });
 
-  const channel = normalizeProvider(opts.provider) ?? "whatsapp";
+  const provider = normalizeProvider(opts.provider) ?? "whatsapp";
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
   const response = await callGateway<GatewayAgentResponse>({
@@ -139,7 +139,7 @@ export async function agentViaGatewayCommand(
       sessionKey,
       thinking: opts.thinking,
       deliver: Boolean(opts.deliver),
-      channel,
+      provider,
       timeout: timeoutSeconds,
       lane: opts.lane,
       extraSystemPrompt: opts.extraSystemPrompt,

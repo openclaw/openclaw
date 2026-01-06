@@ -20,6 +20,7 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createIMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
@@ -200,7 +201,7 @@ export async function monitorIMessageProvider(
       }
       const groupListPolicy = resolveProviderGroupPolicy({
         cfg,
-        surface: "imessage",
+        provider: "imessage",
         groupId,
       });
       if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
@@ -277,7 +278,7 @@ export async function monitorIMessageProvider(
       : true;
     const requireMention = resolveProviderGroupRequireMention({
       cfg,
-      surface: "imessage",
+      provider: "imessage",
       groupId,
       requireMentionOverride: opts.requireMention,
       overrideOrder: "before-config",
@@ -334,16 +335,28 @@ export async function monitorIMessageProvider(
       ? Date.parse(message.created_at)
       : undefined;
     const body = formatAgentEnvelope({
-      surface: "iMessage",
+      provider: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
       body: bodyText,
     });
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "imessage",
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: isGroup
+          ? String(chatId ?? "unknown")
+          : normalizeIMessageHandle(sender),
+      },
+    });
     const ctxPayload = {
       Body: body,
       From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
       To: chatTarget || `imessage:${sender}`,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (message.chat_name ?? undefined) : undefined,
       GroupMembers: isGroup
@@ -351,7 +364,7 @@ export async function monitorIMessageProvider(
         : undefined,
       SenderName: sender,
       SenderId: sender,
-      Surface: "imessage",
+      Provider: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
       Timestamp: createdAt,
       MediaPath: mediaPath,
@@ -363,15 +376,17 @@ export async function monitorIMessageProvider(
 
     if (!isGroup) {
       const sessionCfg = cfg.session;
-      const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-      const storePath = resolveStorePath(sessionCfg?.store);
+      const storePath = resolveStorePath(sessionCfg?.store, {
+        agentId: route.agentId,
+      });
       const to = chatTarget || sender;
       if (to) {
         await updateLastRoute({
           storePath,
-          sessionKey: mainKey,
-          channel: "imessage",
+          sessionKey: route.mainSessionKey,
+          provider: "imessage",
           to,
+          accountId: route.accountId,
         });
       }
     }

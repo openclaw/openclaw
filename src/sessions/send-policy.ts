@@ -17,7 +17,7 @@ function normalizeMatchValue(raw?: string | null) {
   return value ? value : undefined;
 }
 
-function deriveSurfaceFromKey(key?: string) {
+function deriveProviderFromKey(key?: string) {
   if (!key) return undefined;
   const parts = key.split(":").filter(Boolean);
   if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
@@ -37,7 +37,7 @@ export function resolveSendPolicy(params: {
   cfg: ClawdbotConfig;
   entry?: SessionEntry;
   sessionKey?: string;
-  surface?: string;
+  provider?: string;
   chatType?: SessionChatType;
 }): SessionSendPolicyDecision {
   const override = normalizeSendPolicy(params.entry?.sendPolicy);
@@ -46,11 +46,11 @@ export function resolveSendPolicy(params: {
   const policy = params.cfg.session?.sendPolicy;
   if (!policy) return "allow";
 
-  const surface =
-    normalizeMatchValue(params.surface) ??
-    normalizeMatchValue(params.entry?.surface) ??
-    normalizeMatchValue(params.entry?.lastChannel) ??
-    deriveSurfaceFromKey(params.sessionKey);
+  const provider =
+    normalizeMatchValue(params.provider) ??
+    normalizeMatchValue(params.entry?.provider) ??
+    normalizeMatchValue(params.entry?.lastProvider) ??
+    deriveProviderFromKey(params.sessionKey);
   const chatType =
     normalizeMatchValue(params.chatType ?? params.entry?.chatType) ??
     normalizeMatchValue(deriveChatTypeFromKey(params.sessionKey));
@@ -61,11 +61,11 @@ export function resolveSendPolicy(params: {
     if (!rule) continue;
     const action = normalizeSendPolicy(rule.action) ?? "allow";
     const match = rule.match ?? {};
-    const matchSurface = normalizeMatchValue(match.surface);
+    const matchProvider = normalizeMatchValue(match.provider);
     const matchChatType = normalizeMatchValue(match.chatType);
     const matchPrefix = normalizeMatchValue(match.keyPrefix);
 
-    if (matchSurface && matchSurface !== surface) continue;
+    if (matchProvider && matchProvider !== provider) continue;
     if (matchChatType && matchChatType !== chatType) continue;
     if (matchPrefix && !sessionKey.startsWith(matchPrefix)) continue;
     if (action === "deny") return "deny";

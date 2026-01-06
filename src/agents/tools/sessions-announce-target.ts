@@ -7,9 +7,12 @@ export async function resolveAnnounceTarget(params: {
   displayKey: string;
 }): Promise<AnnounceTarget | null> {
   const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  if (parsed) return parsed;
   const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
-  if (parsedDisplay) return parsedDisplay;
+  const fallback = parsed ?? parsedDisplay ?? null;
+
+  // Most providers can derive (provider,to) from the session key directly.
+  // WhatsApp is special: we may need lastAccountId from the session store.
+  if (fallback && fallback.provider !== "whatsapp") return fallback;
 
   try {
     const list = (await callGateway({
@@ -24,13 +27,17 @@ export async function resolveAnnounceTarget(params: {
     const match =
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
-    const channel =
-      typeof match?.lastChannel === "string" ? match.lastChannel : undefined;
+    const provider =
+      typeof match?.lastProvider === "string" ? match.lastProvider : undefined;
     const to = typeof match?.lastTo === "string" ? match.lastTo : undefined;
-    if (channel && to) return { channel, to };
+    const accountId =
+      typeof match?.lastAccountId === "string"
+        ? match.lastAccountId
+        : undefined;
+    if (provider && to) return { provider, to, accountId };
   } catch {
     // ignore
   }
 
-  return null;
+  return fallback;
 }

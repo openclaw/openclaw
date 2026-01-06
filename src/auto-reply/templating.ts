@@ -3,6 +3,8 @@ export type MsgContext = {
   From?: string;
   To?: string;
   SessionKey?: string;
+  /** Provider account id (multi-account). */
+  AccountId?: string;
   MessageSid?: string;
   ReplyToId?: string;
   ReplyToBody?: string;
@@ -24,7 +26,8 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
-  Surface?: string;
+  /** Provider label (whatsapp|telegram|discord|imessage|...). */
+  Provider?: string;
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
 };

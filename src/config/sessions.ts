@@ -6,6 +6,13 @@ import path from "node:path";
 import type { Skill } from "@mariozechner/pi-coding-agent";
 import JSON5 from "json5";
 import type { MsgContext } from "../auto-reply/templating.js";
+import {
+  buildAgentMainSessionKey,
+  DEFAULT_AGENT_ID,
+  DEFAULT_MAIN_KEY,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
 
@@ -59,11 +66,11 @@ export type SessionEntry = {
   contextTokens?: number;
   compactionCount?: number;
   displayName?: string;
-  surface?: string;
+  provider?: string;
   subject?: string;
   room?: string;
   space?: string;
-  lastChannel?:
+  lastProvider?:
     | "whatsapp"
     | "telegram"
     | "discord"
@@ -72,13 +79,14 @@ export type SessionEntry = {
     | "imessage"
     | "webchat";
   lastTo?: string;
+  lastAccountId?: string;
   skillsSnapshot?: SessionSkillSnapshot;
 };
 
 export type GroupKeyResolution = {
   key: string;
   legacyKey?: string;
-  surface?: string;
+  provider?: string;
   id?: string;
   chatType?: SessionChatType;
 };
@@ -89,26 +97,45 @@ export type SessionSkillSnapshot = {
   resolvedSkills?: Skill[];
 };
 
+function resolveAgentSessionsDir(
+  agentId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  const root = resolveStateDir(env, homedir);
+  const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
+  return path.join(root, "agents", id, "sessions");
+}
+
 export function resolveSessionTranscriptsDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
 ): string {
-  return path.join(resolveStateDir(env, homedir), "sessions");
+  return resolveAgentSessionsDir(DEFAULT_AGENT_ID, env, homedir);
 }
 
-export function resolveDefaultSessionStorePath(): string {
-  return path.join(resolveSessionTranscriptsDir(), "sessions.json");
+export function resolveDefaultSessionStorePath(agentId?: string): string {
+  return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }
 export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 60;
 
-export function resolveSessionTranscriptPath(sessionId: string): string {
-  return path.join(resolveSessionTranscriptsDir(), `${sessionId}.jsonl`);
+export function resolveSessionTranscriptPath(
+  sessionId: string,
+  agentId?: string,
+): string {
+  return path.join(resolveAgentSessionsDir(agentId), `${sessionId}.jsonl`);
 }
 
-export function resolveStorePath(store?: string) {
-  if (!store) return resolveDefaultSessionStorePath();
+export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
+  const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
+  if (!store) return resolveDefaultSessionStorePath(agentId);
+  if (store.includes("{agentId}")) {
+    return path.resolve(
+      store.replaceAll("{agentId}", agentId).replace("~", os.homedir()),
+    );
+  }
   if (store.startsWith("~"))
     return path.resolve(store.replace("~", os.homedir()));
   return path.resolve(store);
@@ -116,9 +143,32 @@ export function resolveStorePath(store?: string) {
 
 export function resolveMainSessionKey(cfg?: {
   session?: { scope?: SessionScope; mainKey?: string };
+  routing?: { defaultAgentId?: string };
 }): string {
   if (cfg?.session?.scope === "global") return "global";
-  return "main";
+  const agentId = normalizeAgentId(
+    cfg?.routing?.defaultAgentId ?? DEFAULT_AGENT_ID,
+  );
+  const mainKey =
+    (cfg?.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  return buildAgentMainSessionKey({ agentId, mainKey });
+}
+
+export function resolveAgentIdFromSessionKey(
+  sessionKey?: string | null,
+): string {
+  const parsed = parseAgentSessionKey(sessionKey);
+  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+}
+
+export function resolveAgentMainSessionKey(params: {
+  cfg?: { session?: { mainKey?: string } };
+  agentId: string;
+}): string {
+  const mainKey =
+    (params.cfg?.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() ||
+    DEFAULT_MAIN_KEY;
+  return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
 function normalizeGroupLabel(raw?: string) {
@@ -137,14 +187,14 @@ function shortenGroupId(value?: string) {
 }
 
 export function buildGroupDisplayName(params: {
-  surface?: string;
+  provider?: string;
   subject?: string;
   room?: string;
   space?: string;
   id?: string;
   key: string;
 }) {
-  const surfaceKey = (params.surface?.trim().toLowerCase() || "group").trim();
+  const providerKey = (params.provider?.trim().toLowerCase() || "group").trim();
   const room = params.room?.trim();
   const space = params.space?.trim();
   const subject = params.subject?.trim();
@@ -169,7 +219,7 @@ export function buildGroupDisplayName(params: {
   ) {
     token = `g-${token}`;
   }
-  return token ? `${surfaceKey}:${token}` : surfaceKey;
+  return token ? `${providerKey}:${token}` : providerKey;
 }
 
 export function resolveGroupSessionKey(
@@ -186,13 +236,13 @@ export function resolveGroupSessionKey(
     from.includes(":channel:");
   if (!isGroup) return null;
 
-  const surfaceHint = ctx.Surface?.trim().toLowerCase();
+  const providerHint = ctx.Provider?.trim().toLowerCase();
   const hasLegacyGroupPrefix = from.startsWith("group:");
   const raw = (
     hasLegacyGroupPrefix ? from.slice("group:".length) : from
   ).trim();
 
-  let surface: string | undefined;
+  let provider: string | undefined;
   let kind: "group" | "channel" | undefined;
   let id = "";
 
@@ -203,7 +253,7 @@ export function resolveGroupSessionKey(
 
   const parseParts = (parts: string[]) => {
     if (parts.length >= 2 && GROUP_SURFACES.has(parts[0])) {
-      surface = parts[0];
+      provider = parts[0];
       if (parts.length >= 3) {
         const kindCandidate = parts[1];
         if (["group", "channel"].includes(kindCandidate)) {
@@ -239,8 +289,8 @@ export function resolveGroupSessionKey(
     }
   }
 
-  const resolvedSurface = surface ?? surfaceHint;
-  if (!resolvedSurface) {
+  const resolvedProvider = provider ?? providerHint;
+  if (!resolvedProvider) {
     const legacy = hasLegacyGroupPrefix ? `group:${raw}` : `group:${from}`;
     return {
       key: legacy,
@@ -251,7 +301,7 @@ export function resolveGroupSessionKey(
   }
 
   const resolvedKind = kind === "channel" ? "channel" : "group";
-  const key = `${resolvedSurface}:${resolvedKind}:${id || raw || from}`;
+  const key = `${resolvedProvider}:${resolvedKind}:${id || raw || from}`;
   let legacyKey: string | undefined;
   if (hasLegacyGroupPrefix || from.includes("@g.us")) {
     legacyKey = `group:${id || raw || from}`;
@@ -260,7 +310,7 @@ export function resolveGroupSessionKey(
   return {
     key,
     legacyKey,
-    surface: resolvedSurface,
+    provider: resolvedProvider,
     id: id || raw || from,
     chatType: resolvedKind === "channel" ? "room" : "group",
   };
@@ -323,10 +373,11 @@ export async function saveSessionStore(
 export async function updateLastRoute(params: {
   storePath: string;
   sessionKey: string;
-  channel: SessionEntry["lastChannel"];
+  provider: SessionEntry["lastProvider"];
   to?: string;
+  accountId?: string;
 }) {
-  const { storePath, sessionKey, channel, to } = params;
+  const { storePath, sessionKey, provider, to, accountId } = params;
   const store = loadSessionStore(storePath);
   const existing = store[sessionKey];
   const now = Date.now();
@@ -349,13 +400,16 @@ export async function updateLastRoute(params: {
     contextTokens: existing?.contextTokens,
     displayName: existing?.displayName,
     chatType: existing?.chatType,
-    surface: existing?.surface,
+    provider: existing?.provider,
     subject: existing?.subject,
     room: existing?.room,
     space: existing?.space,
     skillsSnapshot: existing?.skillsSnapshot,
-    lastChannel: channel,
+    lastProvider: provider,
     lastTo: to?.trim() ? to.trim() : undefined,
+    lastAccountId: accountId?.trim()
+      ? accountId.trim()
+      : existing?.lastAccountId,
   };
   store[sessionKey] = next;
   await saveSessionStore(storePath, store);
@@ -384,12 +438,16 @@ export function resolveSessionKey(
   if (explicit) return explicit;
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") return raw;
-  // Default to a single shared direct-chat session called "main"; groups stay isolated.
-  const canonical = (mainKey ?? "main").trim() || "main";
+  const canonicalMainKey =
+    (mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  const canonical = buildAgentMainSessionKey({
+    agentId: DEFAULT_AGENT_ID,
+    mainKey: canonicalMainKey,
+  });
   const isGroup =
     raw.startsWith("group:") ||
     raw.includes(":group:") ||
     raw.includes(":channel:");
   if (!isGroup) return canonical;
-  return raw;
+  return `agent:${DEFAULT_AGENT_ID}:${raw}`;
 }

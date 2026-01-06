@@ -482,7 +482,7 @@ export async function startGatewayServer(
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    channel:
+    provider:
       | "last"
       | "whatsapp"
       | "telegram"
@@ -514,7 +514,7 @@ export async function startGatewayServer(
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,
         deliver: value.deliver,
-        channel: value.channel,
+        provider: value.provider,
         to: value.to,
       },
       state: { nextRunAtMs: now },

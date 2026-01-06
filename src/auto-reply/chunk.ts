@@ -4,7 +4,7 @@
 
 import type { ClawdbotConfig } from "../config/config.js";
 
-export type TextChunkSurface =
+export type TextChunkProvider =
   | "whatsapp"
   | "telegram"
   | "discord"
@@ -13,7 +13,7 @@ export type TextChunkSurface =
   | "imessage"
   | "webchat";
 
-const DEFAULT_CHUNK_LIMIT_BY_SURFACE: Record<TextChunkSurface, number> = {
+const DEFAULT_CHUNK_LIMIT_BY_PROVIDER: Record<TextChunkProvider, number> = {
   whatsapp: 4000,
   telegram: 4000,
   discord: 2000,
@@ -25,22 +25,22 @@ const DEFAULT_CHUNK_LIMIT_BY_SURFACE: Record<TextChunkSurface, number> = {
 
 export function resolveTextChunkLimit(
   cfg: ClawdbotConfig | undefined,
-  surface?: TextChunkSurface,
+  provider?: TextChunkProvider,
 ): number {
-  const surfaceOverride = (() => {
-    if (!surface) return undefined;
-    if (surface === "whatsapp") return cfg?.whatsapp?.textChunkLimit;
-    if (surface === "telegram") return cfg?.telegram?.textChunkLimit;
-    if (surface === "discord") return cfg?.discord?.textChunkLimit;
-    if (surface === "slack") return cfg?.slack?.textChunkLimit;
-    if (surface === "signal") return cfg?.signal?.textChunkLimit;
-    if (surface === "imessage") return cfg?.imessage?.textChunkLimit;
+  const providerOverride = (() => {
+    if (!provider) return undefined;
+    if (provider === "whatsapp") return cfg?.whatsapp?.textChunkLimit;
+    if (provider === "telegram") return cfg?.telegram?.textChunkLimit;
+    if (provider === "discord") return cfg?.discord?.textChunkLimit;
+    if (provider === "slack") return cfg?.slack?.textChunkLimit;
+    if (provider === "signal") return cfg?.signal?.textChunkLimit;
+    if (provider === "imessage") return cfg?.imessage?.textChunkLimit;
     return undefined;
   })();
-  if (typeof surfaceOverride === "number" && surfaceOverride > 0) {
-    return surfaceOverride;
+  if (typeof providerOverride === "number" && providerOverride > 0) {
+    return providerOverride;
   }
-  if (surface) return DEFAULT_CHUNK_LIMIT_BY_SURFACE[surface];
+  if (provider) return DEFAULT_CHUNK_LIMIT_BY_PROVIDER[provider];
   return 4000;
 }
 

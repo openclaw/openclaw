@@ -45,32 +45,41 @@ describe("web logout", () => {
     "deletes cached credentials when present",
     { timeout: 15_000 },
     async () => {
-      const credsDir = path.join(tmpDir, ".clawdbot", "credentials");
-      fs.mkdirSync(credsDir, { recursive: true });
-      fs.writeFileSync(path.join(credsDir, "creds.json"), "{}");
-      const sessionsPath = path.join(
-        tmpDir,
-        ".clawdbot",
-        "sessions",
-        "sessions.json",
-      );
-      fs.mkdirSync(path.dirname(sessionsPath), { recursive: true });
-      fs.writeFileSync(sessionsPath, "{}");
       const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
 
       expect(WA_WEB_AUTH_DIR.startsWith(tmpDir)).toBe(true);
-      const result = await logoutWeb(runtime as never);
+      fs.mkdirSync(WA_WEB_AUTH_DIR, { recursive: true });
+      fs.writeFileSync(path.join(WA_WEB_AUTH_DIR, "creds.json"), "{}");
+      const result = await logoutWeb({ runtime: runtime as never });
 
       expect(result).toBe(true);
-      expect(fs.existsSync(credsDir)).toBe(false);
-      expect(fs.existsSync(sessionsPath)).toBe(false);
+      expect(fs.existsSync(WA_WEB_AUTH_DIR)).toBe(false);
     },
   );
 
   it("no-ops when nothing to delete", { timeout: 15_000 }, async () => {
     const { logoutWeb } = await import("./session.js");
-    const result = await logoutWeb(runtime as never);
+    const result = await logoutWeb({ runtime: runtime as never });
     expect(result).toBe(false);
     expect(runtime.log).toHaveBeenCalled();
+  });
+
+  it("keeps shared oauth.json when using legacy auth dir", async () => {
+    const { logoutWeb } = await import("./session.js");
+    const credsDir = path.join(tmpDir, ".clawdbot", "credentials");
+    fs.mkdirSync(credsDir, { recursive: true });
+    fs.writeFileSync(path.join(credsDir, "creds.json"), "{}");
+    fs.writeFileSync(path.join(credsDir, "oauth.json"), '{"token":true}');
+    fs.writeFileSync(path.join(credsDir, "session-abc.json"), "{}");
+
+    const result = await logoutWeb({
+      authDir: credsDir,
+      isLegacyAuthDir: true,
+      runtime: runtime as never,
+    });
+    expect(result).toBe(true);
+    expect(fs.existsSync(path.join(credsDir, "oauth.json"))).toBe(true);
+    expect(fs.existsSync(path.join(credsDir, "creds.json"))).toBe(false);
+    expect(fs.existsSync(path.join(credsDir, "session-abc.json"))).toBe(false);
   });
 });

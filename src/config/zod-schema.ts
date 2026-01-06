@@ -130,7 +130,7 @@ const SessionSchema = z
               action: z.union([z.literal("allow"), z.literal("deny")]),
               match: z
                 .object({
-                  surface: z.string().optional(),
+                  provider: z.string().optional(),
                   chatType: z
                     .union([
                       z.literal("direct"),
@@ -240,8 +240,8 @@ const RoutingSchema = z
         z.object({
           agentId: z.string(),
           match: z.object({
-            surface: z.string(),
-            surfaceAccountId: z.string().optional(),
+            provider: z.string(),
+            accountId: z.string().optional(),
             peer: z
               .object({
                 kind: z.union([
@@ -261,7 +261,7 @@ const RoutingSchema = z
     queue: z
       .object({
         mode: QueueModeSchema.optional(),
-        bySurface: QueueModeBySurfaceSchema,
+        byProvider: QueueModeBySurfaceSchema,
         debounceMs: z.number().int().nonnegative().optional(),
         cap: z.number().int().positive().optional(),
         drop: QueueDropSchema.optional(),
@@ -288,7 +288,7 @@ const HookMappingSchema = z
     messageTemplate: z.string().optional(),
     textTemplate: z.string().optional(),
     deliver: z.boolean().optional(),
-    channel: z
+    provider: z
       .union([
         z.literal("last"),
         z.literal("whatsapp"),

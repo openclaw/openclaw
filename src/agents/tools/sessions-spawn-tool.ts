@@ -4,6 +4,11 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -26,7 +31,7 @@ const SessionsSpawnToolSchema = Type.Object({
 
 function buildSubagentSystemPrompt(params: {
   requesterSessionKey?: string;
-  requesterSurface?: string;
+  requesterProvider?: string;
   childSessionKey: string;
   label?: string;
 }) {
@@ -36,8 +41,8 @@ function buildSubagentSystemPrompt(params: {
     params.requesterSessionKey
       ? `Requester session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterSurface
-      ? `Requester surface: ${params.requesterSurface}.`
+    params.requesterProvider
+      ? `Requester provider: ${params.requesterProvider}.`
       : undefined,
     `Your session: ${params.childSessionKey}.`,
     "Run the task. Provide a clear final answer (plain text).",
@@ -48,7 +53,7 @@ function buildSubagentSystemPrompt(params: {
 
 function buildSubagentAnnouncePrompt(params: {
   requesterSessionKey?: string;
-  requesterSurface?: string;
+  requesterProvider?: string;
   announceChannel: string;
   task: string;
   subagentReply?: string;
@@ -58,16 +63,16 @@ function buildSubagentAnnouncePrompt(params: {
     params.requesterSessionKey
       ? `Requester session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterSurface
-      ? `Requester surface: ${params.requesterSurface}.`
+    params.requesterProvider
+      ? `Requester provider: ${params.requesterProvider}.`
       : undefined,
-    `Post target surface: ${params.announceChannel}.`,
+    `Post target provider: ${params.announceChannel}.`,
     `Original task: ${params.task}`,
     params.subagentReply
       ? `Sub-agent result: ${params.subagentReply}`
       : "Sub-agent result: (not available).",
     'Reply exactly "ANNOUNCE_SKIP" to stay silent.',
-    "Any other reply will be posted to the requester chat surface.",
+    "Any other reply will be posted to the requester chat provider.",
   ].filter(Boolean);
   return lines.join("\n");
 }
@@ -76,7 +81,7 @@ async function runSubagentAnnounceFlow(params: {
   childSessionKey: string;
   childRunId: string;
   requesterSessionKey: string;
-  requesterSurface?: string;
+  requesterProvider?: string;
   requesterDisplayKey: string;
   task: string;
   timeoutMs: number;
@@ -109,8 +114,8 @@ async function runSubagentAnnounceFlow(params: {
 
     const announcePrompt = buildSubagentAnnouncePrompt({
       requesterSessionKey: params.requesterSessionKey,
-      requesterSurface: params.requesterSurface,
-      announceChannel: announceTarget.channel,
+      requesterProvider: params.requesterProvider,
+      announceChannel: announceTarget.provider,
       task: params.task,
       subagentReply: reply,
     });
@@ -135,7 +140,8 @@ async function runSubagentAnnounceFlow(params: {
       params: {
         to: announceTarget.to,
         message: announceReply.trim(),
-        provider: announceTarget.channel,
+        provider: announceTarget.provider,
+        accountId: announceTarget.accountId,
         idempotencyKey: crypto.randomUUID(),
       },
       timeoutMs: 10_000,
@@ -159,7 +165,7 @@ async function runSubagentAnnounceFlow(params: {
 
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
-  agentSurface?: string;
+  agentProvider?: string;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -188,7 +194,7 @@ export function createSessionsSpawnTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       if (
         typeof requesterSessionKey === "string" &&
-        requesterSessionKey.trim().toLowerCase().startsWith("subagent:")
+        isSubagentSessionKey(requesterSessionKey)
       ) {
         return jsonResult({
           status: "forbidden",
@@ -208,7 +214,10 @@ export function createSessionsSpawnTool(opts?: {
         mainKey,
       });
 
-      const childSessionKey = `subagent:${crypto.randomUUID()}`;
+      const requesterAgentId = normalizeAgentId(
+        parseAgentSessionKey(requesterInternalKey)?.agentId,
+      );
+      const childSessionKey = `agent:${requesterAgentId}:subagent:${crypto.randomUUID()}`;
       if (opts?.sandboxed === true) {
         try {
           await callGateway({
@@ -222,7 +231,7 @@ export function createSessionsSpawnTool(opts?: {
       }
       const childSystemPrompt = buildSubagentSystemPrompt({
         requesterSessionKey,
-        requesterSurface: opts?.agentSurface,
+        requesterProvider: opts?.agentProvider,
         childSessionKey,
         label: label || undefined,
       });
@@ -265,7 +274,7 @@ export function createSessionsSpawnTool(opts?: {
           childSessionKey,
           childRunId,
           requesterSessionKey: requesterInternalKey,
-          requesterSurface: opts?.agentSurface,
+          requesterProvider: opts?.agentProvider,
           requesterDisplayKey,
           task,
           timeoutMs: 30_000,
@@ -311,7 +320,7 @@ export function createSessionsSpawnTool(opts?: {
           childSessionKey,
           childRunId,
           requesterSessionKey: requesterInternalKey,
-          requesterSurface: opts?.agentSurface,
+          requesterProvider: opts?.agentProvider,
           requesterDisplayKey,
           task,
           timeoutMs: 30_000,
@@ -329,7 +338,7 @@ export function createSessionsSpawnTool(opts?: {
           childSessionKey,
           childRunId,
           requesterSessionKey: requesterInternalKey,
-          requesterSurface: opts?.agentSurface,
+          requesterProvider: opts?.agentProvider,
           requesterDisplayKey,
           task,
           timeoutMs: 30_000,
@@ -350,7 +359,7 @@ export function createSessionsSpawnTool(opts?: {
         childSessionKey,
         childRunId,
         requesterSessionKey: requesterInternalKey,
-        requesterSurface: opts?.agentSurface,
+        requesterProvider: opts?.agentProvider,
         requesterDisplayKey,
         task,
         timeoutMs: 30_000,

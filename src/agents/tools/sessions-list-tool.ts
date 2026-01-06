@@ -4,6 +4,11 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
 import {
@@ -31,8 +36,9 @@ type SessionListRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   sendPolicy?: string;
-  lastChannel?: string;
+  lastProvider?: string;
   lastTo?: string;
+  lastAccountId?: string;
   transcriptPath?: string;
   messages?: unknown[];
 };
@@ -76,7 +82,7 @@ export function createSessionsListTool(opts?: {
         opts?.sandboxed === true &&
         visibility === "spawned" &&
         requesterInternalKey &&
-        !requesterInternalKey.toLowerCase().startsWith("subagent:");
+        !isSubagentSessionKey(requesterInternalKey);
 
       const kindsRaw = readStringArrayParam(params, "kinds")?.map((value) =>
         value.trim().toLowerCase(),
@@ -120,12 +126,43 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
+      const routingA2A = cfg.routing?.agentToAgent;
+      const a2aEnabled = routingA2A?.enabled === true;
+      const allowPatterns = Array.isArray(routingA2A?.allow)
+        ? routingA2A.allow
+        : [];
+      const matchesAllow = (agentId: string) => {
+        if (allowPatterns.length === 0) return true;
+        return allowPatterns.some((pattern) => {
+          const raw = String(pattern ?? "").trim();
+          if (!raw) return false;
+          if (raw === "*") return true;
+          if (!raw.includes("*")) return raw === agentId;
+          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
+          return re.test(agentId);
+        });
+      };
+      const requesterAgentId = normalizeAgentId(
+        parseAgentSessionKey(requesterInternalKey)?.agentId,
+      );
       const rows: SessionListRow[] = [];
 
       for (const entry of sessions) {
         if (!entry || typeof entry !== "object") continue;
         const key = typeof entry.key === "string" ? entry.key : "";
         if (!key) continue;
+
+        const entryAgentId = normalizeAgentId(
+          parseAgentSessionKey(key)?.agentId,
+        );
+        const crossAgent = entryAgentId !== requesterAgentId;
+        if (crossAgent) {
+          if (!a2aEnabled) continue;
+          if (!matchesAllow(requesterAgentId) || !matchesAllow(entryAgentId))
+            continue;
+        }
+
         if (key === "unknown") continue;
         if (key === "global" && alias !== "global") continue;
 
@@ -140,15 +177,21 @@ export function createSessionsListTool(opts?: {
           mainKey,
         });
 
-        const surface =
-          typeof entry.surface === "string" ? entry.surface : undefined;
-        const lastChannel =
-          typeof entry.lastChannel === "string" ? entry.lastChannel : undefined;
-        const provider = deriveProvider({
+        const entryProvider =
+          typeof entry.provider === "string" ? entry.provider : undefined;
+        const lastProvider =
+          typeof entry.lastProvider === "string"
+            ? entry.lastProvider
+            : undefined;
+        const lastAccountId =
+          typeof entry.lastAccountId === "string"
+            ? entry.lastAccountId
+            : undefined;
+        const derivedProvider = deriveProvider({
           key,
           kind,
-          surface,
-          lastChannel,
+          provider: entryProvider,
+          lastProvider,
         });
 
         const sessionId =
@@ -161,7 +204,7 @@ export function createSessionsListTool(opts?: {
         const row: SessionListRow = {
           key: displayKey,
           kind,
-          provider,
+          provider: derivedProvider,
           displayName:
             typeof entry.displayName === "string"
               ? entry.displayName
@@ -196,8 +239,9 @@ export function createSessionsListTool(opts?: {
               : undefined,
           sendPolicy:
             typeof entry.sendPolicy === "string" ? entry.sendPolicy : undefined,
-          lastChannel,
+          lastProvider,
           lastTo: typeof entry.lastTo === "string" ? entry.lastTo : undefined,
+          lastAccountId,
           transcriptPath,
         };
 

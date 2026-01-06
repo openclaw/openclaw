@@ -47,8 +47,8 @@ import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export type CommandContext = {
-  surface: string;
-  isWhatsAppSurface: boolean;
+  provider: string;
+  isWhatsAppProvider: boolean;
   ownerList: string[];
   isAuthorizedSender: boolean;
   senderE164?: string;
@@ -123,7 +123,7 @@ export function buildCommandContext(params: {
     cfg,
     commandAuthorized: params.commandAuthorized,
   });
-  const surface = (ctx.Surface ?? "").trim().toLowerCase();
+  const provider = (ctx.Provider ?? "").trim().toLowerCase();
   const abortKey =
     sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
@@ -132,8 +132,8 @@ export function buildCommandContext(params: {
     : rawBodyNormalized;
 
   return {
-    surface,
-    isWhatsAppSurface: auth.isWhatsAppSurface,
+    provider,
+    isWhatsAppProvider: auth.isWhatsAppProvider,
     ownerList: auth.ownerList,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderE164: auth.senderE164,
@@ -220,14 +220,14 @@ export async function handleCommands(params: {
       ? normalizeE164(command.senderE164)
       : "";
     const isActivationOwner =
-      !command.isWhatsAppSurface || activationOwnerList.length === 0
+      !command.isWhatsAppProvider || activationOwnerList.length === 0
         ? command.isAuthorizedSender
         : Boolean(activationSenderE164) &&
           activationOwnerList.includes(activationSenderE164);
 
     if (
       !command.isAuthorizedSender ||
-      (command.isWhatsAppSurface && !isActivationOwner)
+      (command.isWhatsAppProvider && !isActivationOwner)
     ) {
       logVerbose(
         `Ignoring /activation from unauthorized sender in group: ${command.senderE164 || "<unknown>"}`,
@@ -402,7 +402,7 @@ export async function handleCommands(params: {
     const result = await compactEmbeddedPiSession({
       sessionId,
       sessionKey,
-      surface: command.surface,
+      messageProvider: command.provider,
       sessionFile: resolveSessionTranscriptPath(sessionId),
       workspaceDir,
       config: cfg,
@@ -469,7 +469,7 @@ export async function handleCommands(params: {
     cfg,
     entry: sessionEntry,
     sessionKey,
-    surface: sessionEntry?.surface ?? command.surface,
+    provider: sessionEntry?.provider ?? command.provider,
     chatType: sessionEntry?.chatType,
   });
   if (sendPolicy === "deny") {

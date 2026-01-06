@@ -4,6 +4,11 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -32,7 +37,7 @@ const SessionsSendToolSchema = Type.Object({
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentSurface?: string;
+  agentProvider?: string;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {
@@ -67,7 +72,7 @@ export function createSessionsSendTool(opts?: {
         opts?.sandboxed === true &&
         visibility === "spawned" &&
         requesterInternalKey &&
-        !requesterInternalKey.toLowerCase().startsWith("subagent:");
+        !isSubagentSessionKey(requesterInternalKey);
       if (restrictToSpawned) {
         try {
           const list = (await callGateway({
@@ -120,9 +125,55 @@ export function createSessionsSendTool(opts?: {
         alias,
         mainKey,
       });
+
+      const routingA2A = cfg.routing?.agentToAgent;
+      const a2aEnabled = routingA2A?.enabled === true;
+      const allowPatterns = Array.isArray(routingA2A?.allow)
+        ? routingA2A.allow
+        : [];
+      const matchesAllow = (agentId: string) => {
+        if (allowPatterns.length === 0) return true;
+        return allowPatterns.some((pattern) => {
+          const raw = String(pattern ?? "").trim();
+          if (!raw) return false;
+          if (raw === "*") return true;
+          if (!raw.includes("*")) return raw === agentId;
+          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
+          return re.test(agentId);
+        });
+      };
+      const requesterAgentId = normalizeAgentId(
+        parseAgentSessionKey(requesterInternalKey)?.agentId,
+      );
+      const targetAgentId = normalizeAgentId(
+        parseAgentSessionKey(resolvedKey)?.agentId,
+      );
+      const isCrossAgent = requesterAgentId !== targetAgentId;
+      if (isCrossAgent) {
+        if (!a2aEnabled) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Agent-to-agent messaging is disabled. Set routing.agentToAgent.enabled=true to allow cross-agent sends.",
+            sessionKey: displayKey,
+          });
+        }
+        if (!matchesAllow(requesterAgentId) || !matchesAllow(targetAgentId)) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Agent-to-agent messaging denied by routing.agentToAgent.allow.",
+            sessionKey: displayKey,
+          });
+        }
+      }
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
-        requesterSurface: opts?.agentSurface,
+        requesterProvider: opts?.agentProvider,
         targetSessionKey: displayKey,
       });
       const sendParams = {
@@ -134,7 +185,7 @@ export function createSessionsSendTool(opts?: {
         extraSystemPrompt: agentMessageContext,
       };
       const requesterSessionKey = opts?.agentSessionKey;
-      const requesterSurface = opts?.agentSurface;
+      const requesterProvider = opts?.agentProvider;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
 
       const runAgentToAgentFlow = async (
@@ -166,7 +217,7 @@ export function createSessionsSendTool(opts?: {
             sessionKey: resolvedKey,
             displayKey,
           });
-          const targetChannel = announceTarget?.channel ?? "unknown";
+          const targetProvider = announceTarget?.provider ?? "unknown";
           if (
             maxPingPongTurns > 0 &&
             requesterSessionKey &&
@@ -182,9 +233,9 @@ export function createSessionsSendTool(opts?: {
                   : "target";
               const replyPrompt = buildAgentToAgentReplyContext({
                 requesterSessionKey,
-                requesterSurface,
+                requesterProvider,
                 targetSessionKey: displayKey,
-                targetChannel,
+                targetProvider,
                 currentRole,
                 turn,
                 maxTurns: maxPingPongTurns,
@@ -208,9 +259,9 @@ export function createSessionsSendTool(opts?: {
           }
           const announcePrompt = buildAgentToAgentAnnounceContext({
             requesterSessionKey,
-            requesterSurface,
+            requesterProvider,
             targetSessionKey: displayKey,
-            targetChannel,
+            targetProvider,
             originalMessage: message,
             roundOneReply: primaryReply,
             latestReply,
@@ -233,7 +284,8 @@ export function createSessionsSendTool(opts?: {
               params: {
                 to: announceTarget.to,
                 message: announceReply.trim(),
-                provider: announceTarget.channel,
+                provider: announceTarget.provider,
+                accountId: announceTarget.accountId,
                 idempotencyKey: crypto.randomUUID(),
               },
               timeoutMs: 10_000,

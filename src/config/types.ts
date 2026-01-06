@@ -6,7 +6,7 @@ export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
-  surface?: string;
+  provider?: string;
   chatType?: "direct" | "group" | "room";
   keyPrefix?: string;
 };
@@ -178,7 +178,7 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?:
+  provider?:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -506,7 +506,7 @@ export type QueueMode =
   | "interrupt";
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
-export type QueueModeBySurface = {
+export type QueueModeByProvider = {
   whatsapp?: QueueMode;
   telegram?: QueueMode;
   discord?: QueueMode;
@@ -552,8 +552,8 @@ export type RoutingConfig = {
   bindings?: Array<{
     agentId: string;
     match: {
-      surface: string;
-      surfaceAccountId?: string;
+      provider: string;
+      accountId?: string;
       peer?: { kind: "dm" | "group" | "channel"; id: string };
       guildId?: string;
       teamId?: string;
@@ -561,7 +561,7 @@ export type RoutingConfig = {
   }>;
   queue?: {
     mode?: QueueMode;
-    bySurface?: QueueModeBySurface;
+    byProvider?: QueueModeByProvider;
     debounceMs?: number;
     cap?: number;
     drop?: QueueDropPolicy;
@@ -902,7 +902,7 @@ export type ClawdbotConfig = {
     elevated?: {
       /** Enable or disable elevated mode (default: true). */
       enabled?: boolean;
-      /** Approved senders for /elevated (per-surface allowlists). */
+      /** Approved senders for /elevated (per-provider allowlists). */
       allowFrom?: AgentElevatedAllowFromConfig;
     };
     /** Optional sandbox settings for non-main sessions. */

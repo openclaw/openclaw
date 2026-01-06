@@ -21,7 +21,7 @@ describe("resolveSendPolicy", () => {
     expect(resolveSendPolicy({ cfg, entry })).toBe("deny");
   });
 
-  it("rule match by surface + chatType", () => {
+  it("rule match by provider + chatType", () => {
     const cfg = {
       session: {
         sendPolicy: {
@@ -29,7 +29,7 @@ describe("resolveSendPolicy", () => {
           rules: [
             {
               action: "deny",
-              match: { surface: "discord", chatType: "group" },
+              match: { provider: "discord", chatType: "group" },
             },
           ],
         },
@@ -38,7 +38,7 @@ describe("resolveSendPolicy", () => {
     const entry: SessionEntry = {
       sessionId: "s",
       updatedAt: 0,
-      surface: "discord",
+      provider: "discord",
       chatType: "group",
     };
     expect(

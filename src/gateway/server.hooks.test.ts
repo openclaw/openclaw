@@ -86,7 +86,7 @@ describe("gateway server hooks", () => {
     await server.close();
   });
 
-  test("hooks agent rejects invalid channel", async () => {
+  test("hooks agent rejects invalid provider", async () => {
     testState.hooksConfig = { enabled: true, token: "hook-secret" };
     const port = await getFreePort();
     const server = await startGatewayServer(port);
@@ -96,7 +96,7 @@ describe("gateway server hooks", () => {
         "Content-Type": "application/json",
         Authorization: "Bearer hook-secret",
       },
-      body: JSON.stringify({ message: "Nope", channel: "sms" }),
+      body: JSON.stringify({ message: "Nope", provider: "sms" }),
     });
     expect(res.status).toBe(400);
     expect(peekSystemEvents().length).toBe(0);

@@ -32,7 +32,7 @@ type HookDispatchers = {
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    channel:
+    provider:
       | "last"
       | "whatsapp"
       | "telegram"
@@ -175,7 +175,7 @@ export function createHooksRequestHandler(
             wakeMode: mapped.action.wakeMode,
             sessionKey: mapped.action.sessionKey ?? "",
             deliver: mapped.action.deliver === true,
-            channel: mapped.action.channel ?? "last",
+            provider: mapped.action.provider ?? "last",
             to: mapped.action.to,
             thinking: mapped.action.thinking,
             timeoutSeconds: mapped.action.timeoutSeconds,

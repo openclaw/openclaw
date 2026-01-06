@@ -161,7 +161,7 @@ const DEFAULT_CRON_FORM: CronFormState = {
   payloadKind: "systemEvent",
   payloadText: "",
   deliver: false,
-  channel: "last",
+  provider: "last",
   to: "",
   timeoutSeconds: "",
   postToMainPrefix: "",

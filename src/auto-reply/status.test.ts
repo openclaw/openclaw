@@ -24,7 +24,7 @@ describe("buildStatusMessage", () => {
         verboseLevel: "on",
         compactionCount: 2,
       },
-      sessionKey: "main",
+      sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       storePath: "/tmp/sessions.json",
       resolvedThink: "medium",
@@ -39,7 +39,7 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Agent: embedded pi");
     expect(text).toContain("Runtime: direct");
     expect(text).toContain("Context: 16k/32k (50%)");
-    expect(text).toContain("Session: main");
+    expect(text).toContain("Session: agent:main:main");
     expect(text).toContain("compactions 2");
     expect(text).toContain("Web: linked");
     expect(text).toContain("heartbeat 45s");
@@ -70,7 +70,7 @@ describe("buildStatusMessage", () => {
         groupActivation: "always",
         chatType: "group",
       },
-      sessionKey: "whatsapp:group:123@g.us",
+      sessionKey: "agent:main:whatsapp:group:123@g.us",
       sessionScope: "per-sender",
       webLinked: true,
     });
@@ -91,6 +91,8 @@ describe("buildStatusMessage", () => {
       const storePath = path.join(
         dir,
         ".clawdbot",
+        "agents",
+        "main",
         "sessions",
         "sessions.json",
       );
@@ -98,6 +100,8 @@ describe("buildStatusMessage", () => {
       const logPath = path.join(
         dir,
         ".clawdbot",
+        "agents",
+        "main",
         "sessions",
         `${sessionId}.jsonl`,
       );
@@ -135,7 +139,7 @@ describe("buildStatusMessage", () => {
           totalTokens: 3, // would be wrong if cached prompt tokens exist
           contextTokens: 32_000,
         },
-        sessionKey: "main",
+        sessionKey: "agent:main:main",
         sessionScope: "per-sender",
         storePath,
         webLinked: true,

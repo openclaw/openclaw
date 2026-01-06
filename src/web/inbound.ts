@@ -30,6 +30,7 @@ import {
   normalizeE164,
   toWhatsappJid,
 } from "../utils.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import type { ActiveWebSendOptions } from "./active-listener.js";
 import {
   createWaSocket,
@@ -48,6 +49,7 @@ export type WebInboundMessage = {
   from: string; // conversation id: E.164 for direct chats, group JID for groups
   conversationId: string; // alias for clarity (same as from)
   to: string;
+  accountId: string;
   body: string;
   pushName?: string;
   timestamp?: number;
@@ -76,13 +78,17 @@ export type WebInboundMessage = {
 
 export async function monitorWebInbox(options: {
   verbose: boolean;
+  accountId: string;
+  authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger(
     "gateway/providers/whatsapp",
   ).child("inbound");
-  const sock = await createWaSocket(false, options.verbose);
+  const sock = await createWaSocket(false, options.verbose, {
+    authDir: options.authDir,
+  });
   await waitForWaConnection(sock);
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -172,16 +178,29 @@ export async function monitorWebInbox(options: {
       // Filter unauthorized senders early to prevent wasted processing
       // and potential session corruption from Bad MAC errors
       const cfg = loadConfig();
+      const account = resolveWhatsAppAccount({
+        cfg,
+        accountId: options.accountId,
+      });
       const dmPolicy = cfg.whatsapp?.dmPolicy ?? "pairing";
-      const configuredAllowFrom = cfg.whatsapp?.allowFrom;
+      const configuredAllowFrom = account.allowFrom;
       const storeAllowFrom = await readProviderAllowFromStore("whatsapp").catch(
         () => [],
       );
-      const allowFrom = Array.from(
+      // Without user config, default to self-only DM access so the owner can talk to themselves
+      const combinedAllowFrom = Array.from(
         new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
       );
+      const defaultAllowFrom =
+        combinedAllowFrom.length === 0 && selfE164
+          ? [selfE164]
+          : undefined;
+      const allowFrom =
+        combinedAllowFrom.length > 0
+          ? combinedAllowFrom
+          : defaultAllowFrom;
       const groupAllowFrom =
-        cfg.whatsapp?.groupAllowFrom ??
+        account.groupAllowFrom ??
         (configuredAllowFrom && configuredAllowFrom.length > 0
           ? configuredAllowFrom
           : undefined);
@@ -204,7 +223,7 @@ export async function monitorWebInbox(options: {
       // - "open" (default): groups bypass allowFrom, only mention-gating applies
       // - "disabled": block all group messages entirely
       // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-      const groupPolicy = cfg.whatsapp?.groupPolicy ?? "open";
+      const groupPolicy = account.groupPolicy ?? "open";
       if (group && groupPolicy === "disabled") {
         logVerbose(`Blocked group message (groupPolicy: disabled)`);
         continue;
@@ -370,6 +389,7 @@ export async function monitorWebInbox(options: {
             from,
             conversationId: from,
             to: selfE164 ?? "me",
+            accountId: account.accountId,
             body,
             pushName: senderName,
             timestamp,

@@ -47,7 +47,7 @@ describe("chunkText", () => {
 });
 
 describe("resolveTextChunkLimit", () => {
-  it("uses per-surface defaults", () => {
+  it("uses per-provider defaults", () => {
     expect(resolveTextChunkLimit(undefined, "whatsapp")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "telegram")).toBe(4000);
     expect(resolveTextChunkLimit(undefined, "slack")).toBe(4000);

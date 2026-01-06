@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveAgentMainSessionKey,
+  type SessionEntry,
+  saveSessionStore,
+} from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -41,7 +46,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       sessionKey?: string;
       thinking?: string;
       deliver?: boolean;
-      channel?: string;
+      provider?: string;
       lane?: string;
       extraSystemPrompt?: string;
       idempotencyKey: string;
@@ -72,7 +77,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       cfgForAgent = cfg;
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      sessionEntry = {
+      const nextEntry: SessionEntry = {
         sessionId,
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
@@ -80,14 +85,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         systemSent: entry?.systemSent,
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,
-        lastChannel: entry?.lastChannel,
+        lastProvider: entry?.lastProvider,
         lastTo: entry?.lastTo,
       };
+      sessionEntry = nextEntry;
       const sendPolicy = resolveSendPolicy({
         cfg,
         entry,
         sessionKey: requestedSessionKey,
-        surface: entry?.surface,
+        provider: entry?.provider,
         chatType: entry?.chatType,
       });
       if (sendPolicy === "deny") {
@@ -102,14 +108,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       if (store) {
-        store[requestedSessionKey] = sessionEntry;
+        store[requestedSessionKey] = nextEntry;
         if (storePath) {
           await saveSessionStore(storePath, store);
         }
       }
       resolvedSessionId = sessionId;
-      const mainKey = (cfg.session?.mainKey ?? "main").trim() || "main";
-      if (requestedSessionKey === mainKey) {
+      const agentId = resolveAgentIdFromSessionKey(requestedSessionKey);
+      const mainSessionKey = resolveAgentMainSessionKey({
+        cfg,
+        agentId,
+      });
+      const rawMainKey = (cfg.session?.mainKey ?? "main").trim() || "main";
+      if (
+        requestedSessionKey === mainSessionKey ||
+        requestedSessionKey === rawMainKey
+      ) {
         context.addChatRun(idem, {
           sessionKey: requestedSessionKey,
           clientRunId: idem,
@@ -121,42 +135,42 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const runId = idem;
 
-    const requestedChannelRaw =
-      typeof request.channel === "string" ? request.channel.trim() : "";
-    const requestedChannelNormalized = requestedChannelRaw
-      ? requestedChannelRaw.toLowerCase()
+    const requestedProviderRaw =
+      typeof request.provider === "string" ? request.provider.trim() : "";
+    const requestedProviderNormalized = requestedProviderRaw
+      ? requestedProviderRaw.toLowerCase()
       : "last";
-    const requestedChannel =
-      requestedChannelNormalized === "imsg"
+    const requestedProvider =
+      requestedProviderNormalized === "imsg"
         ? "imessage"
-        : requestedChannelNormalized;
+        : requestedProviderNormalized;
 
-    const lastChannel = sessionEntry?.lastChannel;
+    const lastProvider = sessionEntry?.lastProvider;
     const lastTo =
       typeof sessionEntry?.lastTo === "string"
         ? sessionEntry.lastTo.trim()
         : "";
 
-    const resolvedChannel = (() => {
-      if (requestedChannel === "last") {
+    const resolvedProvider = (() => {
+      if (requestedProvider === "last") {
         // WebChat is not a deliverable surface. Treat it as "unset" for routing,
         // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        return lastChannel && lastChannel !== "webchat"
-          ? lastChannel
+        return lastProvider && lastProvider !== "webchat"
+          ? lastProvider
           : "whatsapp";
       }
       if (
-        requestedChannel === "whatsapp" ||
-        requestedChannel === "telegram" ||
-        requestedChannel === "discord" ||
-        requestedChannel === "signal" ||
-        requestedChannel === "imessage" ||
-        requestedChannel === "webchat"
+        requestedProvider === "whatsapp" ||
+        requestedProvider === "telegram" ||
+        requestedProvider === "discord" ||
+        requestedProvider === "signal" ||
+        requestedProvider === "imessage" ||
+        requestedProvider === "webchat"
       ) {
-        return requestedChannel;
+        return requestedProvider;
       }
-      return lastChannel && lastChannel !== "webchat"
-        ? lastChannel
+      return lastProvider && lastProvider !== "webchat"
+        ? lastProvider
         : "whatsapp";
     })();
 
@@ -167,11 +181,11 @@ export const agentHandlers: GatewayRequestHandlers = {
           : undefined;
       if (explicit) return explicit;
       if (
-        resolvedChannel === "whatsapp" ||
-        resolvedChannel === "telegram" ||
-        resolvedChannel === "discord" ||
-        resolvedChannel === "signal" ||
-        resolvedChannel === "imessage"
+        resolvedProvider === "whatsapp" ||
+        resolvedProvider === "telegram" ||
+        resolvedProvider === "discord" ||
+        resolvedProvider === "signal" ||
+        resolvedProvider === "imessage"
       ) {
         return lastTo || undefined;
       }
@@ -182,7 +196,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       // If we derived a WhatsApp recipient from session "lastTo", ensure it is still valid
       // for the configured allowlist. Otherwise, fall back to the first allowed number so
       // voice wake doesn't silently route to stale/test recipients.
-      if (resolvedChannel !== "whatsapp") return resolvedTo;
+      if (resolvedProvider !== "whatsapp") return resolvedTo;
       const explicit =
         typeof request.to === "string" && request.to.trim()
           ? request.to.trim()
@@ -207,7 +221,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       return allowFrom[0];
     })();
 
-    const deliver = request.deliver === true && resolvedChannel !== "webchat";
+    const deliver = request.deliver === true && resolvedProvider !== "webchat";
 
     const accepted = {
       runId,
@@ -229,10 +243,10 @@ export const agentHandlers: GatewayRequestHandlers = {
         sessionId: resolvedSessionId,
         thinking: request.thinking,
         deliver,
-        provider: resolvedChannel,
+        provider: resolvedProvider,
         timeout: request.timeout?.toString(),
         bestEffortDeliver,
-        surface: "VoiceWake",
+        messageProvider: "voicewake",
         runId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,

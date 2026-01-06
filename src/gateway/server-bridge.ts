@@ -48,6 +48,7 @@ import {
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
 import { clearCommandLane } from "../process/command-queue.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
@@ -372,7 +373,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                   },
                 };
               }
-              if (!key.startsWith("subagent:")) {
+              if (!isSubagentSessionKey(key)) {
                 return {
                   ok: false,
                   error: {
@@ -606,11 +607,11 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             sendPolicy: entry?.sendPolicy,
             displayName: entry?.displayName,
             chatType: entry?.chatType,
-            surface: entry?.surface,
+            provider: entry?.provider,
             subject: entry?.subject,
             room: entry?.room,
             space: entry?.space,
-            lastChannel: entry?.lastChannel,
+            lastProvider: entry?.lastProvider,
             lastTo: entry?.lastTo,
             skillsSnapshot: entry?.skillsSnapshot,
           };
@@ -986,7 +987,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             thinkingLevel: entry?.thinkingLevel,
             verboseLevel: entry?.verboseLevel,
             systemSent: entry?.systemSent,
-            lastChannel: entry?.lastChannel,
+            lastProvider: entry?.lastProvider,
             lastTo: entry?.lastTo,
           };
           const clientRunId = p.idempotencyKey;
@@ -1033,7 +1034,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 thinking: p.thinking,
                 deliver: p.deliver,
                 timeout: Math.ceil(timeoutMs / 1000).toString(),
-                surface: `Node(${nodeId})`,
+                messageProvider: `node(${nodeId})`,
                 abortSignal: abortController.signal,
               },
               defaultRuntime,
@@ -1126,7 +1127,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           verboseLevel: entry?.verboseLevel,
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
-          lastChannel: entry?.lastChannel,
+          lastProvider: entry?.lastProvider,
           lastTo: entry?.lastTo,
         };
         if (storePath) {
@@ -1146,7 +1147,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             sessionId,
             thinking: "low",
             deliver: false,
-            surface: "Node",
+            messageProvider: "node",
           },
           defaultRuntime,
           ctx.deps,
@@ -1208,7 +1209,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           verboseLevel: entry?.verboseLevel,
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
-          lastChannel: entry?.lastChannel,
+          lastProvider: entry?.lastProvider,
           lastTo: entry?.lastTo,
         };
         if (storePath) {
@@ -1227,7 +1228,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               typeof link?.timeoutSeconds === "number"
                 ? link.timeoutSeconds.toString()
                 : undefined,
-            surface: "Node",
+            messageProvider: "node",
           },
           defaultRuntime,
           ctx.deps,

@@ -14,7 +14,7 @@ export type CronPayload =
       thinking?: string;
       timeoutSeconds?: number;
       deliver?: boolean;
-      channel?:
+      provider?:
         | "last"
         | "whatsapp"
         | "telegram"

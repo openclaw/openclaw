@@ -5,7 +5,7 @@ import type { DmPolicy } from "../config/types.js";
 import { loginWeb } from "../provider-web.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
-import { resolveWebAuthDir } from "../web/session.js";
+import { WA_WEB_AUTH_DIR } from "../web/session.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { ProviderChoice } from "./onboard-types.js";
@@ -29,7 +29,7 @@ async function pathExists(filePath: string): Promise<boolean> {
 }
 
 async function detectWhatsAppLinked(): Promise<boolean> {
-  const credsPath = path.join(resolveWebAuthDir(), "creds.json");
+  const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
   return await pathExists(credsPath);
 }
 
@@ -550,7 +550,7 @@ export async function setupProviders(
       await prompter.note(
         [
           "Scan the QR with WhatsApp on your phone.",
-          `Credentials are stored under ${resolveWebAuthDir()}/ for future runs.`,
+          `Credentials are stored under ${WA_WEB_AUTH_DIR}/ for future runs.`,
         ].join("\n"),
         "WhatsApp linking",
       );

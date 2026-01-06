@@ -16,12 +16,17 @@ const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
 export async function sendMessageWhatsApp(
   to: string,
   body: string,
-  options: { verbose: boolean; mediaUrl?: string; gifPlayback?: boolean },
+  options: {
+    verbose: boolean;
+    mediaUrl?: string;
+    gifPlayback?: boolean;
+    accountId?: string;
+  },
 ): Promise<{ messageId: string; toJid: string }> {
   let text = body;
   const correlationId = randomUUID();
   const startedAt = Date.now();
-  const active = getActiveWebListener();
+  const active = getActiveWebListener(options.accountId);
   if (!active) {
     throw new Error(
       "No active gateway listener. Start the gateway before sending WhatsApp messages.",
@@ -89,11 +94,11 @@ export async function sendMessageWhatsApp(
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,
-  _options: { verbose: boolean },
+  options: { verbose: boolean; accountId?: string },
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = randomUUID();
   const startedAt = Date.now();
-  const active = getActiveWebListener();
+  const active = getActiveWebListener(options.accountId);
   if (!active) {
     throw new Error(
       "No active gateway listener. Start the gateway before sending WhatsApp polls.",
