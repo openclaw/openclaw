@@ -31,6 +31,16 @@ Skills define *how* tools work. This file is for *your* specifics — the stuff 
 - **Sonarr**: http://192.168.4.84:8989
 - **SABnzbd**: http://192.168.4.84:8080
 
+## Package Managers
+
+**Use pnpm for global packages** (it's first in PATH):
+```bash
+pnpm add -g <package>    # ✅ correct
+npm install -g <package>  # ❌ goes to wrong location
+```
+
+Global bins: `/Users/dbhurley/Library/pnpm/`
+
 ---
 
 Add whatever helps you do your job. This is your cheat sheet.
