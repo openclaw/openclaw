@@ -31,7 +31,6 @@ import {
   CONFIG_PATH_CLAWDBOT,
   loadConfig,
 } from "../../config/config.js";
-import { info } from "../../globals.js";
 import {
   getShellEnvAppliedKeys,
   shouldEnableShellEnvFallback,
@@ -58,6 +57,24 @@ const isRich = (opts?: { json?: boolean; plain?: boolean }) =>
   );
 
 const pad = (value: string, size: number) => value.padEnd(size);
+
+const colorize = (
+  rich: boolean,
+  color: (value: string) => string,
+  value: string,
+) => (rich ? color(value) : value);
+
+const formatTag = (tag: string, rich: boolean) => {
+  if (!rich) return tag;
+  if (tag === "default") return chalk.greenBright(tag);
+  if (tag === "image") return chalk.magentaBright(tag);
+  if (tag === "configured") return chalk.cyan(tag);
+  if (tag === "missing") return chalk.red(tag);
+  if (tag.startsWith("fallback#")) return chalk.yellow(tag);
+  if (tag.startsWith("img-fallback#")) return chalk.yellowBright(tag);
+  if (tag.startsWith("alias:")) return chalk.blue(tag);
+  return chalk.gray(tag);
+};
 
 const truncate = (value: string, max: number) => {
   if (value.length <= max) return value;
@@ -424,23 +441,45 @@ function printModelTable(
     const keyLabel = pad(truncate(row.key, MODEL_PAD), MODEL_PAD);
     const inputLabel = pad(row.input || "-", INPUT_PAD);
     const ctxLabel = pad(formatTokenK(row.contextWindow), CTX_PAD);
-    const localLabel = pad(
-      row.local === null ? "-" : row.local ? "yes" : "no",
-      LOCAL_PAD,
+    const localText = row.local === null ? "-" : row.local ? "yes" : "no";
+    const localLabel = pad(localText, LOCAL_PAD);
+    const authText =
+      row.available === null ? "-" : row.available ? "yes" : "no";
+    const authLabel = pad(authText, AUTH_PAD);
+    const tagsLabel =
+      row.tags.length > 0
+        ? rich
+          ? row.tags.map((tag) => formatTag(tag, rich)).join(",")
+          : row.tags.join(",")
+        : "";
+
+    const coloredInput = colorize(
+      rich,
+      row.input.includes("image") ? chalk.magenta : chalk.white,
+      inputLabel,
     );
-    const authLabel = pad(
-      row.available === null ? "-" : row.available ? "yes" : "no",
-      AUTH_PAD,
+    const coloredLocal = colorize(
+      rich,
+      row.local === null ? chalk.gray : row.local ? chalk.green : chalk.gray,
+      localLabel,
     );
-    const tagsLabel = row.tags.length > 0 ? row.tags.join(",") : "";
+    const coloredAuth = colorize(
+      rich,
+      row.available === null
+        ? chalk.gray
+        : row.available
+          ? chalk.green
+          : chalk.red,
+      authLabel,
+    );
 
     const line = [
       rich ? chalk.cyan(keyLabel) : keyLabel,
-      inputLabel,
+      coloredInput,
       ctxLabel,
-      localLabel,
-      authLabel,
-      rich ? chalk.gray(tagsLabel) : tagsLabel,
+      coloredLocal,
+      coloredAuth,
+      tagsLabel,
     ].join(" ");
     runtime.log(line);
   }
@@ -701,47 +740,116 @@ export async function modelsStatusCommand(
     return;
   }
 
-  runtime.log(info(`Config: ${CONFIG_PATH_CLAWDBOT}`));
-  runtime.log(info(`Agent dir: ${shortenHomePath(agentDir)}`));
-  runtime.log(`Default: ${defaultLabel}`);
+  const rich = isRich(opts);
+  const label = (value: string) => colorize(rich, chalk.cyan, value.padEnd(14));
+
   runtime.log(
-    `Fallbacks (${fallbacks.length || 0}): ${fallbacks.join(", ") || "-"}`,
-  );
-  runtime.log(`Image model: ${imageModel || "-"}`);
-  runtime.log(
-    `Image fallbacks (${imageFallbacks.length || 0}): ${
-      imageFallbacks.length ? imageFallbacks.join(", ") : "-"
-    }`,
+    `${label("Config")}${colorize(rich, chalk.gray, ":")} ${colorize(rich, chalk.white, CONFIG_PATH_CLAWDBOT)}`,
   );
   runtime.log(
-    `Aliases (${Object.keys(aliases).length || 0}): ${
+    `${label("Agent dir")}${colorize(rich, chalk.gray, ":")} ${colorize(
+      rich,
+      chalk.white,
+      shortenHomePath(agentDir),
+    )}`,
+  );
+  runtime.log(
+    `${label("Default")}${colorize(rich, chalk.gray, ":")} ${colorize(
+      rich,
+      chalk.green,
+      defaultLabel,
+    )}`,
+  );
+  runtime.log(
+    `${label(`Fallbacks (${fallbacks.length || 0})`)}${colorize(
+      rich,
+      chalk.gray,
+      ":",
+    )} ${colorize(
+      rich,
+      fallbacks.length ? chalk.yellow : chalk.gray,
+      fallbacks.length ? fallbacks.join(", ") : "-",
+    )}`,
+  );
+  runtime.log(
+    `${label("Image model")}${colorize(rich, chalk.gray, ":")} ${colorize(
+      rich,
+      imageModel ? chalk.magenta : chalk.gray,
+      imageModel || "-",
+    )}`,
+  );
+  runtime.log(
+    `${label(`Image fallbacks (${imageFallbacks.length || 0})`)}${colorize(
+      rich,
+      chalk.gray,
+      ":",
+    )} ${colorize(
+      rich,
+      imageFallbacks.length ? chalk.magentaBright : chalk.gray,
+      imageFallbacks.length ? imageFallbacks.join(", ") : "-",
+    )}`,
+  );
+  runtime.log(
+    `${label(`Aliases (${Object.keys(aliases).length || 0})`)}${colorize(
+      rich,
+      chalk.gray,
+      ":",
+    )} ${colorize(
+      rich,
+      Object.keys(aliases).length ? chalk.cyan : chalk.gray,
       Object.keys(aliases).length
         ? Object.entries(aliases)
-            .map(([alias, target]) => `${alias} -> ${target}`)
+            .map(([alias, target]) =>
+              rich
+                ? `${chalk.blue(alias)} ${chalk.gray("->")} ${chalk.white(
+                    target,
+                  )}`
+                : `${alias} -> ${target}`,
+            )
             .join(", ")
-        : "-"
-    }`,
+        : "-",
+    )}`,
   );
   runtime.log(
-    `Configured models (${allowed.length || 0}): ${
-      allowed.length ? allowed.join(", ") : "all"
-    }`,
+    `${label(`Configured models (${allowed.length || 0})`)}${colorize(
+      rich,
+      chalk.gray,
+      ":",
+    )} ${colorize(
+      rich,
+      allowed.length ? chalk.white : chalk.gray,
+      allowed.length ? allowed.join(", ") : "all",
+    )}`,
   );
 
   runtime.log("");
-  runtime.log(info("Auth overview"));
+  runtime.log(colorize(rich, chalk.bold, "Auth overview"));
   runtime.log(
-    `Auth store: ${shortenHomePath(resolveAuthStorePathForDisplay())}`,
+    `${label("Auth store")}${colorize(rich, chalk.gray, ":")} ${colorize(
+      rich,
+      chalk.white,
+      shortenHomePath(resolveAuthStorePathForDisplay()),
+    )}`,
   );
   runtime.log(
-    `Shell env fallback: ${shellFallbackEnabled ? "on" : "off"}${
-      applied.length ? ` (applied: ${applied.join(", ")})` : ""
+    `${label("Shell env")}${colorize(rich, chalk.gray, ":")} ${colorize(
+      rich,
+      shellFallbackEnabled ? chalk.green : chalk.gray,
+      shellFallbackEnabled ? "on" : "off",
+    )}${
+      applied.length
+        ? colorize(rich, chalk.gray, ` (applied: ${applied.join(", ")})`)
+        : ""
     }`,
   );
   runtime.log(
-    `Providers with OAuth (${providersWithOauth.length || 0}): ${
-      providersWithOauth.length ? providersWithOauth.join(", ") : "-"
-    }`,
+    `${label(
+      `Providers w/ OAuth (${providersWithOauth.length || 0})`,
+    )}${colorize(rich, chalk.gray, ":")} ${colorize(
+      rich,
+      providersWithOauth.length ? chalk.white : chalk.gray,
+      providersWithOauth.length ? providersWithOauth.join(", ") : "-",
+    )}`,
   );
 
   for (const entry of providerAuth) {
