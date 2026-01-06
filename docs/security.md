@@ -52,6 +52,20 @@ When `dmPolicy="pairing"` and a new sender messages the bot:
 
 This is intentionally “boring”: it’s a small, explicit handshake that prevents accidental public bots (especially on discoverable platforms like Telegram).
 
+## Allowlists (DM + groups) — terminology
+
+Clawdbot has *two* separate “who can trigger me?” layers:
+
+- **DM allowlist** (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+  - When `dmPolicy="pairing"`, approvals are written to a local store under `~/.clawdbot/credentials/<provider>-allowFrom.json` (merged with config allowlists).
+- **Group allowlist** (provider-specific): which groups/channels/guilds the bot will accept messages from at all.
+  - Common patterns:
+    - `whatsapp.groups`, `telegram.groups`, `imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
+    - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot *inside* a group session (WhatsApp/Telegram/Signal/iMessage).
+    - `discord.guilds` / `slack.channels`: per-surface allowlists + mention defaults.
+
+Details: https://docs.clawd.bot/configuration and https://docs.clawd.bot/groups
+
 ## Prompt injection (what it is, why it matters)
 
 Prompt injection is when an attacker (or even a well-meaning friend) crafts a message that manipulates the model into doing something unsafe:
