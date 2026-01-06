@@ -50,6 +50,7 @@
 - Control UI: animate reading indicator dots (honors reduced-motion).
 - Control UI: stabilize chat streaming during tool runs (no flicker/vanishing text; correct run scoping).
 - Control UI: let config-form enums select empty-string values. Thanks @sreekaransrinath for PR #268.
+- Control UI: scroll chat to bottom on initial load. Thanks @kiranjd for PR #274.
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
 - Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.

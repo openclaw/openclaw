@@ -437,34 +437,40 @@ export class ClawdbotApp extends LitElement {
       clearTimeout(this.chatScrollTimeout);
       this.chatScrollTimeout = null;
     }
+    const pickScrollTarget = () => {
+      const container = this.querySelector(".chat-thread") as HTMLElement | null;
+      if (container) {
+        const overflowY = getComputedStyle(container).overflowY;
+        const canScroll =
+          overflowY === "auto" ||
+          overflowY === "scroll" ||
+          container.scrollHeight - container.clientHeight > 1;
+        if (canScroll) return container;
+      }
+      return (document.scrollingElement ?? document.documentElement) as HTMLElement | null;
+    };
     // Wait for Lit render to complete, then scroll
     void this.updateComplete.then(() => {
       this.chatScrollFrame = requestAnimationFrame(() => {
         this.chatScrollFrame = null;
-        if (force) {
-          // Force scroll window to bottom unconditionally
-          this.chatHasAutoScrolled = true;
-          window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
-          // Retry after images/content load
-          this.chatScrollTimeout = window.setTimeout(() => {
-            this.chatScrollTimeout = null;
-            window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
-          }, 150);
-          return;
-        }
-        // Stick to bottom if already near bottom
+        const target = pickScrollTarget();
+        if (!target) return;
         const distanceFromBottom =
-          document.body.scrollHeight - window.scrollY - window.innerHeight;
-        const shouldStick = distanceFromBottom < 200;
+          target.scrollHeight - target.scrollTop - target.clientHeight;
+        const shouldStick = force || distanceFromBottom < 200;
         if (!shouldStick) return;
-        window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
+        if (force) this.chatHasAutoScrolled = true;
+        target.scrollTop = target.scrollHeight;
+        const retryDelay = force ? 150 : 120;
         this.chatScrollTimeout = window.setTimeout(() => {
           this.chatScrollTimeout = null;
+          const latest = pickScrollTarget();
+          if (!latest) return;
           const latestDistanceFromBottom =
-            document.body.scrollHeight - window.scrollY - window.innerHeight;
-          if (latestDistanceFromBottom >= 250) return;
-          window.scrollTo({ top: document.body.scrollHeight, behavior: "instant" });
-        }, 120);
+            latest.scrollHeight - latest.scrollTop - latest.clientHeight;
+          if (!force && latestDistanceFromBottom >= 250) return;
+          latest.scrollTop = latest.scrollHeight;
+        }, retryDelay);
       });
     });
   }
