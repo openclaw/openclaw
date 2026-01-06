@@ -12,6 +12,7 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 import { extractReplyToTag } from "./reply-tags.js";
+import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 
 export function createFollowupRunner(params: {
@@ -61,6 +62,7 @@ export function createFollowupRunner(params: {
     if (queued.run.sessionKey) {
       registerAgentRunContext(runId, { sessionKey: queued.run.sessionKey });
     }
+    let autoCompactionCompleted = false;
     let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
     let fallbackProvider = queued.run.provider;
     let fallbackModel = queued.run.model;
@@ -91,6 +93,14 @@ export function createFollowupRunner(params: {
             timeoutMs: queued.run.timeoutMs,
             runId,
             blockReplyBreak: queued.run.blockReplyBreak,
+            onAgentEvent: (evt) => {
+              if (evt.stream !== "compaction") return;
+              const phase = String(evt.data.phase ?? "");
+              const willRetry = Boolean(evt.data.willRetry);
+              if (phase === "end" && !willRetry) {
+                autoCompactionCompleted = true;
+              }
+            },
           }),
       });
       runResult = fallbackResult.result;
@@ -131,6 +141,21 @@ export function createFollowupRunner(params: {
       );
 
     if (replyTaggedPayloads.length === 0) return;
+
+    if (autoCompactionCompleted) {
+      const count = await incrementCompactionCount({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+      if (queued.run.verboseLevel === "on") {
+        const suffix = typeof count === "number" ? ` (count ${count})` : "";
+        replyTaggedPayloads.unshift({
+          text: `🧹 Auto-compaction complete${suffix}.`,
+        });
+      }
+    }
 
     if (sessionStore && sessionKey) {
       const usage = runResult.meta.agentMeta?.usage;

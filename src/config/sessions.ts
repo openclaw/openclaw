@@ -55,6 +55,7 @@ export type SessionEntry = {
   modelProvider?: string;
   model?: string;
   contextTokens?: number;
+  compactionCount?: number;
   displayName?: string;
   surface?: string;
   subject?: string;

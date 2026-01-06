@@ -19,7 +19,7 @@ import {
   runEmbeddedPiAgent,
 } from "../agents/pi-embedded.js";
 import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
-import { resolveSessionKey } from "../config/sessions.js";
+import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -731,6 +731,10 @@ describe("trigger handling", () => {
 
   it("runs /compact as a gated command", async () => {
     await withTempHome(async (home) => {
+      const storePath = join(
+        tmpdir(),
+        `clawdbot-session-test-${Date.now()}.json`,
+      );
       vi.mocked(compactEmbeddedPiSession).mockResolvedValue({
         ok: true,
         compacted: true,
@@ -757,7 +761,7 @@ describe("trigger handling", () => {
             allowFrom: ["*"],
           },
           session: {
-            store: join(tmpdir(), `clawdbot-session-test-${Date.now()}.json`),
+            store: storePath,
           },
         },
       );
@@ -765,6 +769,13 @@ describe("trigger handling", () => {
       expect(text?.startsWith("⚙️ Compacted")).toBe(true);
       expect(compactEmbeddedPiSession).toHaveBeenCalledOnce();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      const store = loadSessionStore(storePath);
+      const sessionKey = resolveSessionKey("per-sender", {
+        Body: "/compact focus on decisions",
+        From: "+1003",
+        To: "+2000",
+      });
+      expect(store[sessionKey]?.compactionCount).toBe(1);
     });
   });
 

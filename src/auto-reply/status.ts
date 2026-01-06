@@ -217,6 +217,9 @@ export function buildStatusMessage(args: StatusArgs): string {
     entry?.updatedAt
       ? `updated ${formatAge(now - entry.updatedAt)}`
       : "no activity",
+    typeof entry?.compactionCount === "number"
+      ? `compactions ${entry.compactionCount}`
+      : undefined,
     args.storePath ? `store ${shortenHomePath(args.storePath)}` : undefined,
   ]
     .filter(Boolean)

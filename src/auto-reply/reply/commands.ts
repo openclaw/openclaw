@@ -44,6 +44,7 @@ import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { incrementCompactionCount } from "./session-updates.js";
 
 export type CommandContext = {
   surface: string;
@@ -444,6 +445,14 @@ export async function handleCommands(params: {
           : "Compacted"
         : "Compaction skipped"
       : "Compaction failed";
+    if (result.ok && result.compacted) {
+      await incrementCompactionCount({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+      });
+    }
     const reason = result.reason?.trim();
     const line = reason
       ? `${compactLabel}: ${reason} • ${contextSummary}`

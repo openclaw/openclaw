@@ -46,6 +46,7 @@
 - Control UI: avoid Slack config ReferenceError by reading slack config snapshots. Thanks @sreekaransrinath for PR #249.
 - Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks @regenrek for PR #242.
 - Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
+- Auto-reply: track compaction count in session status; verbose mode announces auto-compactions.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
