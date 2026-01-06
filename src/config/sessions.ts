@@ -26,6 +26,8 @@ export type SessionChatType = "direct" | "group" | "room";
 export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
+  /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
+  spawnedBy?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   chatType?: SessionChatType;

@@ -201,6 +201,61 @@ const RoutingSchema = z
   .object({
     groupChat: GroupChatSchema,
     transcribeAudio: TranscribeAudioSchema,
+    defaultAgentId: z.string().optional(),
+    agentToAgent: z
+      .object({
+        enabled: z.boolean().optional(),
+        allow: z.array(z.string()).optional(),
+      })
+      .optional(),
+    agents: z
+      .record(
+        z.string(),
+        z
+          .object({
+            workspace: z.string().optional(),
+            agentDir: z.string().optional(),
+            model: z.string().optional(),
+            sandbox: z
+              .object({
+                mode: z
+                  .union([
+                    z.literal("off"),
+                    z.literal("non-main"),
+                    z.literal("all"),
+                  ])
+                  .optional(),
+                perSession: z.boolean().optional(),
+                workspaceRoot: z.string().optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+      )
+      .optional(),
+    bindings: z
+      .array(
+        z.object({
+          agentId: z.string(),
+          match: z.object({
+            surface: z.string(),
+            surfaceAccountId: z.string().optional(),
+            peer: z
+              .object({
+                kind: z.union([
+                  z.literal("dm"),
+                  z.literal("group"),
+                  z.literal("channel"),
+                ]),
+                id: z.string(),
+              })
+              .optional(),
+            guildId: z.string().optional(),
+            teamId: z.string().optional(),
+          }),
+        }),
+      )
+      .optional(),
     queue: z
       .object({
         mode: QueueModeSchema.optional(),
@@ -504,6 +559,9 @@ export const ClawdbotSchema = z.object({
           mode: z
             .union([z.literal("off"), z.literal("non-main"), z.literal("all")])
             .optional(),
+          sessionToolsVisibility: z
+            .union([z.literal("spawned"), z.literal("all")])
+            .optional(),
           perSession: z.boolean().optional(),
           workspaceRoot: z.string().optional(),
           docker: z
@@ -608,6 +666,32 @@ export const ClawdbotSchema = z.object({
     .optional(),
   whatsapp: z
     .object({
+      accounts: z
+        .record(
+          z.string(),
+          z
+            .object({
+              enabled: z.boolean().optional(),
+              /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
+              authDir: z.string().optional(),
+              allowFrom: z.array(z.string()).optional(),
+              groupAllowFrom: z.array(z.string()).optional(),
+              groupPolicy: GroupPolicySchema.optional().default("open"),
+              textChunkLimit: z.number().int().positive().optional(),
+              groups: z
+                .record(
+                  z.string(),
+                  z
+                    .object({
+                      requireMention: z.boolean().optional(),
+                    })
+                    .optional(),
+                )
+                .optional(),
+            })
+            .optional(),
+        )
+        .optional(),
       allowFrom: z.array(z.string()).optional(),
       groupAllowFrom: z.array(z.string()).optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
