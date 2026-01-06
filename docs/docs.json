@@ -20,6 +20,16 @@
       "url": "https://github.com/clawdbot/clawdbot/releases"
     }
   ],
+  "redirects": [
+    {
+      "source": "/cron",
+      "destination": "/cron-jobs"
+    },
+    {
+      "source": "/cron/",
+      "destination": "/cron-jobs"
+    }
+  ],
   "navigation": {
     "groups": [
       {
