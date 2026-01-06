@@ -71,6 +71,7 @@
 - Skills: emit MEDIA token after Nano Banana Pro image generation. Thanks @Iamadig for PR #271.
 - WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.
 - Slack: keep auto-replies in the original thread when responding to thread messages. Thanks @scald for PR #251.
+- Slack: fix Slack provider startup under Bun by using a named import for Bolt `App`. Thanks @snopoke for PR #299.
 - Discord: surface missing-permission hints (muted/role overrides) when replies fail.
 - Discord: use channel IDs for DMs instead of user IDs. Thanks @VACInc for PR #261.
 - Docs: clarify Slack manifest scopes (current vs optional) with references. Thanks @jarvis-medmatic for PR #235.

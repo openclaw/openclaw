@@ -1,8 +1,8 @@
-import type {
-  SlackCommandMiddlewareArgs,
-  SlackEventMiddlewareArgs,
+import {
+  App,
+  type SlackCommandMiddlewareArgs,
+  type SlackEventMiddlewareArgs,
 } from "@slack/bolt";
-import bolt from "@slack/bolt";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
@@ -418,7 +418,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     return false;
   };
 
-  const { App } = bolt;
   const app = new App({
     token: botToken,
     appToken,
