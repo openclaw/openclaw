@@ -13,6 +13,7 @@ import {
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -234,12 +235,13 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   }
 
-  const timeoutSecondsRaw =
-    params.job.payload.kind === "agentTurn" && params.job.payload.timeoutSeconds
-      ? params.job.payload.timeoutSeconds
-      : (agentCfg?.timeoutSeconds ?? 600);
-  const timeoutSeconds = Math.max(Math.floor(timeoutSecondsRaw), 1);
-  const timeoutMs = timeoutSeconds * 1000;
+  const timeoutMs = resolveAgentTimeoutMs({
+    cfg: params.cfg,
+    overrideSeconds:
+      params.job.payload.kind === "agentTurn"
+        ? params.job.payload.timeoutSeconds
+        : undefined,
+  });
 
   const delivery =
     params.job.payload.kind === "agentTurn" &&
