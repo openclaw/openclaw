@@ -9,8 +9,8 @@ import {
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
 } from "../agents/sandbox.js";
-import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
+import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -142,7 +142,9 @@ const MEMORY_SYSTEM_PROMPT = [
   "https://github.com/clawdbot/clawdbot/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
 ].join("\n");
 
-async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
+async function shouldSuggestMemorySystem(
+  workspaceDir: string,
+): Promise<boolean> {
   const memoryPaths = [
     path.join(workspaceDir, "MEMORY.md"),
     path.join(workspaceDir, "memory.md"),

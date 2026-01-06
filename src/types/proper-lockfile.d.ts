@@ -16,10 +16,7 @@ declare module "proper-lockfile" {
 
   export type ReleaseFn = () => Promise<void>;
 
-  export function lock(
-    path: string,
-    options?: LockOptions,
-  ): Promise<ReleaseFn>;
+  export function lock(path: string, options?: LockOptions): Promise<ReleaseFn>;
 
   const lockfile: {
     lock: typeof lock;
