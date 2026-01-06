@@ -80,6 +80,7 @@
 - Bash tool: inherit gateway PATH so Nix-provided tools resolve during commands. Thanks @joshp123 for PR #202.
 
 ### Maintenance
+- Tooling: replace tsx with bun for TypeScript execution. Thanks @obviyus for PR #278.
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
 - Skills: add 1Password CLI skill with op examples.
