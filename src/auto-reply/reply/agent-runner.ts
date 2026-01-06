@@ -314,6 +314,9 @@ export async function runReplyAgent(params: {
             shouldEmitToolResult,
             onToolResult: opts?.onToolResult
               ? (payload) => {
+                  // `subscribeEmbeddedPiSession` may invoke tool callbacks without awaiting them.
+                  // If a tool callback starts typing after the run finalized, we can end up with
+                  // a typing loop that never sees a matching markRunComplete(). Track and drain.
                   const task = (async () => {
                     let text = payload.text;
                     if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
@@ -384,13 +387,16 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
-    if (payloadArray.length === 0) return finalizeWithFollowup(undefined);
     if (pendingBlockTasks.size > 0) {
       await Promise.allSettled(pendingBlockTasks);
     }
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
+    // Drain any late tool/block deliveries before deciding there's "nothing to send".
+    // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
+    // keep the typing indicator stuck.
+    if (payloadArray.length === 0) return finalizeWithFollowup(undefined);
 
     const sanitizedPayloads = isHeartbeat
       ? payloadArray
