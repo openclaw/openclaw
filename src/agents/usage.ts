@@ -49,9 +49,9 @@ export function hasNonzeroUsage(
   ].some((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
 }
 
-export function normalizeUsage(raw?: UsageLike | null):
-  | NormalizedUsage
-  | undefined {
+export function normalizeUsage(
+  raw?: UsageLike | null,
+): NormalizedUsage | undefined {
   if (!raw) return undefined;
 
   const input = asFiniteNumber(
