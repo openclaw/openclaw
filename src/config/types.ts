@@ -1,10 +1,12 @@
 export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
 export type ReplyToMode = "off" | "first" | "all";
+export type GroupPolicy = "open" | "disabled" | "allowlist";
+export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
-  surface?: string;
+  provider?: string;
   chatType?: "direct" | "group" | "room";
   keyPrefix?: string;
 };
@@ -76,9 +78,41 @@ export type AgentElevatedAllowFromConfig = {
 };
 
 export type WhatsAppConfig = {
+  /** Optional per-account WhatsApp configuration (multi-account). */
+  accounts?: Record<string, WhatsAppAccountConfig>;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /** Optional allowlist for WhatsApp group senders (E.164). */
+  groupAllowFrom?: string[];
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+    }
+  >;
+};
+
+export type WhatsAppAccountConfig = {
+  /** If false, do not start this WhatsApp account provider. Default: true. */
+  enabled?: boolean;
+  /** Override auth directory (Baileys multi-file auth state). */
+  authDir?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
+  allowFrom?: string[];
+  groupAllowFrom?: string[];
+  groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
   groups?: Record<
     string,
@@ -144,7 +178,7 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?:
+  provider?:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -193,6 +227,14 @@ export type HooksConfig = {
 };
 
 export type TelegramConfig = {
+  /**
+   * Controls how Telegram direct chats (DMs) are handled:
+   * - "pairing" (default): unknown senders get a pairing code; owner must approve
+   * - "allowlist": only allow senders in allowFrom (or paired allow store)
+   * - "open": allow all inbound DMs (requires allowFrom to include "*")
+   * - "disabled": ignore all inbound DMs
+   */
+  dmPolicy?: DmPolicy;
   /** If false, do not start the Telegram provider. Default: true. */
   enabled?: boolean;
   botToken?: string;
@@ -207,6 +249,15 @@ export type TelegramConfig = {
     }
   >;
   allowFrom?: Array<string | number>;
+  /** Optional allowlist for Telegram group senders (user ids or usernames). */
+  groupAllowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -219,6 +270,8 @@ export type TelegramConfig = {
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
   /** Allowlist for DM senders (ids or names). */
   allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
@@ -247,17 +300,6 @@ export type DiscordGuildEntry = {
   channels?: Record<string, DiscordGuildChannelConfig>;
 };
 
-export type DiscordSlashCommandConfig = {
-  /** Enable handling for the configured slash command (default: false). */
-  enabled?: boolean;
-  /** Slash command name (default: "clawd"). */
-  name?: string;
-  /** Session key prefix for slash commands (default: "discord:slash"). */
-  sessionPrefix?: string;
-  /** Reply ephemerally (default: true). */
-  ephemeral?: boolean;
-};
-
 export type DiscordActionConfig = {
   reactions?: boolean;
   stickers?: boolean;
@@ -282,6 +324,13 @@ export type DiscordConfig = {
   /** If false, do not start the Discord provider. Default: true. */
   enabled?: boolean;
   token?: string;
+  /**
+   * Controls how guild channel messages are handled:
+   * - "open" (default): guild channels bypass allowlists; mention-gating applies
+   * - "disabled": block all guild channel messages
+   * - "allowlist": only allow channels present in discord.guilds.*.channels
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -290,7 +339,6 @@ export type DiscordConfig = {
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
-  slashCommand?: DiscordSlashCommandConfig;
   dm?: DiscordDmConfig;
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
@@ -299,6 +347,8 @@ export type DiscordConfig = {
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
   enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
   /** Allowlist for DM senders (ids). */
   allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
@@ -341,6 +391,13 @@ export type SlackConfig = {
   enabled?: boolean;
   botToken?: string;
   appToken?: string;
+  /**
+   * Controls how channel messages are handled:
+   * - "open" (default): channels bypass allowlists; mention-gating applies
+   * - "disabled": block all channel messages
+   * - "allowlist": only allow channels present in slack.channels
+   */
+  groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
@@ -372,7 +429,18 @@ export type SignalConfig = {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
+  /** Optional allowlist for Signal group senders (E.164). */
+  groupAllowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, no extra gating
+   * - "disabled": block all group messages
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -389,8 +457,19 @@ export type IMessageConfig = {
   service?: "imessage" | "sms" | "auto";
   /** Optional default region (used when sending SMS). */
   region?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
+  /** Optional allowlist for group senders or chat_id targets. */
+  groupAllowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom; mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
   /** Max outbound media size in MB. */
@@ -415,7 +494,7 @@ export type QueueMode =
   | "interrupt";
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
-export type QueueModeBySurface = {
+export type QueueModeByProvider = {
   whatsapp?: QueueMode;
   telegram?: QueueMode;
   discord?: QueueMode;
@@ -437,9 +516,40 @@ export type RoutingConfig = {
     timeoutSeconds?: number;
   };
   groupChat?: GroupChatConfig;
+  /** Default agent id when no binding matches. Default: "main". */
+  defaultAgentId?: string;
+  agentToAgent?: {
+    /** Enable agent-to-agent messaging tools. Default: false. */
+    enabled?: boolean;
+    /** Allowlist of agent ids or patterns (implementation-defined). */
+    allow?: string[];
+  };
+  agents?: Record<
+    string,
+    {
+      workspace?: string;
+      agentDir?: string;
+      model?: string;
+      sandbox?: {
+        mode?: "off" | "non-main" | "all";
+        perSession?: boolean;
+        workspaceRoot?: string;
+      };
+    }
+  >;
+  bindings?: Array<{
+    agentId: string;
+    match: {
+      provider: string;
+      accountId?: string;
+      peer?: { kind: "dm" | "group" | "channel"; id: string };
+      guildId?: string;
+      teamId?: string;
+    };
+  }>;
   queue?: {
     mode?: QueueMode;
-    bySurface?: QueueModeBySurface;
+    byProvider?: QueueModeByProvider;
     debounceMs?: number;
     cap?: number;
     drop?: QueueDropPolicy;
@@ -449,6 +559,19 @@ export type RoutingConfig = {
 export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
+  /** Emoji reaction used to acknowledge inbound messages (empty disables). */
+  ackReaction?: string;
+  /** When to send ack reactions. Default: "group-mentions". */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+};
+
+export type CommandsConfig = {
+  /** Enable native command registration when supported (default: false). */
+  native?: boolean;
+  /** Enable text command parsing (default: true). */
+  text?: boolean;
+  /** Enforce access-group allowlists/policies for commands (default: true). */
+  useAccessGroups?: boolean;
 };
 
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
@@ -698,6 +821,8 @@ export type ClawdbotConfig = {
     models?: Record<string, AgentModelEntryConfig>;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
+    /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
+    skipBootstrap?: boolean;
     /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
     userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
@@ -728,7 +853,7 @@ export type ClawdbotConfig = {
     typingIntervalSeconds?: number;
     /** Periodic background heartbeat runs. */
     heartbeat?: {
-      /** Heartbeat interval (duration string, default unit: minutes). */
+      /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
@@ -744,13 +869,23 @@ export type ClawdbotConfig = {
         | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
-      /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
+      /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time."). */
       prompt?: string;
       /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
       ackMaxChars?: number;
     };
     /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
     maxConcurrent?: number;
+    /** Sub-agent defaults (spawned via sessions_spawn). */
+    subagents?: {
+      /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+      maxConcurrent?: number;
+      /** Tool allow/deny policy for sub-agent sessions (deny wins). */
+      tools?: {
+        allow?: string[];
+        deny?: string[];
+      };
+    };
     /** Bash tool defaults. */
     bash?: {
       /** Default time (ms) before a bash command auto-backgrounds. */
@@ -764,13 +899,19 @@ export type ClawdbotConfig = {
     elevated?: {
       /** Enable or disable elevated mode (default: true). */
       enabled?: boolean;
-      /** Approved senders for /elevated (per-surface allowlists). */
+      /** Approved senders for /elevated (per-provider allowlists). */
       allowFrom?: AgentElevatedAllowFromConfig;
     };
     /** Optional sandbox settings for non-main sessions. */
     sandbox?: {
       /** Enable sandboxing for sessions. */
       mode?: "off" | "non-main" | "all";
+      /**
+       * Session tools visibility for sandboxed sessions.
+       * - "spawned": only allow session tools to target sessions spawned from this session (default)
+       * - "all": allow session tools to target any session
+       */
+      sessionToolsVisibility?: "spawned" | "all";
       /** Use one container per session (recommended for hard isolation). */
       perSession?: boolean;
       /** Root directory for sandbox workspaces. */
@@ -854,6 +995,7 @@ export type ClawdbotConfig = {
   };
   routing?: RoutingConfig;
   messages?: MessagesConfig;
+  commands?: CommandsConfig;
   session?: SessionConfig;
   web?: WebConfig;
   whatsapp?: WhatsAppConfig;

@@ -62,7 +62,7 @@ Use the release note generator so Sparkle renders formatted HTML notes:
 ```bash
 SPARKLE_PRIVATE_KEY_FILE=/Users/steipete/Library/CloudStorage/Dropbox/Backup/Sparkle/ed25519-private-key scripts/make_appcast.sh dist/Clawdbot-0.1.0.zip   https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml
 ```
-Generates HTML release notes from `CHANGELOG.md` (via `scripts/changelog-to-html.sh`) and embeds them in the appcast entry.
+Generates HTML release notes from `CHANGELOG.md` (via [`scripts/changelog-to-html.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/changelog-to-html.sh)) and embeds them in the appcast entry.
 Commit the updated `appcast.xml` alongside the release assets (zip + dSYM) when publishing.
 
 ## Publish & verify

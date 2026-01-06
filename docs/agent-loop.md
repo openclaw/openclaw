@@ -8,8 +8,8 @@ read_when:
 Short, exact flow of one agent run. Source of truth: current code in `src/`.
 
 ## Entry points
-- Gateway RPC: `agent` and `agent.wait` in `src/gateway/server-methods/agent.ts`.
-- CLI: `agentCommand` in `src/commands/agent.ts`.
+- Gateway RPC: `agent` and `agent.wait` in [`src/gateway/server-methods/agent.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-methods/agent.ts).
+- CLI: `agentCommand` in [`src/commands/agent.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/commands/agent.ts).
 
 ## High-level flow
 1) `agent` RPC validates params, resolves session (sessionKey/sessionId), persists session metadata, returns `{ runId, acceptedAt }` immediately.
@@ -36,8 +36,8 @@ Short, exact flow of one agent run. Source of truth: current code in `src/`.
 - `assistant`: streamed deltas from pi-agent-core
 - `tool`: streamed tool events from pi-agent-core
 
-## Chat surface handling
-- `createAgentEventHandler` in `src/gateway/server-chat.ts`:
+## Chat provider handling
+- `createAgentEventHandler` in [`src/gateway/server-chat.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-chat.ts):
   - buffers assistant deltas
   - emits chat `delta` messages
   - emits chat `final` when **lifecycle end/error** arrives
@@ -53,9 +53,9 @@ Short, exact flow of one agent run. Source of truth: current code in `src/`.
 - `agent.wait` timeout (wait-only, does not stop agent)
 
 ## Files
-- `src/gateway/server-methods/agent.ts`
-- `src/gateway/server-methods/agent-job.ts`
-- `src/commands/agent.ts`
-- `src/agents/pi-embedded-runner.ts`
-- `src/agents/pi-embedded-subscribe.ts`
-- `src/gateway/server-chat.ts`
+- [`src/gateway/server-methods/agent.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-methods/agent.ts)
+- [`src/gateway/server-methods/agent-job.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-methods/agent-job.ts)
+- [`src/commands/agent.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/commands/agent.ts)
+- [`src/agents/pi-embedded-runner.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-embedded-runner.ts)
+- [`src/agents/pi-embedded-subscribe.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-embedded-subscribe.ts)
+- [`src/gateway/server-chat.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-chat.ts)

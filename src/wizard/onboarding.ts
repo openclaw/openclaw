@@ -52,6 +52,10 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
+import {
+  applyOpenAICodexModelDefault,
+  OPENAI_CODEX_DEFAULT_MODEL,
+} from "../commands/openai-codex-model-default.js";
 import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -60,7 +64,6 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
-import type { AgentModelListConfig } from "../config/types.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -69,50 +72,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
-
-const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.2";
-
-function shouldSetOpenAICodexModel(model?: string): boolean {
-  const trimmed = model?.trim();
-  if (!trimmed) return true;
-  const normalized = trimmed.toLowerCase();
-  if (normalized.startsWith("openai-codex/")) return false;
-  if (normalized.startsWith("openai/")) return true;
-  return normalized === "gpt" || normalized === "gpt-mini";
-}
-
-function resolvePrimaryModel(
-  model?: AgentModelListConfig | string,
-): string | undefined {
-  if (typeof model === "string") return model;
-  if (model && typeof model === "object" && typeof model.primary === "string") {
-    return model.primary;
-  }
-  return undefined;
-}
-
-function applyOpenAICodexModelDefault(cfg: ClawdbotConfig): {
-  next: ClawdbotConfig;
-  changed: boolean;
-} {
-  const current = resolvePrimaryModel(cfg.agent?.model);
-  if (!shouldSetOpenAICodexModel(current)) {
-    return { next: cfg, changed: false };
-  }
-  return {
-    next: {
-      ...cfg,
-      agent: {
-        ...cfg.agent,
-        model:
-          cfg.agent?.model && typeof cfg.agent.model === "object"
-            ? { ...cfg.agent.model, primary: OPENAI_CODEX_DEFAULT_MODEL }
-            : { primary: OPENAI_CODEX_DEFAULT_MODEL },
-      },
-    },
-    changed: true,
-  };
-}
 
 async function warnIfModelConfigLooksOff(
   config: ClawdbotConfig,
@@ -356,12 +315,19 @@ export async function runOnboardingWizard(
       "OpenAI Codex OAuth",
     );
     const spin = prompter.progress("Starting OAuth flow…");
+    let manualCodePromise: Promise<string> | undefined;
     try {
       const creds = await loginOpenAICodex({
         onAuth: async ({ url }) => {
           if (isRemote) {
             spin.stop("OAuth URL ready");
             runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
+            manualCodePromise = prompter
+              .text({
+                message: "Paste the redirect URL (or authorization code)",
+                validate: (value) => (value?.trim() ? undefined : "Required"),
+              })
+              .then((value) => String(value));
           } else {
             spin.update("Complete sign-in in browser…");
             await openUrl(url);
@@ -369,6 +335,9 @@ export async function runOnboardingWizard(
           }
         },
         onPrompt: async (prompt) => {
+          if (manualCodePromise) {
+            return manualCodePromise;
+          }
           const code = await prompter.text({
             message: prompt.message,
             placeholder: prompt.placeholder,
@@ -438,7 +407,7 @@ export async function runOnboardingWizard(
       if (oauthCreds) {
         await writeOAuthCredentials("google-antigravity", oauthCreds);
         nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: "google-antigravity:default",
+          profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
           provider: "google-antigravity",
           mode: "oauth",
         });
@@ -635,7 +604,9 @@ export async function runOnboardingWizard(
 
   await writeConfigFile(nextConfig);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-  await ensureWorkspaceAndSessions(workspaceDir, runtime);
+  await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+    skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+  });
 
   nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });

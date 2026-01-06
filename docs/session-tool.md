@@ -6,16 +6,17 @@ read_when:
 
 # Session Tools
 
-Goal: small, hard-to-misuse tool surface so agents can list sessions, fetch history, and send to another session.
+Goal: small, hard-to-misuse tool set so agents can list sessions, fetch history, and send to another session.
 
 ## Tool Names
 - `sessions_list`
 - `sessions_history`
 - `sessions_send`
+- `sessions_spawn`
 
 ## Key Model
 - Main direct chat bucket is always the literal key `"main"`.
-- Group chats use `surface:group:<id>` or `surface:channel:<id>`.
+- Group chats use `<provider>:group:<id>` or `<provider>:channel:<id>`.
 - Cron jobs use `cron:<job.id>`.
 - Hooks use `hook:<uuid>` unless explicitly set.
 - Node bridge uses `node-<nodeId>` unless explicitly set.
@@ -34,6 +35,7 @@ Parameters:
 Behavior:
 - `messageLimit > 0` fetches `chat.history` per session and includes the last N messages.
 - Tool results are filtered out in list output; use `sessions_history` for tool messages.
+- When running in a **sandboxed** agent session, session tools default to **spawned-only visibility** (see below).
 
 Row shape (JSON):
 - `key`: session key (string)
@@ -45,7 +47,7 @@ Row shape (JSON):
 - `model`, `contextTokens`, `totalTokens`
 - `thinkingLevel`, `verboseLevel`, `systemSent`, `abortedLastRun`
 - `sendPolicy` (session override if set)
-- `lastChannel`, `lastTo`
+- `lastProvider`, `lastTo`
 - `transcriptPath` (best-effort path derived from store dir + sessionId)
 - `messages?` (only when `messageLimit > 0`)
 
@@ -82,17 +84,17 @@ Behavior:
   - Max turns is `session.agentToAgent.maxPingPongTurns` (0–5, default 5).
 - Once the loop ends, Clawdbot runs the **agent‑to‑agent announce step** (target agent only):
   - Reply exactly `ANNOUNCE_SKIP` to stay silent.
-  - Any other reply is sent to the target channel.
+  - Any other reply is sent to the target provider.
   - Announce step includes the original request + round‑1 reply + latest ping‑pong reply.
 
 ## Provider Field
-- For groups, `provider` is the `surface` recorded on the session entry.
-- For direct chats, `provider` maps from `lastChannel`.
+- For groups, `provider` is the provider recorded on the session entry.
+- For direct chats, `provider` maps from `lastProvider`.
 - For cron/hook/node, `provider` is `internal`.
 - If missing, `provider` is `unknown`.
 
 ## Security / Send Policy
-Policy-based blocking by surface/chat type (not per session id).
+Policy-based blocking by provider/chat type (not per session id).
 
 ```json
 {
@@ -100,7 +102,7 @@ Policy-based blocking by surface/chat type (not per session id).
     "sendPolicy": {
       "rules": [
         {
-          "match": { "surface": "discord", "chatType": "group" },
+          "match": { "provider": "discord", "chatType": "group" },
           "action": "deny"
         }
       ],
@@ -112,8 +114,41 @@ Policy-based blocking by surface/chat type (not per session id).
 
 Runtime override (per session entry):
 - `sendPolicy: "allow" | "deny"` (unset = inherit config)
-- Settable via `sessions.patch` or owner-only `/send on|off|inherit`.
+- Settable via `sessions.patch` or owner-only `/send on|off|inherit` (standalone message).
 
 Enforcement points:
 - `chat.send` / `agent` (gateway)
 - auto-reply delivery logic
+
+## sessions_spawn
+Spawn a sub-agent run in an isolated session and announce the result back to the requester chat provider.
+
+Parameters:
+- `task` (required)
+- `label?` (optional; used for logs/UI)
+- `timeoutSeconds?` (default 0; 0 = fire-and-forget)
+- `cleanup?` (`delete|keep`, default `delete`)
+
+Behavior:
+- Starts a new `subagent:<uuid>` session with `deliver: false`.
+- Sub-agents default to the full tool set **minus session tools** (configurable via `agent.subagents.tools`).
+- Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
+- After completion (or best-effort wait), Clawdbot runs a sub-agent **announce step** and posts the result to the requester chat provider.
+- Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
+
+## Sandbox Session Visibility
+
+Sandboxed sessions can use session tools, but by default they only see sessions they spawned via `sessions_spawn`.
+
+Config:
+
+```json5
+{
+  agent: {
+    sandbox: {
+      // default: "spawned"
+      sessionToolsVisibility: "spawned" // or "all"
+    }
+  }
+}
+```

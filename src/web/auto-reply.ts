@@ -1,4 +1,7 @@
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import {
   normalizeGroupActivation,
@@ -7,18 +10,24 @@ import {
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   HEARTBEAT_PROMPT,
+  resolveHeartbeatPrompt,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   normalizeMentionText,
 } from "../auto-reply/reply/mentions.js";
-import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
 import { loadConfig } from "../config/config.js";
+import {
+  resolveProviderGroupPolicy,
+  resolveProviderGroupRequireMention,
+} from "../config/group-policy.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
@@ -33,8 +42,11 @@ import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
+import { toLocationContext } from "../providers/location.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import { setActiveWebListener } from "./active-listener.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
@@ -116,6 +128,8 @@ export type WebMonitorTuning = {
   heartbeatSeconds?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   statusSink?: (status: WebProviderStatus) => void;
+  /** WhatsApp account id. Default: "default". */
+  accountId?: string;
 };
 
 const formatDuration = (ms: number) =>
@@ -326,7 +340,7 @@ export async function runWebHeartbeatOnce(opts: {
 
     const replyResult = await replyResolver(
       {
-        Body: HEARTBEAT_PROMPT,
+        Body: resolveHeartbeatPrompt(cfg.agent?.heartbeat?.prompt),
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
@@ -451,7 +465,7 @@ function getSessionRecipients(cfg: ReturnType<typeof loadConfig>) {
     .filter(([key]) => !isGroupKey(key) && !isCronKey(key))
     .map(([_, entry]) => ({
       to:
-        entry?.lastChannel === "whatsapp" && entry?.lastTo
+        entry?.lastProvider === "whatsapp" && entry?.lastTo
           ? normalizeE164(entry.lastTo)
           : "",
       updatedAt: entry?.updatedAt ?? 0,
@@ -545,7 +559,7 @@ async function deliverWebReply(params: {
     skipLog,
   } = params;
   const replyStarted = Date.now();
-  const textChunks = chunkText(replyResult.text || "", textLimit);
+  const textChunks = chunkMarkdownText(replyResult.text || "", textLimit);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl
@@ -755,7 +769,22 @@ export async function monitorWebProvider(
     });
   };
   emitStatus();
-  const cfg = loadConfig();
+  const baseCfg = loadConfig();
+  const account = resolveWhatsAppAccount({
+    cfg: baseCfg,
+    accountId: tuning.accountId,
+  });
+  const cfg = {
+    ...baseCfg,
+    whatsapp: {
+      ...baseCfg.whatsapp,
+      allowFrom: account.allowFrom,
+      groupAllowFrom: account.groupAllowFrom,
+      groupPolicy: account.groupPolicy,
+      textChunkLimit: account.textChunkLimit,
+      groups: account.groups,
+    },
+  } satisfies ReturnType<typeof loadConfig>;
   const configuredMaxMb = cfg.agent?.mediaMaxMb;
   const maxMediaBytes =
     typeof configuredMaxMb === "number" && configuredMaxMb > 0
@@ -767,7 +796,6 @@ export async function monitorWebProvider(
   );
   const reconnectPolicy = resolveReconnectPolicy(cfg, tuning.reconnect);
   const mentionConfig = buildMentionConfig(cfg);
-  const sessionStorePath = resolveStorePath(cfg.session?.store);
   const groupHistoryLimit =
     cfg.routing?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
@@ -846,30 +874,40 @@ export async function monitorWebProvider(
     resolveGroupSessionKey({
       From: conversationId,
       ChatType: "group",
-      Surface: "whatsapp",
+      Provider: "whatsapp",
     });
+
+  const resolveGroupPolicyFor = (conversationId: string) => {
+    const groupId =
+      resolveGroupResolution(conversationId)?.id ?? conversationId;
+    return resolveProviderGroupPolicy({
+      cfg,
+      provider: "whatsapp",
+      groupId,
+    });
+  };
 
   const resolveGroupRequireMentionFor = (conversationId: string) => {
     const groupId =
       resolveGroupResolution(conversationId)?.id ?? conversationId;
-    const groupConfig = cfg.whatsapp?.groups?.[groupId];
-    if (typeof groupConfig?.requireMention === "boolean") {
-      return groupConfig.requireMention;
-    }
-    const groupDefault = cfg.whatsapp?.groups?.["*"]?.requireMention;
-    if (typeof groupDefault === "boolean") return groupDefault;
-    return true;
+    return resolveProviderGroupRequireMention({
+      cfg,
+      provider: "whatsapp",
+      groupId,
+    });
   };
 
-  const resolveGroupActivationFor = (conversationId: string) => {
-    const key =
-      resolveGroupResolution(conversationId)?.key ??
-      (conversationId.startsWith("group:")
-        ? conversationId
-        : `whatsapp:group:${conversationId}`);
-    const store = loadSessionStore(sessionStorePath);
-    const entry = store[key];
-    const requireMention = resolveGroupRequireMentionFor(conversationId);
+  const resolveGroupActivationFor = (params: {
+    agentId: string;
+    sessionKey: string;
+    conversationId: string;
+  }) => {
+    const storePath = resolveStorePath(cfg.session?.store, {
+      agentId: params.agentId,
+    });
+    const store = loadSessionStore(storePath);
+    const entry = store[params.sessionKey];
+    const requireMention = resolveGroupRequireMentionFor(params.conversationId);
     const defaultActivation = requireMention === false ? "always" : "mention";
     return (
       normalizeGroupActivation(entry?.groupActivation) ?? defaultActivation
@@ -1005,7 +1043,7 @@ export async function monitorWebProvider(
 
       // Wrap with standardized envelope for the agent.
       return formatAgentEnvelope({
-        surface: "WhatsApp",
+        provider: "WhatsApp",
         from:
           msg.chatType === "group"
             ? msg.from
@@ -1015,7 +1053,10 @@ export async function monitorWebProvider(
       });
     };
 
-    const processMessage = async (msg: WebInboundMsg) => {
+    const processMessage = async (
+      msg: WebInboundMsg,
+      route: ReturnType<typeof resolveAgentRoute>,
+    ) => {
       status.lastMessageAt = Date.now();
       status.lastEventAt = status.lastMessageAt;
       emitStatus();
@@ -1024,14 +1065,14 @@ export async function monitorWebProvider(
       let shouldClearGroupHistory = false;
 
       if (msg.chatType === "group") {
-        const history = groupHistories.get(conversationId) ?? [];
+        const history = groupHistories.get(route.sessionKey) ?? [];
         const historyWithoutCurrent =
           history.length > 0 ? history.slice(0, -1) : [];
         if (historyWithoutCurrent.length > 0) {
           const historyText = historyWithoutCurrent
             .map((m) =>
               formatAgentEnvelope({
-                surface: "WhatsApp",
+                provider: "WhatsApp",
                 from: conversationId,
                 timestamp: m.timestamp,
                 body: `${m.sender}: ${m.body}`,
@@ -1081,8 +1122,9 @@ export async function monitorWebProvider(
 
       if (msg.chatType !== "group") {
         const sessionCfg = cfg.session;
-        const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-        const storePath = resolveStorePath(sessionCfg?.store);
+        const storePath = resolveStorePath(sessionCfg?.store, {
+          agentId: route.agentId,
+        });
         const to = (() => {
           if (msg.senderE164) return normalizeE164(msg.senderE164);
           // In direct chats, `msg.from` is already the canonical conversation id,
@@ -1094,12 +1136,18 @@ export async function monitorWebProvider(
         if (to) {
           const task = updateLastRoute({
             storePath,
-            sessionKey: mainKey,
-            channel: "whatsapp",
+            sessionKey: route.mainSessionKey,
+            provider: "whatsapp",
             to,
+            accountId: route.accountId,
           }).catch((err) => {
             replyLogger.warn(
-              { error: formatError(err), storePath, sessionKey: mainKey, to },
+              {
+                error: formatError(err),
+                storePath,
+                sessionKey: route.mainSessionKey,
+                to,
+              },
               "failed updating last route",
             );
           });
@@ -1113,74 +1161,78 @@ export async function monitorWebProvider(
       const textLimit = resolveTextChunkLimit(cfg, "whatsapp");
       let didLogHeartbeatStrip = false;
       let didSendReply = false;
-      const dispatcher = createReplyDispatcher({
-        responsePrefix: cfg.messages?.responsePrefix,
-        onHeartbeatStrip: () => {
-          if (!didLogHeartbeatStrip) {
-            didLogHeartbeatStrip = true;
-            logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
-          }
-        },
-        deliver: async (payload, info) => {
-          await deliverWebReply({
-            replyResult: payload,
-            msg,
-            maxMediaBytes,
-            textLimit,
-            replyLogger,
-            connectionId,
-            // Tool + block updates are noisy; skip their log lines.
-            skipLog: info.kind !== "final",
-          });
-          didSendReply = true;
-          if (info.kind === "tool") {
-            rememberSentText(payload.text, { combinedBody: "" });
-            return;
-          }
-          const shouldLog =
-            info.kind === "final" && payload.text ? true : undefined;
-          rememberSentText(payload.text, {
-            combinedBody,
-            logVerboseMessage: shouldLog,
-          });
-          if (info.kind === "final") {
-            const fromDisplay =
-              msg.chatType === "group"
-                ? conversationId
-                : (msg.from ?? "unknown");
-            const hasMedia = Boolean(
-              payload.mediaUrl || payload.mediaUrls?.length,
-            );
-            whatsappOutboundLog.info(
-              `Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
-            );
-            if (shouldLogVerbose()) {
-              const preview =
-                payload.text != null ? elide(payload.text, 400) : "<media>";
-              whatsappOutboundLog.debug(
-                `Reply body: ${preview}${hasMedia ? " (media)" : ""}`,
-              );
+      const { dispatcher, replyOptions, markDispatchIdle } =
+        createReplyDispatcherWithTyping({
+          responsePrefix: cfg.messages?.responsePrefix,
+          onHeartbeatStrip: () => {
+            if (!didLogHeartbeatStrip) {
+              didLogHeartbeatStrip = true;
+              logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
             }
-          }
-        },
-        onError: (err, info) => {
-          const label =
-            info.kind === "tool"
-              ? "tool update"
-              : info.kind === "block"
-                ? "block update"
-                : "auto-reply";
-          whatsappOutboundLog.error(
-            `Failed sending web ${label} to ${msg.from ?? conversationId}: ${formatError(err)}`,
-          );
-        },
-      });
+          },
+          deliver: async (payload, info) => {
+            await deliverWebReply({
+              replyResult: payload,
+              msg,
+              maxMediaBytes,
+              textLimit,
+              replyLogger,
+              connectionId,
+              // Tool + block updates are noisy; skip their log lines.
+              skipLog: info.kind !== "final",
+            });
+            didSendReply = true;
+            if (info.kind === "tool") {
+              rememberSentText(payload.text, { combinedBody: "" });
+              return;
+            }
+            const shouldLog =
+              info.kind === "final" && payload.text ? true : undefined;
+            rememberSentText(payload.text, {
+              combinedBody,
+              logVerboseMessage: shouldLog,
+            });
+            if (info.kind === "final") {
+              const fromDisplay =
+                msg.chatType === "group"
+                  ? conversationId
+                  : (msg.from ?? "unknown");
+              const hasMedia = Boolean(
+                payload.mediaUrl || payload.mediaUrls?.length,
+              );
+              whatsappOutboundLog.info(
+                `Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`,
+              );
+              if (shouldLogVerbose()) {
+                const preview =
+                  payload.text != null ? elide(payload.text, 400) : "<media>";
+                whatsappOutboundLog.debug(
+                  `Reply body: ${preview}${hasMedia ? " (media)" : ""}`,
+                );
+              }
+            }
+          },
+          onError: (err, info) => {
+            const label =
+              info.kind === "tool"
+                ? "tool update"
+                : info.kind === "block"
+                  ? "block update"
+                  : "auto-reply";
+            whatsappOutboundLog.error(
+              `Failed sending web ${label} to ${msg.from ?? conversationId}: ${formatError(err)}`,
+            );
+          },
+          onReplyStart: msg.sendComposing,
+        });
 
-      const replyResult = await (replyResolver ?? getReplyFromConfig)(
-        {
+      const { queuedFinal } = await dispatchReplyFromConfig({
+        ctx: {
           Body: combinedBody,
           From: msg.from,
           To: msg.to,
+          SessionKey: route.sessionKey,
+          AccountId: route.accountId,
           MessageSid: msg.id,
           ReplyToId: msg.replyToId,
           ReplyToBody: msg.replyToBody,
@@ -1192,39 +1244,24 @@ export async function monitorWebProvider(
           GroupSubject: msg.groupSubject,
           GroupMembers: formatGroupMembers(
             msg.groupParticipants,
-            groupMemberNames.get(conversationId),
+            groupMemberNames.get(route.sessionKey),
             msg.senderE164,
           ),
           SenderName: msg.senderName,
           SenderE164: msg.senderE164,
           WasMentioned: msg.wasMentioned,
-          Surface: "whatsapp",
+          ...(msg.location ? toLocationContext(msg.location) : {}),
+          Provider: "whatsapp",
         },
-        {
-          onReplyStart: msg.sendComposing,
-          onToolResult: (payload) => {
-            dispatcher.sendToolResult(payload);
-          },
-          onBlockReply: (payload) => {
-            dispatcher.sendBlockReply(payload);
-          },
-        },
-      );
-
-      const replyList = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-
-      let queuedFinal = false;
-      for (const replyPayload of replyList) {
-        queuedFinal = dispatcher.sendFinalReply(replyPayload) || queuedFinal;
-      }
-      await dispatcher.waitForIdle();
+        cfg,
+        dispatcher,
+        replyResolver,
+        replyOptions,
+      });
+      markDispatchIdle();
       if (!queuedFinal) {
         if (shouldClearGroupHistory && didSendReply) {
-          groupHistories.set(conversationId, []);
+          groupHistories.set(route.sessionKey, []);
         }
         logVerbose(
           "Skipping auto-reply: silent token or no text/media returned from resolver",
@@ -1233,12 +1270,14 @@ export async function monitorWebProvider(
       }
 
       if (shouldClearGroupHistory && didSendReply) {
-        groupHistories.set(conversationId, []);
+        groupHistories.set(route.sessionKey, []);
       }
     };
 
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
+      accountId: account.accountId,
+      authDir: account.authDir,
       onMessage: async (msg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
@@ -1247,6 +1286,28 @@ export async function monitorWebProvider(
         emitStatus();
         _lastInboundMsg = msg;
         const conversationId = msg.conversationId ?? msg.from;
+        const peerId =
+          msg.chatType === "group"
+            ? conversationId
+            : (() => {
+                if (msg.senderE164) {
+                  return normalizeE164(msg.senderE164) ?? msg.senderE164;
+                }
+                if (msg.from.includes("@")) {
+                  return jidToE164(msg.from) ?? msg.from;
+                }
+                return normalizeE164(msg.from) ?? msg.from;
+              })();
+        const route = resolveAgentRoute({
+          cfg,
+          provider: "whatsapp",
+          accountId: msg.accountId,
+          peer: {
+            kind: msg.chatType === "group" ? "group" : "dm",
+            id: peerId,
+          },
+        });
+        const groupHistoryKey = route.sessionKey;
 
         // Same-phone mode logging retained
         if (msg.from === msg.to) {
@@ -1266,7 +1327,40 @@ export async function monitorWebProvider(
         }
 
         if (msg.chatType === "group") {
-          noteGroupMember(conversationId, msg.senderE164, msg.senderName);
+          const groupPolicy = resolveGroupPolicyFor(conversationId);
+          if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+            logVerbose(
+              `Skipping group message ${conversationId} (not in allowlist)`,
+            );
+            return;
+          }
+          {
+            const storePath = resolveStorePath(cfg.session?.store, {
+              agentId: route.agentId,
+            });
+            const task = updateLastRoute({
+              storePath,
+              sessionKey: route.sessionKey,
+              provider: "whatsapp",
+              to: conversationId,
+              accountId: route.accountId,
+            }).catch((err) => {
+              replyLogger.warn(
+                {
+                  error: formatError(err),
+                  storePath,
+                  sessionKey: route.sessionKey,
+                  to: conversationId,
+                },
+                "failed updating last route",
+              );
+            });
+            backgroundTasks.add(task);
+            void task.finally(() => {
+              backgroundTasks.delete(task);
+            });
+          }
+          noteGroupMember(groupHistoryKey, msg.senderE164, msg.senderName);
           const commandBody = stripMentionsForCommand(msg.body, msg.selfE164);
           const activationCommand = parseActivationCommand(commandBody);
           const isOwner = isOwnerSender(msg);
@@ -1283,7 +1377,7 @@ export async function monitorWebProvider(
 
           if (!shouldBypassMention) {
             const history =
-              groupHistories.get(conversationId) ??
+              groupHistories.get(groupHistoryKey) ??
               ([] as Array<{
                 sender: string;
                 body: string;
@@ -1295,7 +1389,7 @@ export async function monitorWebProvider(
               timestamp: msg.timestamp,
             });
             while (history.length > groupHistoryLimit) history.shift();
-            groupHistories.set(conversationId, history);
+            groupHistories.set(groupHistoryKey, history);
           }
 
           const mentionDebug = debugMention(msg, mentionConfig);
@@ -1309,7 +1403,11 @@ export async function monitorWebProvider(
           );
           const wasMentioned = mentionDebug.wasMentioned;
           msg.wasMentioned = wasMentioned;
-          const activation = resolveGroupActivationFor(conversationId);
+          const activation = resolveGroupActivationFor({
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            conversationId,
+          });
           const requireMention = activation !== "always";
           if (!shouldBypassMention && requireMention && !wasMentioned) {
             logVerbose(
@@ -1319,7 +1417,7 @@ export async function monitorWebProvider(
           }
         }
 
-        return processMessage(msg);
+        return processMessage(msg, route);
       },
     });
 
@@ -1330,12 +1428,18 @@ export async function monitorWebProvider(
     emitStatus();
 
     // Surface a concise connection event for the next main-session turn/heartbeat.
-    const { e164: selfE164 } = readWebSelfId();
+    const { e164: selfE164 } = readWebSelfId(account.authDir);
+    const connectRoute = resolveAgentRoute({
+      cfg,
+      provider: "whatsapp",
+      accountId: account.accountId,
+    });
     enqueueSystemEvent(
       `WhatsApp gateway connected${selfE164 ? ` as ${selfE164}` : ""}.`,
+      { sessionKey: connectRoute.sessionKey },
     );
 
-    setActiveWebListener(listener);
+    setActiveWebListener(account.accountId, listener);
     unregisterUnhandled = registerUnhandledRejectionHandler((reason) => {
       if (!isLikelyWhatsAppCryptoError(reason)) return false;
       const errorStr = formatError(reason);
@@ -1352,7 +1456,7 @@ export async function monitorWebProvider(
     });
 
     const closeListener = async () => {
-      setActiveWebListener(null);
+      setActiveWebListener(account.accountId, null);
       if (unregisterUnhandled) {
         unregisterUnhandled();
         unregisterUnhandled = null;
@@ -1372,7 +1476,7 @@ export async function monitorWebProvider(
 
     if (keepAlive) {
       heartbeat = setInterval(() => {
-        const authAgeMs = getWebAuthAgeMs();
+        const authAgeMs = getWebAuthAgeMs(account.authDir);
         const minutesSinceLastMessage = lastMessageAt
           ? Math.floor((Date.now() - lastMessageAt) / 60000)
           : null;

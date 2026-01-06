@@ -10,41 +10,37 @@ import {
   useMultiFileAuthState,
 } from "@whiskeysockets/baileys";
 import qrcode from "qrcode-terminal";
-
-import { resolveDefaultSessionStorePath } from "../config/sessions.js";
+import { resolveOAuthDir } from "../config/paths.js";
 import { danger, info, success } from "../globals.js";
 import { getChildLogger, toPinoLikeLogger } from "../logging.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import type { Provider } from "../utils.js";
-import {
-  CONFIG_DIR,
-  ensureDir,
-  jidToE164,
-  resolveConfigDir,
-} from "../utils.js";
+import { ensureDir, jidToE164, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 
-export function resolveWebAuthDir() {
-  return path.join(resolveConfigDir(), "credentials");
+function resolveDefaultWebAuthDir(): string {
+  return path.join(resolveOAuthDir(), "whatsapp", DEFAULT_ACCOUNT_ID);
 }
 
-function resolveWebCredsPath() {
-  return path.join(resolveWebAuthDir(), "creds.json");
+export const WA_WEB_AUTH_DIR = resolveDefaultWebAuthDir();
+
+function resolveWebCredsPath(authDir: string) {
+  return path.join(authDir, "creds.json");
 }
 
-function resolveWebCredsBackupPath() {
-  return path.join(resolveWebAuthDir(), "creds.json.bak");
+function resolveWebCredsBackupPath(authDir: string) {
+  return path.join(authDir, "creds.json.bak");
 }
-
-export const WA_WEB_AUTH_DIR = path.join(CONFIG_DIR, "credentials");
 
 let credsSaveQueue: Promise<void> = Promise.resolve();
 function enqueueSaveCreds(
+  authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
   credsSaveQueue = credsSaveQueue
-    .then(() => safeSaveCreds(saveCreds, logger))
+    .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
     });
@@ -62,11 +58,12 @@ function readCredsJsonRaw(filePath: string): string | null {
 }
 
 function maybeRestoreCredsFromBackup(
+  authDir: string,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
   try {
-    const credsPath = resolveWebCredsPath();
-    const backupPath = resolveWebCredsBackupPath();
+    const credsPath = resolveWebCredsPath(authDir);
+    const backupPath = resolveWebCredsBackupPath(authDir);
     const raw = readCredsJsonRaw(credsPath);
     if (raw) {
       // Validate that creds.json is parseable.
@@ -90,14 +87,15 @@ function maybeRestoreCredsFromBackup(
 }
 
 async function safeSaveCreds(
+  authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<void> {
   try {
     // Best-effort backup so we can recover after abrupt restarts.
     // Important: don't clobber a good backup with a corrupted/truncated creds.json.
-    const credsPath = resolveWebCredsPath();
-    const backupPath = resolveWebCredsBackupPath();
+    const credsPath = resolveWebCredsPath(authDir);
+    const backupPath = resolveWebCredsBackupPath(authDir);
     const raw = readCredsJsonRaw(credsPath);
     if (raw) {
       try {
@@ -124,7 +122,7 @@ async function safeSaveCreds(
 export async function createWaSocket(
   printQr: boolean,
   verbose: boolean,
-  opts: { onQr?: (qr: string) => void } = {},
+  opts: { authDir?: string; onQr?: (qr: string) => void } = {},
 ) {
   const baseLogger = getChildLogger(
     { module: "baileys" },
@@ -133,10 +131,10 @@ export async function createWaSocket(
     },
   );
   const logger = toPinoLikeLogger(baseLogger, verbose ? "info" : "silent");
-  const authDir = resolveWebAuthDir();
+  const authDir = resolveUserPath(opts.authDir ?? resolveDefaultWebAuthDir());
   await ensureDir(authDir);
   const sessionLogger = getChildLogger({ module: "web-session" });
-  maybeRestoreCredsFromBackup(sessionLogger);
+  maybeRestoreCredsFromBackup(authDir, sessionLogger);
   const { state, saveCreds } = await useMultiFileAuthState(authDir);
   const { version } = await fetchLatestBaileysVersion();
   const sock = makeWASocket({
@@ -152,7 +150,9 @@ export async function createWaSocket(
     markOnlineOnConnect: false,
   });
 
-  sock.ev.on("creds.update", () => enqueueSaveCreds(saveCreds, sessionLogger));
+  sock.ev.on("creds.update", () =>
+    enqueueSaveCreds(authDir, saveCreds, sessionLogger),
+  );
   sock.ev.on(
     "connection.update",
     (update: Partial<import("@whiskeysockets/baileys").ConnectionState>) => {
@@ -330,13 +330,15 @@ export function formatError(err: unknown): string {
   return safeStringify(err);
 }
 
-export async function webAuthExists() {
+export async function webAuthExists(
+  authDir: string = resolveDefaultWebAuthDir(),
+) {
   const sessionLogger = getChildLogger({ module: "web-session" });
-  maybeRestoreCredsFromBackup(sessionLogger);
-  const authDir = resolveWebAuthDir();
-  const credsPath = resolveWebCredsPath();
+  const resolvedAuthDir = resolveUserPath(authDir);
+  maybeRestoreCredsFromBackup(resolvedAuthDir, sessionLogger);
+  const credsPath = resolveWebCredsPath(resolvedAuthDir);
   try {
-    await fs.access(authDir);
+    await fs.access(resolvedAuthDir);
   } catch {
     return false;
   }
@@ -351,23 +353,50 @@ export async function webAuthExists() {
   }
 }
 
-export async function logoutWeb(runtime: RuntimeEnv = defaultRuntime) {
-  const exists = await webAuthExists();
+async function clearLegacyBaileysAuthState(authDir: string) {
+  const entries = await fs.readdir(authDir, { withFileTypes: true });
+  const shouldDelete = (name: string) => {
+    if (name === "oauth.json") return false;
+    if (name === "creds.json" || name === "creds.json.bak") return true;
+    if (!name.endsWith(".json")) return false;
+    return /^(app-state-sync|session|sender-key|pre-key)-/.test(name);
+  };
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile()) return;
+      if (!shouldDelete(entry.name)) return;
+      await fs.rm(path.join(authDir, entry.name), { force: true });
+    }),
+  );
+}
+
+export async function logoutWeb(params: {
+  authDir?: string;
+  isLegacyAuthDir?: boolean;
+  runtime?: RuntimeEnv;
+}) {
+  const runtime = params.runtime ?? defaultRuntime;
+  const resolvedAuthDir = resolveUserPath(
+    params.authDir ?? resolveDefaultWebAuthDir(),
+  );
+  const exists = await webAuthExists(resolvedAuthDir);
   if (!exists) {
     runtime.log(info("No WhatsApp Web session found; nothing to delete."));
     return false;
   }
-  await fs.rm(resolveWebAuthDir(), { recursive: true, force: true });
-  // Also drop session store to clear lingering per-sender state after logout.
-  await fs.rm(resolveDefaultSessionStorePath(), { force: true });
+  if (params.isLegacyAuthDir) {
+    await clearLegacyBaileysAuthState(resolvedAuthDir);
+  } else {
+    await fs.rm(resolvedAuthDir, { recursive: true, force: true });
+  }
   runtime.log(success("Cleared WhatsApp Web credentials."));
   return true;
 }
 
-export function readWebSelfId() {
+export function readWebSelfId(authDir: string = resolveDefaultWebAuthDir()) {
   // Read the cached WhatsApp Web identity (jid + E.164) from disk if present.
   try {
-    const credsPath = resolveWebCredsPath();
+    const credsPath = resolveWebCredsPath(resolveUserPath(authDir));
     if (!fsSync.existsSync(credsPath)) {
       return { e164: null, jid: null } as const;
     }
@@ -385,9 +414,13 @@ export function readWebSelfId() {
  * Return the age (in milliseconds) of the cached WhatsApp web auth state, or null when missing.
  * Helpful for heartbeats/observability to spot stale credentials.
  */
-export function getWebAuthAgeMs(): number | null {
+export function getWebAuthAgeMs(
+  authDir: string = resolveDefaultWebAuthDir(),
+): number | null {
   try {
-    const stats = fsSync.statSync(resolveWebCredsPath());
+    const stats = fsSync.statSync(
+      resolveWebCredsPath(resolveUserPath(authDir)),
+    );
     return Date.now() - stats.mtimeMs;
   } catch {
     return null;
@@ -399,11 +432,12 @@ export function newConnectionId() {
 }
 
 export function logWebSelfId(
+  authDir: string = resolveDefaultWebAuthDir(),
   runtime: RuntimeEnv = defaultRuntime,
   includeProviderPrefix = false,
 ) {
   // Human-friendly log of the currently linked personal web session.
-  const { e164, jid } = readWebSelfId();
+  const { e164, jid } = readWebSelfId(authDir);
   const details =
     e164 || jid
       ? `${e164 ?? "unknown"}${jid ? ` (jid ${jid})` : ""}`
@@ -412,9 +446,12 @@ export function logWebSelfId(
   runtime.log(info(`${prefix}${details}`));
 }
 
-export async function pickProvider(pref: Provider | "auto"): Promise<Provider> {
+export async function pickProvider(
+  pref: Provider | "auto",
+  authDir: string = resolveDefaultWebAuthDir(),
+): Promise<Provider> {
   const choice: Provider = pref === "auto" ? "web" : pref;
-  const hasWeb = await webAuthExists();
+  const hasWeb = await webAuthExists(authDir);
   if (!hasWeb) {
     throw new Error(
       "No WhatsApp Web session found. Run `clawdbot login --verbose` to link.",

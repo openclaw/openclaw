@@ -7,10 +7,10 @@ read_when:
 
 Updated: 2025-12-23
 
-Status: WhatsApp Web via Baileys only. Gateway owns the single session.
+Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
 ## Goals
-- One WhatsApp identity, one gateway session.
+- Multiple WhatsApp accounts (multi-account) in one Gateway process.
 - Deterministic routing: replies return to WhatsApp, no model routing.
 - Model sees enough context to understand quoted replies.
 
@@ -37,9 +37,12 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Login + credentials
 - Login command: `clawdbot login` (QR via Linked Devices).
-- Credentials stored in `~/.clawdbot/credentials/creds.json`.
+- Multi-account login: `clawdbot login --account <id>` (`<id>` = `accountId`).
+- Default account (when `--account` is omitted): `default` if present, otherwise the first configured account id (sorted).
+- Credentials stored in `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`.
 - Backup copy at `creds.json.bak` (restored on corruption).
-- Logout: `clawdbot logout` deletes creds and session store.
+- Legacy compatibility: older installs stored Baileys files directly in `~/.clawdbot/credentials/`.
+- Logout: `clawdbot logout` (or `--account <id>`) deletes WhatsApp auth state (but keeps shared `oauth.json`).
 - Logged-out socket => error instructs re-link.
 
 ## Inbound flow (DM + group)
@@ -47,8 +50,12 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Inbox listeners are detached on shutdown to avoid accumulating event handlers in tests/restarts.
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
-- **Allowlist**: `whatsapp.allowFrom` enforced for direct chats only.
-  - If `whatsapp.allowFrom` is empty, default allowlist = self number (self-chat mode).
+- **DM policy**: `whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
+  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`).
+  - Open: requires `whatsapp.allowFrom` to include `"*"`.
+  - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
+- **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).
+  - `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
@@ -68,11 +75,12 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
   - `<media:image|video|audio|document|sticker>`
 
 ## Groups
-- Groups map to `whatsapp:group:<jid>` sessions.
+- Groups map to `agent:<agentId>:whatsapp:group:<jid>` sessions.
+- Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `open`).
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.
-- `/activation mention|always` is owner-only.
+- `/activation mention|always` is owner-only and must be sent as a standalone message.
 - Owner = `whatsapp.allowFrom` (or self E.164 if unset).
 - **History injection**:
   - Recent messages (default 50) inserted under:
@@ -84,7 +92,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Reply delivery (threading)
 - WhatsApp Web sends standard messages (no quoted reply threading in the current gateway).
-- Reply tags are ignored on this surface.
+- Reply tags are ignored on this provider.
 
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
@@ -107,8 +115,8 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Heartbeats
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
 - **Agent heartbeat** is global (`agent.heartbeat.*`) and runs in the main session.
-  - Uses `HEARTBEAT` prompt + `HEARTBEAT_OK` skip behavior.
-  - Delivery defaults to the last used channel (or configured target).
+  - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) + `HEARTBEAT_OK` skip behavior.
+  - Delivery defaults to the last used provider (or configured target).
 
 ## Reconnect behavior
 - Backoff policy: `web.reconnect`:
@@ -117,8 +125,12 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Logged-out => stop and require re-link.
 
 ## Config quick map
+- `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `whatsapp.allowFrom` (DM allowlist).
-- `whatsapp.groups` (group mention gating defaults/overrides)
+- `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
+- `whatsapp.groupAllowFrom` (group sender allowlist).
+- `whatsapp.groupPolicy` (group policy).
+- `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)
@@ -128,7 +140,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - `agent.heartbeat.model` (optional override)
 - `agent.heartbeat.target`
 - `agent.heartbeat.to`
-- `session.*` (scope, idle, store; `mainKey` is ignored)
+- `session.*` (scope, idle, store, mainKey)
 - `web.enabled` (disable provider startup when false)
 - `web.heartbeatSeconds`
 - `web.reconnect.*`
@@ -136,9 +148,9 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
-- Troubleshooting guide: `docs/troubleshooting.md`.
+- Troubleshooting guide: [`docs/troubleshooting.md`](https://docs.clawd.bot/troubleshooting).
 
 ## Tests
-- `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)
-- `src/web/monitor-inbox.test.ts` (inbound parsing + reply context)
-- `src/web/outbound.test.ts` (send mapping + media)
+- [`src/web/auto-reply.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/auto-reply.test.ts) (mention gating, history injection, reply flow)
+- [`src/web/monitor-inbox.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/monitor-inbox.test.ts) (inbound parsing + reply context)
+- [`src/web/outbound.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/outbound.test.ts) (send mapping + media)

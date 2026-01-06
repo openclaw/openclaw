@@ -12,13 +12,13 @@ We now serialize command-based auto-replies (WhatsApp Web listener) through a ti
 - Serializing avoids competing for terminal/stdin, keeps logs readable, and reduces the chance of rate limits from upstream tools.
 
 ## How it works
-- `src/process/command-queue.ts` holds a lane-aware FIFO queue and drains each lane synchronously.
+- [`src/process/command-queue.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/process/command-queue.ts) holds a lane-aware FIFO queue and drains each lane synchronously.
 - `runEmbeddedPiAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
 - Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agent.maxConcurrent`.
 - When verbose logging is enabled, queued commands emit a short notice if they waited more than ~2s before starting.
 - Typing indicators (`onReplyStart`) still fire immediately on enqueue so user experience is unchanged while we wait our turn.
 
-## Queue modes (per surface)
+## Queue modes (per provider)
 Inbound messages can steer the current run, wait for a followup turn, or do both:
 - `steer`: inject immediately into the current run (cancels pending tool calls after the next tool boundary). If not streaming, falls back to followup.
 - `followup`: enqueue for the next agent turn after the current run ends.
@@ -30,12 +30,12 @@ Inbound messages can steer the current run, wait for a followup turn, or do both
 Steer-backlog means you can get a followup response after the steered run, so
 streaming surfaces can look like duplicates. Prefer `collect`/`steer` if you want
 one response per inbound message.
-Inline fix: `/queue collect` (per-session) or set `routing.queue.bySurface.discord: "collect"`.
+Send `/queue collect` as a standalone command (per-session) or set `routing.queue.byProvider.discord: "collect"`.
 
 Defaults (when unset in config):
 - All surfaces → `collect`
 
-Configure globally or per surface via `routing.queue`:
+Configure globally or per provider via `routing.queue`:
 
 ```json5
 {
@@ -45,7 +45,7 @@ Configure globally or per surface via `routing.queue`:
       debounceMs: 1000,
       cap: 20,
       drop: "summarize",
-      bySurface: { discord: "collect" }
+      byProvider: { discord: "collect" }
     }
   }
 }
@@ -61,8 +61,7 @@ Summarize keeps a short bullet list of dropped messages and injects it as a synt
 Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 ## Per-session overrides
-- `/queue <mode>` as a standalone command stores the mode for the current session.
-- `/queue <mode>` embedded in a message applies **once** (no persistence).
+- Send `/queue <mode>` as a standalone command to store the mode for the current session.
 - Options can be combined: `/queue collect debounce:2s cap:25 drop:summarize`
 - `/queue default` or `/queue reset` clears the session override.
 

@@ -1,5 +1,5 @@
 export type AgentEnvelopeParams = {
-  surface: string;
+  provider: string;
   from?: string;
   timestamp?: number | Date;
   host?: string;
@@ -24,8 +24,8 @@ function formatTimestamp(ts?: number | Date): string | undefined {
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
-  const surface = params.surface?.trim() || "Surface";
-  const parts: string[] = [surface];
+  const provider = params.provider?.trim() || "Provider";
+  const parts: string[] = [provider];
   if (params.from?.trim()) parts.push(params.from.trim());
   if (params.host?.trim()) parts.push(params.host.trim());
   if (params.ip?.trim()) parts.push(params.ip.trim());

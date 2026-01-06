@@ -223,10 +223,11 @@ export async function openUrl(url: string): Promise<boolean> {
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
   runtime: RuntimeEnv,
+  options?: { skipBootstrap?: boolean },
 ) {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
-    ensureBootstrapFiles: true,
+    ensureBootstrapFiles: !options?.skipBootstrap,
   });
   runtime.log(`Workspace OK: ${ws.dir}`);
   const sessionsDir = resolveSessionTranscriptsDir();

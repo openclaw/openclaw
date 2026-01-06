@@ -9,6 +9,7 @@ import {
 import { Type } from "@sinclair/typebox";
 import type { ClawdbotConfig } from "../config/config.js";
 import { detectMime } from "../media/mime.js";
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import {
   type BashToolDefaults,
@@ -333,6 +334,23 @@ function normalizeToolNames(list?: string[]) {
   return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 }
 
+const DEFAULT_SUBAGENT_TOOL_DENY = [
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+];
+
+function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
+  const configured = cfg?.agent?.subagents?.tools;
+  const deny = [
+    ...DEFAULT_SUBAGENT_TOOL_DENY,
+    ...(Array.isArray(configured?.deny) ? configured.deny : []),
+  ];
+  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  return { allow, deny };
+}
+
 function filterToolsByPolicy(
   tools: AnyAgentTool[],
   policy?: SandboxToolPolicy,
@@ -466,28 +484,31 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
-function normalizeSurface(surface?: string): string | undefined {
-  const trimmed = surface?.trim().toLowerCase();
+function normalizeMessageProvider(
+  messageProvider?: string,
+): string | undefined {
+  const trimmed = messageProvider?.trim().toLowerCase();
   return trimmed ? trimmed : undefined;
 }
 
-function shouldIncludeDiscordTool(surface?: string): boolean {
-  const normalized = normalizeSurface(surface);
+function shouldIncludeDiscordTool(messageProvider?: string): boolean {
+  const normalized = normalizeMessageProvider(messageProvider);
   if (!normalized) return false;
   return normalized === "discord" || normalized.startsWith("discord:");
 }
 
-function shouldIncludeSlackTool(surface?: string): boolean {
-  const normalized = normalizeSurface(surface);
+function shouldIncludeSlackTool(messageProvider?: string): boolean {
+  const normalized = normalizeMessageProvider(messageProvider);
   if (!normalized) return false;
   return normalized === "slack" || normalized.startsWith("slack:");
 }
 
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
-  surface?: string;
+  messageProvider?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
+  agentDir?: string;
   config?: ClawdbotConfig;
 }): AnyAgentTool[] {
   const bashToolName = "bash";
@@ -533,12 +554,14 @@ export function createClawdbotCodingTools(options?: {
     ...createClawdbotTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
-      agentSurface: options?.surface,
+      agentProvider: options?.messageProvider,
+      agentDir: options?.agentDir,
+      sandboxed: !!sandbox,
       config: options?.config,
     }),
   ];
-  const allowDiscord = shouldIncludeDiscordTool(options?.surface);
-  const allowSlack = shouldIncludeSlackTool(options?.surface);
+  const allowDiscord = shouldIncludeDiscordTool(options?.messageProvider);
+  const allowSlack = shouldIncludeSlackTool(options?.messageProvider);
   const filtered = tools.filter((tool) => {
     if (tool.name === "discord") return allowDiscord;
     if (tool.name === "slack") return allowSlack;
@@ -553,7 +576,14 @@ export function createClawdbotCodingTools(options?: {
   const sandboxed = sandbox
     ? filterToolsByPolicy(globallyFiltered, sandbox.tools)
     : globallyFiltered;
+  const subagentFiltered =
+    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
+      ? filterToolsByPolicy(
+          sandboxed,
+          resolveSubagentToolPolicy(options.config),
+        )
+      : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
-  return sandboxed.map(normalizeToolParameters);
+  return subagentFiltered.map(normalizeToolParameters);
 }

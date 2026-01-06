@@ -68,7 +68,7 @@ pnpm test:docker:qr
 ### Notes
 
 - Gateway bind defaults to `lan` for container use.
-- The gateway container is the source of truth for sessions (`~/.clawdbot/sessions`).
+- The gateway container is the source of truth for sessions (`~/.clawdbot/agents/<agentId>/sessions/`).
 
 ## Per-session Agent Sandbox (host gateway + Docker tools)
 
@@ -88,7 +88,7 @@ container. The gateway stays on your host, but the tool execution is isolated:
 - Workspace per session under `~/.clawdbot/sandboxes`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
-- Default allow: `bash`, `process`, `read`, `write`, `edit`
+- Default allow: `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`
 - Default deny: `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`
 
 ### Enable sandboxing
@@ -124,7 +124,7 @@ container. The gateway stays on your host, but the tool execution is isolated:
         extraHosts: ["internal.service:10.0.0.5"]
       },
       tools: {
-        allow: ["bash", "process", "read", "write", "edit"],
+        allow: ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn"],
         deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
       },
       prune: {
@@ -252,7 +252,7 @@ Example:
 
 ## Troubleshooting
 
-- Image missing: build with `scripts/sandbox-setup.sh` or set `agent.sandbox.docker.image`.
+- Image missing: build with [`scripts/sandbox-setup.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/sandbox-setup.sh) or set `agent.sandbox.docker.image`.
 - Container not running: it will auto-create per session on demand.
 - Permission errors in sandbox: set `docker.user` to a UID:GID that matches your
   mounted workspace ownership (or chown the workspace folder).

@@ -51,6 +51,24 @@ function parsePort(raw: unknown): number | null {
   return parsed;
 }
 
+function describeUnknownError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === "string") return err;
+  if (typeof err === "number" || typeof err === "bigint") return err.toString();
+  if (typeof err === "boolean") return err ? "true" : "false";
+  if (err && typeof err === "object") {
+    if ("message" in err && typeof err.message === "string") {
+      return err.message;
+    }
+    try {
+      return JSON.stringify(err);
+    } catch {
+      return "Unknown error";
+    }
+  }
+  return "Unknown error";
+}
+
 function renderGatewayServiceStopHints(): string[] {
   switch (process.platform) {
     case "darwin":
@@ -353,12 +371,7 @@ export function registerGatewayCli(program: Command) {
             typeof err === "object" &&
             (err as { name?: string }).name === "GatewayLockError")
         ) {
-          const errMessage =
-            err instanceof Error
-              ? err.message
-              : typeof err === "object" && err !== null && "message" in err
-                ? String((err as { message?: unknown }).message ?? "")
-                : String(err);
+          const errMessage = describeUnknownError(err);
           defaultRuntime.error(
             `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot gateway stop`,
           );
@@ -568,12 +581,7 @@ export function registerGatewayCli(program: Command) {
             typeof err === "object" &&
             (err as { name?: string }).name === "GatewayLockError")
         ) {
-          const errMessage =
-            err instanceof Error
-              ? err.message
-              : typeof err === "object" && err !== null && "message" in err
-                ? String((err as { message?: unknown }).message ?? "")
-                : String(err);
+          const errMessage = describeUnknownError(err);
           defaultRuntime.error(
             `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot gateway stop`,
           );

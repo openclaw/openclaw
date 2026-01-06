@@ -36,7 +36,7 @@ Presence entries are produced by multiple sources and then **merged**.
 
 The Gateway seeds a “self” entry at startup so UIs always show at least the current gateway host.
 
-Implementation: `src/infra/system-presence.ts` (`initSelfPresence()`).
+Implementation: [`src/infra/system-presence.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/system-presence.ts) (`initSelfPresence()`).
 
 ### 2) WebSocket connect (connection-derived presence)
 
@@ -44,7 +44,7 @@ Every WS client must begin with a `connect` request. On successful handshake, th
 
 This is meant to answer: “Which clients are currently connected?”
 
-Implementation: `src/gateway/server.ts` (connect handling uses `connect.params.client.instanceId` when provided; otherwise falls back to `connId`).
+Implementation: [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts) (connect handling uses `connect.params.client.instanceId` when provided; otherwise falls back to `connId`).
 
 #### Why one-off CLI commands do not show up
 
@@ -58,8 +58,8 @@ Clients can publish richer periodic beacons via the `system-event` method. The m
 - `lastInputSeconds`
 
 Implementation:
-- Gateway: `src/gateway/server.ts` handles method `system-event` by calling `updateSystemPresence(...)`.
-- mac app beaconing: `apps/macos/Sources/Clawdbot/PresenceReporter.swift`.
+- Gateway: [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts) handles method `system-event` by calling `updateSystemPresence(...)`.
+- mac app beaconing: [`apps/macos/Sources/Clawdbot/PresenceReporter.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/PresenceReporter.swift).
 
 ### 4) Node bridge beacons (gateway-owned presence)
 
@@ -69,7 +69,7 @@ for that node and starts periodic refresh beacons so it does not expire.
 - Connect/disconnect markers: `node-connected`, `node-disconnected`
 - Periodic heartbeat: every 3 minutes (`reason: periodic`)
 
-Implementation: `src/gateway/server.ts` (node bridge handlers + timer beacons).
+Implementation: [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts) (node bridge handlers + timer beacons).
 
 ## Merge + dedupe rules (why `instanceId` matters)
 
@@ -80,7 +80,7 @@ Key points:
 - The best key is a stable, opaque `instanceId` that does not change across restarts.
 - Keys are treated case-insensitively.
 
-Implementation: `src/infra/system-presence.ts` (`normalizePresenceKey()`).
+Implementation: [`src/infra/system-presence.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/system-presence.ts) (`normalizePresenceKey()`).
 
 ### mac app identity (stable UUID)
 
@@ -89,7 +89,7 @@ The mac app uses a persisted UUID as `instanceId` so:
 - renaming the Mac does not create a new “instance”
 - debug/release builds can share the same identity
 
-Implementation: `apps/macos/Sources/Clawdbot/InstanceIdentity.swift`.
+Implementation: [`apps/macos/Sources/Clawdbot/InstanceIdentity.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/InstanceIdentity.swift).
 
 `displayName` (machine name) is used for UI, while `instanceId` is used for dedupe.
 
@@ -99,7 +99,7 @@ Presence entries are not permanent:
 - TTL: entries older than 5 minutes are pruned
 - Max: map is capped at 200 entries (LRU by `ts`)
 
-Implementation: `src/infra/system-presence.ts` (`TTL_MS`, `MAX_ENTRIES`, pruning in `listSystemPresence()`).
+Implementation: [`src/infra/system-presence.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/system-presence.ts) (`TTL_MS`, `MAX_ENTRIES`, pruning in `listSystemPresence()`).
 
 ## Remote/tunnel caveat (loopback IPs)
 
@@ -107,7 +107,7 @@ When a client connects over an SSH tunnel / local port forward, the Gateway may 
 
 To avoid degrading an otherwise-correct client beacon IP, the Gateway avoids writing loopback remote addresses into presence entries.
 
-Implementation: `src/gateway/server.ts` (`isLoopbackAddress()`).
+Implementation: [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts) (`isLoopbackAddress()`).
 
 ## Consumers (who reads presence)
 
@@ -116,8 +116,8 @@ Implementation: `src/gateway/server.ts` (`isLoopbackAddress()`).
 The mac app’s Instances tab renders the result of `system-presence`.
 
 Implementation:
-- View: `apps/macos/Sources/Clawdbot/InstancesSettings.swift`
-- Store: `apps/macos/Sources/Clawdbot/InstancesStore.swift`
+- View: [`apps/macos/Sources/Clawdbot/InstancesSettings.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/InstancesSettings.swift)
+- Store: [`apps/macos/Sources/Clawdbot/InstancesStore.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/InstancesStore.swift)
 
 The Instances rows show a small presence indicator (Active/Idle/Stale) based on
 the last beacon age. The label is derived from the entry timestamp (`ts`).

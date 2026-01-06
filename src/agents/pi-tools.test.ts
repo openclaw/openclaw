@@ -100,20 +100,52 @@ describe("createClawdbotCodingTools", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("scopes discord tool to discord surface", () => {
-    const other = createClawdbotCodingTools({ surface: "whatsapp" });
+  it("scopes discord tool to discord provider", () => {
+    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
     expect(other.some((tool) => tool.name === "discord")).toBe(false);
 
-    const discord = createClawdbotCodingTools({ surface: "discord" });
+    const discord = createClawdbotCodingTools({ messageProvider: "discord" });
     expect(discord.some((tool) => tool.name === "discord")).toBe(true);
   });
 
-  it("scopes slack tool to slack surface", () => {
-    const other = createClawdbotCodingTools({ surface: "whatsapp" });
+  it("scopes slack tool to slack provider", () => {
+    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
     expect(other.some((tool) => tool.name === "slack")).toBe(false);
 
-    const slack = createClawdbotCodingTools({ surface: "slack" });
+    const slack = createClawdbotCodingTools({ messageProvider: "slack" });
     expect(slack.some((tool) => tool.name === "slack")).toBe(true);
+  });
+
+  it("filters session tools for sub-agent sessions by default", () => {
+    const tools = createClawdbotCodingTools({
+      sessionKey: "agent:main:subagent:test",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("sessions_list")).toBe(false);
+    expect(names.has("sessions_history")).toBe(false);
+    expect(names.has("sessions_send")).toBe(false);
+    expect(names.has("sessions_spawn")).toBe(false);
+
+    expect(names.has("read")).toBe(true);
+    expect(names.has("bash")).toBe(true);
+    expect(names.has("process")).toBe(true);
+  });
+
+  it("supports allow-only sub-agent tool policy", () => {
+    const tools = createClawdbotCodingTools({
+      sessionKey: "agent:main:subagent:test",
+      // Intentionally partial config; only fields used by pi-tools are provided.
+      config: {
+        agent: {
+          subagents: {
+            tools: {
+              allow: ["read"],
+            },
+          },
+        },
+      },
+    });
+    expect(tools.map((tool) => tool.name)).toEqual(["read"]);
   });
 
   it("keeps read tool image metadata intact", async () => {

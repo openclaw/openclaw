@@ -172,7 +172,7 @@ Recommendation: **deep integration in Clawdbot**, but keep a separable core libr
 
 Shape:
 - `src/memory/*` (library-ish core; pure functions + sqlite adapter)
-- `src/commands/memory/*.ts` (CLI glue)
+- [`src/commands/memory/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/commands/memory/*.ts) (CLI glue)
 
 ## “S-Collide” / SuCo: when to use it (research)
 

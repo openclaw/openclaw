@@ -154,8 +154,8 @@ export function registerCronCli(program: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
-        "--channel <channel>",
-        "Delivery channel (last|whatsapp|telegram|discord|slack|signal|imessage)",
+        "--provider <provider>",
+        "Delivery provider (last|whatsapp|telegram|discord|slack|signal|imessage)",
         "last",
       )
       .option(
@@ -255,7 +255,8 @@ export function registerCronCli(program: Command) {
                   ? timeoutSeconds
                   : undefined,
               deliver: Boolean(opts.deliver),
-              channel: typeof opts.channel === "string" ? opts.channel : "last",
+              provider:
+                typeof opts.provider === "string" ? opts.provider : "last",
               to:
                 typeof opts.to === "string" && opts.to.trim()
                   ? opts.to.trim()
@@ -413,8 +414,8 @@ export function registerCronCli(program: Command) {
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
-        "--channel <channel>",
-        "Delivery channel (last|whatsapp|telegram|discord|slack|signal|imessage)",
+        "--provider <provider>",
+        "Delivery provider (last|whatsapp|telegram|discord|slack|signal|imessage)",
       )
       .option(
         "--to <dest>",
@@ -502,8 +503,8 @@ export function registerCronCli(program: Command) {
                   ? timeoutSeconds
                   : undefined,
               deliver: Boolean(opts.deliver),
-              channel:
-                typeof opts.channel === "string" ? opts.channel : undefined,
+              provider:
+                typeof opts.provider === "string" ? opts.provider : undefined,
               to: typeof opts.to === "string" ? opts.to : undefined,
               bestEffortDeliver: Boolean(opts.bestEffortDeliver),
             };

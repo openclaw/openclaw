@@ -37,6 +37,8 @@ function createTyping(): TypingController {
     startTypingLoop: vi.fn(async () => {}),
     startTypingOnText: vi.fn(async () => {}),
     refreshTypingTtl: vi.fn(),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
     cleanup: vi.fn(),
   };
 }
@@ -88,7 +90,7 @@ describe("createFollowupRunner compaction", () => {
       run: {
         sessionId: "session",
         sessionKey: "main",
-        surface: "whatsapp",
+        messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
         config: {},

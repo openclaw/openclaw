@@ -327,7 +327,9 @@ describe("gateway server cron", () => {
           : "";
       expect(storePath).toContain("jobs.json");
 
-      const atMs = Date.now() + 80;
+      // Avoid races: if we schedule too close to "now", the cron runner can
+      // finish before we start listening for the "finished" event.
+      const atMs = Date.now() + 1000;
       const addRes = await rpcReq(ws, "cron.add", {
         name: "auto run test",
         enabled: true,
@@ -345,8 +347,12 @@ describe("gateway server cron", () => {
         type: "event";
         event: string;
         payload?: { jobId?: string; action?: string; status?: string } | null;
-      }>((resolve) => {
-        const timeout = setTimeout(() => resolve(null as never), 8000);
+      }>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          reject(
+            new Error(`timeout waiting for cron finished event: ${jobId}`),
+          );
+        }, 8000);
         ws.on("message", (data) => {
           const obj = JSON.parse(decodeWsData(data));
           if (

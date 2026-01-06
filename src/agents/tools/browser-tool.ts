@@ -118,6 +118,7 @@ const BrowserToolSchema = Type.Object({
     Type.Literal("dialog"),
     Type.Literal("act"),
   ]),
+  profile: Type.Optional(Type.String()),
   controlUrl: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
@@ -161,38 +162,41 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const controlUrl = readStringParam(params, "controlUrl");
+      const profile = readStringParam(params, "profile");
       const baseUrl = resolveBrowserBaseUrl(
         controlUrl ?? opts?.defaultControlUrl,
       );
 
       switch (action) {
         case "status":
-          return jsonResult(await browserStatus(baseUrl));
+          return jsonResult(await browserStatus(baseUrl, { profile }));
         case "start":
-          await browserStart(baseUrl);
-          return jsonResult(await browserStatus(baseUrl));
+          await browserStart(baseUrl, { profile });
+          return jsonResult(await browserStatus(baseUrl, { profile }));
         case "stop":
-          await browserStop(baseUrl);
-          return jsonResult(await browserStatus(baseUrl));
+          await browserStop(baseUrl, { profile });
+          return jsonResult(await browserStatus(baseUrl, { profile }));
         case "tabs":
-          return jsonResult({ tabs: await browserTabs(baseUrl) });
+          return jsonResult({ tabs: await browserTabs(baseUrl, { profile }) });
         case "open": {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
           });
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl));
+          return jsonResult(
+            await browserOpenTab(baseUrl, targetUrl, { profile }),
+          );
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
             required: true,
           });
-          await browserFocusTab(baseUrl, targetId);
+          await browserFocusTab(baseUrl, targetId, { profile });
           return jsonResult({ ok: true });
         }
         case "close": {
           const targetId = readStringParam(params, "targetId");
-          if (targetId) await browserCloseTab(baseUrl, targetId);
-          else await browserAct(baseUrl, { kind: "close" });
+          if (targetId) await browserCloseTab(baseUrl, targetId, { profile });
+          else await browserAct(baseUrl, { kind: "close" }, { profile });
           return jsonResult({ ok: true });
         }
         case "snapshot": {
@@ -212,6 +216,7 @@ export function createBrowserTool(opts?: {
             format,
             targetId,
             limit,
+            profile,
           });
           if (snapshot.format === "ai") {
             return {
@@ -233,6 +238,7 @@ export function createBrowserTool(opts?: {
             ref,
             element,
             type,
+            profile,
           });
           return await imageResultFromFile({
             label: "browser:screenshot",
@@ -246,7 +252,11 @@ export function createBrowserTool(opts?: {
           });
           const targetId = readStringParam(params, "targetId");
           return jsonResult(
-            await browserNavigate(baseUrl, { url: targetUrl, targetId }),
+            await browserNavigate(baseUrl, {
+              url: targetUrl,
+              targetId,
+              profile,
+            }),
           );
         }
         case "console": {
@@ -257,7 +267,7 @@ export function createBrowserTool(opts?: {
               ? params.targetId.trim()
               : undefined;
           return jsonResult(
-            await browserConsoleMessages(baseUrl, { level, targetId }),
+            await browserConsoleMessages(baseUrl, { level, targetId, profile }),
           );
         }
         case "pdf": {
@@ -265,7 +275,7 @@ export function createBrowserTool(opts?: {
             typeof params.targetId === "string"
               ? params.targetId.trim()
               : undefined;
-          const result = await browserPdfSave(baseUrl, { targetId });
+          const result = await browserPdfSave(baseUrl, { targetId, profile });
           return {
             content: [{ type: "text", text: `FILE:${result.path}` }],
             details: result,
@@ -296,6 +306,7 @@ export function createBrowserTool(opts?: {
               element,
               targetId,
               timeoutMs,
+              profile,
             }),
           );
         }
@@ -320,6 +331,7 @@ export function createBrowserTool(opts?: {
               promptText,
               targetId,
               timeoutMs,
+              profile,
             }),
           );
         }
@@ -331,6 +343,7 @@ export function createBrowserTool(opts?: {
           const result = await browserAct(
             baseUrl,
             request as Parameters<typeof browserAct>[1],
+            { profile },
           );
           return jsonResult(result);
         }

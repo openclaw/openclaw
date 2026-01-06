@@ -126,9 +126,10 @@ export async function handleDiscordMessagingAction(
         typeof durationRaw === "number" && Number.isFinite(durationRaw)
           ? durationRaw
           : undefined;
+      const maxSelections = allowMultiselect ? Math.max(2, answers.length) : 1;
       await sendPollDiscord(
         to,
-        { question, answers, allowMultiselect, durationHours },
+        { question, options: answers, maxSelections, durationHours },
         { content },
       );
       return jsonResult({ ok: true });

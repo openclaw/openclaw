@@ -9,6 +9,7 @@ export function buildAgentSystemPromptAppend(params: {
   toolNames?: string[];
   userTimezone?: string;
   userTime?: string;
+  heartbeatPrompt?: string;
   runtimeInfo?: {
     host?: string;
     os?: string;
@@ -113,6 +114,10 @@ export function buildAgentSystemPromptAppend(params: {
     : undefined;
   const userTimezone = params.userTimezone?.trim();
   const userTime = params.userTime?.trim();
+  const heartbeatPrompt = params.heartbeatPrompt?.trim();
+  const heartbeatPromptLine = heartbeatPrompt
+    ? `Heartbeat prompt: ${heartbeatPrompt}`
+    : "Heartbeat prompt: (configured)";
   const runtimeInfo = params.runtimeInfo;
   const runtimeLines: string[] = [];
   if (runtimeInfo?.host) runtimeLines.push(`Host: ${runtimeInfo.host}`);
@@ -207,7 +212,8 @@ export function buildAgentSystemPromptAppend(params: {
 
   lines.push(
     "## Heartbeats",
-    'If you receive a heartbeat poll (a user message containing just "HEARTBEAT"), and there is nothing that needs attention, reply exactly:',
+    heartbeatPromptLine,
+    "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
     "HEARTBEAT_OK",
     'Clawdbot treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
     'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',

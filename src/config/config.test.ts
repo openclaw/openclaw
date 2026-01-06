@@ -87,6 +87,57 @@ describe("config identity defaults", () => {
     });
   });
 
+  it("defaults ackReaction to identity emoji", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" },
+            messages: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.ackReaction).toBe("🦥");
+      expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+    });
+  });
+
+  it("defaults ackReaction to 👀 when identity is missing", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            messages: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.ackReaction).toBe("👀");
+      expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+    });
+  });
+
   it("does not override explicit values", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdbot");
@@ -625,6 +676,166 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("telegram.requireMention");
+    }
+  });
+
+  it('rejects telegram.dmPolicy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      telegram: { dmPolicy: "open", allowFrom: ["123456789"] },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("telegram.allowFrom");
+    }
+  });
+
+  it('accepts telegram.dmPolicy="open" with allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      telegram: { dmPolicy: "open", allowFrom: ["*"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.telegram?.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults telegram.dmPolicy to pairing when telegram section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ telegram: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.telegram?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      whatsapp: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("whatsapp.allowFrom");
+    }
+  });
+
+  it('accepts whatsapp.dmPolicy="open" with allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      whatsapp: { dmPolicy: "open", allowFrom: ["*"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.whatsapp?.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults whatsapp.dmPolicy to pairing when whatsapp section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ whatsapp: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.whatsapp?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it('rejects signal.dmPolicy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      signal: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("signal.allowFrom");
+    }
+  });
+
+  it('accepts signal.dmPolicy="open" with allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      signal: { dmPolicy: "open", allowFrom: ["*"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.signal?.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults signal.dmPolicy to pairing when signal section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ signal: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.signal?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it('rejects imessage.dmPolicy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      imessage: { dmPolicy: "open", allowFrom: ["+15555550123"] },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("imessage.allowFrom");
+    }
+  });
+
+  it('accepts imessage.dmPolicy="open" with allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      imessage: { dmPolicy: "open", allowFrom: ["*"] },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.imessage?.dmPolicy).toBe("open");
+    }
+  });
+
+  it("defaults imessage.dmPolicy to pairing when imessage section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ imessage: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.imessage?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it('rejects discord.dm.policy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      discord: { dm: { policy: "open", allowFrom: ["123"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("discord.dm.allowFrom");
+    }
+  });
+
+  it('rejects slack.dm.policy="open" without allowFrom "*"', async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      slack: { dm: { policy: "open", allowFrom: ["U123"] } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("slack.dm.allowFrom");
     }
   });
 

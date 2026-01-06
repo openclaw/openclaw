@@ -20,7 +20,10 @@ export function registerBrowserCli(program: Command) {
       "--url <url>",
       "Override browser control URL (default from ~/.clawdbot/clawdbot.json)",
     )
-    .option("--profile <name>", "Browser profile name (default from config)")
+    .option(
+      "--browser-profile <name>",
+      "Browser profile name (default from config)",
+    )
     .option("--json", "Output machine-readable JSON", false)
     .addHelpText(
       "after",

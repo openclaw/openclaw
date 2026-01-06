@@ -189,9 +189,25 @@ All existing endpoints accept optional `?profile=<name>` query parameter:
 - `GET /?profile=work` — status for work profile
 - `POST /start?profile=work` — start work profile browser
 - `GET /tabs?profile=work` — list tabs for work profile
+- `POST /tabs/open?profile=work` — open tab in work profile
 - etc.
 
 When `profile` is omitted, uses `browser.defaultProfile` (defaults to "clawd").
+
+### Agent browser tool
+
+The `browser` tool accepts an optional `profile` parameter for all actions:
+
+```json
+{
+  "action": "open",
+  "targetUrl": "https://example.com",
+  "profile": "work"
+}
+```
+
+This routes the operation to the specified profile's browser instance. Omitting
+`profile` uses the default profile.
 
 ### Profile naming rules
 
@@ -221,7 +237,7 @@ The agent should not assume tabs are ephemeral. It should:
 
 ## CLI quick reference (one example each)
 
-All commands accept `--profile <name>` to target a specific profile (default: `clawd`).
+All commands accept `--browser-profile <name>` to target a specific profile (default: `clawd`).
 
 Profile management:
 - `clawdbot browser profiles`
@@ -290,4 +306,4 @@ Notes:
 
 ## Troubleshooting
 
-For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting.md](./browser-linux-troubleshooting.md).
+For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting](https://docs.clawd.bot/browser-linux-troubleshooting).

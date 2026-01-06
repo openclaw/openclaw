@@ -16,109 +16,127 @@
 </p>
 
 **Clawdbot** is a *personal AI assistant* you run on your own devices.
-It answers you on the surfaces you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the providers you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-Website: [https://clawdbot.com](https://clawdbot.com) · Docs: [https://docs.clawdbot.com](https://docs.clawdbot.com/) · Showcase: [https://docs.clawdbot.com/showcase](https://docs.clawdbot.com/showcase) · FAQ: [https://docs.clawdbot.com/faq](https://docs.clawdbot.com/faq) · Wizard: [https://docs.clawdbot.com/wizard](https://docs.clawdbot.com/wizard) · Nix: [https://github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [https://docs.clawdbot.com/docker](https://docs.clawdbot.com/docker) · Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+[Website](https://clawdbot.com) · [Docs](https://docs.clawd.bot) · Getting Started: [https://docs.clawd.bot/getting-started](https://docs.clawd.bot/getting-started) · Updating: [https://docs.clawd.bot/updating](https://docs.clawd.bot/updating) · Showcase: [https://docs.clawd.bot/showcase](https://docs.clawd.bot/showcase) · FAQ: [https://docs.clawd.bot/faq](https://docs.clawd.bot/faq) · Wizard: [https://docs.clawd.bot/wizard](https://docs.clawd.bot/wizard) · Nix: [https://github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [https://docs.clawd.bot/docker](https://docs.clawd.bot/docker) · Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
 Works with npm, pnpm, or bun.
+New install? Start here: https://docs.clawd.bot/getting-started
 
 **Subscriptions (OAuth):**
 - **Anthropic** (Claude Pro/Max)
 - **OpenAI** (ChatGPT/Codex)
 
-Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.clawdbot.com/onboarding).
+Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.5** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.clawd.bot/onboarding).
+
+## Models (selection + auth)
+
+- Models config + CLI: https://docs.clawd.bot/models
+- Auth profile rotation (OAuth vs API keys) + fallbacks: https://docs.clawd.bot/model-failover
 
 ## Recommended setup (from source)
 
-Do **not** download prebuilt binaries. Build from source.
+Do **not** download prebuilt binaries. Run from source.
+
+Prefer **Bun**. `pnpm` is also supported (see https://docs.clawd.bot/getting-started).
 
 ```bash
 # Clone this repo
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 
-pnpm install
-pnpm build
-pnpm ui:build
-pnpm clawdbot onboard
+bun install
+bun run ui:install
+bun run ui:build
+bun run build
+bun run clawdbot onboard
 ```
 
-## Quick start (from source)
+Note: `bun run clawdbot ...` runs TypeScript directly. `bun run build` produces `dist/` for running via Node / the packaged `clawdbot` binary.
 
-Runtime: **Node ≥22** + **pnpm**.
+## Quick start (TL;DR)
+
+Runtime: **Node ≥22**.
+
+Full beginner guide (auth, pairing, providers): https://docs.clawd.bot/getting-started
 
 ```bash
-pnpm install
-pnpm build
-pnpm ui:build
+bun run clawdbot onboard
 
-# Recommended: run the onboarding wizard
-pnpm clawdbot onboard
-
-# Link WhatsApp (stores creds in ~/.clawdbot/credentials)
-pnpm clawdbot login
-
-# Start the gateway
-pnpm clawdbot gateway --port 18789 --verbose
+bun run clawdbot gateway --port 18789 --verbose
 
 # Dev loop (auto-reload on TS changes)
-pnpm gateway:watch
+bun run gateway:watch
 
 # Send a message
-pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
+bun run clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 
 # Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
-pnpm clawdbot agent --message "Ship checklist" --thinking high
+bun run clawdbot agent --message "Ship checklist" --thinking high
 ```
 
-Upgrading? `clawdbot doctor`.
+Upgrading? https://docs.clawd.bot/updating (and run `clawdbot doctor`).
 
-If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
+If you run from source, prefer `bun run clawdbot …` or `pnpm clawdbot …` (not global `clawdbot`).
+
+## Security defaults (DM access)
+
+Clawdbot connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
+
+Full security guide: https://docs.clawd.bot/security
+
+Default behavior on Telegram/WhatsApp/Signal/iMessage/Discord/Slack:
+- **DM pairing** (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
+- Approve with: `clawdbot pairing approve --provider <provider> <code>` (then the sender is added to a local allowlist store).
+- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the provider allowlist (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`).
+
+Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 
 ## Highlights
 
-- **[Local-first Gateway](https://docs.clawdbot.com/gateway)** — single control plane for sessions, providers, tools, and events.
-- **[Multi-surface inbox](https://docs.clawdbot.com/surface)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat, macOS, iOS/Android.
-- **[Voice Wake](https://docs.clawdbot.com/voicewake) + [Talk Mode](https://docs.clawdbot.com/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
-- **[Live Canvas](https://docs.clawdbot.com/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.clawdbot.com/refactor/canvas-a2ui).
-- **[First-class tools](https://docs.clawdbot.com/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
-- **[Companion apps](https://docs.clawdbot.com/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.clawdbot.com/nodes).
-- **[Onboarding](https://docs.clawdbot.com/wizard) + [skills](https://docs.clawdbot.com/skills)** — wizard-driven setup with bundled/managed/workspace skills.
+- **[Local-first Gateway](https://docs.clawd.bot/gateway)** — single control plane for sessions, providers, tools, and events.
+- **[Multi-provider inbox](https://docs.clawd.bot/surface)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat, macOS, iOS/Android.
+- **[Multi-agent routing](https://docs.clawd.bot/configuration)** — route inbound providers/accounts/peers to isolated agents (workspaces + per-agent sessions).
+- **[Voice Wake](https://docs.clawd.bot/voicewake) + [Talk Mode](https://docs.clawd.bot/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
+- **[Live Canvas](https://docs.clawd.bot/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.clawd.bot/mac/canvas#canvas-a2ui).
+- **[First-class tools](https://docs.clawd.bot/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
+- **[Companion apps](https://docs.clawd.bot/macos)** — macOS menu bar app + iOS/Android [nodes](https://docs.clawd.bot/nodes).
+- **[Onboarding](https://docs.clawd.bot/wizard) + [skills](https://docs.clawd.bot/skills)** — wizard-driven setup with bundled/managed/workspace skills.
 
 ## Everything we built so far
 
 ### Core platform
-- [Gateway WS control plane](https://docs.clawdbot.com/gateway) with sessions, presence, config, cron, webhooks, [Control UI](https://docs.clawdbot.com/web), and [Canvas host](https://docs.clawdbot.com/refactor/canvas-a2ui).
-- [CLI surface](https://docs.clawdbot.com/agent-send): gateway, agent, send, [wizard](https://docs.clawdbot.com/wizard), and [doctor](https://docs.clawdbot.com/doctor).
-- [Pi agent runtime](https://docs.clawdbot.com/agent) in RPC mode with tool streaming and block streaming.
-- [Session model](https://docs.clawdbot.com/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.clawdbot.com/groups).
-- [Media pipeline](https://docs.clawdbot.com/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawdbot.com/audio).
+- [Gateway WS control plane](https://docs.clawd.bot/gateway) with sessions, presence, config, cron, webhooks, [Control UI](https://docs.clawd.bot/web), and [Canvas host](https://docs.clawd.bot/mac/canvas#canvas-a2ui).
+- [CLI surface](https://docs.clawd.bot/agent-send): gateway, agent, send, [wizard](https://docs.clawd.bot/wizard), and [doctor](https://docs.clawd.bot/doctor).
+- [Pi agent runtime](https://docs.clawd.bot/agent) in RPC mode with tool streaming and block streaming.
+- [Session model](https://docs.clawd.bot/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.clawd.bot/groups).
+- [Media pipeline](https://docs.clawd.bot/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawd.bot/audio).
 
-### Surfaces + providers
-- [Providers](https://docs.clawdbot.com/surface): [WhatsApp](https://docs.clawdbot.com/whatsapp) (Baileys), [Telegram](https://docs.clawdbot.com/telegram) (grammY), [Slack](https://docs.clawdbot.com/slack) (Bolt), [Discord](https://docs.clawdbot.com/discord) (discord.js), [Signal](https://docs.clawdbot.com/signal) (signal-cli), [iMessage](https://docs.clawdbot.com/imessage) (imsg), [WebChat](https://docs.clawdbot.com/webchat).
-- [Group routing](https://docs.clawdbot.com/group-messages): mention gating, reply tags, per-surface chunking and routing. Surface rules: [Surface routing](https://docs.clawdbot.com/surface).
+### Providers
+- [Providers](https://docs.clawd.bot/surface): [WhatsApp](https://docs.clawd.bot/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/telegram) (grammY), [Slack](https://docs.clawd.bot/slack) (Bolt), [Discord](https://docs.clawd.bot/discord) (discord.js), [Signal](https://docs.clawd.bot/signal) (signal-cli), [iMessage](https://docs.clawd.bot/imessage) (imsg), [WebChat](https://docs.clawd.bot/webchat).
+- [Group routing](https://docs.clawd.bot/group-messages): mention gating, reply tags, per-provider chunking and routing. Provider rules: [Providers](https://docs.clawd.bot/surface).
 
 ### Apps + nodes
-- [macOS app](https://docs.clawdbot.com/macos): menu bar control plane, [Voice Wake](https://docs.clawdbot.com/voicewake)/PTT, [Talk Mode](https://docs.clawdbot.com/talk) overlay, [WebChat](https://docs.clawdbot.com/webchat), debug tools, [remote gateway](https://docs.clawdbot.com/remote) control.
-- [iOS node](https://docs.clawdbot.com/ios): [Canvas](https://docs.clawdbot.com/mac/canvas), [Voice Wake](https://docs.clawdbot.com/voicewake), [Talk Mode](https://docs.clawdbot.com/talk), camera, screen recording, Bonjour pairing.
-- [Android node](https://docs.clawdbot.com/android): [Canvas](https://docs.clawdbot.com/mac/canvas), [Talk Mode](https://docs.clawdbot.com/talk), camera, screen recording, optional SMS.
-- [macOS node mode](https://docs.clawdbot.com/nodes): system.run/notify + canvas/camera exposure.
+- [macOS app](https://docs.clawd.bot/macos): menu bar control plane, [Voice Wake](https://docs.clawd.bot/voicewake)/PTT, [Talk Mode](https://docs.clawd.bot/talk) overlay, [WebChat](https://docs.clawd.bot/webchat), debug tools, [remote gateway](https://docs.clawd.bot/remote) control.
+- [iOS node](https://docs.clawd.bot/ios): [Canvas](https://docs.clawd.bot/mac/canvas), [Voice Wake](https://docs.clawd.bot/voicewake), [Talk Mode](https://docs.clawd.bot/talk), camera, screen recording, Bonjour pairing.
+- [Android node](https://docs.clawd.bot/android): [Canvas](https://docs.clawd.bot/mac/canvas), [Talk Mode](https://docs.clawd.bot/talk), camera, screen recording, optional SMS.
+- [macOS node mode](https://docs.clawd.bot/nodes): system.run/notify + canvas/camera exposure.
 
 ### Tools + automation
-- [Browser control](https://docs.clawdbot.com/browser): dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
-- [Canvas](https://docs.clawdbot.com/mac/canvas): [A2UI](https://docs.clawdbot.com/refactor/canvas-a2ui) push/reset, eval, snapshot.
-- [Nodes](https://docs.clawdbot.com/nodes): camera snap/clip, screen record, [location.get](https://docs.clawdbot.com/location-command), notifications.
-- [Cron + wakeups](https://docs.clawdbot.com/cron); [webhooks](https://docs.clawdbot.com/webhook); [Gmail Pub/Sub](https://docs.clawdbot.com/gmail-pubsub).
-- [Skills platform](https://docs.clawdbot.com/skills): bundled, managed, and workspace skills with install gating + UI.
+- [Browser control](https://docs.clawd.bot/browser): dedicated clawd Chrome/Chromium, snapshots, actions, uploads, profiles.
+- [Canvas](https://docs.clawd.bot/mac/canvas): [A2UI](https://docs.clawd.bot/mac/canvas#canvas-a2ui) push/reset, eval, snapshot.
+- [Nodes](https://docs.clawd.bot/nodes): camera snap/clip, screen record, [location.get](https://docs.clawd.bot/location-command), notifications.
+- [Cron + wakeups](https://docs.clawd.bot/cron); [webhooks](https://docs.clawd.bot/webhook); [Gmail Pub/Sub](https://docs.clawd.bot/gmail-pubsub).
+- [Skills platform](https://docs.clawd.bot/skills): bundled, managed, and workspace skills with install gating + UI.
 
 ### Ops + packaging
-- [Control UI](https://docs.clawdbot.com/web) + [WebChat](https://docs.clawdbot.com/webchat) served directly from the Gateway.
-- [Tailscale Serve/Funnel](https://docs.clawdbot.com/tailscale) or [SSH tunnels](https://docs.clawdbot.com/remote) with token/password auth.
-- [Nix mode](https://docs.clawdbot.com/nix) for declarative config; [Docker](https://docs.clawdbot.com/docker)-based installs.
-- [Doctor](https://docs.clawdbot.com/doctor) migrations, [logging](https://docs.clawdbot.com/logging).
+- [Control UI](https://docs.clawd.bot/web) + [WebChat](https://docs.clawd.bot/webchat) served directly from the Gateway.
+- [Tailscale Serve/Funnel](https://docs.clawd.bot/tailscale) or [SSH tunnels](https://docs.clawd.bot/remote) with token/password auth.
+- [Nix mode](https://docs.clawd.bot/nix) for declarative config; [Docker](https://docs.clawd.bot/docker)-based installs.
+- [Doctor](https://docs.clawd.bot/doctor) migrations, [logging](https://docs.clawd.bot/logging).
 
 ## How it works (short)
 
@@ -140,12 +158,12 @@ WhatsApp / Telegram / Slack / Discord / Signal / iMessage / WebChat
 
 ## Key subsystems
 
-- **[Gateway WebSocket network](https://docs.clawdbot.com/architecture)** — single WS control plane for clients, tools, and events (plus ops: [Gateway runbook](https://docs.clawdbot.com/gateway)).
-- **[Tailscale exposure](https://docs.clawdbot.com/tailscale)** — Serve/Funnel for the Gateway dashboard + WS (remote access: [Remote](https://docs.clawdbot.com/remote)).
-- **[Browser control](https://docs.clawdbot.com/browser)** — clawd‑managed Chrome/Chromium with CDP control.
-- **[Canvas + A2UI](https://docs.clawdbot.com/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.clawdbot.com/refactor/canvas-a2ui)).
-- **[Voice Wake](https://docs.clawdbot.com/voicewake) + [Talk Mode](https://docs.clawdbot.com/talk)** — always‑on speech and continuous conversation.
-- **[Nodes](https://docs.clawdbot.com/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
+- **[Gateway WebSocket network](https://docs.clawd.bot/architecture)** — single WS control plane for clients, tools, and events (plus ops: [Gateway runbook](https://docs.clawd.bot/gateway)).
+- **[Tailscale exposure](https://docs.clawd.bot/tailscale)** — Serve/Funnel for the Gateway dashboard + WS (remote access: [Remote](https://docs.clawd.bot/remote)).
+- **[Browser control](https://docs.clawd.bot/browser)** — clawd‑managed Chrome/Chromium with CDP control.
+- **[Canvas + A2UI](https://docs.clawd.bot/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.clawd.bot/mac/canvas#canvas-a2ui)).
+- **[Voice Wake](https://docs.clawd.bot/voicewake) + [Talk Mode](https://docs.clawd.bot/talk)** — always‑on speech and continuous conversation.
+- **[Nodes](https://docs.clawd.bot/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
 
 ## Tailscale access (Gateway dashboard)
 
@@ -161,7 +179,7 @@ Notes:
 - Funnel refuses to start unless `gateway.auth.mode: "password"` is set.
 - Optional: `gateway.tailscale.resetOnExit` to undo Serve/Funnel on shutdown.
 
-Details: [Tailscale guide](https://docs.clawdbot.com/tailscale) · [Web surfaces](https://docs.clawdbot.com/web)
+Details: [Tailscale guide](https://docs.clawd.bot/tailscale) · [Web surfaces](https://docs.clawd.bot/web)
 
 ## Remote Gateway (Linux is great)
 
@@ -171,7 +189,7 @@ It’s perfectly fine to run the Gateway on a small Linux instance. Clients (mac
 - **Device nodes** run device‑local actions (`system.run`, camera, screen recording, notifications) via `node.invoke`.
 In short: bash runs where the Gateway lives; device actions run where the device lives.
 
-Details: [Remote access](https://docs.clawdbot.com/remote) · [Nodes](https://docs.clawdbot.com/nodes) · [Security](https://docs.clawdbot.com/security)
+Details: [Remote access](https://docs.clawd.bot/remote) · [Nodes](https://docs.clawd.bot/nodes) · [Security](https://docs.clawd.bot/security)
 
 ## macOS permissions via the Gateway protocol
 
@@ -186,7 +204,7 @@ Elevated bash (host permissions) is separate from macOS TCC:
 - Use `/elevated on|off` to toggle per‑session elevated access when enabled + allowlisted.
 - Gateway persists the per‑session toggle via `sessions.patch` (WS method) alongside `thinkingLevel`, `verboseLevel`, `model`, `sendPolicy`, and `groupActivation`.
 
-Details: [Nodes](https://docs.clawdbot.com/nodes) · [macOS app](https://docs.clawdbot.com/macos) · [Gateway protocol](https://docs.clawdbot.com/architecture)
+Details: [Nodes](https://docs.clawd.bot/nodes) · [macOS app](https://docs.clawd.bot/macos) · [Gateway protocol](https://docs.clawd.bot/architecture)
 
 ## Agent to Agent (sessions_* tools)
 
@@ -195,7 +213,7 @@ Details: [Nodes](https://docs.clawdbot.com/nodes) · [macOS app](https://docs.cl
 - `sessions_history` — fetch transcript logs for a session.
 - `sessions_send` — message another session; optional reply‑back ping‑pong + announce step (`REPLY_SKIP`, `ANNOUNCE_SKIP`).
 
-Details: [Session tools](https://docs.clawdbot.com/session-tool)
+Details: [Session tools](https://docs.clawd.bot/session-tool)
 
 ## Skills registry (ClawdHub)
 
@@ -241,13 +259,13 @@ Note: signed builds required for macOS permissions to stick across rebuilds (see
 - Voice trigger forwarding + Canvas surface.
 - Controlled via `clawdbot nodes …`.
 
-Runbook: [iOS connect](https://docs.clawdbot.com/ios).
+Runbook: [iOS connect](https://docs.clawd.bot/ios).
 
 ### Android node (optional)
 
 - Pairs via the same Bridge + pairing flow as iOS.
 - Exposes Canvas, Camera, and Screen capture commands.
-- Runbook: [Android connect](https://docs.clawdbot.com/android).
+- Runbook: [Android connect](https://docs.clawd.bot/android).
 
 ## Agent workspace + skills
 
@@ -267,25 +285,26 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 }
 ```
 
-[Full configuration reference (all keys + examples).](https://docs.clawdbot.com/configuration)
+[Full configuration reference (all keys + examples).](https://docs.clawd.bot/configuration)
 
 ## Security model (important)
 
 - **Default:** tools run on the host for the **main** session, so the agent has full access when it’s just you.
 - **Group/channel safety:** set `agent.sandbox.mode: "non-main"` to run **non‑main sessions** (groups/channels) inside per‑session Docker sandboxes; bash then runs in Docker for those sessions.
-- **Sandbox defaults:** allowlist `bash`, `process`, `read`, `write`, `edit`; denylist `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
+- **Sandbox defaults:** allowlist `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`; denylist `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
 
-Details: [Security guide](https://docs.clawdbot.com/security) · [Docker + sandboxing](https://docs.clawdbot.com/docker) · [Sandbox config](https://docs.clawdbot.com/configuration)
+Details: [Security guide](https://docs.clawd.bot/security) · [Docker + sandboxing](https://docs.clawd.bot/docker) · [Sandbox config](https://docs.clawd.bot/configuration)
 
-### [WhatsApp](https://docs.clawdbot.com/whatsapp)
+### [WhatsApp](https://docs.clawd.bot/whatsapp)
 
 - Link the device: `pnpm clawdbot login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
+- If `whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
-### [Telegram](https://docs.clawdbot.com/telegram)
+### [Telegram](https://docs.clawd.bot/telegram)
 
 - Set `TELEGRAM_BOT_TOKEN` or `telegram.botToken` (env wins).
-- Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`), `telegram.allowFrom`, or `telegram.webhookUrl` as needed.
+- Optional: set `telegram.groups` (with `telegram.groups."*".requireMention`); when set, it is a group allowlist (include `"*"` to allow all). Also `telegram.allowFrom` or `telegram.webhookUrl` as needed.
 
 ```json5
 {
@@ -295,14 +314,14 @@ Details: [Security guide](https://docs.clawdbot.com/security) · [Docker + sandb
 }
 ```
 
-### [Slack](https://docs.clawdbot.com/slack)
+### [Slack](https://docs.clawd.bot/slack)
 
 - Set `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN` (or `slack.botToken` + `slack.appToken`).
 
-### [Discord](https://docs.clawdbot.com/discord)
+### [Discord](https://docs.clawd.bot/discord)
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
-- Optional: set `discord.slashCommand`, `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
+- Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
 
 ```json5
 {
@@ -312,15 +331,16 @@ Details: [Security guide](https://docs.clawdbot.com/security) · [Docker + sandb
 }
 ```
 
-### [Signal](https://docs.clawdbot.com/signal)
+### [Signal](https://docs.clawd.bot/signal)
 
 - Requires `signal-cli` and a `signal` config section.
 
-### [iMessage](https://docs.clawdbot.com/imessage)
+### [iMessage](https://docs.clawd.bot/imessage)
 
 - macOS only; Messages must be signed in.
+- If `imessage.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
-### [WebChat](https://docs.clawdbot.com/webchat)
+### [WebChat](https://docs.clawd.bot/webchat)
 
 - Uses the Gateway WebSocket; no separate WebChat port/config.
 
@@ -339,69 +359,69 @@ Browser control (optional):
 ## Docs
 
 Use these when you’re past the onboarding flow and want the deeper reference.
-- [Start with the docs index for navigation and “what’s where.”](https://docs.clawdbot.com/)
-- [Read the architecture overview for the gateway + protocol model.](https://docs.clawdbot.com/architecture)
-- [Use the full configuration reference when you need every key and example.](https://docs.clawdbot.com/configuration)
-- [Run the Gateway by the book with the operational runbook.](https://docs.clawdbot.com/gateway)
-- [Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.clawdbot.com/web)
-- [Understand remote access over SSH tunnels or tailnets.](https://docs.clawdbot.com/remote)
-- [Follow the onboarding wizard flow for a guided setup.](https://docs.clawdbot.com/wizard)
-- [Wire external triggers via the webhook surface.](https://docs.clawdbot.com/webhook)
-- [Set up Gmail Pub/Sub triggers.](https://docs.clawdbot.com/gmail-pubsub)
-- [Learn the macOS menu bar companion details.](https://docs.clawdbot.com/mac/menu-bar)
-- [Platform guides: Windows](https://docs.clawdbot.com/windows), [Linux](https://docs.clawdbot.com/linux), [macOS](https://docs.clawdbot.com/macos), [iOS](https://docs.clawdbot.com/ios), [Android](https://docs.clawdbot.com/android)
-- [Debug common failures with the troubleshooting guide.](https://docs.clawdbot.com/troubleshooting)
-- [Review security guidance before exposing anything.](https://docs.clawdbot.com/security)
+- [Start with the docs index for navigation and “what’s where.”](https://docs.clawd.bot)
+- [Read the architecture overview for the gateway + protocol model.](https://docs.clawd.bot/architecture)
+- [Use the full configuration reference when you need every key and example.](https://docs.clawd.bot/configuration)
+- [Run the Gateway by the book with the operational runbook.](https://docs.clawd.bot/gateway)
+- [Learn how the Control UI/Web surfaces work and how to expose them safely.](https://docs.clawd.bot/web)
+- [Understand remote access over SSH tunnels or tailnets.](https://docs.clawd.bot/remote)
+- [Follow the onboarding wizard flow for a guided setup.](https://docs.clawd.bot/wizard)
+- [Wire external triggers via the webhook surface.](https://docs.clawd.bot/webhook)
+- [Set up Gmail Pub/Sub triggers.](https://docs.clawd.bot/gmail-pubsub)
+- [Learn the macOS menu bar companion details.](https://docs.clawd.bot/mac/menu-bar)
+- [Platform guides: Windows](https://docs.clawd.bot/windows), [Linux](https://docs.clawd.bot/linux), [macOS](https://docs.clawd.bot/macos), [iOS](https://docs.clawd.bot/ios), [Android](https://docs.clawd.bot/android)
+- [Debug common failures with the troubleshooting guide.](https://docs.clawd.bot/troubleshooting)
+- [Review security guidance before exposing anything.](https://docs.clawd.bot/security)
 
 ## Advanced docs (discovery + control)
 
-- [Discovery + transports](https://docs.clawdbot.com/discovery)
-- [Bonjour/mDNS](https://docs.clawdbot.com/bonjour)
-- [Gateway pairing](https://docs.clawdbot.com/gateway/pairing)
-- [Remote gateway README](https://docs.clawdbot.com/remote-gateway-readme)
-- [Control UI](https://docs.clawdbot.com/control-ui)
-- [Dashboard](https://docs.clawdbot.com/dashboard)
+- [Discovery + transports](https://docs.clawd.bot/discovery)
+- [Bonjour/mDNS](https://docs.clawd.bot/bonjour)
+- [Gateway pairing](https://docs.clawd.bot/gateway/pairing)
+- [Remote gateway README](https://docs.clawd.bot/remote-gateway-readme)
+- [Control UI](https://docs.clawd.bot/control-ui)
+- [Dashboard](https://docs.clawd.bot/dashboard)
 
 ## Operations & troubleshooting
 
-- [Health checks](https://docs.clawdbot.com/health)
-- [Gateway lock](https://docs.clawdbot.com/gateway-lock)
-- [Background process](https://docs.clawdbot.com/background-process)
-- [Browser troubleshooting (Linux)](https://docs.clawdbot.com/browser-linux-troubleshooting)
-- [Logging](https://docs.clawdbot.com/logging)
+- [Health checks](https://docs.clawd.bot/health)
+- [Gateway lock](https://docs.clawd.bot/gateway-lock)
+- [Background process](https://docs.clawd.bot/background-process)
+- [Browser troubleshooting (Linux)](https://docs.clawd.bot/browser-linux-troubleshooting)
+- [Logging](https://docs.clawd.bot/logging)
 
 ## Deep dives
 
-- [Agent loop](https://docs.clawdbot.com/agent-loop)
-- [Presence](https://docs.clawdbot.com/presence)
-- [TypeBox schemas](https://docs.clawdbot.com/typebox)
-- [RPC adapters](https://docs.clawdbot.com/rpc)
-- [Queue](https://docs.clawdbot.com/queue)
+- [Agent loop](https://docs.clawd.bot/agent-loop)
+- [Presence](https://docs.clawd.bot/presence)
+- [TypeBox schemas](https://docs.clawd.bot/typebox)
+- [RPC adapters](https://docs.clawd.bot/rpc)
+- [Queue](https://docs.clawd.bot/queue)
 
 ## Workspace & skills
 
-- [Skills config](https://docs.clawdbot.com/skills-config)
-- [Default AGENTS](https://docs.clawdbot.com/AGENTS.default)
-- [Templates: AGENTS](https://docs.clawdbot.com/templates/AGENTS)
-- [Templates: BOOTSTRAP](https://docs.clawdbot.com/templates/BOOTSTRAP)
-- [Templates: IDENTITY](https://docs.clawdbot.com/templates/IDENTITY)
-- [Templates: SOUL](https://docs.clawdbot.com/templates/SOUL)
-- [Templates: TOOLS](https://docs.clawdbot.com/templates/TOOLS)
-- [Templates: USER](https://docs.clawdbot.com/templates/USER)
+- [Skills config](https://docs.clawd.bot/skills-config)
+- [Default AGENTS](https://docs.clawd.bot/AGENTS.default)
+- [Templates: AGENTS](https://docs.clawd.bot/templates/AGENTS)
+- [Templates: BOOTSTRAP](https://docs.clawd.bot/templates/BOOTSTRAP)
+- [Templates: IDENTITY](https://docs.clawd.bot/templates/IDENTITY)
+- [Templates: SOUL](https://docs.clawd.bot/templates/SOUL)
+- [Templates: TOOLS](https://docs.clawd.bot/templates/TOOLS)
+- [Templates: USER](https://docs.clawd.bot/templates/USER)
 
 ## Platform internals
 
-- [macOS dev setup](https://docs.clawdbot.com/mac/dev-setup)
-- [macOS menu bar](https://docs.clawdbot.com/mac/menu-bar)
-- [macOS voice wake](https://docs.clawdbot.com/mac/voicewake)
-- [iOS node](https://docs.clawdbot.com/ios)
-- [Android node](https://docs.clawdbot.com/android)
-- [Windows app](https://docs.clawdbot.com/windows)
-- [Linux app](https://docs.clawdbot.com/linux)
+- [macOS dev setup](https://docs.clawd.bot/mac/dev-setup)
+- [macOS menu bar](https://docs.clawd.bot/mac/menu-bar)
+- [macOS voice wake](https://docs.clawd.bot/mac/voicewake)
+- [iOS node](https://docs.clawd.bot/ios)
+- [Android node](https://docs.clawd.bot/android)
+- [Windows app](https://docs.clawd.bot/windows)
+- [Linux app](https://docs.clawd.bot/linux)
 
 ## Email hooks (Gmail)
 
-[Gmail Pub/Sub wiring (gcloud + gogcli), hook tokens, and auto-watch behavior are documented here.](https://docs.clawdbot.com/gmail-pubsub)
+[Gmail Pub/Sub wiring (gcloud + gogcli), hook tokens, and auto-watch behavior are documented here.](https://docs.clawd.bot/gmail-pubsub)
 
 Gateway auto-starts the watcher when `hooks.enabled=true` and `hooks.gmail.account` is set; `clawdbot hooks gmail run` is the manual daemon wrapper if you don’t want auto-start.
 
@@ -431,5 +451,7 @@ Thanks to all clawtributors:
   <a href="https://github.com/mbelinky"><img src="https://avatars.githubusercontent.com/u/132747814?v=4&s=48" width="48" height="48" alt="mbelinky" title="mbelinky"/></a> <a href="https://github.com/julianengel"><img src="https://avatars.githubusercontent.com/u/10634231?v=4&s=48" width="48" height="48" alt="julianengel" title="julianengel"/></a> <a href="https://github.com/CashWilliams"><img src="https://avatars.githubusercontent.com/u/613573?v=4&s=48" width="48" height="48" alt="CashWilliams" title="CashWilliams"/></a> <a href="https://github.com/omniwired"><img src="https://avatars.githubusercontent.com/u/322761?v=4&s=48" width="48" height="48" alt="omniwired" title="omniwired"/></a> <a href="https://github.com/jverdi"><img src="https://avatars.githubusercontent.com/u/345050?v=4&s=48" width="48" height="48" alt="jverdi" title="jverdi"/></a> <a href="https://github.com/Syhids"><img src="https://avatars.githubusercontent.com/u/671202?v=4&s=48" width="48" height="48" alt="Syhids" title="Syhids"/></a> <a href="https://github.com/meaningfool"><img src="https://avatars.githubusercontent.com/u/2862331?v=4&s=48" width="48" height="48" alt="meaningfool" title="meaningfool"/></a> <a href="https://github.com/rafaelreis-r"><img src="https://avatars.githubusercontent.com/u/57492577?v=4&s=48" width="48" height="48" alt="rafaelreis-r" title="rafaelreis-r"/></a> <a href="https://github.com/wstock"><img src="https://avatars.githubusercontent.com/u/1394687?v=4&s=48" width="48" height="48" alt="wstock" title="wstock"/></a> <a href="https://github.com/vsabavat"><img src="https://avatars.githubusercontent.com/u/50385532?v=4&s=48" width="48" height="48" alt="vsabavat" title="vsabavat"/></a>
   <a href="https://github.com/scald"><img src="https://avatars.githubusercontent.com/u/1215913?v=4&s=48" width="48" height="48" alt="scald" title="scald"/></a> <a href="https://github.com/sreekaransrinath"><img src="https://avatars.githubusercontent.com/u/50989977?v=4&s=48" width="48" height="48" alt="sreekaransrinath" title="sreekaransrinath"/></a> <a href="https://github.com/ratulsarna"><img src="https://avatars.githubusercontent.com/u/105903728?v=4&s=48" width="48" height="48" alt="ratulsarna" title="ratulsarna"/></a> <a href="https://github.com/osolmaz"><img src="https://avatars.githubusercontent.com/u/2453968?v=4&s=48" width="48" height="48" alt="osolmaz" title="osolmaz"/></a> <a href="https://github.com/conhecendocontato"><img src="https://avatars.githubusercontent.com/u/82890727?v=4&s=48" width="48" height="48" alt="conhecendocontato" title="conhecendocontato"/></a> <a href="https://github.com/hrdwdmrbl"><img src="https://avatars.githubusercontent.com/u/554881?v=4&s=48" width="48" height="48" alt="hrdwdmrbl" title="hrdwdmrbl"/></a> <a href="https://github.com/jayhickey"><img src="https://avatars.githubusercontent.com/u/1676460?v=4&s=48" width="48" height="48" alt="jayhickey" title="jayhickey"/></a> <a href="https://github.com/jamesgroat"><img src="https://avatars.githubusercontent.com/u/2634024?v=4&s=48" width="48" height="48" alt="jamesgroat" title="jamesgroat"/></a> <a href="https://github.com/gtsifrikas"><img src="https://avatars.githubusercontent.com/u/8904378?v=4&s=48" width="48" height="48" alt="gtsifrikas" title="gtsifrikas"/></a> <a href="https://github.com/djangonavarro220"><img src="https://avatars.githubusercontent.com/u/251162586?v=4&s=48" width="48" height="48" alt="djangonavarro220" title="djangonavarro220"/></a>
   <a href="https://github.com/azade-c"><img src="https://avatars.githubusercontent.com/u/252790079?v=4&s=48" width="48" height="48" alt="azade-c" title="azade-c"/></a> <a href="https://github.com/andranik-sahakyan"><img src="https://avatars.githubusercontent.com/u/8908029?v=4&s=48" width="48" height="48" alt="andranik-sahakyan" title="andranik-sahakyan"/></a>
-  <a href="https://github.com/adamgall"><img src="https://avatars.githubusercontent.com/u/706929?v=4&s=48" width="48" height="48" alt="adamgall" title="adamgall"/></a> <a href="https://github.com/jalehman"><img src="https://avatars.githubusercontent.com/u/550978?v=4&s=48" width="48" height="48" alt="jalehman" title="jalehman"/></a> <a href="https://github.com/jarvis-medmatic"><img src="https://avatars.githubusercontent.com/u/252428873?v=4&s=48" width="48" height="48" alt="jarvis-medmatic" title="jarvis-medmatic"/></a> <a href="https://github.com/mneves75"><img src="https://avatars.githubusercontent.com/u/2423436?v=4&s=48" width="48" height="48" alt="mneves75" title="mneves75"/></a> <a href="https://github.com/regenrek"><img src="https://avatars.githubusercontent.com/u/5182020?v=4&s=48" width="48" height="48" alt="regenrek" title="regenrek"/></a> <a href="https://github.com/tobiasbischoff"><img src="https://avatars.githubusercontent.com/u/711564?v=4&s=48" width="48" height="48" alt="tobiasbischoff" title="tobiasbischoff"/></a> <a href="https://github.com/MSch"><img src="https://avatars.githubusercontent.com/u/7475?v=4&s=48" width="48" height="48" alt="MSch" title="MSch"/></a> <a href="https://github.com/obviyus"><img src="https://avatars.githubusercontent.com/u/22031114?v=4&s=48" width="48" height="48" alt="obviyus" title="obviyus"/></a>
+  <a href="https://github.com/adamgall"><img src="https://avatars.githubusercontent.com/u/706929?v=4&s=48" width="48" height="48" alt="adamgall" title="adamgall"/></a> <a href="https://github.com/jalehman"><img src="https://avatars.githubusercontent.com/u/550978?v=4&s=48" width="48" height="48" alt="jalehman" title="jalehman"/></a> <a href="https://github.com/jarvis-medmatic"><img src="https://avatars.githubusercontent.com/u/252428873?v=4&s=48" width="48" height="48" alt="jarvis-medmatic" title="jarvis-medmatic"/></a> <a href="https://github.com/mneves75"><img src="https://avatars.githubusercontent.com/u/2423436?v=4&s=48" width="48" height="48" alt="mneves75" title="mneves75"/></a> <a href="https://github.com/regenrek"><img src="https://avatars.githubusercontent.com/u/5182020?v=4&s=48" width="48" height="48" alt="regenrek" title="regenrek"/></a> <a href="https://github.com/tobiasbischoff"><img src="https://avatars.githubusercontent.com/u/711564?v=4&s=48" width="48" height="48" alt="tobiasbischoff" title="tobiasbischoff"/></a> <a href="https://github.com/MSch"><img src="https://avatars.githubusercontent.com/u/7475?v=4&s=48" width="48" height="48" alt="MSch" title="MSch"/></a> <a href="https://github.com/obviyus"><img src="https://avatars.githubusercontent.com/u/22031114?v=4&s=48" width="48" height="48" alt="obviyus" title="obviyus"/></a> <a href="https://github.com/dbhurley"><img src="https://avatars.githubusercontent.com/u/5251425?v=4&s=48" width="48" height="48" alt="dbhurley" title="dbhurley"/></a>
+  <a href="https://github.com/Asleep123"><img src="https://avatars.githubusercontent.com/u/122379135?v=4&s=48" width="48" height="48" alt="Asleep123" title="Asleep123"/></a> <a href="https://github.com/Iamadig"><img src="https://avatars.githubusercontent.com/u/102129234?v=4&s=48" width="48" height="48" alt="Iamadig" title="Iamadig"/></a> <a href="https://github.com/imfing"><img src="https://avatars.githubusercontent.com/u/5097752?v=4&s=48" width="48" height="48" alt="imfing" title="imfing"/></a> <a href="https://github.com/kitze"><img src="https://avatars.githubusercontent.com/u/1160594?v=4&s=48" width="48" height="48" alt="kitze" title="kitze"/></a> <a href="https://github.com/nachoiacovino"><img src="https://avatars.githubusercontent.com/u/50103937?v=4&s=48" width="48" height="48" alt="nachoiacovino" title="nachoiacovino"/></a> <a href="https://github.com/VACInc"><img src="https://avatars.githubusercontent.com/u/3279061?v=4&s=48" width="48" height="48" alt="VACInc" title="VACInc"/></a> <a href="https://github.com/cash-echo-bot"><img src="https://avatars.githubusercontent.com/u/252747386?v=4&s=48" width="48" height="48" alt="cash-echo-bot" title="cash-echo-bot"/></a> <a href="https://github.com/claude"><img src="https://avatars.githubusercontent.com/u/81847?v=4&s=48" width="48" height="48" alt="claude" title="claude"/></a> <a href="https://github.com/kiranjd"><img src="https://avatars.githubusercontent.com/u/25822851?v=4&s=48" width="48" height="48" alt="kiranjd" title="kiranjd"/></a> <a href="https://github.com/pcty-nextgen-service-account"><img src="https://avatars.githubusercontent.com/u/112553441?v=4&s=48" width="48" height="48" alt="pcty-nextgen-service-account" title="pcty-nextgen-service-account"/></a> <a href="https://github.com/minghinmatthewlam"><img src="https://avatars.githubusercontent.com/u/14224566?v=4&s=48" width="48" height="48" alt="minghinmatthewlam" title="minghinmatthewlam"/></a>
+  <a href="https://github.com/ngutman"><img src="https://avatars.githubusercontent.com/u/1540134?v=4&s=48" width="48" height="48" alt="ngutman" title="ngutman"/></a> <a href="https://github.com/onutc"><img src="https://avatars.githubusercontent.com/u/152018508?v=4&s=48" width="48" height="48" alt="onutc" title="onutc"/></a> <a href="https://github.com/oswalpalash"><img src="https://avatars.githubusercontent.com/u/6431196?v=4&s=48" width="48" height="48" alt="oswalpalash" title="oswalpalash"/></a> <a href="https://github.com/snopoke"><img src="https://avatars.githubusercontent.com/u/249606?v=4&s=48" width="48" height="48" alt="snopoke" title="snopoke"/></a> <a href="https://github.com/ManuelHettich"><img src="https://avatars.githubusercontent.com/u/17690367?v=4&s=48" width="48" height="48" alt="ManuelHettich" title="ManuelHettich"/></a> <a href="https://github.com/loukotal"><img src="https://avatars.githubusercontent.com/u/18210858?v=4&s=48" width="48" height="48" alt="loukotal" title="loukotal"/></a> <a href="https://github.com/hugobarauna"><img src="https://avatars.githubusercontent.com/u/2719?v=4&s=48" width="48" height="48" alt="hugobarauna" title="hugobarauna"/></a> <a href="https://github.com/AbhisekBasu1"><img src="https://avatars.githubusercontent.com/u/40645221?v=4&s=48" width="48" height="48" alt="AbhisekBasu1" title="AbhisekBasu1"/></a> <a href="https://github.com/emanuelst"><img src="https://avatars.githubusercontent.com/u/9994339?v=4&s=48" width="48" height="48" alt="emanuelst" title="emanuelst"/></a>
 </p>

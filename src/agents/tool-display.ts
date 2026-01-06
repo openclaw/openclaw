@@ -1,6 +1,6 @@
-import fs from "node:fs";
 import { redactToolDetail } from "../logging/redact.js";
 import { shortenHomeInString } from "../utils.js";
+import TOOL_DISPLAY_JSON from "./tool-display.json" with { type: "json" };
 
 type ToolDisplayActionSpec = {
   label?: string;
@@ -30,17 +30,7 @@ export type ToolDisplay = {
   detail?: string;
 };
 
-const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = (() => {
-  try {
-    const raw = fs.readFileSync(
-      new URL("./tool-display.json", import.meta.url),
-      "utf8",
-    );
-    return JSON.parse(raw) as ToolDisplayConfig;
-  } catch {
-    return {};
-  }
-})();
+const TOOL_DISPLAY_CONFIG = TOOL_DISPLAY_JSON as ToolDisplayConfig;
 const FALLBACK = TOOL_DISPLAY_CONFIG.fallback ?? { emoji: "🧩" };
 const TOOL_MAP = TOOL_DISPLAY_CONFIG.tools ?? {};
 

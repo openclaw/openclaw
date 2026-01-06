@@ -1,17 +1,26 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
+import {
+  resolveProviderGroupPolicy,
+  resolveProviderGroupRequireMention,
+} from "../config/group-policy.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createIMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
@@ -48,6 +57,7 @@ export type MonitorIMessageOpts = {
   cliPath?: string;
   dbPath?: string;
   allowFrom?: Array<string | number>;
+  groupAllowFrom?: Array<string | number>;
   includeAttachments?: boolean;
   mediaMaxMb?: number;
   requireMention?: boolean;
@@ -71,22 +81,15 @@ function resolveAllowFrom(opts: MonitorIMessageOpts): string[] {
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
-function resolveGroupRequireMention(
-  cfg: ReturnType<typeof loadConfig>,
-  opts: MonitorIMessageOpts,
-  chatId?: number | null,
-): boolean {
-  if (typeof opts.requireMention === "boolean") return opts.requireMention;
-  const groupId = chatId != null ? String(chatId) : undefined;
-  if (groupId) {
-    const groupConfig = cfg.imessage?.groups?.[groupId];
-    if (typeof groupConfig?.requireMention === "boolean") {
-      return groupConfig.requireMention;
-    }
-  }
-  const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
-  if (typeof groupDefault === "boolean") return groupDefault;
-  return true;
+function resolveGroupAllowFrom(opts: MonitorIMessageOpts): string[] {
+  const cfg = loadConfig();
+  const raw =
+    opts.groupAllowFrom ??
+    cfg.imessage?.groupAllowFrom ??
+    (cfg.imessage?.allowFrom && cfg.imessage.allowFrom.length > 0
+      ? cfg.imessage.allowFrom
+      : []);
+  return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
 async function deliverReplies(params: {
@@ -130,6 +133,9 @@ export async function monitorIMessageProvider(
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "imessage");
   const allowFrom = resolveAllowFrom(opts);
+  const groupAllowFrom = resolveGroupAllowFrom(opts);
+  const groupPolicy = cfg.imessage?.groupPolicy ?? "open";
+  const dmPolicy = cfg.imessage?.dmPolicy ?? "pairing";
   const mentionRegexes = buildMentionRegexes(cfg);
   const includeAttachments =
     opts.includeAttachments ?? cfg.imessage?.includeAttachments ?? false;
@@ -152,24 +158,143 @@ export async function monitorIMessageProvider(
     const isGroup = Boolean(message.is_group);
     if (isGroup && !chatId) return;
 
-    const commandAuthorized = isAllowedIMessageSender({
-      allowFrom,
-      sender,
-      chatId: chatId ?? undefined,
-      chatGuid,
-      chatIdentifier,
-    });
-    if (!commandAuthorized) {
-      logVerbose(`Blocked iMessage sender ${sender} (not in allowFrom)`);
-      return;
+    const groupId = isGroup ? String(chatId) : undefined;
+    const storeAllowFrom = await readProviderAllowFromStore("imessage").catch(
+      () => [],
+    );
+    const effectiveDmAllowFrom = Array.from(
+      new Set([...allowFrom, ...storeAllowFrom]),
+    )
+      .map((v) => String(v).trim())
+      .filter(Boolean);
+    const effectiveGroupAllowFrom = Array.from(
+      new Set([...groupAllowFrom, ...storeAllowFrom]),
+    )
+      .map((v) => String(v).trim())
+      .filter(Boolean);
+
+    if (isGroup) {
+      if (groupPolicy === "disabled") {
+        logVerbose("Blocked iMessage group message (groupPolicy: disabled)");
+        return;
+      }
+      if (groupPolicy === "allowlist") {
+        if (effectiveGroupAllowFrom.length === 0) {
+          logVerbose(
+            "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
+          );
+          return;
+        }
+        const allowed = isAllowedIMessageSender({
+          allowFrom: effectiveGroupAllowFrom,
+          sender,
+          chatId: chatId ?? undefined,
+          chatGuid,
+          chatIdentifier,
+        });
+        if (!allowed) {
+          logVerbose(
+            `Blocked iMessage sender ${sender} (not in groupAllowFrom)`,
+          );
+          return;
+        }
+      }
+      const groupListPolicy = resolveProviderGroupPolicy({
+        cfg,
+        provider: "imessage",
+        groupId,
+      });
+      if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
+        logVerbose(
+          `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
+        );
+        return;
+      }
+    }
+
+    const dmHasWildcard = effectiveDmAllowFrom.includes("*");
+    const dmAuthorized =
+      dmPolicy === "open"
+        ? true
+        : dmHasWildcard ||
+          (effectiveDmAllowFrom.length > 0 &&
+            isAllowedIMessageSender({
+              allowFrom: effectiveDmAllowFrom,
+              sender,
+              chatId: chatId ?? undefined,
+              chatGuid,
+              chatIdentifier,
+            }));
+    if (!isGroup) {
+      if (dmPolicy === "disabled") return;
+      if (!dmAuthorized) {
+        if (dmPolicy === "pairing") {
+          const senderId = normalizeIMessageHandle(sender);
+          const { code } = await upsertProviderPairingRequest({
+            provider: "imessage",
+            id: senderId,
+            meta: {
+              sender: senderId,
+              chatId: chatId ? String(chatId) : undefined,
+            },
+          });
+          logVerbose(
+            `imessage pairing request sender=${senderId} code=${code}`,
+          );
+          try {
+            await sendMessageIMessage(
+              sender,
+              [
+                "Clawdbot: access not configured.",
+                "",
+                `Pairing code: ${code}`,
+                "",
+                "Ask the bot owner to approve with:",
+                "clawdbot pairing approve --provider imessage <code>",
+              ].join("\n"),
+              {
+                client,
+                maxBytes: mediaMaxBytes,
+                ...(chatId ? { chatId } : {}),
+              },
+            );
+          } catch (err) {
+            logVerbose(
+              `imessage pairing reply failed for ${senderId}: ${String(err)}`,
+            );
+          }
+        } else {
+          logVerbose(
+            `Blocked iMessage sender ${sender} (dmPolicy=${dmPolicy})`,
+          );
+        }
+        return;
+      }
     }
 
     const messageText = (message.text ?? "").trim();
     const mentioned = isGroup
       ? matchesMentionPatterns(messageText, mentionRegexes)
       : true;
-    const requireMention = resolveGroupRequireMention(cfg, opts, chatId);
+    const requireMention = resolveProviderGroupRequireMention({
+      cfg,
+      provider: "imessage",
+      groupId,
+      requireMentionOverride: opts.requireMention,
+      overrideOrder: "before-config",
+    });
     const canDetectMention = mentionRegexes.length > 0;
+    const commandAuthorized = isGroup
+      ? effectiveGroupAllowFrom.length > 0
+        ? isAllowedIMessageSender({
+            allowFrom: effectiveGroupAllowFrom,
+            sender,
+            chatId: chatId ?? undefined,
+            chatGuid,
+            chatIdentifier,
+          })
+        : true
+      : dmAuthorized;
     const shouldBypassMention =
       isGroup &&
       requireMention &&
@@ -210,16 +335,28 @@ export async function monitorIMessageProvider(
       ? Date.parse(message.created_at)
       : undefined;
     const body = formatAgentEnvelope({
-      surface: "iMessage",
+      provider: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
       body: bodyText,
     });
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "imessage",
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: isGroup
+          ? String(chatId ?? "unknown")
+          : normalizeIMessageHandle(sender),
+      },
+    });
     const ctxPayload = {
       Body: body,
       From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
       To: chatTarget || `imessage:${sender}`,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (message.chat_name ?? undefined) : undefined,
       GroupMembers: isGroup
@@ -227,7 +364,7 @@ export async function monitorIMessageProvider(
         : undefined,
       SenderName: sender,
       SenderId: sender,
-      Surface: "imessage",
+      Provider: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
       Timestamp: createdAt,
       MediaPath: mediaPath,
@@ -239,15 +376,17 @@ export async function monitorIMessageProvider(
 
     if (!isGroup) {
       const sessionCfg = cfg.session;
-      const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-      const storePath = resolveStorePath(sessionCfg?.store);
+      const storePath = resolveStorePath(sessionCfg?.store, {
+        agentId: route.agentId,
+      });
       const to = chatTarget || sender;
       if (to) {
         await updateLastRoute({
           storePath,
-          sessionKey: mainKey,
-          channel: "imessage",
+          sessionKey: route.mainSessionKey,
+          provider: "imessage",
           to,
+          accountId: route.accountId,
         });
       }
     }
@@ -278,28 +417,11 @@ export async function monitorIMessageProvider(
       },
     });
 
-    const replyResult = await getReplyFromConfig(
-      ctxPayload,
-      {
-        onToolResult: (payload) => {
-          dispatcher.sendToolResult(payload);
-        },
-        onBlockReply: (payload) => {
-          dispatcher.sendBlockReply(payload);
-        },
-      },
+    const { queuedFinal } = await dispatchReplyFromConfig({
+      ctx: ctxPayload,
       cfg,
-    );
-    const replies = replyResult
-      ? Array.isArray(replyResult)
-        ? replyResult
-        : [replyResult]
-      : [];
-    let queuedFinal = false;
-    for (const reply of replies) {
-      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-    }
-    await dispatcher.waitForIdle();
+      dispatcher,
+    });
     if (!queuedFinal) return;
   };
 

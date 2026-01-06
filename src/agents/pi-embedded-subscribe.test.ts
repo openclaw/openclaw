@@ -968,6 +968,7 @@ describe("subscribeEmbeddedPiSession", () => {
       });
     }
 
+    expect(subscription.isCompacting()).toBe(true);
     expect(subscription.assistantTexts.length).toBe(0);
 
     let resolved = false;
@@ -1004,6 +1005,8 @@ describe("subscribeEmbeddedPiSession", () => {
       listener({ type: "auto_compaction_start" });
     }
 
+    expect(subscription.isCompacting()).toBe(true);
+
     let resolved = false;
     const waitPromise = subscription.waitForCompactionRetry().then(() => {
       resolved = true;
@@ -1018,6 +1021,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     await waitPromise;
     expect(resolved).toBe(true);
+    expect(subscription.isCompacting()).toBe(false);
   });
 
   it("waits for multiple compaction retries before resolving", async () => {

@@ -58,8 +58,8 @@ export function classifySessionKind(params: {
 export function deriveProvider(params: {
   key: string;
   kind: SessionKind;
-  surface?: string | null;
-  lastChannel?: string | null;
+  provider?: string | null;
+  lastProvider?: string | null;
 }): string {
   if (
     params.kind === "cron" ||
@@ -67,10 +67,10 @@ export function deriveProvider(params: {
     params.kind === "node"
   )
     return "internal";
-  const surface = normalizeKey(params.surface ?? undefined);
-  if (surface) return surface;
-  const lastChannel = normalizeKey(params.lastChannel ?? undefined);
-  if (lastChannel) return lastChannel;
+  const provider = normalizeKey(params.provider ?? undefined);
+  if (provider) return provider;
+  const lastProvider = normalizeKey(params.lastProvider ?? undefined);
+  if (lastProvider) return lastProvider;
   const parts = params.key.split(":").filter(Boolean);
   if (parts.length >= 3 && (parts[1] === "group" || parts[1] === "channel")) {
     return parts[0];

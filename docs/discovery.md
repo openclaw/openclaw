@@ -42,7 +42,7 @@ Target direction:
 - The **gateway** advertises its bridge via Bonjour.
 - Clients browse and show a “pick a gateway” list, then store the chosen endpoint.
 
-Troubleshooting and beacon details: `docs/bonjour.md`.
+Troubleshooting and beacon details: [`docs/bonjour.md`](https://docs.clawd.bot/bonjour).
 
 #### Current implementation
 
@@ -77,7 +77,7 @@ If the gateway can detect it is running under Tailscale, it publishes `tailnetDn
 
 When there is no direct route (or direct is disabled), clients can always connect via SSH by forwarding the loopback gateway port.
 
-See `docs/remote.md`.
+See [`docs/remote.md`](https://docs.clawd.bot/remote).
 
 ## Transport selection (client policy)
 
@@ -92,7 +92,7 @@ Recommended client behavior:
 
 The gateway is the source of truth for node/client admission.
 
-- Pairing requests are created/approved/rejected in the gateway (see `docs/gateway/pairing.md`).
+- Pairing requests are created/approved/rejected in the gateway (see [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing)).
 - The bridge enforces:
   - auth (token / keypair)
   - scopes/ACLs (bridge is not a raw proxy to every gateway method)

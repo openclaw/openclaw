@@ -23,9 +23,11 @@ describe("ensureAgentWorkspace", () => {
 
     const identity = path.join(path.resolve(nested), "IDENTITY.md");
     const user = path.join(path.resolve(nested), "USER.md");
+    const heartbeat = path.join(path.resolve(nested), "HEARTBEAT.md");
     const bootstrap = path.join(path.resolve(nested), "BOOTSTRAP.md");
     await expect(fs.stat(identity)).resolves.toBeDefined();
     await expect(fs.stat(user)).resolves.toBeDefined();
+    await expect(fs.stat(heartbeat)).resolves.toBeDefined();
     await expect(fs.stat(bootstrap)).resolves.toBeDefined();
   });
 
@@ -35,5 +37,18 @@ describe("ensureAgentWorkspace", () => {
     await fs.writeFile(agentsPath, "custom", "utf-8");
     await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
     expect(await fs.readFile(agentsPath, "utf-8")).toBe("custom");
+  });
+
+  it("does not recreate BOOTSTRAP.md once workspace exists", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-ws-"));
+    const agentsPath = path.join(dir, "AGENTS.md");
+    const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
+
+    await fs.writeFile(agentsPath, "custom", "utf-8");
+    await fs.rm(bootstrapPath, { force: true });
+
+    await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
+
+    await expect(fs.stat(bootstrapPath)).rejects.toBeDefined();
   });
 });

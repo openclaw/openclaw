@@ -12,6 +12,7 @@ import {
   SettingsManager,
   type Skill,
 } from "@mariozechner/pi-coding-agent";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -24,7 +25,11 @@ import {
 } from "../process/command-queue.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { markAuthProfileGood } from "./auth-profiles.js";
+import {
+  markAuthProfileCooldown,
+  markAuthProfileGood,
+  markAuthProfileUsed,
+} from "./auth-profiles.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -61,6 +66,7 @@ import {
   type SkillSnapshot,
 } from "./skills.js";
 import { buildAgentSystemPromptAppend } from "./system-prompt.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 export type EmbeddedPiAgentMeta = {
@@ -94,6 +100,7 @@ export type EmbeddedPiRunResult = {
     mediaUrl?: string;
     mediaUrls?: string[];
     replyToId?: string;
+    isError?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
 };
@@ -113,6 +120,7 @@ export type EmbeddedPiCompactResult = {
 type EmbeddedPiQueueHandle = {
   queueMessage: (text: string) => Promise<void>;
   isStreaming: () => boolean;
+  isCompacting: () => boolean;
   abort: () => void;
 };
 
@@ -212,6 +220,7 @@ export function queueEmbeddedPiMessage(
   const handle = ACTIVE_EMBEDDED_RUNS.get(sessionId);
   if (!handle) return false;
   if (!handle.isStreaming()) return false;
+  if (handle.isCompacting()) return false;
   void handle.queueMessage(text);
   return true;
 }
@@ -329,9 +338,10 @@ function resolvePromptSkills(
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
   sessionKey?: string;
-  surface?: string;
+  messageProvider?: string;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
   config?: ClawdbotConfig;
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
@@ -360,7 +370,7 @@ export async function compactEmbeddedPiSession(params: {
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       await ensureClawdbotModelsJson(params.config);
-      const agentDir = resolveClawdbotAgentDir();
+      const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
@@ -434,8 +444,9 @@ export async function compactEmbeddedPiSession(params: {
             elevated: params.bashElevated,
           },
           sandbox,
-          surface: params.surface,
+          messageProvider: params.messageProvider,
           sessionKey: params.sessionKey ?? params.sessionId,
+          agentDir,
           config: params.config,
         });
         const machineName = await getMachineDisplayName();
@@ -459,6 +470,9 @@ export async function compactEmbeddedPiSession(params: {
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
+            heartbeatPrompt: resolveHeartbeatPrompt(
+              params.config?.agent?.heartbeat?.prompt,
+            ),
             runtimeInfo,
             sandboxInfo,
             toolNames: tools.map((tool) => tool.name),
@@ -538,9 +552,10 @@ export async function compactEmbeddedPiSession(params: {
 export async function runEmbeddedPiAgent(params: {
   sessionId: string;
   sessionKey?: string;
-  surface?: string;
+  messageProvider?: string;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
   config?: ClawdbotConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
@@ -595,7 +610,7 @@ export async function runEmbeddedPiAgent(params: {
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       await ensureClawdbotModelsJson(params.config);
-      const agentDir = resolveClawdbotAgentDir();
+      const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
@@ -604,7 +619,7 @@ export async function runEmbeddedPiAgent(params: {
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
-      const authStore = ensureAuthProfileStore();
+      const authStore = ensureAuthProfileStore(agentDir);
       const explicitProfileId = params.authProfileId?.trim();
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
@@ -672,7 +687,7 @@ export async function runEmbeddedPiAgent(params: {
         attemptedThinking.add(thinkLevel);
 
         log.debug(
-          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} surface=${params.surface ?? "unknown"}`,
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} messageProvider=${params.messageProvider ?? "unknown"}`,
         );
 
         await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -728,8 +743,9 @@ export async function runEmbeddedPiAgent(params: {
               elevated: params.bashElevated,
             },
             sandbox,
-            surface: params.surface,
+            messageProvider: params.messageProvider,
             sessionKey: params.sessionKey ?? params.sessionId,
+            agentDir,
             config: params.config,
           });
           const machineName = await getMachineDisplayName();
@@ -753,6 +769,9 @@ export async function runEmbeddedPiAgent(params: {
               extraSystemPrompt: params.extraSystemPrompt,
               ownerNumbers: params.ownerNumbers,
               reasoningTagHint,
+              heartbeatPrompt: resolveHeartbeatPrompt(
+                params.config?.agent?.heartbeat?.prompt,
+              ),
               runtimeInfo,
               sandboxInfo,
               toolNames: tools.map((tool) => tool.name),
@@ -806,25 +825,13 @@ export async function runEmbeddedPiAgent(params: {
             session.agent.replaceMessages(prior);
           }
           let aborted = Boolean(params.abortSignal?.aborted);
-          const abortRun = () => {
+          let timedOut = false;
+          const abortRun = (isTimeout = false) => {
             aborted = true;
+            if (isTimeout) timedOut = true;
             void session.abort();
           };
-          const queueHandle: EmbeddedPiQueueHandle = {
-            queueMessage: async (text: string) => {
-              await session.steer(text);
-            },
-            isStreaming: () => session.isStreaming,
-            abort: abortRun,
-          };
-          ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
-
-          const {
-            assistantTexts,
-            toolMetas,
-            unsubscribe,
-            waitForCompactionRetry,
-          } = subscribeEmbeddedPiSession({
+          const subscription = subscribeEmbeddedPiSession({
             session,
             runId: params.runId,
             verboseLevel: params.verboseLevel,
@@ -837,6 +844,22 @@ export async function runEmbeddedPiAgent(params: {
             onAgentEvent: params.onAgentEvent,
             enforceFinalTag: params.enforceFinalTag,
           });
+          const {
+            assistantTexts,
+            toolMetas,
+            unsubscribe,
+            waitForCompactionRetry,
+          } = subscription;
+
+          const queueHandle: EmbeddedPiQueueHandle = {
+            queueMessage: async (text: string) => {
+              await session.steer(text);
+            },
+            isStreaming: () => session.isStreaming,
+            isCompacting: () => subscription.isCompacting(),
+            abort: abortRun,
+          };
+          ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
 
           let abortWarnTimer: NodeJS.Timeout | undefined;
           const abortTimer = setTimeout(
@@ -844,7 +867,7 @@ export async function runEmbeddedPiAgent(params: {
               log.warn(
                 `embedded run timeout: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${params.timeoutMs}`,
               );
-              abortRun();
+              abortRun(true);
               if (!abortWarnTimer) {
                 abortWarnTimer = setTimeout(() => {
                   if (!session.isStreaming) return;
@@ -949,7 +972,24 @@ export async function runEmbeddedPiAgent(params: {
             (params.config?.agent?.model?.fallbacks?.length ?? 0) > 0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
-          if (!aborted && (authFailure || rateLimitFailure)) {
+
+          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
+          const shouldRotate =
+            (!aborted && (authFailure || rateLimitFailure)) || timedOut;
+
+          if (shouldRotate) {
+            // Mark current profile for cooldown before rotating
+            if (lastProfileId) {
+              markAuthProfileCooldown({
+                store: authStore,
+                profileId: lastProfileId,
+              });
+              if (timedOut) {
+                log.warn(
+                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
+                );
+              }
+            }
             const rotated = await advanceAuthProfile();
             if (rotated) {
               continue;
@@ -960,35 +1000,34 @@ export async function runEmbeddedPiAgent(params: {
                 (lastAssistant
                   ? formatAssistantErrorText(lastAssistant)
                   : "") ||
-                (rateLimitFailure
-                  ? "LLM request rate limited."
-                  : "LLM request unauthorized.");
+                (timedOut
+                  ? "LLM request timed out."
+                  : rateLimitFailure
+                    ? "LLM request rate limited."
+                    : "LLM request unauthorized.");
               throw new Error(message);
             }
           }
 
-          const usage = lastAssistant?.usage;
+          const usage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
-            usage: usage
-              ? {
-                  input: usage.input,
-                  output: usage.output,
-                  cacheRead: usage.cacheRead,
-                  cacheWrite: usage.cacheWrite,
-                  total: usage.totalTokens,
-                }
-              : undefined,
+            usage,
           };
 
-          const replyItems: Array<{ text: string; media?: string[] }> = [];
+          const replyItems: Array<{
+            text: string;
+            media?: string[];
+            isError?: boolean;
+          }> = [];
 
           const errorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant)
             : undefined;
-          if (errorText) replyItems.push({ text: errorText });
+
+          if (errorText) replyItems.push({ text: errorText, isError: true });
 
           const inlineToolResults =
             params.verboseLevel === "on" &&
@@ -1021,6 +1060,7 @@ export async function runEmbeddedPiAgent(params: {
               text: item.text?.trim() ? item.text.trim() : undefined,
               mediaUrls: item.media?.length ? item.media : undefined,
               mediaUrl: item.media?.[0],
+              isError: item.isError,
             }))
             .filter(
               (p) =>
@@ -1036,6 +1076,8 @@ export async function runEmbeddedPiAgent(params: {
               provider,
               profileId: lastProfileId,
             });
+            // Track usage for round-robin rotation
+            markAuthProfileUsed({ store: authStore, profileId: lastProfileId });
           }
           return {
             payloads: payloads.length ? payloads : undefined,

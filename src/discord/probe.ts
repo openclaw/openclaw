@@ -74,3 +74,27 @@ export async function probeDiscord(
     };
   }
 }
+
+export async function fetchDiscordApplicationId(
+  token: string,
+  timeoutMs: number,
+  fetcher: typeof fetch = fetch,
+): Promise<string | undefined> {
+  const normalized = normalizeDiscordToken(token);
+  if (!normalized) return undefined;
+  try {
+    const res = await fetchWithTimeout(
+      `${DISCORD_API_BASE}/oauth2/applications/@me`,
+      timeoutMs,
+      fetcher,
+      {
+        Authorization: `Bot ${normalized}`,
+      },
+    );
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { id?: string };
+    return json.id ?? undefined;
+  } catch {
+    return undefined;
+  }
+}

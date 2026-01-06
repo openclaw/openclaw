@@ -74,7 +74,7 @@ export async function setupCommand(
 
   const ws = await ensureAgentWorkspace({
     dir: workspace,
-    ensureBootstrapFiles: true,
+    ensureBootstrapFiles: !next.agent?.skipBootstrap,
   });
   runtime.log(`Workspace OK: ${ws.dir}`);
 

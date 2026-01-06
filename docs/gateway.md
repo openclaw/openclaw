@@ -111,7 +111,7 @@ CLAWDBOT_CONFIG_PATH=~/.clawdbot/b.json CLAWDBOT_STATE_DIR=~/.clawdbot-b clawdbo
 - `node.invoke` — invoke a command on a node (e.g. `canvas.*`, `camera.*`).
 - `node.pair.*` — pairing lifecycle (`request`, `list`, `approve`, `reject`, `verify`).
 
-See also: `docs/presence.md` for how presence is produced/deduped and why `instanceId` matters.
+See also: [`docs/presence.md`](https://docs.clawd.bot/presence) for how presence is produced/deduped and why `instanceId` matters.
 
 ## Events
 - `agent` — streamed tool/output events from the agent run (seq-tagged).
@@ -127,7 +127,7 @@ See also: `docs/presence.md` for how presence is produced/deduped and why `insta
 ## Typing and validation
 - Server validates every inbound frame with AJV against JSON Schema emitted from the protocol definitions.
 - Clients (TS/Swift) consume generated types (TS directly; Swift via the repo’s generator).
-- Types live in `src/gateway/protocol/*.ts`; regenerate schemas/models with `pnpm protocol:gen` (writes `dist/protocol.schema.json`) and `pnpm protocol:gen:swift` (writes `apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`).
+- Types live in [`src/gateway/protocol/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/protocol/*.ts); regenerate schemas/models with `pnpm protocol:gen` (writes [`dist/protocol.schema.json`](https://github.com/clawdbot/clawdbot/blob/main/dist/protocol.schema.json)) and `pnpm protocol:gen:swift` (writes [`apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift)).
 
 ## Connection snapshot
 - `hello-ok` includes a `snapshot` with `presence`, `health`, `stateVersion`, and `uptimeMs` plus `policy {maxPayload,maxBufferedBytes,tickIntervalMs}` so clients can render immediately without extra requests.

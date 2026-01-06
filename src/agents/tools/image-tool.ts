@@ -14,7 +14,6 @@ import { Type } from "@sinclair/typebox";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
-import { resolveClawdbotAgentDir } from "../agent-paths.js";
 import { getApiKeyForModel } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
@@ -78,15 +77,15 @@ function buildImageContext(
 
 async function runImagePrompt(params: {
   cfg?: ClawdbotConfig;
+  agentDir: string;
   modelOverride?: string;
   prompt: string;
   base64: string;
   mimeType: string;
 }): Promise<{ text: string; provider: string; model: string }> {
-  const agentDir = resolveClawdbotAgentDir();
-  await ensureClawdbotModelsJson(params.cfg);
-  const authStorage = discoverAuthStorage(agentDir);
-  const modelRegistry = discoverModels(authStorage, agentDir);
+  await ensureClawdbotModelsJson(params.cfg, params.agentDir);
+  const authStorage = discoverAuthStorage(params.agentDir);
+  const modelRegistry = discoverModels(authStorage, params.agentDir);
 
   const result = await runWithImageModelFallback({
     cfg: params.cfg,
@@ -104,6 +103,7 @@ async function runImagePrompt(params: {
       const apiKeyInfo = await getApiKeyForModel({
         model,
         cfg: params.cfg,
+        agentDir: params.agentDir,
       });
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
       const context = buildImageContext(
@@ -130,8 +130,13 @@ async function runImagePrompt(params: {
 
 export function createImageTool(options?: {
   config?: ClawdbotConfig;
+  agentDir?: string;
 }): AnyAgentTool | null {
   if (!ensureImageToolConfigured(options?.config)) return null;
+  const agentDir = options?.agentDir;
+  if (!agentDir?.trim()) {
+    throw new Error("createImageTool requires agentDir when enabled");
+  }
   return {
     label: "Image",
     name: "image",
@@ -175,6 +180,7 @@ export function createImageTool(options?: {
       const base64 = media.buffer.toString("base64");
       const result = await runImagePrompt({
         cfg: options?.config,
+        agentDir,
         modelOverride,
         prompt: promptRaw,
         base64,

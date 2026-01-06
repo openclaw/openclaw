@@ -93,6 +93,18 @@ vi.mock("../daemon/service.js", () => ({
   }),
 }));
 
+vi.mock("../telegram/pairing-store.js", () => ({
+  readTelegramAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../pairing/pairing-store.js", () => ({
+  readProviderAllowFromStore: vi.fn().mockResolvedValue([]),
+}));
+
+vi.mock("../telegram/token.js", () => ({
+  resolveTelegramToken: vi.fn(() => ({ token: "", source: "none" })),
+}));
+
 vi.mock("../runtime.js", () => ({
   defaultRuntime: {
     log: () => {},
@@ -121,6 +133,37 @@ vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp",
   guardCancel: (value: unknown) => value,
   printWizardHeader: vi.fn(),
+}));
+
+vi.mock("./doctor-state-migrations.js", () => ({
+  detectLegacyStateMigrations: vi.fn().mockResolvedValue({
+    targetAgentId: "main",
+    targetMainKey: "main",
+    stateDir: "/tmp/state",
+    oauthDir: "/tmp/oauth",
+    sessions: {
+      legacyDir: "/tmp/state/sessions",
+      legacyStorePath: "/tmp/state/sessions/sessions.json",
+      targetDir: "/tmp/state/agents/main/sessions",
+      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
+      hasLegacy: false,
+    },
+    agentDir: {
+      legacyDir: "/tmp/state/agent",
+      targetDir: "/tmp/state/agents/main/agent",
+      hasLegacy: false,
+    },
+    whatsappAuth: {
+      legacyDir: "/tmp/oauth",
+      targetDir: "/tmp/oauth/whatsapp/default",
+      hasLegacy: false,
+    },
+    preview: [],
+  }),
+  runLegacyStateMigrations: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
 }));
 
 describe("doctor", () => {
@@ -225,9 +268,9 @@ describe("doctor", () => {
         parsed: {
           gateway: { mode: "local", bind: "loopback" },
           agent: {
-            workspace: "/Users/steipete/clawdbot",
+            workspace: "/Users/steipete/clawd",
             sandbox: {
-              workspaceRoot: "/Users/steipete/clawdbot/sandboxes",
+              workspaceRoot: "/Users/steipete/clawd/sandboxes",
               docker: {
                 image: "clawdbot-sandbox",
                 containerPrefix: "clawdbot-sbx",
@@ -239,9 +282,9 @@ describe("doctor", () => {
         config: {
           gateway: { mode: "local", bind: "loopback" },
           agent: {
-            workspace: "/Users/steipete/clawdbot",
+            workspace: "/Users/steipete/clawd",
             sandbox: {
-              workspaceRoot: "/Users/steipete/clawdbot/sandboxes",
+              workspaceRoot: "/Users/steipete/clawd/sandboxes",
               docker: {
                 image: "clawdbot-sandbox",
                 containerPrefix: "clawdbot-sbx",
@@ -322,8 +365,8 @@ describe("doctor", () => {
     const sandbox = agent.sandbox as Record<string, unknown>;
     const docker = sandbox.docker as Record<string, unknown>;
 
-    expect(agent.workspace).toBe("/Users/steipete/clawdbot");
-    expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawdbot/sandboxes");
+    expect(agent.workspace).toBe("/Users/steipete/clawd");
+    expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawd/sandboxes");
     expect(docker.image).toBe("clawdbot-sandbox");
     expect(docker.containerPrefix).toBe("clawdbot-sbx");
   });

@@ -31,15 +31,17 @@ export async function resolveApiKeyForProvider(params: {
   profileId?: string;
   preferredProfile?: string;
   store?: AuthProfileStore;
+  agentDir?: string;
 }): Promise<{ apiKey: string; profileId?: string; source: string }> {
   const { provider, cfg, profileId, preferredProfile } = params;
-  const store = params.store ?? ensureAuthProfileStore();
+  const store = params.store ?? ensureAuthProfileStore(params.agentDir);
 
   if (profileId) {
     const resolved = await resolveApiKeyForProfile({
       cfg,
       store,
       profileId,
+      agentDir: params.agentDir,
     });
     if (!resolved) {
       throw new Error(`No credentials found for profile "${profileId}".`);
@@ -63,6 +65,7 @@ export async function resolveApiKeyForProvider(params: {
         cfg,
         store,
         profileId: candidate,
+        agentDir: params.agentDir,
       });
       if (resolved) {
         return {
@@ -146,6 +149,7 @@ export async function getApiKeyForModel(params: {
   profileId?: string;
   preferredProfile?: string;
   store?: AuthProfileStore;
+  agentDir?: string;
 }): Promise<{ apiKey: string; profileId?: string; source: string }> {
   return resolveApiKeyForProvider({
     provider: params.model.provider,
@@ -153,5 +157,6 @@ export async function getApiKeyForModel(params: {
     profileId: params.profileId,
     preferredProfile: params.preferredProfile,
     store: params.store,
+    agentDir: params.agentDir,
   });
 }

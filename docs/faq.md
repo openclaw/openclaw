@@ -3,7 +3,7 @@ summary: "Frequently asked questions about Clawdbot setup, configuration, and us
 ---
 # FAQ 🦞
 
-Common questions from the community. For detailed configuration, see [configuration.md](./configuration.md).
+Common questions from the community. For detailed configuration, see [Configuration](https://docs.clawd.bot/configuration).
 
 ## Installation & Setup
 
@@ -14,12 +14,15 @@ Everything lives under `~/.clawdbot/`:
 | Path | Purpose |
 |------|---------|
 | `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
-| `~/.clawdbot/credentials/oauth.json` | OAuth credentials (Anthropic/OpenAI, etc.) |
-| `~/.clawdbot/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
-| `~/.clawdbot/agent/auth.json` | Runtime API key cache (managed automatically) |
-| `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
-| `~/.clawdbot/sessions/` | Conversation history & state |
-| `~/.clawdbot/sessions/sessions.json` | Session metadata |
+| `~/.clawdbot/credentials/oauth.json` | Legacy OAuth import (copied into auth profiles on first use) |
+| `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
+| `~/.clawdbot/agents/<agentId>/agent/auth.json` | Runtime auth cache (managed automatically) |
+| `~/.clawdbot/credentials/` | Provider auth state (e.g. `whatsapp/<accountId>/creds.json`) |
+| `~/.clawdbot/agents/` | Per-agent state (agentDir + sessions) |
+| `~/.clawdbot/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
+| `~/.clawdbot/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
+
+Legacy single-agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`).
 
 Your **workspace** (AGENTS.md, memory files, skills) is separate — configured via `agent.workspace` in your config (default: `~/clawd`).
 
@@ -37,7 +40,7 @@ Some features are platform-specific:
 
 ### What are the minimum system requirements?
 
-**Basically nothing!** The gateway is very lightweight — all heavy compute happens on Anthropic's servers.
+**Basically nothing!** The gateway is very lightweight — heavy compute happens on your model provider’s servers (Anthropic/OpenAI/etc.).
 
 - **RAM:** 512MB-1GB is enough (community member runs on 1GB VPS!)
 - **CPU:** 1 core is fine for personal use
@@ -119,7 +122,7 @@ They're **separate billing**! An API key does NOT use your subscription.
 pnpm clawdbot login
 ```
 
-**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/credentials/oauth.json` to your server. The auth is just a JSON file.
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (and `auth.json` if present) to your server. Legacy installs can still import `~/.clawdbot/credentials/oauth.json` on first use.
 
 ### How are env vars loaded?
 
@@ -141,15 +144,15 @@ Or set `CLAWDBOT_LOAD_SHELL_ENV=1` (timeout: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=1500
 
 ### Does enterprise OAuth work?
 
-**Not currently.** Enterprise accounts use SSO which requires a different auth flow that pi-coding-agent doesn't support yet.
+**Not currently.** Enterprise accounts use SSO which requires a different auth flow that Clawdbot’s OAuth login doesn’t support yet.
 
-**Workaround:** Ask your enterprise admin to provision an API key via the Anthropic console, then use that with `ANTHROPIC_API_KEY`.
+**Workaround:** Ask your enterprise admin to provision an API key (Anthropic or OpenAI) and use it via `ANTHROPIC_API_KEY` or `OPENAI_API_KEY`.
 
 ### OAuth callback not working (containers/headless)?
 
 OAuth needs the callback to reach the machine running the CLI. Options:
 
-1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/oauth.json` to the container.
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (and `auth.json` if present) to the container. Legacy flow: copy `~/.clawdbot/credentials/oauth.json` to trigger import.
 2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
 3. **Tailscale** — Put both machines on your tailnet.
 
@@ -191,7 +194,15 @@ OAuth needs the callback to reach the machine running the CLI. Options:
 
 ### Can I run Clawdbot in Docker?
 
-There's no official Docker setup yet, but it works. Key considerations:
+Yes — Docker is optional but supported. Recommended: run the setup script:
+
+```bash
+./docker-setup.sh
+```
+
+It builds the image, runs onboarding + login, and starts Docker Compose. For manual steps and sandbox notes, see `docs/docker.md`.
+
+Key considerations:
 
 - **WhatsApp login:** QR code works in terminal — no display needed.
 - **Persistence:** Mount `~/.clawdbot/` and your workspace as volumes.
@@ -218,7 +229,7 @@ pnpm clawdbot gateway
 bash /app/start.sh
 ```
 
-Docker support is on the roadmap — PRs welcome!
+For more detail, see `docs/docker.md`.
 
 ### Can I run Clawdbot headless on a VPS?
 
@@ -290,7 +301,7 @@ Per-group activation can be changed by the owner:
 - `/activation mention` — respond only when mentioned (default)
 - `/activation always` — respond to all messages
 
-See [groups.md](./groups.md) for details.
+See [Groups](https://docs.clawd.bot/groups) for details.
 
 ---
 
@@ -298,7 +309,7 @@ See [groups.md](./groups.md) for details.
 
 ### How much context can Clawdbot handle?
 
-Claude Opus has a 200k token context window, and Clawdbot uses **autocompaction** — older conversation gets summarized to stay under the limit.
+Context window depends on the model. Clawdbot uses **autocompaction** — older conversation gets summarized to stay under the limit.
 
 Practical tips:
 - Keep `AGENTS.md` focused, not bloated.
@@ -327,7 +338,7 @@ cat ~/.clawdbot/clawdbot.json | grep workspace
 - **Telegram** — Via Bot API (grammY).
 - **Discord** — Bot integration.
 - **iMessage** — Via `imsg` CLI (macOS only).
-- **Signal** — Via `signal-cli` (see [signal.md](./signal.md)).
+- **Signal** — Via `signal-cli` (see [Signal](https://docs.clawd.bot/signal)).
 - **WebChat** — Browser-based chat UI.
 
 ### Discord: Bot works in channels but not DMs?
@@ -365,7 +376,7 @@ If you send an image but your Clawd doesn't "see" it, check these:
 
 Not all models support images! Check `agent.model` in your config:
 
-- ✅ Vision: `claude-opus-4-5`, `claude-sonnet-4-5`, `claude-haiku-4-5`, `gpt-5.2`, `gpt-4o`, `gemini-pro`
+- ✅ Vision (examples): `anthropic/claude-opus-4-5`, `anthropic/claude-sonnet-4-5`, `anthropic/claude-haiku-4-5`, `openai/gpt-5.2`, `openai/gpt-4o`, `google/gemini-3-pro-preview`, `google/gemini-3-flash-preview`
 - ❌ No vision: Most local LLMs (Llama, Mistral), older models, text-only configs
 
 **2. Is media being downloaded?**
@@ -486,24 +497,16 @@ Headless/system services are not configured out of the box.
 
 The gateway runs under a supervisor that auto-restarts it. You need to stop the supervisor, not just kill the process.
 
-**macOS (launchd)**
+**macOS (Clawdbot.app)**
+
+- Quit the menu bar app to stop the gateway.
+- For debugging, restart via the app (or `scripts/restart-mac.sh` when working in the repo).
+- To inspect launchd state: `launchctl print gui/$UID | grep clawdbot`
+
+**macOS (CLI launchd service, if installed)**
 
 ```bash
-# Check if running
-launchctl list | grep clawdbot
-
-# Stop (disable does NOT stop a running job)
 clawdbot gateway stop
-
-# Stop and disable
-launchctl disable gui/$UID/com.clawdbot.gateway
-launchctl bootout gui/$UID/com.clawdbot.gateway
-
-# Re-enable later
-launchctl enable gui/$UID/com.clawdbot.gateway
-launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.gateway.plist
-
-# Or just restart
 clawdbot gateway restart
 ```
 
@@ -535,8 +538,11 @@ pm2 delete clawdbot
 launchctl disable gui/$UID/com.clawdbot.gateway
 launchctl bootout gui/$UID/com.clawdbot.gateway 2>/dev/null
 
-# Linux: stop systemd service
-sudo systemctl disable --now clawdbot
+# Linux: stop systemd user service
+systemctl --user disable --now clawdbot-gateway.service
+
+# Linux (system-wide unit, if installed)
+sudo systemctl disable --now clawdbot-gateway.service
 
 # Kill any remaining processes
 pkill -f "clawdbot"
@@ -544,10 +550,10 @@ pkill -f "clawdbot"
 # Remove data
 trash ~/.clawdbot
 
-# Remove repo and re-clone
-trash ~/clawdbot
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot && pnpm install && pnpm build
+# Remove repo and re-clone (adjust path if you cloned elsewhere)
+trash ~/Projects/clawdbot
+git clone https://github.com/clawdbot/clawdbot.git ~/Projects/clawdbot
+cd ~/Projects/clawdbot && pnpm install && pnpm build
 pnpm clawdbot onboard
 ```
 
@@ -559,17 +565,21 @@ Quick reference (send these in chat):
 
 | Command | Action |
 |---------|--------|
+| `/help` | Show available commands |
 | `/status` | Health + session info |
 | `/new` or `/reset` | Reset the session |
-| `/compact` | Compact session context |
-
-Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authorization on other surfaces).
+| `/compact [notes]` | Compact session context |
+| `/restart` | Restart Clawdbot |
+| `/activation mention\|always` | Group activation (owner-only) |
 | `/think <level>` | Set thinking level (off\|minimal\|low\|medium\|high) |
 | `/verbose on\|off` | Toggle verbose mode |
 | `/elevated on\|off` | Toggle elevated bash mode (approved senders only) |
-| `/activation mention\|always` | Group activation (owner-only) |
 | `/model <name>` | Switch AI model (see below) |
-| `/queue instant\|batch\|serial` | Message queuing mode |
+| `/queue <mode>` | Queue mode (see below) |
+
+Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authorization on other surfaces).
+Commands are only recognized when the entire message is the command (slash required; no plain-text aliases).
+Full list + config: https://docs.clawd.bot/slash-commands
 
 ### How do I switch models on the fly?
 
@@ -615,8 +625,8 @@ If you don't want to use Anthropic directly, you can use alternative providers:
 ```json5
 {
   agent: {
-    model: { primary: "openrouter/anthropic/claude-sonnet-4" },
-    models: { "openrouter/anthropic/claude-sonnet-4": {} },
+    model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
+    models: { "openrouter/anthropic/claude-sonnet-4-5": {} },
     env: { OPENROUTER_API_KEY: "sk-or-..." }
   }
 }
@@ -647,11 +657,8 @@ If you get weird errors after switching models, try `/think off` and `/new` to r
 
 ### How do I stop/cancel a running task?
 
-Send `/stop` to immediately abort the current agent run. Other stop words also work:
-- `/stop`
-- `/abort`
-- `/esc`
-- `/exit`
+Send one of these **as a standalone message** (no slash): `stop`, `abort`, `esc`, `wait`, `exit`.
+These are abort triggers, not slash commands.
 
 For background processes (like Codex), use:
 ```
@@ -660,8 +667,10 @@ process action:kill sessionId:XXX
 
 You can also configure `routing.queue.mode` to control how new messages interact with running tasks:
 - `steer` — New messages redirect the current task
-- `interrupt` — Kills current run, starts fresh
-- `collect` — Queues messages for after
+- `followup` — Run messages one at a time
+- `collect` — Batch messages, reply once after things settle
+- `steer-backlog` — Steer now, process backlog afterward
+- `interrupt` — Abort current run, start fresh
 
 ### Does Codex CLI use my ChatGPT Pro subscription or API credits?
 
@@ -684,11 +693,13 @@ If you have a ChatGPT subscription, use browser auth to avoid API charges!
 
 Use `/queue` to control how messages sent in quick succession are handled:
 
-- **`/queue instant`** — New messages interrupt/steer the current response
-- **`/queue batch`** — Messages queue up, processed after current turn
-- **`/queue serial`** — One at a time, in order
+- **`/queue steer`** — New messages steer the current response
+- **`/queue collect`** — Batch messages, reply once after things settle
+- **`/queue followup`** — One at a time, in order
+- **`/queue steer-backlog`** — Steer now, process backlog afterward
+- **`/queue interrupt`** — Abort current run, start fresh
 
-If you tend to send multiple short messages, `/queue instant` feels most natural.
+If you tend to send multiple short messages, `/queue steer` feels most natural.
 
 ---
 

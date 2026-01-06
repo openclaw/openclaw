@@ -604,6 +604,7 @@ export function subscribeEmbeddedPiSession(params: {
     assistantTexts,
     toolMetas,
     unsubscribe,
+    isCompacting: () => compactionInFlight || pendingCompactionRetry > 0,
     waitForCompactionRetry: () => {
       if (compactionInFlight || pendingCompactionRetry > 0) {
         ensureCompactionPromise();

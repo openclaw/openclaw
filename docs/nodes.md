@@ -14,7 +14,7 @@ macOS can also run in **node mode**: the menubar app connects to the Gateway’s
 
 ## Pairing + status
 
-Pairing is gateway-owned and approval-based. See `docs/gateway/pairing.md` for the full flow.
+Pairing is gateway-owned and approval-based. See [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing) for the full flow.
 
 Quick CLI:
 
@@ -150,8 +150,8 @@ Nodes may include a `permissions` map in `node.list` / `node.describe`, keyed by
 
 ## Where to look in code
 
-- CLI wiring: `src/cli/nodes-cli.ts`
-- Canvas snapshot decoding/temp paths: `src/cli/nodes-canvas.ts`
-- Duration parsing for CLI: `src/cli/parse-duration.ts`
-- iOS node commands: `apps/ios/Sources/Model/NodeAppModel.swift`
+- CLI wiring: [`src/cli/nodes-cli.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/nodes-cli.ts)
+- Canvas snapshot decoding/temp paths: [`src/cli/nodes-canvas.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/nodes-canvas.ts)
+- Duration parsing for CLI: [`src/cli/parse-duration.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/parse-duration.ts)
+- iOS node commands: [`apps/ios/Sources/Model/NodeAppModel.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/ios/Sources/Model/NodeAppModel.swift)
 - Android node commands: `apps/android/app/src/main/java/com/clawdbot/android/node/*`

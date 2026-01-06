@@ -203,7 +203,7 @@ Notes:
 - `reactions` returns per-emoji user lists (limited to 100 per reaction).
 - `discord.actions.*` gates Discord tool actions; `roles` + `moderation` default to `false`.
 - `searchMessages` follows the Discord preview spec (limit max 25, channel/author filters accept arrays).
-- The tool is only exposed when the current surface is Discord.
+- The tool is only exposed when the current provider is Discord.
 
 ## Parameters (common)
 
@@ -247,17 +247,17 @@ Tools are exposed to the model in **two parallel channels**:
 2) **Provider tool schema**: the actual function/tool declarations sent to the model API.
 
 In pi-mono:
-- System prompt builder: `packages/coding-agent/src/core/system-prompt.ts`
+- System prompt builder: [`packages/coding-agent/src/core/system-prompt.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts)
   - Builds the `Available tools:` list from `toolDescriptions`.
   - Appends skills and project context.
 - Tool schemas passed to providers:
-  - OpenAI: `packages/ai/src/providers/openai-responses.ts` (`convertTools`)
-  - Anthropic: `packages/ai/src/providers/anthropic.ts` (`convertTools`)
-  - Gemini: `packages/ai/src/providers/google-shared.ts` (`convertTools`)
+  - OpenAI: [`packages/ai/src/providers/openai-responses.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) (`convertTools`)
+  - Anthropic: [`packages/ai/src/providers/anthropic.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) (`convertTools`)
+  - Gemini: [`packages/ai/src/providers/google-shared.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/google-shared.ts) (`convertTools`)
 - Tool execution loop:
-  - Agent loop: `packages/ai/src/agent/agent-loop.ts`
+  - Agent loop: [`packages/ai/src/agent/agent-loop.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/agent/agent-loop.ts)
   - Validates tool arguments and executes tools, then appends `toolResult` messages.
 
 In Clawdbot:
-- System prompt append: `src/agents/system-prompt.ts`
-- Tool list injected via `createClawdbotCodingTools()` in `src/agents/pi-tools.ts`
+- System prompt append: [`src/agents/system-prompt.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/system-prompt.ts)
+- Tool list injected via `createClawdbotCodingTools()` in [`src/agents/pi-tools.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-tools.ts)
