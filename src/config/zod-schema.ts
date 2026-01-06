@@ -150,6 +150,10 @@ const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     responsePrefix: z.string().optional(),
+    ackReaction: z.string().optional(),
+    ackReactionScope: z
+      .enum(["group-mentions", "group-all", "direct", "all"])
+      .optional(),
   })
   .optional();
 

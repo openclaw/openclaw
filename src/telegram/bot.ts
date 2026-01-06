@@ -73,6 +73,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
   const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
+  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.telegram?.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
@@ -181,11 +183,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
       }
 
-      // React to acknowledge message receipt
-      ctx.react("✍️").catch((err) => {
-        logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
-      });
-
       const media = await resolveMedia(
         ctx,
         mediaMaxBytes,
@@ -200,6 +197,39 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ""
       ).trim();
       if (!rawBody) return;
+      const shouldAckReaction = () => {
+        if (!ackReaction) return false;
+        if (ackReactionScope === "all") return true;
+        if (ackReactionScope === "direct") return !isGroup;
+        if (ackReactionScope === "group-all") return isGroup;
+        if (ackReactionScope === "group-mentions") {
+          if (!isGroup) return false;
+          if (!resolveGroupRequireMention(chatId)) return false;
+          if (!canDetectMention) return false;
+          return wasMentioned || shouldBypassMention;
+        }
+        return false;
+      };
+      if (shouldAckReaction() && msg.message_id) {
+        const api = bot.api as unknown as {
+          setMessageReaction?: (
+            chatId: number | string,
+            messageId: number,
+            reactions: Array<{ type: "emoji"; emoji: string }>,
+          ) => Promise<void>;
+        };
+        if (typeof api.setMessageReaction === "function") {
+          api
+            .setMessageReaction(chatId, msg.message_id, [
+              { type: "emoji", emoji: ackReaction },
+            ])
+            .catch((err) => {
+              logVerbose(
+                `telegram react failed for chat ${chatId}: ${String(err)}`,
+              );
+            });
+        }
+      }
       const replySuffix = replyTarget
         ? `\n\n[Replying to ${replyTarget.sender}${replyTarget.id ? ` id:${replyTarget.id}` : ""}]\n${replyTarget.body}\n[/Replying]`
         : "";

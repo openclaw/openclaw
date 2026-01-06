@@ -30,6 +30,7 @@ import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
 
@@ -384,6 +385,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   );
   const textLimit = resolveTextChunkLimit(cfg, "slack");
   const mentionRegexes = buildMentionRegexes(cfg);
+  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.slack?.mediaMaxMb ?? 20) * 1024 * 1024;
 
@@ -628,6 +631,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
+    const shouldAckReaction = () => {
+      if (!ackReaction) return false;
+      if (ackReactionScope === "all") return true;
+      if (ackReactionScope === "direct") return isDirectMessage;
+      const isGroupChat = isRoom || isGroupDm;
+      if (ackReactionScope === "group-all") return isGroupChat;
+      if (ackReactionScope === "group-mentions") {
+        if (!isRoom) return false;
+        if (!channelConfig?.requireMention) return false;
+        if (!canDetectMention) return false;
+        return wasMentioned || shouldBypassMention;
+      }
+      return false;
+    };
+    if (shouldAckReaction() && message.ts) {
+      reactSlackMessage(message.channel, message.ts, ackReaction, {
+        token: botToken,
+        client: app.client,
+      }).catch((err) => {
+        logVerbose(
+          `slack react failed for channel ${message.channel}: ${String(err)}`,
+        );
+      });
+    }
 
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 

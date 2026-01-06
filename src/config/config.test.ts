@@ -87,6 +87,57 @@ describe("config identity defaults", () => {
     });
   });
 
+  it("defaults ackReaction to identity emoji", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" },
+            messages: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.ackReaction).toBe("🦥");
+      expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+    });
+  });
+
+  it("defaults ackReaction to 👀 when identity is missing", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            messages: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.ackReaction).toBe("👀");
+      expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+    });
+  });
+
   it("does not override explicit values", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdbot");

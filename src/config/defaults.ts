@@ -54,6 +54,32 @@ export function applyIdentityDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   return mutated ? next : cfg;
 }
 
+export function applyMessageDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
+  const messages = cfg.messages;
+  const hasAckReaction = messages?.ackReaction !== undefined;
+  const hasAckScope = messages?.ackReactionScope !== undefined;
+  if (hasAckReaction && hasAckScope) return cfg;
+
+  const fallbackEmoji = cfg.identity?.emoji?.trim() || "👀";
+  const nextMessages = { ...(messages ?? {}) };
+  let mutated = false;
+
+  if (!hasAckReaction) {
+    nextMessages.ackReaction = fallbackEmoji;
+    mutated = true;
+  }
+  if (!hasAckScope) {
+    nextMessages.ackReactionScope = "group-mentions";
+    mutated = true;
+  }
+
+  if (!mutated) return cfg;
+  return {
+    ...cfg,
+    messages: nextMessages,
+  };
+}
+
 export function applySessionDefaults(
   cfg: ClawdbotConfig,
   options: SessionDefaultsOptions = {},

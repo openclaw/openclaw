@@ -25,12 +25,14 @@ const useSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
 const sendChatActionSpy = vi.fn();
+const setMessageReactionSpy = vi.fn(async () => undefined);
 const sendMessageSpy = vi.fn(async () => ({ message_id: 77 }));
 const sendAnimationSpy = vi.fn(async () => ({ message_id: 78 }));
 const sendPhotoSpy = vi.fn(async () => ({ message_id: 79 }));
 type ApiStub = {
   config: { use: (arg: unknown) => void };
   sendChatAction: typeof sendChatActionSpy;
+  setMessageReaction: typeof setMessageReactionSpy;
   sendMessage: typeof sendMessageSpy;
   sendAnimation: typeof sendAnimationSpy;
   sendPhoto: typeof sendPhotoSpy;
@@ -38,6 +40,7 @@ type ApiStub = {
 const apiStub: ApiStub = {
   config: { use: useSpy },
   sendChatAction: sendChatActionSpy,
+  setMessageReaction: setMessageReactionSpy,
   sendMessage: sendMessageSpy,
   sendAnimation: sendAnimationSpy,
   sendPhoto: sendPhotoSpy,
@@ -74,6 +77,7 @@ describe("createTelegramBot", () => {
     loadWebMedia.mockReset();
     sendAnimationSpy.mockReset();
     sendPhotoSpy.mockReset();
+    setMessageReactionSpy.mockReset();
   });
 
   it("installs grammY throttler", () => {
@@ -176,6 +180,42 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expect(payload.WasMentioned).toBe(true);
+  });
+
+  it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
+    onSpy.mockReset();
+    setMessageReactionSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
+      routing: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      telegram: { groups: { "*": { requireMention: true } } },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "bert hello",
+        date: 1736380800,
+        message_id: 123,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(setMessageReactionSpy).toHaveBeenCalledWith(7, 123, [
+      { type: "emoji", emoji: "👀" },
+    ]);
   });
 
   it("skips group messages when requireMention is enabled and no mention matches", async () => {

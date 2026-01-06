@@ -131,7 +131,7 @@ rotation order used for failover.
 Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
 
 If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
-- `messages.responsePrefix` from `identity.emoji`
+- `messages.ackReaction` from `identity.emoji` (falls back to 👀)
 - `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
 
 ```json5
@@ -477,19 +477,31 @@ message envelopes). If unset, Clawdbot uses the host timezone at runtime.
 
 ### `messages`
 
-Controls inbound/outbound prefixes.
+Controls inbound/outbound prefixes and optional ack reactions.
 
 ```json5
 {
   messages: {
     messagePrefix: "[clawdbot]",
-    responsePrefix: "🦞"
+    responsePrefix: "🦞",
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions"
   }
 }
 ```
 
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across providers unless already present.
+
+`ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
+on providers that support reactions (Slack/Discord/Telegram). Defaults to the
+configured `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
+
+`ackReactionScope` controls when reactions fire:
+- `group-mentions` (default): only when a group/room requires mentions **and** the bot was mentioned
+- `group-all`: all group/room messages
+- `direct`: direct messages only
+- `all`: all messages
 
 ### `talk`
 
