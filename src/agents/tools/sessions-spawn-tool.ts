@@ -220,24 +220,36 @@ export function createSessionsSpawnTool(opts?: {
         parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
       const childSessionKey = `agent:${requesterAgentId}:subagent:${crypto.randomUUID()}`;
-      const patchParams: { key: string; spawnedBy?: string; model?: string } = {
-        key: childSessionKey,
-      };
       if (opts?.sandboxed === true) {
-        patchParams.spawnedBy = requesterInternalKey;
-      }
-      if (model) {
-        patchParams.model = model;
-      }
-      if (patchParams.spawnedBy || patchParams.model) {
         try {
           await callGateway({
             method: "sessions.patch",
-            params: patchParams,
+            params: { key: childSessionKey, spawnedBy: requesterInternalKey },
             timeoutMs: 10_000,
           });
         } catch {
           // best-effort; scoping relies on this metadata but spawning still works without it
+        }
+      }
+      if (model) {
+        try {
+          await callGateway({
+            method: "sessions.patch",
+            params: { key: childSessionKey, model },
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          const messageText =
+            err instanceof Error
+              ? err.message
+              : typeof err === "string"
+                ? err
+                : "error";
+          return jsonResult({
+            status: "error",
+            error: messageText,
+            childSessionKey,
+          });
         }
       }
       const childSystemPrompt = buildSubagentSystemPrompt({
