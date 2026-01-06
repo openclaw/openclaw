@@ -33,3 +33,11 @@ scripts/e2e/onboard-docker.sh
 ```
 
 This script drives the interactive wizard via a pseudo-tty, verifies config/workspace/session files, then starts the gateway and runs `clawdbot health`.
+
+## QR import smoke (Docker)
+
+Ensures `qrcode-terminal` loads under Node 22+ in Docker:
+
+```bash
+pnpm test:docker:qr
+```

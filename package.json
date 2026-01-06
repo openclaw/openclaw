@@ -67,6 +67,7 @@
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
@@ -148,7 +149,8 @@
       "@sinclair/typebox": "0.34.46"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch"
+      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
+      "qrcode-terminal": "patches/qrcode-terminal.patch"
     }
   },
   "vitest": {
