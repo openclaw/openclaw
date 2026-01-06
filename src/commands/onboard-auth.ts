@@ -44,16 +44,25 @@ export function applyAuthProfileConfig(
       ...(params.email ? { email: params.email } : {}),
     },
   };
-  const order = { ...cfg.auth?.order };
-  const list = order[params.provider] ? [...order[params.provider]] : [];
-  if (!list.includes(params.profileId)) list.push(params.profileId);
-  order[params.provider] = list;
+
+  // Only maintain `auth.order` when the user explicitly configured it.
+  // Default behavior: no explicit order -> resolveAuthProfileOrder can round-robin by lastUsed.
+  const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const order =
+    existingProviderOrder !== undefined
+      ? {
+          ...cfg.auth?.order,
+          [params.provider]: existingProviderOrder.includes(params.profileId)
+            ? existingProviderOrder
+            : [...existingProviderOrder, params.profileId],
+        }
+      : cfg.auth?.order;
   return {
     ...cfg,
     auth: {
       ...cfg.auth,
       profiles,
-      order,
+      ...(order ? { order } : {}),
     },
   };
 }

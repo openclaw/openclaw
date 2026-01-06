@@ -203,7 +203,7 @@ Notes:
 - `reactions` returns per-emoji user lists (limited to 100 per reaction).
 - `discord.actions.*` gates Discord tool actions; `roles` + `moderation` default to `false`.
 - `searchMessages` follows the Discord preview spec (limit max 25, channel/author filters accept arrays).
-- The tool is only exposed when the current surface is Discord.
+- The tool is only exposed when the current provider is Discord.
 
 ## Parameters (common)
 

@@ -23,23 +23,25 @@
   "navigation": {
     "groups": [
       {
-        "group": "Getting Started",
+        "group": "Start Here",
         "pages": [
+          "getting-started",
+          "wizard",
           "index",
+          "setup",
+          "pairing",
+          "faq",
+          "clawd",
           "showcase",
           "hubs",
-          "onboarding",
-          "clawd",
-          "faq"
+          "onboarding"
         ]
       },
       {
-        "group": "Installation",
+        "group": "Install Options",
         "pages": [
-          "wizard",
           "nix",
-          "docker",
-          "setup"
+          "docker"
         ]
       },
       {

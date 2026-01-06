@@ -71,7 +71,7 @@ function createMinimalRun(params?: {
   const typing = createTyping();
   const opts = params?.opts;
   const sessionCtx = {
-    Surface: "whatsapp",
+    Provider: "whatsapp",
     MessageSid: "msg",
   } as unknown as TemplateContext;
   const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
@@ -83,7 +83,7 @@ function createMinimalRun(params?: {
     run: {
       sessionId: "session",
       sessionKey,
-      surface: "whatsapp",
+      messageProvider: "whatsapp",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},

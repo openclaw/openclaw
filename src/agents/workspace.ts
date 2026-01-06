@@ -222,6 +222,21 @@ export async function ensureAgentWorkspace(params?: {
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
 
+  const isBrandNewWorkspace = await (async () => {
+    const paths = [agentsPath, soulPath, toolsPath, identityPath, userPath];
+    const existing = await Promise.all(
+      paths.map(async (p) => {
+        try {
+          await fs.access(p);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    return existing.every((v) => !v);
+  })();
+
   const agentsTemplate = await loadTemplate(
     DEFAULT_AGENTS_FILENAME,
     DEFAULT_AGENTS_TEMPLATE,
@@ -252,7 +267,9 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+  if (isBrandNewWorkspace) {
+    await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+  }
 
   return {
     dir,

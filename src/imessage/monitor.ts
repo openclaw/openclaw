@@ -16,6 +16,11 @@ import {
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createIMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
@@ -130,6 +135,7 @@ export async function monitorIMessageProvider(
   const allowFrom = resolveAllowFrom(opts);
   const groupAllowFrom = resolveGroupAllowFrom(opts);
   const groupPolicy = cfg.imessage?.groupPolicy ?? "open";
+  const dmPolicy = cfg.imessage?.dmPolicy ?? "pairing";
   const mentionRegexes = buildMentionRegexes(cfg);
   const includeAttachments =
     opts.includeAttachments ?? cfg.imessage?.includeAttachments ?? false;
@@ -153,20 +159,34 @@ export async function monitorIMessageProvider(
     if (isGroup && !chatId) return;
 
     const groupId = isGroup ? String(chatId) : undefined;
+    const storeAllowFrom = await readProviderAllowFromStore("imessage").catch(
+      () => [],
+    );
+    const effectiveDmAllowFrom = Array.from(
+      new Set([...allowFrom, ...storeAllowFrom]),
+    )
+      .map((v) => String(v).trim())
+      .filter(Boolean);
+    const effectiveGroupAllowFrom = Array.from(
+      new Set([...groupAllowFrom, ...storeAllowFrom]),
+    )
+      .map((v) => String(v).trim())
+      .filter(Boolean);
+
     if (isGroup) {
       if (groupPolicy === "disabled") {
         logVerbose("Blocked iMessage group message (groupPolicy: disabled)");
         return;
       }
       if (groupPolicy === "allowlist") {
-        if (groupAllowFrom.length === 0) {
+        if (effectiveGroupAllowFrom.length === 0) {
           logVerbose(
             "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
           );
           return;
         }
         const allowed = isAllowedIMessageSender({
-          allowFrom: groupAllowFrom,
+          allowFrom: effectiveGroupAllowFrom,
           sender,
           chatId: chatId ?? undefined,
           chatGuid,
@@ -181,7 +201,7 @@ export async function monitorIMessageProvider(
       }
       const groupListPolicy = resolveProviderGroupPolicy({
         cfg,
-        surface: "imessage",
+        provider: "imessage",
         groupId,
       });
       if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
@@ -192,16 +212,64 @@ export async function monitorIMessageProvider(
       }
     }
 
-    const dmAuthorized = isAllowedIMessageSender({
-      allowFrom,
-      sender,
-      chatId: chatId ?? undefined,
-      chatGuid,
-      chatIdentifier,
-    });
-    if (!isGroup && !dmAuthorized) {
-      logVerbose(`Blocked iMessage sender ${sender} (not in allowFrom)`);
-      return;
+    const dmHasWildcard = effectiveDmAllowFrom.includes("*");
+    const dmAuthorized =
+      dmPolicy === "open"
+        ? true
+        : dmHasWildcard ||
+          (effectiveDmAllowFrom.length > 0 &&
+            isAllowedIMessageSender({
+              allowFrom: effectiveDmAllowFrom,
+              sender,
+              chatId: chatId ?? undefined,
+              chatGuid,
+              chatIdentifier,
+            }));
+    if (!isGroup) {
+      if (dmPolicy === "disabled") return;
+      if (!dmAuthorized) {
+        if (dmPolicy === "pairing") {
+          const senderId = normalizeIMessageHandle(sender);
+          const { code } = await upsertProviderPairingRequest({
+            provider: "imessage",
+            id: senderId,
+            meta: {
+              sender: senderId,
+              chatId: chatId ? String(chatId) : undefined,
+            },
+          });
+          logVerbose(
+            `imessage pairing request sender=${senderId} code=${code}`,
+          );
+          try {
+            await sendMessageIMessage(
+              sender,
+              [
+                "Clawdbot: access not configured.",
+                "",
+                `Pairing code: ${code}`,
+                "",
+                "Ask the bot owner to approve with:",
+                "clawdbot pairing approve --provider imessage <code>",
+              ].join("\n"),
+              {
+                client,
+                maxBytes: mediaMaxBytes,
+                ...(chatId ? { chatId } : {}),
+              },
+            );
+          } catch (err) {
+            logVerbose(
+              `imessage pairing reply failed for ${senderId}: ${String(err)}`,
+            );
+          }
+        } else {
+          logVerbose(
+            `Blocked iMessage sender ${sender} (dmPolicy=${dmPolicy})`,
+          );
+        }
+        return;
+      }
     }
 
     const messageText = (message.text ?? "").trim();
@@ -210,16 +278,16 @@ export async function monitorIMessageProvider(
       : true;
     const requireMention = resolveProviderGroupRequireMention({
       cfg,
-      surface: "imessage",
+      provider: "imessage",
       groupId,
       requireMentionOverride: opts.requireMention,
       overrideOrder: "before-config",
     });
     const canDetectMention = mentionRegexes.length > 0;
     const commandAuthorized = isGroup
-      ? groupAllowFrom.length > 0
+      ? effectiveGroupAllowFrom.length > 0
         ? isAllowedIMessageSender({
-            allowFrom: groupAllowFrom,
+            allowFrom: effectiveGroupAllowFrom,
             sender,
             chatId: chatId ?? undefined,
             chatGuid,
@@ -267,16 +335,28 @@ export async function monitorIMessageProvider(
       ? Date.parse(message.created_at)
       : undefined;
     const body = formatAgentEnvelope({
-      surface: "iMessage",
+      provider: "iMessage",
       from: fromLabel,
       timestamp: createdAt,
       body: bodyText,
     });
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "imessage",
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: isGroup
+          ? String(chatId ?? "unknown")
+          : normalizeIMessageHandle(sender),
+      },
+    });
     const ctxPayload = {
       Body: body,
       From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
       To: chatTarget || `imessage:${sender}`,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (message.chat_name ?? undefined) : undefined,
       GroupMembers: isGroup
@@ -284,7 +364,7 @@ export async function monitorIMessageProvider(
         : undefined,
       SenderName: sender,
       SenderId: sender,
-      Surface: "imessage",
+      Provider: "imessage",
       MessageSid: message.id ? String(message.id) : undefined,
       Timestamp: createdAt,
       MediaPath: mediaPath,
@@ -296,15 +376,17 @@ export async function monitorIMessageProvider(
 
     if (!isGroup) {
       const sessionCfg = cfg.session;
-      const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-      const storePath = resolveStorePath(sessionCfg?.store);
+      const storePath = resolveStorePath(sessionCfg?.store, {
+        agentId: route.agentId,
+      });
       const to = chatTarget || sender;
       if (to) {
         await updateLastRoute({
           storePath,
-          sessionKey: mainKey,
-          channel: "imessage",
+          sessionKey: route.mainSessionKey,
+          provider: "imessage",
           to,
+          accountId: route.accountId,
         });
       }
     }

@@ -17,7 +17,10 @@ import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIAttachment } from "discord-api-types/v10";
 import { ApplicationCommandOptionType, Routes } from "discord-api-types/v10";
 
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildCommandText,
@@ -36,16 +39,17 @@ import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import {
-  resolveSessionKey,
-  resolveStorePath,
-  updateLastRoute,
-} from "../config/sessions.js";
+import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { fetchDiscordApplicationId } from "./probe.js";
@@ -169,6 +173,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   );
   const replyToMode = opts.replyToMode ?? cfg.discord?.replyToMode ?? "off";
   const dmEnabled = dmConfig?.enabled ?? true;
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = dmConfig?.groupChannels;
   const nativeEnabled = cfg.commands?.native === true;
@@ -179,7 +184,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   if (shouldLogVerbose()) {
     logVerbose(
-      `discord: config dm=${dmEnabled ? "on" : "off"} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"}`,
+      `discord: config dm=${dmEnabled ? "on" : "off"} dmPolicy=${dmPolicy} allowFrom=${summarizeAllowList(allowFrom)} groupDm=${groupDmEnabled ? "on" : "off"} groupDmChannels=${summarizeAllowList(groupDmChannels)} groupPolicy=${groupPolicy} guilds=${summarizeGuilds(guildEntries)} historyLimit=${historyLimit} mediaMaxMb=${Math.round(mediaMaxBytes / (1024 * 1024))} native=${nativeEnabled ? "on" : "off"} accessGroups=${useAccessGroups ? "on" : "off"}`,
     );
   }
 
@@ -378,6 +383,72 @@ export function createDiscordMessageHandler(params: {
         logVerbose("discord: drop dm (dms disabled)");
         return;
       }
+
+      const dmPolicy = cfg.discord?.dm?.policy ?? "pairing";
+      let commandAuthorized = true;
+      if (isDirectMessage) {
+        if (dmPolicy === "disabled") {
+          logVerbose("discord: drop dm (dmPolicy: disabled)");
+          return;
+        }
+        if (dmPolicy !== "open") {
+          const storeAllowFrom = await readProviderAllowFromStore(
+            "discord",
+          ).catch(() => []);
+          const effectiveAllowFrom = [...(allowFrom ?? []), ...storeAllowFrom];
+          const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
+            "discord:",
+            "user:",
+          ]);
+          const permitted = allowList
+            ? allowListMatches(allowList, {
+                id: author.id,
+                name: author.username,
+                tag: formatDiscordUserTag(author),
+              })
+            : false;
+          if (!permitted) {
+            commandAuthorized = false;
+            if (dmPolicy === "pairing") {
+              const { code } = await upsertProviderPairingRequest({
+                provider: "discord",
+                id: author.id,
+                meta: {
+                  tag: formatDiscordUserTag(author),
+                  name: author.username ?? undefined,
+                },
+              });
+              logVerbose(
+                `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} code=${code}`,
+              );
+              try {
+                await sendMessageDiscord(
+                  `user:${author.id}`,
+                  [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot pairing approve --provider discord <code>",
+                  ].join("\n"),
+                  { token, rest: client.rest },
+                );
+              } catch (err) {
+                logVerbose(
+                  `discord pairing reply failed for ${author.id}: ${String(err)}`,
+                );
+              }
+            } else {
+              logVerbose(
+                `Blocked unauthorized discord sender ${author.id} (dmPolicy=${dmPolicy})`,
+              );
+            }
+            return;
+          }
+          commandAuthorized = true;
+        }
+      }
       const botId = botUserId;
       const baseText = resolveDiscordMessageText(message);
       const wasMentioned =
@@ -425,6 +496,16 @@ export function createDiscordMessageHandler(params: {
       const guildSlug =
         guildInfo?.slug ||
         (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : "");
+
+      const route = resolveAgentRoute({
+        cfg,
+        provider: "discord",
+        guildId: data.guild_id ?? undefined,
+        peer: {
+          kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? author.id : message.channelId,
+        },
+      });
       const channelConfig = isGuildMessage
         ? resolveDiscordChannelConfig({
             guildInfo,
@@ -502,12 +583,14 @@ export function createDiscordMessageHandler(params: {
             (message.mentionedUsers?.length ?? 0) > 0 ||
             (message.mentionedRoles?.length ?? 0) > 0),
       );
-      const commandAuthorized = resolveDiscordCommandAuthorized({
-        isDirectMessage,
-        allowFrom,
-        guildInfo,
-        author,
-      });
+      if (!isDirectMessage) {
+        commandAuthorized = resolveDiscordCommandAuthorized({
+          isDirectMessage,
+          allowFrom,
+          guildInfo,
+          author,
+        });
+      }
       const allowTextCommands = shouldHandleTextCommands({
         cfg,
         surface: "discord",
@@ -560,26 +643,6 @@ export function createDiscordMessageHandler(params: {
         }
       }
 
-      if (isDirectMessage && Array.isArray(allowFrom) && allowFrom.length > 0) {
-        const allowList = normalizeDiscordAllowList(allowFrom, [
-          "discord:",
-          "user:",
-        ]);
-        const permitted =
-          allowList &&
-          allowListMatches(allowList, {
-            id: author.id,
-            name: author.username,
-            tag: formatDiscordUserTag(author),
-          });
-        if (!permitted) {
-          logVerbose(
-            `Blocked unauthorized discord sender ${author.id} (not in allowFrom)`,
-          );
-          return;
-        }
-      }
-
       const systemLocation = resolveDiscordSystemLocation({
         isDirectMessage,
         isGroupDm,
@@ -588,22 +651,8 @@ export function createDiscordMessageHandler(params: {
       });
       const systemText = resolveDiscordSystemEvent(message, systemLocation);
       if (systemText) {
-        const sessionCfg = cfg.session;
-        const sessionScope = sessionCfg?.scope ?? "per-sender";
-        const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-        const sessionKey = resolveSessionKey(
-          sessionScope,
-          {
-            From: isDirectMessage
-              ? `discord:${author.id}`
-              : `group:${message.channelId}`,
-            ChatType: isDirectMessage ? "direct" : "group",
-            Surface: "discord",
-          },
-          mainKey,
-        );
         enqueueSystemEvent(systemText, {
-          sessionKey,
+          sessionKey: route.sessionKey,
           contextKey: `discord:system:${message.channelId}:${message.id}`,
         });
         return;
@@ -654,7 +703,7 @@ export function createDiscordMessageHandler(params: {
         isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
       const groupSubject = isDirectMessage ? undefined : groupRoom;
       let combinedBody = formatAgentEnvelope({
-        surface: "Discord",
+        provider: "Discord",
         from: fromLabel,
         timestamp: resolveTimestampMs(message.timestamp),
         body: text,
@@ -669,7 +718,7 @@ export function createDiscordMessageHandler(params: {
           const historyText = historyWithoutCurrent
             .map((entry) =>
               formatAgentEnvelope({
-                surface: "Discord",
+                provider: "Discord",
                 from: fromLabel,
                 timestamp: entry.timestamp,
                 body: `${entry.sender}: ${entry.body} [id:${entry.messageId ?? "unknown"} channel:${message.channelId}]`,
@@ -696,6 +745,8 @@ export function createDiscordMessageHandler(params: {
         To: isDirectMessage
           ? `user:${author.id}`
           : `channel:${message.channelId}`,
+        SessionKey: route.sessionKey,
+        AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName:
           data.member?.nickname ?? author.globalName ?? author.username,
@@ -707,6 +758,7 @@ export function createDiscordMessageHandler(params: {
         GroupSpace: isGuildMessage
           ? (guildInfo?.id ?? guildSlug) || undefined
           : undefined,
+        Provider: "discord" as const,
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
@@ -725,13 +777,15 @@ export function createDiscordMessageHandler(params: {
 
       if (isDirectMessage) {
         const sessionCfg = cfg.session;
-        const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-        const storePath = resolveStorePath(sessionCfg?.store);
+        const storePath = resolveStorePath(sessionCfg?.store, {
+          agentId: route.agentId,
+        });
         await updateLastRoute({
           storePath,
-          sessionKey: mainKey,
-          channel: "discord",
+          sessionKey: route.mainSessionKey,
+          provider: "discord",
           to: `user:${author.id}`,
+          accountId: route.accountId,
         });
       }
 
@@ -939,20 +993,15 @@ async function handleDiscordReactionEvent(params: {
       : undefined;
     const baseText = `Discord reaction ${action}: ${emojiLabel} by ${actorLabel} on ${guildSlug} ${channelLabel} msg ${data.message_id}`;
     const text = authorLabel ? `${baseText} from ${authorLabel}` : baseText;
-    const sessionCfg = loadConfig().session;
-    const sessionScope = sessionCfg?.scope ?? "per-sender";
-    const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-    const sessionKey = resolveSessionKey(
-      sessionScope,
-      {
-        From: `group:${data.channel_id}`,
-        ChatType: "group",
-        Surface: "discord",
-      },
-      mainKey,
-    );
+    const cfg = loadConfig();
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "discord",
+      guildId: data.guild_id ?? undefined,
+      peer: { kind: "channel", id: data.channel_id },
+    });
     enqueueSystemEvent(text, {
-      sessionKey,
+      sessionKey: route.sessionKey,
       contextKey: `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`,
     });
   } catch (err) {
@@ -1033,17 +1082,65 @@ function createDiscordNativeCommand(params: {
           return;
         }
       }
-      const commandAuthorized = resolveDiscordCommandAuthorized({
-        isDirectMessage: Boolean(isDirectMessage),
-        allowFrom: cfg.discord?.dm?.allowFrom,
-        guildInfo,
-        author: user,
-      });
-      if (!commandAuthorized) {
-        await interaction.reply({
-          content: "You are not authorized to use this command.",
-        });
-        return;
+      const dmEnabled = cfg.discord?.dm?.enabled ?? true;
+      const dmPolicy = cfg.discord?.dm?.policy ?? "pairing";
+      let commandAuthorized = true;
+      if (isDirectMessage) {
+        if (!dmEnabled || dmPolicy === "disabled") {
+          await interaction.reply({ content: "Discord DMs are disabled." });
+          return;
+        }
+        if (dmPolicy !== "open") {
+          const storeAllowFrom = await readProviderAllowFromStore(
+            "discord",
+          ).catch(() => []);
+          const effectiveAllowFrom = [
+            ...(cfg.discord?.dm?.allowFrom ?? []),
+            ...storeAllowFrom,
+          ];
+          const allowList = normalizeDiscordAllowList(effectiveAllowFrom, [
+            "discord:",
+            "user:",
+          ]);
+          const permitted = allowList
+            ? allowListMatches(allowList, {
+                id: user.id,
+                name: user.username,
+                tag: formatDiscordUserTag(user),
+              })
+            : false;
+          if (!permitted) {
+            commandAuthorized = false;
+            if (dmPolicy === "pairing") {
+              const { code } = await upsertProviderPairingRequest({
+                provider: "discord",
+                id: user.id,
+                meta: {
+                  tag: formatDiscordUserTag(user),
+                  name: user.username ?? undefined,
+                },
+              });
+              await interaction.reply({
+                content: [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider discord <code>",
+                ].join("\n"),
+                ephemeral: true,
+              });
+            } else {
+              await interaction.reply({
+                content: "You are not authorized to use this command.",
+                ephemeral: true,
+              });
+            }
+            return;
+          }
+          commandAuthorized = true;
+        }
       }
       if (guildInfo?.users && !isDirectMessage) {
         const allowList = normalizeDiscordAllowList(guildInfo.users, [
@@ -1068,29 +1165,36 @@ function createDiscordNativeCommand(params: {
         await interaction.reply({ content: "Discord group DMs are disabled." });
         return;
       }
-      if (isDirectMessage && cfg.discord?.dm?.enabled === false) {
-        await interaction.reply({ content: "Discord DMs are disabled." });
-        return;
-      }
 
       const isGuild = Boolean(interaction.guild);
       const channelId = channel?.id ?? "unknown";
       const interactionId = interaction.rawData.id;
+      const route = resolveAgentRoute({
+        cfg,
+        provider: "discord",
+        guildId: interaction.guild?.id ?? undefined,
+        peer: {
+          kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? user.id : channelId,
+        },
+      });
       const ctxPayload = {
         Body: prompt,
         From: isDirectMessage ? `discord:${user.id}` : `group:${channelId}`,
         To: `slash:${user.id}`,
+        SessionKey: `agent:${route.agentId}:${sessionPrefix}:${user.id}`,
+        AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         GroupSubject: isGuild ? interaction.guild?.name : undefined,
         SenderName: user.globalName ?? user.username,
         SenderId: user.id,
         SenderUsername: user.username,
         SenderTag: formatDiscordUserTag(user),
+        Provider: "discord" as const,
         Surface: "discord" as const,
         WasMentioned: true,
         MessageSid: interactionId,
         Timestamp: Date.now(),
-        SessionKey: `${sessionPrefix}:${user.id}`,
         CommandAuthorized: commandAuthorized,
         CommandSource: "native" as const,
       };
@@ -1176,7 +1280,7 @@ async function deliverDiscordInteractionReply(params: {
     if (text.length > textLimit) {
       const remaining = text.slice(textLimit).trim();
       if (remaining) {
-        for (const chunk of chunkText(remaining, textLimit)) {
+        for (const chunk of chunkMarkdownText(remaining, textLimit)) {
           await interaction.followUp({ content: chunk });
         }
       }
@@ -1185,7 +1289,7 @@ async function deliverDiscordInteractionReply(params: {
   }
 
   if (!text.trim()) return;
-  for (const chunk of chunkText(text, textLimit)) {
+  for (const chunk of chunkMarkdownText(text, textLimit)) {
     await sendMessage(chunk);
   }
 }
@@ -1207,7 +1311,7 @@ async function deliverDiscordReply(params: {
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(text, chunkLimit)) {
+      for (const chunk of chunkMarkdownText(text, chunkLimit)) {
         const trimmed = chunk.trim();
         if (!trimmed) continue;
         await sendMessageDiscord(params.target, trimmed, {
@@ -1308,7 +1412,7 @@ function resolveReplyContext(message: Message): string | null {
     : "Unknown";
   const body = `${referencedText}\n[discord message id: ${referenced.id} channel: ${referenced.channelId} from: ${formatDiscordUserTag(referenced.author)} user id:${referenced.author?.id ?? "unknown"}]`;
   return formatAgentEnvelope({
-    surface: "Discord",
+    provider: "Discord",
     from: fromLabel,
     timestamp: resolveTimestampMs(referenced.timestamp),
     body,

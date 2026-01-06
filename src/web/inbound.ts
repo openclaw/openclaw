@@ -17,6 +17,10 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
+import {
   formatLocationText,
   type NormalizedLocation,
 } from "../providers/location.js";
@@ -26,6 +30,7 @@ import {
   normalizeE164,
   toWhatsappJid,
 } from "../utils.js";
+import { resolveWhatsAppAccount } from "./accounts.js";
 import type { ActiveWebSendOptions } from "./active-listener.js";
 import {
   createWaSocket,
@@ -44,6 +49,7 @@ export type WebInboundMessage = {
   from: string; // conversation id: E.164 for direct chats, group JID for groups
   conversationId: string; // alias for clarity (same as from)
   to: string;
+  accountId: string;
   body: string;
   pushName?: string;
   timestamp?: number;
@@ -72,13 +78,17 @@ export type WebInboundMessage = {
 
 export async function monitorWebInbox(options: {
   verbose: boolean;
+  accountId: string;
+  authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger(
     "gateway/providers/whatsapp",
   ).child("inbound");
-  const sock = await createWaSocket(false, options.verbose);
+  const sock = await createWaSocket(false, options.verbose, {
+    authDir: options.authDir,
+  });
   await waitForWaConnection(sock);
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
   const onClose = new Promise<WebListenerCloseReason>((resolve) => {
@@ -168,18 +178,25 @@ export async function monitorWebInbox(options: {
       // Filter unauthorized senders early to prevent wasted processing
       // and potential session corruption from Bad MAC errors
       const cfg = loadConfig();
-      const configuredAllowFrom = cfg.whatsapp?.allowFrom;
+      const account = resolveWhatsAppAccount({
+        cfg,
+        accountId: options.accountId,
+      });
+      const dmPolicy = cfg.whatsapp?.dmPolicy ?? "pairing";
+      const configuredAllowFrom = account.allowFrom;
+      const storeAllowFrom = await readProviderAllowFromStore("whatsapp").catch(
+        () => [],
+      );
       // Without user config, default to self-only DM access so the owner can talk to themselves
+      const combinedAllowFrom = Array.from(
+        new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
+      );
       const defaultAllowFrom =
-        (!configuredAllowFrom || configuredAllowFrom.length === 0) && selfE164
-          ? [selfE164]
-          : undefined;
+        combinedAllowFrom.length === 0 && selfE164 ? [selfE164] : undefined;
       const allowFrom =
-        configuredAllowFrom && configuredAllowFrom.length > 0
-          ? configuredAllowFrom
-          : defaultAllowFrom;
+        combinedAllowFrom.length > 0 ? combinedAllowFrom : defaultAllowFrom;
       const groupAllowFrom =
-        cfg.whatsapp?.groupAllowFrom ??
+        account.groupAllowFrom ??
         (configuredAllowFrom && configuredAllowFrom.length > 0
           ? configuredAllowFrom
           : undefined);
@@ -202,7 +219,7 @@ export async function monitorWebInbox(options: {
       // - "open" (default): groups bypass allowFrom, only mention-gating applies
       // - "disabled": block all group messages entirely
       // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-      const groupPolicy = cfg.whatsapp?.groupPolicy ?? "open";
+      const groupPolicy = account.groupPolicy ?? "open";
       if (group && groupPolicy === "disabled") {
         logVerbose(`Blocked group message (groupPolicy: disabled)`);
         continue;
@@ -227,16 +244,53 @@ export async function monitorWebInbox(options: {
         }
       }
 
-      // DM allowlist filtering (unchanged behavior)
-      const allowlistEnabled =
-        !group && Array.isArray(allowFrom) && allowFrom.length > 0;
-      if (!isSamePhone && allowlistEnabled) {
-        const candidate = from;
-        if (!dmHasWildcard && !normalizedAllowFrom.includes(candidate)) {
-          logVerbose(
-            `Blocked unauthorized sender ${candidate} (not in allowFrom list)`,
-          );
+      // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
+      if (!group) {
+        if (dmPolicy === "disabled") {
+          logVerbose("Blocked dm (dmPolicy: disabled)");
           continue;
+        }
+        if (dmPolicy !== "open" && !isSamePhone) {
+          const candidate = from;
+          const allowed =
+            dmHasWildcard ||
+            (normalizedAllowFrom.length > 0 &&
+              normalizedAllowFrom.includes(candidate));
+          if (!allowed) {
+            if (dmPolicy === "pairing") {
+              const { code } = await upsertProviderPairingRequest({
+                provider: "whatsapp",
+                id: candidate,
+                meta: {
+                  name: (msg.pushName ?? "").trim() || undefined,
+                },
+              });
+              logVerbose(
+                `whatsapp pairing request sender=${candidate} name=${msg.pushName ?? "unknown"} code=${code}`,
+              );
+              try {
+                await sock.sendMessage(remoteJid, {
+                  text: [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot pairing approve --provider whatsapp <code>",
+                  ].join("\n"),
+                });
+              } catch (err) {
+                logVerbose(
+                  `whatsapp pairing reply failed for ${candidate}: ${String(err)}`,
+                );
+              }
+            } else {
+              logVerbose(
+                `Blocked unauthorized sender ${candidate} (dmPolicy=${dmPolicy})`,
+              );
+            }
+            continue;
+          }
         }
       }
 
@@ -331,6 +385,7 @@ export async function monitorWebInbox(options: {
             from,
             conversationId: from,
             to: selfE164 ?? "me",
+            accountId: account.accountId,
             body,
             pushName: senderName,
             timestamp,

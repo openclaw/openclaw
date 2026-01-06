@@ -1,6 +1,6 @@
 import type { ClawdbotConfig } from "./config.js";
 
-export type GroupPolicySurface = "whatsapp" | "telegram" | "imessage";
+export type GroupPolicyProvider = "whatsapp" | "telegram" | "imessage";
 
 export type ProviderGroupConfig = {
   requireMention?: boolean;
@@ -17,21 +17,21 @@ type ProviderGroups = Record<string, ProviderGroupConfig>;
 
 function resolveProviderGroups(
   cfg: ClawdbotConfig,
-  surface: GroupPolicySurface,
+  provider: GroupPolicyProvider,
 ): ProviderGroups | undefined {
-  if (surface === "whatsapp") return cfg.whatsapp?.groups;
-  if (surface === "telegram") return cfg.telegram?.groups;
-  if (surface === "imessage") return cfg.imessage?.groups;
+  if (provider === "whatsapp") return cfg.whatsapp?.groups;
+  if (provider === "telegram") return cfg.telegram?.groups;
+  if (provider === "imessage") return cfg.imessage?.groups;
   return undefined;
 }
 
 export function resolveProviderGroupPolicy(params: {
   cfg: ClawdbotConfig;
-  surface: GroupPolicySurface;
+  provider: GroupPolicyProvider;
   groupId?: string | null;
 }): ProviderGroupPolicy {
-  const { cfg, surface } = params;
-  const groups = resolveProviderGroups(cfg, surface);
+  const { cfg, provider } = params;
+  const groups = resolveProviderGroups(cfg, provider);
   const allowlistEnabled = Boolean(groups && Object.keys(groups).length > 0);
   const normalizedId = params.groupId?.trim();
   const groupConfig = normalizedId && groups ? groups[normalizedId] : undefined;
@@ -54,7 +54,7 @@ export function resolveProviderGroupPolicy(params: {
 
 export function resolveProviderGroupRequireMention(params: {
   cfg: ClawdbotConfig;
-  surface: GroupPolicySurface;
+  provider: GroupPolicyProvider;
   groupId?: string | null;
   requireMentionOverride?: boolean;
   overrideOrder?: "before-config" | "after-config";

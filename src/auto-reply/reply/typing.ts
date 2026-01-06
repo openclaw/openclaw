@@ -26,6 +26,10 @@ export function createTypingController(params: {
   let active = false;
   let runComplete = false;
   let dispatchIdle = false;
+  // Important: callbacks (tool/block streaming) can fire late (after the run completed),
+  // especially when upstream event emitters don't await async listeners.
+  // Once we stop typing, we "seal" the controller so late events can't restart typing forever.
+  let sealed = false;
   let typingTimer: NodeJS.Timeout | undefined;
   let typingTtlTimer: NodeJS.Timeout | undefined;
   const typingIntervalMs = typingIntervalSeconds * 1000;
@@ -43,6 +47,7 @@ export function createTypingController(params: {
   };
 
   const cleanup = () => {
+    if (sealed) return;
     if (typingTtlTimer) {
       clearTimeout(typingTtlTimer);
       typingTtlTimer = undefined;
@@ -52,9 +57,11 @@ export function createTypingController(params: {
       typingTimer = undefined;
     }
     resetCycle();
+    sealed = true;
   };
 
   const refreshTypingTtl = () => {
+    if (sealed) return;
     if (!typingIntervalMs || typingIntervalMs <= 0) return;
     if (typingTtlMs <= 0) return;
     if (typingTtlTimer) {
@@ -70,10 +77,14 @@ export function createTypingController(params: {
   };
 
   const triggerTyping = async () => {
+    if (sealed) return;
     await onReplyStart?.();
   };
 
   const ensureStart = async () => {
+    if (sealed) return;
+    // Late callbacks after a run completed should never restart typing.
+    if (runComplete) return;
     if (!active) {
       active = true;
     }
@@ -89,6 +100,7 @@ export function createTypingController(params: {
   };
 
   const startTypingLoop = async () => {
+    if (sealed) return;
     if (!onReplyStart) return;
     if (typingIntervalMs <= 0) return;
     if (typingTimer) return;
@@ -100,6 +112,7 @@ export function createTypingController(params: {
   };
 
   const startTypingOnText = async (text?: string) => {
+    if (sealed) return;
     const trimmed = text?.trim();
     if (!trimmed) return;
     if (silentToken && trimmed === silentToken) return;

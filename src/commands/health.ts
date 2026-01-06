@@ -6,6 +6,7 @@ import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
 import { resolveTelegramToken } from "../telegram/token.js";
+import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import {
   getWebAuthAgeMs,
@@ -58,8 +59,9 @@ export async function getHealthSnapshot(
   timeoutMs?: number,
 ): Promise<HealthSummary> {
   const cfg = loadConfig();
-  const linked = await webAuthExists();
-  const authAgeMs = getWebAuthAgeMs();
+  const account = resolveWhatsAppAccount({ cfg });
+  const linked = await webAuthExists(account.authDir);
+  const authAgeMs = getWebAuthAgeMs(account.authDir);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
   const storePath = resolveStorePath(cfg.session?.store);
   const store = loadSessionStore(storePath);
@@ -128,7 +130,9 @@ export async function healthCommand(
         : "Web: not linked (run clawdbot login)",
     );
     if (summary.web.linked) {
-      logWebSelfId(runtime, true);
+      const cfg = loadConfig();
+      const account = resolveWhatsAppAccount({ cfg });
+      logWebSelfId(account.authDir, runtime, true);
     }
     if (summary.web.connect) {
       const base = summary.web.connect.ok

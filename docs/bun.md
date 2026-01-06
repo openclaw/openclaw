@@ -1,21 +1,33 @@
-# Bun (optional)
+---
+summary: "Bun workflow (preferred): installs, patches, and gotchas vs pnpm"
+read_when:
+  - You want the fastest local dev loop (bun + watch)
+  - You hit Bun install/patch/lifecycle script issues
+---
 
-Goal: allow running this repo with Bun without maintaining a Bun lockfile or losing pnpm patch behavior.
+# Bun
+
+Goal: run this repo with **Bun** (preferred) without losing pnpm patch behavior.
 
 ## Status
 
-- pnpm remains the primary package manager/runtime for this repo.
-- Bun can be used for local installs/builds/tests, but Bun currently **cannot use** `pnpm-lock.yaml` and will ignore it.
+- Bun is the preferred local runtime for running TypeScript directly (`bun run …`, `bun --watch …`).
+- `pnpm` is still fully supported (and used by some docs tooling).
+- Bun cannot use `pnpm-lock.yaml` and will ignore it.
 
-## Install (no Bun lockfile)
+## Install
 
-Use Bun without writing `bun.lock`/`bun.lockb`:
+Default:
+
+```sh
+bun install
+```
+
+Note: `bun.lock`/`bun.lockb` are gitignored, so there’s no repo churn either way. If you want *no lockfile writes*:
 
 ```sh
 bun install --no-save
 ```
-
-This avoids maintaining two lockfiles. (`bun.lock`/`bun.lockb` are gitignored.)
 
 ## Build / Test (Bun)
 

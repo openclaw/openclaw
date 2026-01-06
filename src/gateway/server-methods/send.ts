@@ -6,6 +6,7 @@ import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
+import { resolveDefaultWhatsAppAccountId } from "../../web/accounts.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   ErrorCodes,
@@ -37,6 +38,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       mediaUrl?: string;
       gifPlayback?: boolean;
       provider?: string;
+      accountId?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -148,10 +150,17 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         respond(true, payload, undefined, { provider });
       } else {
+        const cfg = loadConfig();
+        const accountId =
+          typeof request.accountId === "string" &&
+          request.accountId.trim().length > 0
+            ? request.accountId.trim()
+            : resolveDefaultWhatsAppAccountId(cfg);
         const result = await sendMessageWhatsApp(to, message, {
           mediaUrl: request.mediaUrl,
           verbose: shouldLogVerbose(),
           gifPlayback: request.gifPlayback,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -199,6 +208,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       maxSelections?: number;
       durationHours?: number;
       provider?: string;
+      accountId?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -245,8 +255,15 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         respond(true, payload, undefined, { provider });
       } else {
+        const cfg = loadConfig();
+        const accountId =
+          typeof request.accountId === "string" &&
+          request.accountId.trim().length > 0
+            ? request.accountId.trim()
+            : resolveDefaultWhatsAppAccountId(cfg);
         const result = await sendPollWhatsApp(to, poll, {
           verbose: shouldLogVerbose(),
+          accountId,
         });
         const payload = {
           runId: idem,

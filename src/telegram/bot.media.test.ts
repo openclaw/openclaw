@@ -35,9 +35,17 @@ vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    loadConfig: () => ({}),
+    loadConfig: () => ({ telegram: { dmPolicy: "open", allowFrom: ["*"] } }),
   };
 });
+
+vi.mock("./pairing-store.js", () => ({
+  readTelegramAllowFromStore: vi.fn(async () => [] as string[]),
+  upsertTelegramPairingRequest: vi.fn(async () => ({
+    code: "PAIRCODE",
+    created: true,
+  })),
+}));
 
 vi.mock("../auto-reply/reply.js", () => {
   const replySpy = vi.fn(async (_ctx, opts) => {

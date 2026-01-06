@@ -254,4 +254,4 @@ Then set in config:
 }
 ```
 
-**Full guide:** See [browser-linux-troubleshooting.md](./browser-linux-troubleshooting.md)
+**Full guide:** See [browser-linux-troubleshooting](https://docs.clawd.bot/browser-linux-troubleshooting)

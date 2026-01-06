@@ -6,7 +6,6 @@ import {
 } from "../../config/config.js";
 import { type DiscordProbe, probeDiscord } from "../../discord/probe.js";
 import { type IMessageProbe, probeIMessage } from "../../imessage/probe.js";
-import { webAuthExists } from "../../providers/web/index.js";
 import { probeSignal, type SignalProbe } from "../../signal/probe.js";
 import { probeSlack, type SlackProbe } from "../../slack/probe.js";
 import {
@@ -15,7 +14,15 @@ import {
 } from "../../slack/token.js";
 import { probeTelegram, type TelegramProbe } from "../../telegram/probe.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
-import { getWebAuthAgeMs, readWebSelfId } from "../../web/session.js";
+import {
+  listEnabledWhatsAppAccounts,
+  resolveDefaultWhatsAppAccountId,
+} from "../../web/accounts.js";
+import {
+  getWebAuthAgeMs,
+  readWebSelfId,
+  webAuthExists,
+} from "../../web/session.js";
 import {
   ErrorCodes,
   errorShape,
@@ -148,10 +155,55 @@ export const providersHandlers: GatewayRequestHandlers = {
       imessageLastProbeAt = Date.now();
     }
 
-    const linked = await webAuthExists();
-    const authAgeMs = getWebAuthAgeMs();
-    const self = readWebSelfId();
     const runtime = context.getRuntimeSnapshot();
+    const defaultWhatsAppAccountId = resolveDefaultWhatsAppAccountId(cfg);
+    const enabledWhatsAppAccounts = listEnabledWhatsAppAccounts(cfg);
+    const defaultWhatsAppAccount =
+      enabledWhatsAppAccounts.find(
+        (account) => account.accountId === defaultWhatsAppAccountId,
+      ) ?? enabledWhatsAppAccounts[0];
+    const linked = defaultWhatsAppAccount
+      ? await webAuthExists(defaultWhatsAppAccount.authDir)
+      : false;
+    const authAgeMs = defaultWhatsAppAccount
+      ? getWebAuthAgeMs(defaultWhatsAppAccount.authDir)
+      : null;
+    const self = defaultWhatsAppAccount
+      ? readWebSelfId(defaultWhatsAppAccount.authDir)
+      : { e164: null, jid: null };
+
+    const defaultWhatsAppStatus = {
+      running: false,
+      connected: false,
+      reconnectAttempts: 0,
+      lastConnectedAt: null,
+      lastDisconnect: null,
+      lastMessageAt: null,
+      lastEventAt: null,
+      lastError: null,
+    } as const;
+    const whatsappAccounts = await Promise.all(
+      enabledWhatsAppAccounts.map(async (account) => {
+        const rt =
+          runtime.whatsappAccounts?.[account.accountId] ??
+          defaultWhatsAppStatus;
+        return {
+          accountId: account.accountId,
+          enabled: account.enabled,
+          linked: await webAuthExists(account.authDir),
+          authAgeMs: getWebAuthAgeMs(account.authDir),
+          self: readWebSelfId(account.authDir),
+          running: rt.running,
+          connected: rt.connected,
+          lastConnectedAt: rt.lastConnectedAt ?? null,
+          lastDisconnect: rt.lastDisconnect ?? null,
+          reconnectAttempts: rt.reconnectAttempts,
+          lastMessageAt: rt.lastMessageAt ?? null,
+          lastEventAt: rt.lastEventAt ?? null,
+          lastError: rt.lastError ?? null,
+        };
+      }),
+    );
 
     respond(
       true,
@@ -171,6 +223,8 @@ export const providersHandlers: GatewayRequestHandlers = {
           lastEventAt: runtime.whatsapp.lastEventAt ?? null,
           lastError: runtime.whatsapp.lastError ?? null,
         },
+        whatsappAccounts,
+        whatsappDefaultAccountId: defaultWhatsAppAccountId,
         telegram: {
           configured: telegramEnabled && Boolean(telegramToken),
           tokenSource,

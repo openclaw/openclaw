@@ -22,7 +22,7 @@ read_when:
 
 ## Availability + allowlists
 - Feature gate: `agent.elevated.enabled` (default can be off via config even if the code supports it).
-- Sender allowlist: `agent.elevated.allowFrom` with per-surface allowlists (e.g. `discord`, `whatsapp`).
+- Sender allowlist: `agent.elevated.allowFrom` with per-provider allowlists (e.g. `discord`, `whatsapp`).
 - Both must pass; otherwise elevated is treated as unavailable.
 - Discord fallback: if `agent.elevated.allowFrom.discord` is omitted, the `discord.dm.allowFrom` list is used as a fallback. Set `agent.elevated.allowFrom.discord` (even `[]`) to override.
 

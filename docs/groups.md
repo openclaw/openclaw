@@ -8,12 +8,12 @@ read_when:
 Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage.
 
 ## Session keys
-- Group sessions use `surface:group:<id>` session keys (rooms/channels use `surface:channel:<id>`).
+- Group sessions use `agent:<agentId>:<provider>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
 - Direct chats use the main session (or per-sender if configured).
 - Heartbeats are skipped for group sessions.
 
 ## Display labels
-- UI labels use `displayName` when available, formatted as `surface:<token>`.
+- UI labels use `displayName` when available, formatted as `<provider>:<token>`.
 - `#room` is reserved for rooms/channels; group chats use `g-<slug>` (lowercase, spaces -> `-`, keep `#@+._-`).
 
 ## Group policy
@@ -127,4 +127,4 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - Group replies always go back to the same `chat_id`.
 
 ## WhatsApp specifics
-See `docs/group-messages.md` for WhatsApp-only behavior (history injection, mention handling details).
+See [`docs/group-messages.md`](https://docs.clawd.bot/group-messages) for WhatsApp-only behavior (history injection, mention handling details).

@@ -17,11 +17,16 @@ import {
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { hasNonzeroUsage } from "../agents/usage.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  chunkText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   normalizeThinkLevel,
@@ -59,7 +64,8 @@ type AgentCommandOpts = {
   json?: boolean;
   timeout?: string;
   deliver?: boolean;
-  surface?: string;
+  /** Message provider context (webchat|voicewake|whatsapp|...). */
+  messageProvider?: string;
   provider?: string; // delivery provider (whatsapp|telegram|...)
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
@@ -162,7 +168,7 @@ export async function agentCommand(
   const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: true,
+    ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
 
@@ -231,7 +237,7 @@ export async function agentCommand(
       cfg,
       entry: sessionEntry,
       sessionKey,
-      surface: sessionEntry?.surface,
+      provider: sessionEntry?.provider,
       chatType: sessionEntry?.chatType,
     });
     if (sendPolicy === "deny") {
@@ -379,8 +385,8 @@ export async function agentCommand(
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const surface =
-      opts.surface?.trim().toLowerCase() ||
+    const messageProvider =
+      opts.messageProvider?.trim().toLowerCase() ||
       (() => {
         const raw = opts.provider?.trim().toLowerCase();
         if (!raw) return undefined;
@@ -394,7 +400,7 @@ export async function agentCommand(
         runEmbeddedPiAgent({
           sessionId,
           sessionKey,
-          surface,
+          messageProvider,
           sessionFile,
           workspaceDir,
           config: cfg,
@@ -481,7 +487,7 @@ export async function agentCommand(
       contextTokens,
     };
     next.abortedLastRun = result.meta.aborted ?? false;
-    if (usage) {
+    if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const promptTokens =
@@ -665,7 +671,7 @@ export async function agentCommand(
     if (deliveryProvider === "telegram" && telegramTarget) {
       try {
         if (media.length === 0) {
-          for (const chunk of chunkText(text, deliveryTextLimit)) {
+          for (const chunk of chunkMarkdownText(text, deliveryTextLimit)) {
             await deps.sendMessageTelegram(telegramTarget, chunk, {
               verbose: false,
               token: telegramToken || undefined,

@@ -82,7 +82,7 @@ describe("getReplyFromConfig typing (heartbeat)", () => {
       const onReplyStart = vi.fn();
 
       await getReplyFromConfig(
-        { Body: "hi", From: "+1000", To: "+2000", Surface: "whatsapp" },
+        { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
         { onReplyStart, isHeartbeat: false },
         makeCfg(home),
       );
@@ -100,7 +100,7 @@ describe("getReplyFromConfig typing (heartbeat)", () => {
       const onReplyStart = vi.fn();
 
       await getReplyFromConfig(
-        { Body: "hi", From: "+1000", To: "+2000", Surface: "whatsapp" },
+        { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
         { onReplyStart, isHeartbeat: true },
         makeCfg(home),
       );

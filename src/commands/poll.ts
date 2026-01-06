@@ -57,7 +57,6 @@ export async function pollCommand(
     toJid?: string;
     channelId?: string;
   }>({
-    url: "ws://127.0.0.1:18789",
     method: "poll",
     params: {
       to: opts.to,

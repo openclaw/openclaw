@@ -174,12 +174,12 @@ export function renderCron(props: CronProps) {
                   />
                 </label>
                 <label class="field">
-                  <span>Channel</span>
+                  <span>Provider</span>
                   <select
-                    .value=${props.form.channel}
+                    .value=${props.form.provider}
                     @change=${(e: Event) =>
                       props.onFormChange({
-                        channel: (e.target as HTMLSelectElement).value as CronFormState["channel"],
+                        provider: (e.target as HTMLSelectElement).value as CronFormState["provider"],
                       })}
                   >
                     <option value="last">Last</option>

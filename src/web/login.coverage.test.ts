@@ -7,20 +7,36 @@ vi.useFakeTimers();
 
 const rmMock = vi.spyOn(fs, "rm");
 
+vi.mock("../config/config.js", () => ({
+  loadConfig: () =>
+    ({
+      whatsapp: {
+        accounts: {
+          default: { enabled: true, authDir: "/tmp/wa-creds" },
+        },
+      },
+    }) as never,
+}));
+
 vi.mock("./session.js", () => {
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
-  const createWaSocket = vi.fn(async () =>
-    createWaSocket.mock.calls.length === 0 ? sockA : sockB,
-  );
+  let call = 0;
+  const createWaSocket = vi.fn(async () => (call++ === 0 ? sockA : sockB));
   const waitForWaConnection = vi.fn();
   const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
   return {
     createWaSocket,
     waitForWaConnection,
     formatError,
-    resolveWebAuthDir: () => "/tmp/wa-creds",
     WA_WEB_AUTH_DIR: "/tmp/wa-creds",
+    logoutWeb: vi.fn(async (params: { authDir?: string }) => {
+      await fs.rm(params.authDir ?? "/tmp/wa-creds", {
+        recursive: true,
+        force: true,
+      });
+      return true;
+    }),
   };
 });
 

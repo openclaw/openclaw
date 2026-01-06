@@ -45,13 +45,14 @@ export type GatewaySessionList = {
     contextTokens?: number | null;
     totalTokens?: number | null;
     displayName?: string;
-    surface?: string;
+    provider?: string;
     room?: string;
     space?: string;
     subject?: string;
     chatType?: string;
-    lastChannel?: string;
+    lastProvider?: string;
     lastTo?: string;
+    lastAccountId?: string;
   }>;
 };
 

@@ -2,10 +2,11 @@ export type ReplyMode = "text" | "command";
 export type SessionScope = "per-sender" | "global";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
+export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
-  surface?: string;
+  provider?: string;
   chatType?: "direct" | "group" | "room";
   keyPrefix?: string;
 };
@@ -77,6 +78,10 @@ export type AgentElevatedAllowFromConfig = {
 };
 
 export type WhatsAppConfig = {
+  /** Optional per-account WhatsApp configuration (multi-account). */
+  accounts?: Record<string, WhatsAppAccountConfig>;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
   /** Optional allowlist for WhatsApp group senders (E.164). */
@@ -89,6 +94,25 @@ export type WhatsAppConfig = {
    */
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
+  groups?: Record<
+    string,
+    {
+      requireMention?: boolean;
+    }
+  >;
+};
+
+export type WhatsAppAccountConfig = {
+  /** If false, do not start this WhatsApp account provider. Default: true. */
+  enabled?: boolean;
+  /** Override auth directory (Baileys multi-file auth state). */
+  authDir?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
+  allowFrom?: string[];
+  groupAllowFrom?: string[];
+  groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
   groups?: Record<
     string,
@@ -154,7 +178,7 @@ export type HookMappingConfig = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?:
+  provider?:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -203,6 +227,14 @@ export type HooksConfig = {
 };
 
 export type TelegramConfig = {
+  /**
+   * Controls how Telegram direct chats (DMs) are handled:
+   * - "pairing" (default): unknown senders get a pairing code; owner must approve
+   * - "allowlist": only allow senders in allowFrom (or paired allow store)
+   * - "open": allow all inbound DMs (requires allowFrom to include "*")
+   * - "disabled": ignore all inbound DMs
+   */
+  dmPolicy?: DmPolicy;
   /** If false, do not start the Telegram provider. Default: true. */
   enabled?: boolean;
   botToken?: string;
@@ -238,6 +270,8 @@ export type TelegramConfig = {
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
   /** Allowlist for DM senders (ids or names). */
   allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
@@ -313,6 +347,8 @@ export type DiscordConfig = {
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
   enabled?: boolean;
+  /** Direct message access policy (default: pairing). */
+  policy?: DmPolicy;
   /** Allowlist for DM senders (ids). */
   allowFrom?: Array<string | number>;
   /** If true, allow group DMs (default: false). */
@@ -393,6 +429,8 @@ export type SignalConfig = {
   ignoreAttachments?: boolean;
   ignoreStories?: boolean;
   sendReadReceipts?: boolean;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   allowFrom?: Array<string | number>;
   /** Optional allowlist for Signal group senders (E.164). */
   groupAllowFrom?: Array<string | number>;
@@ -419,6 +457,8 @@ export type IMessageConfig = {
   service?: "imessage" | "sms" | "auto";
   /** Optional default region (used when sending SMS). */
   region?: string;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
   /** Optional allowlist for inbound handles or chat_id targets. */
   allowFrom?: Array<string | number>;
   /** Optional allowlist for group senders or chat_id targets. */
@@ -454,7 +494,7 @@ export type QueueMode =
   | "interrupt";
 export type QueueDropPolicy = "old" | "new" | "summarize";
 
-export type QueueModeBySurface = {
+export type QueueModeByProvider = {
   whatsapp?: QueueMode;
   telegram?: QueueMode;
   discord?: QueueMode;
@@ -476,9 +516,40 @@ export type RoutingConfig = {
     timeoutSeconds?: number;
   };
   groupChat?: GroupChatConfig;
+  /** Default agent id when no binding matches. Default: "main". */
+  defaultAgentId?: string;
+  agentToAgent?: {
+    /** Enable agent-to-agent messaging tools. Default: false. */
+    enabled?: boolean;
+    /** Allowlist of agent ids or patterns (implementation-defined). */
+    allow?: string[];
+  };
+  agents?: Record<
+    string,
+    {
+      workspace?: string;
+      agentDir?: string;
+      model?: string;
+      sandbox?: {
+        mode?: "off" | "non-main" | "all";
+        perSession?: boolean;
+        workspaceRoot?: string;
+      };
+    }
+  >;
+  bindings?: Array<{
+    agentId: string;
+    match: {
+      provider: string;
+      accountId?: string;
+      peer?: { kind: "dm" | "group" | "channel"; id: string };
+      guildId?: string;
+      teamId?: string;
+    };
+  }>;
   queue?: {
     mode?: QueueMode;
-    bySurface?: QueueModeBySurface;
+    byProvider?: QueueModeByProvider;
     debounceMs?: number;
     cap?: number;
     drop?: QueueDropPolicy;
@@ -750,6 +821,8 @@ export type ClawdbotConfig = {
     models?: Record<string, AgentModelEntryConfig>;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
+    /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
+    skipBootstrap?: boolean;
     /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
     userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
@@ -803,6 +876,16 @@ export type ClawdbotConfig = {
     };
     /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
     maxConcurrent?: number;
+    /** Sub-agent defaults (spawned via sessions_spawn). */
+    subagents?: {
+      /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+      maxConcurrent?: number;
+      /** Tool allow/deny policy for sub-agent sessions (deny wins). */
+      tools?: {
+        allow?: string[];
+        deny?: string[];
+      };
+    };
     /** Bash tool defaults. */
     bash?: {
       /** Default time (ms) before a bash command auto-backgrounds. */
@@ -816,13 +899,19 @@ export type ClawdbotConfig = {
     elevated?: {
       /** Enable or disable elevated mode (default: true). */
       enabled?: boolean;
-      /** Approved senders for /elevated (per-surface allowlists). */
+      /** Approved senders for /elevated (per-provider allowlists). */
       allowFrom?: AgentElevatedAllowFromConfig;
     };
     /** Optional sandbox settings for non-main sessions. */
     sandbox?: {
       /** Enable sandboxing for sessions. */
       mode?: "off" | "non-main" | "all";
+      /**
+       * Session tools visibility for sandboxed sessions.
+       * - "spawned": only allow session tools to target sessions spawned from this session (default)
+       * - "all": allow session tools to target any session
+       */
+      sessionToolsVisibility?: "spawned" | "all";
       /** Use one container per session (recommended for hard isolation). */
       perSession?: boolean;
       /** Root directory for sandbox workspaces. */

@@ -65,6 +65,7 @@ import {
   type SkillSnapshot,
 } from "./skills.js";
 import { buildAgentSystemPromptAppend } from "./system-prompt.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 export type EmbeddedPiAgentMeta = {
@@ -335,9 +336,10 @@ function resolvePromptSkills(
 export async function compactEmbeddedPiSession(params: {
   sessionId: string;
   sessionKey?: string;
-  surface?: string;
+  messageProvider?: string;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
   config?: ClawdbotConfig;
   skillsSnapshot?: SkillSnapshot;
   provider?: string;
@@ -366,7 +368,7 @@ export async function compactEmbeddedPiSession(params: {
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       await ensureClawdbotModelsJson(params.config);
-      const agentDir = resolveClawdbotAgentDir();
+      const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
@@ -440,8 +442,9 @@ export async function compactEmbeddedPiSession(params: {
             elevated: params.bashElevated,
           },
           sandbox,
-          surface: params.surface,
+          messageProvider: params.messageProvider,
           sessionKey: params.sessionKey ?? params.sessionId,
+          agentDir,
           config: params.config,
         });
         const machineName = await getMachineDisplayName();
@@ -544,9 +547,10 @@ export async function compactEmbeddedPiSession(params: {
 export async function runEmbeddedPiAgent(params: {
   sessionId: string;
   sessionKey?: string;
-  surface?: string;
+  messageProvider?: string;
   sessionFile: string;
   workspaceDir: string;
+  agentDir?: string;
   config?: ClawdbotConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
@@ -601,7 +605,7 @@ export async function runEmbeddedPiAgent(params: {
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       await ensureClawdbotModelsJson(params.config);
-      const agentDir = resolveClawdbotAgentDir();
+      const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
@@ -610,7 +614,7 @@ export async function runEmbeddedPiAgent(params: {
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
       }
-      const authStore = ensureAuthProfileStore();
+      const authStore = ensureAuthProfileStore(agentDir);
       const explicitProfileId = params.authProfileId?.trim();
       const profileOrder = resolveAuthProfileOrder({
         cfg: params.config,
@@ -678,7 +682,7 @@ export async function runEmbeddedPiAgent(params: {
         attemptedThinking.add(thinkLevel);
 
         log.debug(
-          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} surface=${params.surface ?? "unknown"}`,
+          `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${provider} model=${modelId} thinking=${thinkLevel} messageProvider=${params.messageProvider ?? "unknown"}`,
         );
 
         await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -734,8 +738,9 @@ export async function runEmbeddedPiAgent(params: {
               elevated: params.bashElevated,
             },
             sandbox,
-            surface: params.surface,
+            messageProvider: params.messageProvider,
             sessionKey: params.sessionKey ?? params.sessionId,
+            agentDir,
             config: params.config,
           });
           const machineName = await getMachineDisplayName();
@@ -996,20 +1001,12 @@ export async function runEmbeddedPiAgent(params: {
             }
           }
 
-          const usage = lastAssistant?.usage;
+          const usage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
-            usage: usage
-              ? {
-                  input: usage.input,
-                  output: usage.output,
-                  cacheRead: usage.cacheRead,
-                  cacheWrite: usage.cacheWrite,
-                  total: usage.totalTokens,
-                }
-              : undefined,
+            usage,
           };
 
           const replyItems: Array<{ text: string; media?: string[] }> = [];

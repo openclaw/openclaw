@@ -3,7 +3,7 @@ summary: "Frequently asked questions about Clawdbot setup, configuration, and us
 ---
 # FAQ 🦞
 
-Common questions from the community. For detailed configuration, see [configuration.md](./configuration.md).
+Common questions from the community. For detailed configuration, see [Configuration](https://docs.clawd.bot/configuration).
 
 ## Installation & Setup
 
@@ -18,8 +18,9 @@ Everything lives under `~/.clawdbot/`:
 | `~/.clawdbot/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
 | `~/.clawdbot/agent/auth.json` | Runtime API key cache (managed automatically) |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
-| `~/.clawdbot/sessions/` | Conversation history & state |
-| `~/.clawdbot/sessions/sessions.json` | Session metadata |
+| `~/.clawdbot/agents/` | Per-agent state (agentDir + sessions) |
+| `~/.clawdbot/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
+| `~/.clawdbot/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
 
 Your **workspace** (AGENTS.md, memory files, skills) is separate — configured via `agent.workspace` in your config (default: `~/clawd`).
 
@@ -290,7 +291,7 @@ Per-group activation can be changed by the owner:
 - `/activation mention` — respond only when mentioned (default)
 - `/activation always` — respond to all messages
 
-See [groups.md](./groups.md) for details.
+See [Groups](https://docs.clawd.bot/groups) for details.
 
 ---
 
@@ -327,7 +328,7 @@ cat ~/.clawdbot/clawdbot.json | grep workspace
 - **Telegram** — Via Bot API (grammY).
 - **Discord** — Bot integration.
 - **iMessage** — Via `imsg` CLI (macOS only).
-- **Signal** — Via `signal-cli` (see [signal.md](./signal.md)).
+- **Signal** — Via `signal-cli` (see [Signal](https://docs.clawd.bot/signal)).
 - **WebChat** — Browser-based chat UI.
 
 ### Discord: Bot works in channels but not DMs?
@@ -544,10 +545,10 @@ pkill -f "clawdbot"
 # Remove data
 trash ~/.clawdbot
 
-# Remove repo and re-clone
-trash ~/clawdbot
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot && pnpm install && pnpm build
+# Remove repo and re-clone (adjust path if you cloned elsewhere)
+trash ~/Projects/clawdbot
+git clone https://github.com/clawdbot/clawdbot.git ~/Projects/clawdbot
+cd ~/Projects/clawdbot && pnpm install && pnpm build
 pnpm clawdbot onboard
 ```
 

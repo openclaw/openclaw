@@ -52,7 +52,7 @@ Use the group chat command:
 - `/activation mention`
 - `/activation always`
 
-Only the owner number (from `whatsapp.allowFrom`, defaulting to the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
+Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when unset) can change this. Send `/status` as a standalone message in the group to see the current activation mode.
 
 ## How to use
 1) Add Clawd UK (`+447700900123`) to the group.
@@ -70,4 +70,4 @@ Only the owner number (from `whatsapp.allowFrom`, defaulting to the bot’s own 
 ## Known considerations
 - Heartbeats are intentionally skipped for groups to avoid noisy broadcasts.
 - Echo suppression uses the combined batch string; if you send identical text twice without mentions, only the first will get a response.
-- Session store entries will appear as `whatsapp:group:<jid>` in the session store (`~/.clawdbot/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.
+- Session store entries will appear as `agent:<agentId>:whatsapp:group:<jid>` in the session store (`~/.clawdbot/agents/<agentId>/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.

@@ -36,7 +36,7 @@ Short, exact flow of one agent run. Source of truth: current code in `src/`.
 - `assistant`: streamed deltas from pi-agent-core
 - `tool`: streamed tool events from pi-agent-core
 
-## Chat surface handling
+## Chat provider handling
 - `createAgentEventHandler` in `src/gateway/server-chat.ts`:
   - buffers assistant deltas
   - emits chat `delta` messages

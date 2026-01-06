@@ -49,14 +49,14 @@ export type AuthProfileStore = {
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
-function resolveAuthStorePath(): string {
-  const agentDir = resolveClawdbotAgentDir();
-  return path.join(agentDir, AUTH_PROFILE_FILENAME);
+function resolveAuthStorePath(agentDir?: string): string {
+  const resolved = resolveUserPath(agentDir ?? resolveClawdbotAgentDir());
+  return path.join(resolved, AUTH_PROFILE_FILENAME);
 }
 
-function resolveLegacyAuthStorePath(): string {
-  const agentDir = resolveClawdbotAgentDir();
-  return path.join(agentDir, LEGACY_AUTH_FILENAME);
+function resolveLegacyAuthStorePath(agentDir?: string): string {
+  const resolved = resolveUserPath(agentDir ?? resolveClawdbotAgentDir());
+  return path.join(resolved, LEGACY_AUTH_FILENAME);
 }
 
 function loadJsonFile(pathname: string): unknown {
@@ -104,8 +104,9 @@ function buildOAuthApiKey(
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
   provider: OAuthProvider;
+  agentDir?: string;
 }): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
-  const authPath = resolveAuthStorePath();
+  const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
   let release: (() => Promise<void>) | undefined;
@@ -121,7 +122,7 @@ async function refreshOAuthTokenWithLock(params: {
       stale: 30_000,
     });
 
-    const store = ensureAuthProfileStore();
+    const store = ensureAuthProfileStore(params.agentDir);
     const cred = store.profiles[params.profileId];
     if (!cred || cred.type !== "oauth") return null;
 
@@ -142,7 +143,7 @@ async function refreshOAuthTokenWithLock(params: {
       ...result.newCredentials,
       type: "oauth",
     };
-    saveAuthProfileStore(store);
+    saveAuthProfileStore(store, params.agentDir);
     return result;
   } finally {
     if (release) {
@@ -261,13 +262,13 @@ export function loadAuthProfileStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
 }
 
-export function ensureAuthProfileStore(): AuthProfileStore {
-  const authPath = resolveAuthStorePath();
+export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
+  const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
   if (asStore) return asStore;
 
-  const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
+  const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath(agentDir));
   const legacy = coerceLegacyStore(legacyRaw);
   const store: AuthProfileStore = {
     version: AUTH_STORE_VERSION,
@@ -307,8 +308,11 @@ export function ensureAuthProfileStore(): AuthProfileStore {
   return store;
 }
 
-export function saveAuthProfileStore(store: AuthProfileStore): void {
-  const authPath = resolveAuthStorePath();
+export function saveAuthProfileStore(
+  store: AuthProfileStore,
+  agentDir?: string,
+): void {
+  const authPath = resolveAuthStorePath(agentDir);
   const payload = {
     version: AUTH_STORE_VERSION,
     profiles: store.profiles,
@@ -321,10 +325,11 @@ export function saveAuthProfileStore(store: AuthProfileStore): void {
 export function upsertAuthProfile(params: {
   profileId: string;
   credential: AuthProfileCredential;
+  agentDir?: string;
 }): void {
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(params.agentDir);
   store.profiles[params.profileId] = params.credential;
-  saveAuthProfileStore(store);
+  saveAuthProfileStore(store, params.agentDir);
 }
 
 export function listProfilesForProvider(
@@ -354,8 +359,9 @@ export function isProfileInCooldown(
 export function markAuthProfileUsed(params: {
   store: AuthProfileStore;
   profileId: string;
+  agentDir?: string;
 }): void {
-  const { store, profileId } = params;
+  const { store, profileId, agentDir } = params;
   if (!store.profiles[profileId]) return;
 
   store.usageStats = store.usageStats ?? {};
@@ -365,7 +371,7 @@ export function markAuthProfileUsed(params: {
     errorCount: 0,
     cooldownUntil: undefined,
   };
-  saveAuthProfileStore(store);
+  saveAuthProfileStore(store, agentDir);
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {
@@ -383,8 +389,9 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
 export function markAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
+  agentDir?: string;
 }): void {
-  const { store, profileId } = params;
+  const { store, profileId, agentDir } = params;
   if (!store.profiles[profileId]) return;
 
   store.usageStats = store.usageStats ?? {};
@@ -399,7 +406,7 @@ export function markAuthProfileCooldown(params: {
     errorCount,
     cooldownUntil: Date.now() + backoffMs,
   };
-  saveAuthProfileStore(store);
+  saveAuthProfileStore(store, agentDir);
 }
 
 /**
@@ -408,8 +415,9 @@ export function markAuthProfileCooldown(params: {
 export function clearAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
+  agentDir?: string;
 }): void {
-  const { store, profileId } = params;
+  const { store, profileId, agentDir } = params;
   if (!store.usageStats?.[profileId]) return;
 
   store.usageStats[profileId] = {
@@ -417,7 +425,7 @@ export function clearAuthProfileCooldown(params: {
     errorCount: 0,
     cooldownUntil: undefined,
   };
-  saveAuthProfileStore(store);
+  saveAuthProfileStore(store, agentDir);
 }
 
 export function resolveAuthProfileOrder(params: {
@@ -433,19 +441,14 @@ export function resolveAuthProfileOrder(params: {
         .filter(([, profile]) => profile.provider === provider)
         .map(([profileId]) => profileId)
     : [];
-  const lastGood = store.lastGood?.[provider];
   const baseOrder =
     configuredOrder ??
     (explicitProfiles.length > 0
       ? explicitProfiles
       : listProfilesForProvider(store, provider));
   if (baseOrder.length === 0) return [];
-  const order =
-    configuredOrder && configuredOrder.length > 0
-      ? baseOrder
-      : orderProfilesByMode(baseOrder, store);
 
-  const filtered = order.filter((profileId) => {
+  const filtered = baseOrder.filter((profileId) => {
     const cred = store.profiles[profileId];
     return cred ? cred.provider === provider : true;
   });
@@ -453,21 +456,29 @@ export function resolveAuthProfileOrder(params: {
   for (const entry of filtered) {
     if (!deduped.includes(entry)) deduped.push(entry);
   }
-  if (preferredProfile && deduped.includes(preferredProfile)) {
-    const rest = deduped.filter((entry) => entry !== preferredProfile);
-    if (lastGood && rest.includes(lastGood)) {
+
+  // If user specified explicit order in config, respect it exactly
+  if (configuredOrder && configuredOrder.length > 0) {
+    // Still put preferredProfile first if specified
+    if (preferredProfile && deduped.includes(preferredProfile)) {
       return [
         preferredProfile,
-        lastGood,
-        ...rest.filter((entry) => entry !== lastGood),
+        ...deduped.filter((e) => e !== preferredProfile),
       ];
     }
-    return [preferredProfile, ...rest];
+    return deduped;
   }
-  if (lastGood && deduped.includes(lastGood)) {
-    return [lastGood, ...deduped.filter((entry) => entry !== lastGood)];
+
+  // Otherwise, use round-robin: sort by lastUsed (oldest first)
+  // preferredProfile goes first if specified (for explicit user choice)
+  // lastGood is NOT prioritized - that would defeat round-robin
+  const sorted = orderProfilesByMode(deduped, store);
+
+  if (preferredProfile && sorted.includes(preferredProfile)) {
+    return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
   }
-  return deduped;
+
+  return sorted;
 }
 
 function orderProfilesByMode(
@@ -489,7 +500,7 @@ function orderProfilesByMode(
   }
 
   // Sort available profiles by lastUsed (oldest first = round-robin)
-  // Then by type (oauth preferred over api_key)
+  // Then by lastUsed (oldest first = round-robin within type)
   const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
     const typeScore = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
@@ -497,14 +508,14 @@ function orderProfilesByMode(
     return { profileId, typeScore, lastUsed };
   });
 
-  // Primary sort: lastUsed (oldest first for round-robin)
-  // Secondary sort: type preference (oauth > api_key)
+  // Primary sort: type preference (oauth > api_key).
+  // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .sort((a, b) => {
-      // First by lastUsed (oldest first)
-      if (a.lastUsed !== b.lastUsed) return a.lastUsed - b.lastUsed;
-      // Then by type
-      return a.typeScore - b.typeScore;
+      // First by type (oauth > api_key)
+      if (a.typeScore !== b.typeScore) return a.typeScore - b.typeScore;
+      // Then by lastUsed (oldest first)
+      return a.lastUsed - b.lastUsed;
     })
     .map((entry) => entry.profileId);
 
@@ -524,6 +535,7 @@ export async function resolveApiKeyForProfile(params: {
   cfg?: ClawdbotConfig;
   store: AuthProfileStore;
   profileId: string;
+  agentDir?: string;
 }): Promise<{ apiKey: string; provider: string; email?: string } | null> {
   const { cfg, store, profileId } = params;
   const cred = store.profiles[profileId];
@@ -547,6 +559,7 @@ export async function resolveApiKeyForProfile(params: {
     const result = await refreshOAuthTokenWithLock({
       profileId,
       provider: cred.provider,
+      agentDir: params.agentDir,
     });
     if (!result) return null;
     return {
@@ -555,7 +568,7 @@ export async function resolveApiKeyForProfile(params: {
       email: cred.email,
     };
   } catch (error) {
-    const refreshedStore = ensureAuthProfileStore();
+    const refreshedStore = ensureAuthProfileStore(params.agentDir);
     const refreshed = refreshedStore.profiles[profileId];
     if (refreshed?.type === "oauth" && Date.now() < refreshed.expires) {
       return {
@@ -576,12 +589,13 @@ export function markAuthProfileGood(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
+  agentDir?: string;
 }): void {
-  const { store, provider, profileId } = params;
+  const { store, provider, profileId, agentDir } = params;
   const profile = store.profiles[profileId];
   if (!profile || profile.provider !== provider) return;
   store.lastGood = { ...store.lastGood, [provider]: profileId };
-  saveAuthProfileStore(store);
+  saveAuthProfileStore(store, agentDir);
 }
 
 export function resolveAuthStorePathForDisplay(): string {

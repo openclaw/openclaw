@@ -14,7 +14,7 @@ Clawdbot standardizes timestamps so the model sees a **single reference time**.
 Inbound messages are wrapped in an envelope like:
 
 ```
-[Surface ... 2026-01-05T21:26Z] message text
+[Provider ... 2026-01-05T21:26Z] message text
 ```
 
 The timestamp in the envelope is **always UTC**, with minutes precision.

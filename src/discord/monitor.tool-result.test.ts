@@ -39,7 +39,7 @@ describe("discord tool result dispatch", () => {
       agent: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/clawd" },
       session: { store: "/tmp/clawdbot-sessions.json" },
       messages: { responsePrefix: "PFX" },
-      discord: { dm: { enabled: true } },
+      discord: { dm: { enabled: true, policy: "open" } },
       routing: { allowFrom: [] },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
@@ -104,7 +104,7 @@ describe("discord tool result dispatch", () => {
       session: { store: "/tmp/clawdbot-sessions.json" },
       messages: { responsePrefix: "PFX" },
       discord: {
-        dm: { enabled: true },
+        dm: { enabled: true, policy: "open" },
         guilds: { "*": { requireMention: true } },
       },
       routing: {

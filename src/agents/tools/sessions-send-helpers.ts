@@ -6,33 +6,38 @@ const DEFAULT_PING_PONG_TURNS = 5;
 const MAX_PING_PONG_TURNS = 5;
 
 export type AnnounceTarget = {
-  channel: string;
+  provider: string;
   to: string;
+  accountId?: string;
 };
 
 export function resolveAnnounceTargetFromKey(
   sessionKey: string,
 ): AnnounceTarget | null {
-  const parts = sessionKey.split(":").filter(Boolean);
+  const rawParts = sessionKey.split(":").filter(Boolean);
+  const parts =
+    rawParts.length >= 3 && rawParts[0] === "agent"
+      ? rawParts.slice(2)
+      : rawParts;
   if (parts.length < 3) return null;
-  const [surface, kind, ...rest] = parts;
+  const [providerRaw, kind, ...rest] = parts;
   if (kind !== "group" && kind !== "channel") return null;
   const id = rest.join(":").trim();
   if (!id) return null;
-  if (!surface) return null;
-  const channel = surface.toLowerCase();
-  if (channel === "discord") {
-    return { channel, to: `channel:${id}` };
+  if (!providerRaw) return null;
+  const provider = providerRaw.toLowerCase();
+  if (provider === "discord") {
+    return { provider, to: `channel:${id}` };
   }
-  if (channel === "signal") {
-    return { channel, to: `group:${id}` };
+  if (provider === "signal") {
+    return { provider, to: `group:${id}` };
   }
-  return { channel, to: id };
+  return { provider, to: id };
 }
 
 export function buildAgentToAgentMessageContext(params: {
   requesterSessionKey?: string;
-  requesterSurface?: string;
+  requesterProvider?: string;
   targetSessionKey: string;
 }) {
   const lines = [
@@ -40,8 +45,8 @@ export function buildAgentToAgentMessageContext(params: {
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterSurface
-      ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
+    params.requesterProvider
+      ? `Agent 1 (requester) provider: ${params.requesterProvider}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
   ].filter(Boolean);
@@ -50,9 +55,9 @@ export function buildAgentToAgentMessageContext(params: {
 
 export function buildAgentToAgentReplyContext(params: {
   requesterSessionKey?: string;
-  requesterSurface?: string;
+  requesterProvider?: string;
   targetSessionKey: string;
-  targetChannel?: string;
+  targetProvider?: string;
   currentRole: "requester" | "target";
   turn: number;
   maxTurns: number;
@@ -68,12 +73,12 @@ export function buildAgentToAgentReplyContext(params: {
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterSurface
-      ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
+    params.requesterProvider
+      ? `Agent 1 (requester) provider: ${params.requesterProvider}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel
-      ? `Agent 2 (target) surface: ${params.targetChannel}.`
+    params.targetProvider
+      ? `Agent 2 (target) provider: ${params.targetProvider}.`
       : undefined,
     `If you want to stop the ping-pong, reply exactly "${REPLY_SKIP_TOKEN}".`,
   ].filter(Boolean);
@@ -82,9 +87,9 @@ export function buildAgentToAgentReplyContext(params: {
 
 export function buildAgentToAgentAnnounceContext(params: {
   requesterSessionKey?: string;
-  requesterSurface?: string;
+  requesterProvider?: string;
   targetSessionKey: string;
-  targetChannel?: string;
+  targetProvider?: string;
   originalMessage: string;
   roundOneReply?: string;
   latestReply?: string;
@@ -94,12 +99,12 @@ export function buildAgentToAgentAnnounceContext(params: {
     params.requesterSessionKey
       ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
       : undefined,
-    params.requesterSurface
-      ? `Agent 1 (requester) surface: ${params.requesterSurface}.`
+    params.requesterProvider
+      ? `Agent 1 (requester) provider: ${params.requesterProvider}.`
       : undefined,
     `Agent 2 (target) session: ${params.targetSessionKey}.`,
-    params.targetChannel
-      ? `Agent 2 (target) surface: ${params.targetChannel}.`
+    params.targetProvider
+      ? `Agent 2 (target) provider: ${params.targetProvider}.`
       : undefined,
     `Original request: ${params.originalMessage}`,
     params.roundOneReply
@@ -109,7 +114,7 @@ export function buildAgentToAgentAnnounceContext(params: {
       ? `Latest reply: ${params.latestReply}`
       : "Latest reply: (not available).",
     `If you want to remain silent, reply exactly "${ANNOUNCE_SKIP_TOKEN}".`,
-    "Any other reply will be posted to the target channel.",
+    "Any other reply will be posted to the target provider.",
     "After this reply, the agent-to-agent conversation is over.",
   ].filter(Boolean);
   return lines.join("\n");

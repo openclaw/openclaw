@@ -2,7 +2,11 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-
+import {
+  resolveAgentDir,
+  resolveAgentIdFromSessionKey,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
 import { resolveModelRefFromString } from "../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
@@ -107,10 +111,10 @@ function stripSenderPrefix(value?: string) {
 
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
-  surface: string,
+  provider: string,
   discordFallback?: Array<string | number>,
 ): Array<string | number> | undefined {
-  switch (surface) {
+  switch (provider) {
     case "whatsapp":
       return allowFrom?.whatsapp;
     case "telegram":
@@ -134,14 +138,14 @@ function resolveElevatedAllowList(
 }
 
 function isApprovedElevatedSender(params: {
-  surface: string;
+  provider: string;
   ctx: MsgContext;
   allowFrom?: AgentElevatedAllowFromConfig;
   discordFallback?: Array<string | number>;
 }): boolean {
   const rawAllow = resolveElevatedAllowList(
     params.allowFrom,
-    params.surface,
+    params.provider,
     params.discordFallback,
   );
   if (!rawAllow || rawAllow.length === 0) return false;
@@ -215,12 +219,15 @@ export async function getReplyFromConfig(
     }
   }
 
-  const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
+  const workspaceDirRaw =
+    resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: true,
+    ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
@@ -328,20 +335,20 @@ export async function getReplyFromConfig(
   sessionCtx.Body = parsedDirectives.cleaned;
   sessionCtx.BodyStripped = parsedDirectives.cleaned;
 
-  const surfaceKey =
-    sessionCtx.Surface?.trim().toLowerCase() ??
-    ctx.Surface?.trim().toLowerCase() ??
+  const messageProviderKey =
+    sessionCtx.Provider?.trim().toLowerCase() ??
+    ctx.Provider?.trim().toLowerCase() ??
     "";
   const elevatedConfig = agentCfg?.elevated;
   const discordElevatedFallback =
-    surfaceKey === "discord" ? cfg.discord?.dm?.allowFrom : undefined;
+    messageProviderKey === "discord" ? cfg.discord?.dm?.allowFrom : undefined;
   const elevatedEnabled = elevatedConfig?.enabled !== false;
   const elevatedAllowed =
     elevatedEnabled &&
     Boolean(
-      surfaceKey &&
+      messageProviderKey &&
         isApprovedElevatedSender({
-          surface: surfaceKey,
+          provider: messageProviderKey,
           ctx,
           allowFrom: elevatedConfig?.allowFrom,
           discordFallback: discordElevatedFallback,
@@ -384,7 +391,7 @@ export async function getReplyFromConfig(
       : "text_end";
   const blockStreamingEnabled = resolvedBlockStreaming === "on";
   const blockReplyChunking = blockStreamingEnabled
-    ? resolveBlockStreamingChunking(cfg, sessionCtx.Surface)
+    ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider)
     : undefined;
 
   const modelState = await createModelSelectionState({
@@ -507,7 +514,7 @@ export async function getReplyFromConfig(
   });
   const isEmptyConfig = Object.keys(cfg).length === 0;
   if (
-    command.isWhatsAppSurface &&
+    command.isWhatsAppProvider &&
     isEmptyConfig &&
     command.from &&
     command.to &&
@@ -677,7 +684,7 @@ export async function getReplyFromConfig(
     : queueBodyBase;
   const resolvedQueue = resolveQueueSettings({
     cfg,
-    surface: sessionCtx.Surface,
+    provider: sessionCtx.Provider,
     sessionEntry,
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
@@ -708,9 +715,11 @@ export async function getReplyFromConfig(
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
     run: {
+      agentId,
+      agentDir,
       sessionId: sessionIdFinal,
       sessionKey,
-      surface: sessionCtx.Surface?.trim().toLowerCase() || undefined,
+      messageProvider: sessionCtx.Provider?.trim().toLowerCase() || undefined,
       sessionFile,
       workspaceDir,
       config: cfg,

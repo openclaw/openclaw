@@ -8,7 +8,7 @@ read_when:
 This repo supports “remote over SSH” by keeping a single Gateway (the master) running on a host (e.g., your Mac Studio) and connecting clients to it.
 
 - For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.
-- For **nodes (iOS/Android and future devices)**: prefer the Gateway **Bridge** when on the same LAN/tailnet (see `docs/discovery.md`).
+- For **nodes (iOS/Android and future devices)**: prefer the Gateway **Bridge** when on the same LAN/tailnet (see [`docs/discovery.md`](https://docs.clawd.bot/discovery)).
 
 ## The core idea
 
@@ -58,9 +58,4 @@ WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects direct
 
 The macOS menu bar app can drive the same setup end-to-end (remote status checks, WebChat, and Voice Wake forwarding).
 
-Runbook: `docs/mac/remote.md`.
-
-## Legacy control channel
-
-Older builds experimented with a newline-delimited TCP control channel on the same port.
-That API is deprecated and should not be relied on. (Historical reference: `docs/control-api.md`.)
+Runbook: [`docs/mac/remote.md`](https://docs.clawd.bot/mac/remote).
