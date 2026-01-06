@@ -10,6 +10,7 @@ import { createNodesTool } from "./tools/nodes-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
+import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSlackTool } from "./tools/slack-tool.js";
 
 export function createClawdbotTools(options?: {
@@ -30,6 +31,10 @@ export function createClawdbotTools(options?: {
     createSessionsListTool(),
     createSessionsHistoryTool(),
     createSessionsSendTool({
+      agentSessionKey: options?.agentSessionKey,
+      agentSurface: options?.agentSurface,
+    }),
+    createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
       agentSurface: options?.agentSurface,
     }),

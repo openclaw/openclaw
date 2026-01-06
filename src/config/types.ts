@@ -806,6 +806,16 @@ export type ClawdbotConfig = {
     };
     /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
     maxConcurrent?: number;
+    /** Sub-agent defaults (spawned via sessions_spawn). */
+    subagents?: {
+      /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+      maxConcurrent?: number;
+      /** Tool allow/deny policy for sub-agent sessions (deny wins). */
+      tools?: {
+        allow?: string[];
+        deny?: string[];
+      };
+    };
     /** Bash tool defaults. */
     bash?: {
       /** Default time (ms) before a bash command auto-backgrounds. */

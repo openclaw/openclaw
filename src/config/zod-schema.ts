@@ -465,6 +465,17 @@ export const ClawdbotSchema = z.object({
       typingIntervalSeconds: z.number().int().positive().optional(),
       heartbeat: HeartbeatSchema,
       maxConcurrent: z.number().int().positive().optional(),
+      subagents: z
+        .object({
+          maxConcurrent: z.number().int().positive().optional(),
+          tools: z
+            .object({
+              allow: z.array(z.string()).optional(),
+              deny: z.array(z.string()).optional(),
+            })
+            .optional(),
+        })
+        .optional(),
       bash: z
         .object({
           backgroundMs: z.number().int().positive().optional(),
