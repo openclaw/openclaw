@@ -39,14 +39,14 @@ backend.auth.raw = "your-password"
 ### Password from command (recommended)
 ```toml
 backend.auth.cmd = "pass show email/imap"
-backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"
+# backend.auth.cmd = "security find-generic-password -a user@example.com -s imap -w"
 ```
 
 ### System keyring (requires keyring feature)
 ```toml
 backend.auth.keyring = "imap-example"
 ```
-Then run `himalaya configure -a <account>` to store the password.
+Then run `himalaya account configure <account>` to store the password.
 
 ## Gmail Configuration
 
@@ -172,4 +172,3 @@ Set via environment variable:
 ```bash
 export EDITOR="vim"
 ```
-

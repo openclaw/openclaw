@@ -163,14 +163,15 @@ himalaya message forward 42
 
 ### Send from stdin
 ```bash
-cat message.txt | himalaya message write
+cat message.txt | himalaya template send
 ```
 
-### Send with headers from CLI
+### Prefill headers from CLI
 ```bash
-echo "Message body here" | himalaya message write \
-  --to "recipient@example.com" \
-  --subject "Quick Message"
+himalaya message write \
+  -H "To:recipient@example.com" \
+  -H "Subject:Quick Message" \
+  "Message body here"
 ```
 
 ## Tips
@@ -178,5 +179,4 @@ echo "Message body here" | himalaya message write \
 - The editor opens with a template; fill in headers and body.
 - Save and exit the editor to send; exit without saving to cancel.
 - MML parts are compiled to proper MIME when sending.
-- Use `--raw` with `message read` to see the raw MIME structure of received emails.
-
+- Use `himalaya message export --full` to inspect the raw MIME structure of received emails.

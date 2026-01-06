@@ -117,6 +117,7 @@
 - Models: extend `clawdbot models` status output with a masked auth overview (profiles, env sources, and OAuth counts).
 
 ### Maintenance
+- Skills: add Himalaya email CLI skill. Thanks @dantelex for PR #335.
 - Agent: add `skipBootstrap` config option. Thanks @onutc for PR #292.
 - UI: add favicon.ico derived from the macOS app icon. Thanks @jeffersonwarrior for PR #305.
 - Tooling: replace tsx with bun for TypeScript execution. Thanks @obviyus for PR #278.
