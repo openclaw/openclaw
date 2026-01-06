@@ -48,6 +48,7 @@ Doctor can migrate older on-disk layouts into the current structure:
   - to `~/.clawdbot/credentials/whatsapp/<accountId>/...` (default account id: `default`)
 
 These migrations are best-effort and idempotent; doctor will emit warnings when it leaves any legacy folders behind as backups.
+The Gateway/CLI also auto-migrates the legacy agent dir on startup so auth/models land in the per-agent path without a manual doctor run.
 
 ## Usage
 
