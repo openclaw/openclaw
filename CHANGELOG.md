@@ -98,6 +98,7 @@
 - Bash tool: inherit gateway PATH so Nix-provided tools resolve during commands. Thanks @joshp123 for PR #202.
 
 ### Maintenance
+- Agent: add `skipBootstrap` config option. Thanks @onutc for PR #292.
 - UI: add favicon.ico derived from the macOS app icon. Thanks @jeffersonwarrior for PR #305.
 - Tooling: replace tsx with bun for TypeScript execution. Thanks @obviyus for PR #278.
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
