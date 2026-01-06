@@ -1,10 +1,18 @@
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { loadConfig } from "../config/config.js";
+import {
+  resolveProviderGroupPolicy,
+  resolveProviderGroupRequireMention,
+} from "../config/group-policy.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -67,46 +75,6 @@ function resolveAllowFrom(opts: MonitorIMessageOpts): string[] {
   return raw.map((entry) => String(entry).trim()).filter(Boolean);
 }
 
-function resolveMentionRegexes(cfg: ReturnType<typeof loadConfig>): RegExp[] {
-  return (
-    cfg.routing?.groupChat?.mentionPatterns
-      ?.map((pattern) => {
-        try {
-          return new RegExp(pattern, "i");
-        } catch {
-          return null;
-        }
-      })
-      .filter((val): val is RegExp => Boolean(val)) ?? []
-  );
-}
-
-function resolveGroupRequireMention(
-  cfg: ReturnType<typeof loadConfig>,
-  opts: MonitorIMessageOpts,
-  chatId?: number | null,
-): boolean {
-  if (typeof opts.requireMention === "boolean") return opts.requireMention;
-  const groupId = chatId != null ? String(chatId) : undefined;
-  if (groupId) {
-    const groupConfig = cfg.imessage?.groups?.[groupId];
-    if (typeof groupConfig?.requireMention === "boolean") {
-      return groupConfig.requireMention;
-    }
-  }
-  const groupDefault = cfg.imessage?.groups?.["*"]?.requireMention;
-  if (typeof groupDefault === "boolean") return groupDefault;
-  return true;
-}
-
-function isMentioned(text: string, regexes: RegExp[]): boolean {
-  if (!text) return false;
-  const cleaned = text
-    .replace(/[\u200b-\u200f\u202a-\u202e\u2060-\u206f]/g, "")
-    .toLowerCase();
-  return regexes.some((re) => re.test(cleaned));
-}
-
 async function deliverReplies(params: {
   replies: ReplyPayload[];
   target: string;
@@ -148,7 +116,7 @@ export async function monitorIMessageProvider(
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "imessage");
   const allowFrom = resolveAllowFrom(opts);
-  const mentionRegexes = resolveMentionRegexes(cfg);
+  const mentionRegexes = buildMentionRegexes(cfg);
   const includeAttachments =
     opts.includeAttachments ?? cfg.imessage?.includeAttachments ?? false;
   const mediaMaxBytes =
@@ -170,6 +138,21 @@ export async function monitorIMessageProvider(
     const isGroup = Boolean(message.is_group);
     if (isGroup && !chatId) return;
 
+    const groupId = isGroup ? String(chatId) : undefined;
+    if (isGroup) {
+      const groupPolicy = resolveProviderGroupPolicy({
+        cfg,
+        surface: "imessage",
+        groupId,
+      });
+      if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
+        logVerbose(
+          `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
+        );
+        return;
+      }
+    }
+
     const commandAuthorized = isAllowedIMessageSender({
       allowFrom,
       sender,
@@ -183,15 +166,30 @@ export async function monitorIMessageProvider(
     }
 
     const messageText = (message.text ?? "").trim();
-    const mentioned = isGroup ? isMentioned(messageText, mentionRegexes) : true;
-    const requireMention = resolveGroupRequireMention(cfg, opts, chatId);
+    const mentioned = isGroup
+      ? matchesMentionPatterns(messageText, mentionRegexes)
+      : true;
+    const requireMention = resolveProviderGroupRequireMention({
+      cfg,
+      surface: "imessage",
+      groupId,
+      requireMentionOverride: opts.requireMention,
+      overrideOrder: "before-config",
+    });
+    const canDetectMention = mentionRegexes.length > 0;
     const shouldBypassMention =
       isGroup &&
       requireMention &&
       !mentioned &&
       commandAuthorized &&
       hasControlCommand(messageText);
-    if (isGroup && requireMention && !mentioned && !shouldBypassMention) {
+    if (
+      isGroup &&
+      requireMention &&
+      canDetectMention &&
+      !mentioned &&
+      !shouldBypassMention
+    ) {
       logVerbose(`imessage: skipping group message (no mention)`);
       return;
     }
@@ -287,28 +285,11 @@ export async function monitorIMessageProvider(
       },
     });
 
-    const replyResult = await getReplyFromConfig(
-      ctxPayload,
-      {
-        onToolResult: (payload) => {
-          dispatcher.sendToolResult(payload);
-        },
-        onBlockReply: (payload) => {
-          dispatcher.sendBlockReply(payload);
-        },
-      },
+    const { queuedFinal } = await dispatchReplyFromConfig({
+      ctx: ctxPayload,
       cfg,
-    );
-    const replies = replyResult
-      ? Array.isArray(replyResult)
-        ? replyResult
-        : [replyResult]
-      : [];
-    let queuedFinal = false;
-    for (const reply of replies) {
-      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-    }
-    await dispatcher.waitForIdle();
+      dispatcher,
+    });
     if (!queuedFinal) return;
   };
 

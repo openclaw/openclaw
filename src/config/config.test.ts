@@ -87,6 +87,57 @@ describe("config identity defaults", () => {
     });
   });
 
+  it("defaults ackReaction to identity emoji", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            identity: { name: "Samantha", theme: "helpful sloth", emoji: "🦥" },
+            messages: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.ackReaction).toBe("🦥");
+      expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+    });
+  });
+
+  it("defaults ackReaction to 👀 when identity is missing", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            messages: {},
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.messages?.ackReaction).toBe("👀");
+      expect(cfg.messages?.ackReactionScope).toBe("group-mentions");
+    });
+  });
+
   it("does not override explicit values", async () => {
     await withTempHome(async (home) => {
       const configDir = path.join(home, ".clawdbot");
@@ -628,6 +679,18 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("rejects legacy agent.model string", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      agent: { model: "anthropic/claude-opus-4-5" },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("agent.model");
+    }
+  });
+
   it("migrates telegram.requireMention to telegram.groups.*.requireMention", async () => {
     vi.resetModules();
     const { migrateLegacyConfig } = await import("./config.js");
@@ -639,6 +702,38 @@ describe("legacy config detection", () => {
     );
     expect(res.config?.telegram?.groups?.["*"]?.requireMention).toBe(false);
     expect(res.config?.telegram?.requireMention).toBeUndefined();
+  });
+
+  it("migrates legacy model config to agent.models + model lists", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        modelFallbacks: ["openai/gpt-4.1-mini"],
+        imageModel: "openai/gpt-4.1-mini",
+        imageModelFallbacks: ["anthropic/claude-opus-4-5"],
+        allowedModels: ["anthropic/claude-opus-4-5", "openai/gpt-4.1-mini"],
+        modelAliases: { Opus: "anthropic/claude-opus-4-5" },
+      },
+    });
+
+    expect(res.config?.agent?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expect(res.config?.agent?.model?.fallbacks).toEqual([
+      "openai/gpt-4.1-mini",
+    ]);
+    expect(res.config?.agent?.imageModel?.primary).toBe("openai/gpt-4.1-mini");
+    expect(res.config?.agent?.imageModel?.fallbacks).toEqual([
+      "anthropic/claude-opus-4-5",
+    ]);
+    expect(
+      res.config?.agent?.models?.["anthropic/claude-opus-4-5"],
+    ).toMatchObject({ alias: "Opus" });
+    expect(res.config?.agent?.models?.["openai/gpt-4.1-mini"]).toBeTruthy();
+    expect(res.config?.agent?.allowedModels).toBeUndefined();
+    expect(res.config?.agent?.modelAliases).toBeUndefined();
+    expect(res.config?.agent?.modelFallbacks).toBeUndefined();
+    expect(res.config?.agent?.imageModelFallbacks).toBeUndefined();
   });
 
   it("surfaces legacy issues in snapshot", async () => {

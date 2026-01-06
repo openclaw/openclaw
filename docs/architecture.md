@@ -32,6 +32,12 @@ Last updated: 2026-01-05
 - Canvas + actions: `WKWebView` with A2UI action bridge; accepts actions from local-network or trusted file URLs; intercepts `clawdbot://` deep links and forwards `agent.request` to the bridge.
 - Voice/talk: voice wake sends `voice.transcript` events and syncs triggers via `voicewake.get` + `voicewake.changed`; Talk Mode attaches to the bridge.
 
+### Android node (`apps/android`)
+- Discovery + pairing: `BridgeDiscovery` uses mDNS/NSD to find `_clawdbot-bridge._tcp`, with manual host/port fallback.
+- Auto-connect: `NodeRuntime` restores a stored token, performs `pair-and-hello`, and reconnects to the last discovered or manual bridge.
+- Bridge runtime: `BridgeSession` owns the TCP JSONL session (`hello`/`hello-ok`, ping/pong, `req/res`, `event`, `invoke`); stores `canvasHostUrl`.
+- Commands: `NodeRuntime` executes `canvas.*`, `canvas.a2ui.*`, `camera.*`, and chat/session events; foreground-only for canvas/camera.
+
 ## Components and flows
 - **Gateway (daemon)**  
   - Maintains WhatsApp (Baileys), Telegram (grammY), Slack (Bolt), Discord (discord.js), Signal (signal-cli), and iMessage (imsg) connections.  
@@ -40,7 +46,7 @@ Last updated: 2026-01-05
 - **Clients (mac app / CLI / web admin)**  
   - One WS connection per client.  
   - Send requests (`health`, `status`, `send`, `agent`, `system-presence`, toggles) and subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
-  - On macOS, the app can also be invoked via deep links (`clawdbot://agent?...`) which translate into the same Gateway `agent` request path (see `docs/clawdbot-mac.md`).
+  - On macOS, the app can also be invoked via deep links (`clawdbot://agent?...`) which translate into the same Gateway `agent` request path (see `docs/macos.md`).
 - **Agent process (Pi)**  
   - Spawned by the Gateway on demand for `agent` calls; streams events back over the same WS connection.
 - **WebChat**  

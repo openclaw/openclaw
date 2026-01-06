@@ -44,6 +44,10 @@ export type LoggingConfig = {
     | "debug"
     | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
+  /** Redact sensitive tokens in tool summaries. Default: "tools". */
+  redactSensitive?: "off" | "tools";
+  /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
+  redactPatterns?: string[];
 };
 
 export type WebReconnectConfig = {
@@ -74,6 +78,13 @@ export type AgentElevatedAllowFromConfig = {
 export type WhatsAppConfig = {
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in allowFrom
+   */
+  groupPolicy?: "open" | "disabled" | "allowlist";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   groups?: Record<
@@ -203,6 +214,13 @@ export type TelegramConfig = {
     }
   >;
   allowFrom?: Array<string | number>;
+  /**
+   * Controls how group messages are handled:
+   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "disabled": block all group messages entirely
+   * - "allowlist": only allow group messages from senders in allowFrom
+   */
+  groupPolicy?: "open" | "disabled" | "allowlist";
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
@@ -445,7 +463,10 @@ export type RoutingConfig = {
 export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
-  timestampPrefix?: boolean | string; // true/false or IANA timezone string (default: true with UTC)
+  /** Emoji reaction used to acknowledge inbound messages (empty disables). */
+  ackReaction?: string;
+  /** When to send ack reactions. Default: "group-mentions". */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
 };
 
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
@@ -636,7 +657,28 @@ export type ModelsConfig = {
   providers?: Record<string, ModelProviderConfig>;
 };
 
+export type AuthProfileConfig = {
+  provider: string;
+  mode: "api_key" | "oauth";
+  email?: string;
+};
+
+export type AuthConfig = {
+  profiles?: Record<string, AuthProfileConfig>;
+  order?: Record<string, string[]>;
+};
+
+export type AgentModelEntryConfig = {
+  alias?: string;
+};
+
+export type AgentModelListConfig = {
+  primary?: string;
+  fallbacks?: string[];
+};
+
 export type ClawdbotConfig = {
+  auth?: AuthConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */
     shellEnv?: {
@@ -666,20 +708,16 @@ export type ClawdbotConfig = {
   skills?: SkillsConfig;
   models?: ModelsConfig;
   agent?: {
-    /** Model id (provider/model), e.g. "anthropic/claude-opus-4-5". */
-    model?: string;
-    /** Optional image-capable model (provider/model) used by the image tool. */
-    imageModel?: string;
+    /** Primary model and fallbacks (provider/model). */
+    model?: AgentModelListConfig;
+    /** Optional image-capable model and fallbacks (provider/model). */
+    imageModel?: AgentModelListConfig;
+    /** Model catalog with optional aliases (full provider/model keys). */
+    models?: Record<string, AgentModelEntryConfig>;
     /** Agent working directory (preferred). Used as the default cwd for agent runs. */
     workspace?: string;
-    /** Optional allowlist for /model (provider/model or model-only). */
-    allowedModels?: string[];
-    /** Optional model aliases for /model (alias -> provider/model). */
-    modelAliases?: Record<string, string>;
-    /** Ordered fallback models (provider/model). */
-    modelFallbacks?: string[];
-    /** Ordered fallback image models (provider/model) for the image tool. */
-    imageModelFallbacks?: string[];
+    /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
+    userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
     /** Default thinking level when no /think directive is present. */
@@ -726,6 +764,8 @@ export type ClawdbotConfig = {
       to?: string;
       /** Override the heartbeat prompt body (default: "HEARTBEAT"). */
       prompt?: string;
+      /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
+      ackMaxChars?: number;
     };
     /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
     maxConcurrent?: number;

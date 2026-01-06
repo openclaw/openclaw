@@ -79,4 +79,18 @@ describe("createReplyDispatcher", () => {
     await dispatcher.waitForIdle();
     expect(delivered).toEqual(["tool", "block", "final"]);
   });
+
+  it("fires onIdle when the queue drains", async () => {
+    const deliver = vi.fn(
+      async () => await new Promise((resolve) => setTimeout(resolve, 5)),
+    );
+    const onIdle = vi.fn();
+    const dispatcher = createReplyDispatcher({ deliver, onIdle });
+
+    dispatcher.sendToolResult({ text: "one" });
+    dispatcher.sendFinalReply({ text: "two" });
+
+    await dispatcher.waitForIdle();
+    expect(onIdle).toHaveBeenCalledTimes(1);
+  });
 });

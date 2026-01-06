@@ -24,8 +24,8 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
      - The webhook listener currently binds to `0.0.0.0:8787` and serves `POST /telegram-webhook` by default.
      - If you need a different public port/host, set `telegram.webhookUrl` to the externally reachable URL and use a reverse proxy to forward to `:8787`.
 4) Direct chats: user sends the first message; all subsequent turns land in the shared `main` session (default, no extra config).
-5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>` and require mention/command by default (override via `telegram.groups`).
-6) Optional allowlist: use `telegram.allowFrom` for direct chats by chat id (`123456789` or `telegram:123456789`).
+5) Groups: add the bot, disable privacy mode (or make it admin) so it can read messages; group threads stay on `telegram:group:<chatId>`. When `telegram.groups` is set, it becomes a group allowlist (use `"*"` to allow all). Mention/command gating defaults come from `telegram.groups`.
+6) Optional allowlist: use `telegram.allowFrom` for direct chats by chat id (`123456789`, `telegram:123456789`, or `tg:123456789`; prefixes are case-insensitive).
 
 ## Capabilities & limits (Bot API)
 - Sees only messages sent after it’s added to a chat; no pre-history access.
@@ -35,9 +35,10 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 
 ## Planned implementation details
 - Library: grammY is the only client for send + gateway (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
-- Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention by default (override per chat in config).
+- Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention or a `routing.groupChat.mentionPatterns` match by default (override per chat in config).
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
-- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups`, `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
+- Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups` (group allowlist + mention defaults), `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
+  - Ack reactions are controlled globally via `messages.ackReaction` + `messages.ackReactionScope`.
   - Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
 
 Example config:
@@ -48,7 +49,7 @@ Example config:
     botToken: "123:abc",
     replyToMode: "off",
     groups: {
-      "*": { requireMention: true },
+      "*": { requireMention: true }, // allow all groups
       "123456789": { requireMention: false } // group chat id
     },
     allowFrom: ["123456789"], // direct chat ids allowed (or "*")
@@ -65,7 +66,7 @@ Example config:
 ## Group etiquette
 - Keep privacy mode off if you expect the bot to read all messages; with privacy on, it only sees commands/mentions.
 - Make the bot an admin if you need it to send in restricted groups or channels.
-- Mention the bot (`@yourbot`) or use commands to trigger; per-group overrides live in `telegram.groups` if you want always-on behavior.
+- Mention the bot (`@yourbot`) or use a `routing.groupChat.mentionPatterns` trigger; per-group overrides live in `telegram.groups` if you want always-on behavior. If `telegram.groups` is set, add `"*"` to keep existing allow-all behavior.
 
 ## Reply tags
 To request a threaded reply, the model can include one tag in its output:

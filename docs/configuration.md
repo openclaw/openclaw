@@ -9,7 +9,7 @@ CLAWDBOT reads an optional **JSON5** config from `~/.clawdbot/clawdbot.json` (co
 
 If the file is missing, CLAWDBOT uses safe-ish defaults (embedded Pi agent + per-sender sessions + workspace `~/clawd`). You usually only need a config to:
 - restrict who can trigger the bot (`whatsapp.allowFrom`, `telegram.allowFrom`, etc.)
-- control group mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `routing.groupChat`)
+- control group allowlists + mention behavior (`whatsapp.groups`, `telegram.groups`, `discord.guilds`, `routing.groupChat`)
 - customize message prefixes (`messages`)
 - set the agent's workspace (`agent.workspace`)
 - tune the embedded agent (`agent`) and session behavior (`session`)
@@ -91,26 +91,48 @@ Env var equivalent:
 
 ### Auth storage (OAuth + API keys)
 
-Clawdbot keeps subscription OAuth tokens + API keys in the **agent auth store**:
-- `~/.clawdbot/agent/auth.json`
+Clawdbot stores **auth profiles** (OAuth + API keys) in:
+- `~/.clawdbot/agent/auth-profiles.json`
 
-The agent directory can be overridden with:
-- `CLAWDBOT_AGENT_DIR` (preferred)
-- `PI_CODING_AGENT_DIR` (legacy)
+Legacy OAuth imports:
+- `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
 
-Legacy OAuth storage is still supported for migration:
-- Default: `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
-- Override: `CLAWDBOT_OAUTH_DIR`
+The embedded Pi agent maintains a runtime cache at:
+- `~/.clawdbot/agent/auth.json` (managed automatically; don’t edit manually)
 
-On first use, Clawdbot auto‑migrates legacy `oauth.json` entries into `auth.json`.
+Overrides:
+- OAuth dir (legacy import only): `CLAWDBOT_OAUTH_DIR`
+- Agent dir: `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
+
+On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
+
+### `auth`
+
+Optional metadata for auth profiles. This does **not** store secrets; it maps
+profile IDs to a provider + mode (and optional email) and defines the provider
+rotation order used for failover.
+
+```json5
+{
+  auth: {
+    profiles: {
+      "anthropic:default": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:work": { provider: "anthropic", mode: "api_key" }
+    },
+    order: {
+      anthropic: ["anthropic:default", "anthropic:work"]
+    }
+  }
+}
+```
 
 ### `identity`
 
 Optional agent identity used for defaults and UX. This is written by the macOS onboarding assistant.
 
 If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
-- `messages.responsePrefix` from `identity.emoji`
-- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
+- `messages.ackReaction` from `identity.emoji` (falls back to 👀)
+- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
 
 ```json5
 {
@@ -141,6 +163,9 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
 - Console output can be tuned separately via:
   - `logging.consoleLevel` (defaults to `info`, bumps to `debug` when `--verbose`)
   - `logging.consoleStyle` (`pretty` | `compact` | `json`)
+- Tool summaries can be redacted to avoid leaking secrets:
+  - `logging.redactSensitive` (`off` | `tools`, default: `tools`)
+  - `logging.redactPatterns` (array of regex strings; overrides defaults)
 
 ```json5
 {
@@ -148,7 +173,13 @@ Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
     level: "info",
     file: "/tmp/clawdbot/clawdbot.log",
     consoleLevel: "info",
-    consoleStyle: "pretty"
+    consoleStyle: "pretty",
+    redactSensitive: "tools",
+    redactPatterns: [
+      // Example: override defaults with your own rules.
+      "\\bTOKEN\\b\\s*[=:]\\s*([\"']?)([^\\s\"']+)\\1",
+      "/\\bsk-[A-Za-z0-9_-]{8,}\\b/gi"
+    ]
   }
 }
 ```
@@ -174,6 +205,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 **Mention types:**
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
 - **Text patterns**: Regex patterns defined in `mentionPatterns`. Always checked regardless of self-chat mode.
+- Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
 
 ```json5
 {
@@ -186,7 +218,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 }
 ```
 
-Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`).
+Mention gating defaults live per provider (`whatsapp.groups`, `telegram.groups`, `imessage.groups`, `discord.guilds`). When `*.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
 
 To respond **only** to specific text triggers (ignoring native @-mentions):
 ```json5
@@ -432,22 +464,44 @@ Default: `~/clawd`.
 If `agent.sandbox` is enabled, non-main sessions can override this with their
 own per-session workspaces under `agent.sandbox.workspaceRoot`.
 
+### `agent.userTimezone`
+
+Sets the user’s timezone for **system prompt context** (not for timestamps in
+message envelopes). If unset, Clawdbot uses the host timezone at runtime.
+
+```json5
+{
+  agent: { userTimezone: "America/Chicago" }
+}
+```
+
 ### `messages`
 
-Controls inbound/outbound prefixes and timestamps.
+Controls inbound/outbound prefixes and optional ack reactions.
 
 ```json5
 {
   messages: {
     messagePrefix: "[clawdbot]",
     responsePrefix: "🦞",
-    timestampPrefix: "Europe/London"
+    ackReaction: "👀",
+    ackReactionScope: "group-mentions"
   }
 }
 ```
 
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across providers unless already present.
+
+`ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
+on providers that support reactions (Slack/Discord/Telegram). Defaults to the
+configured `identity.emoji` when set, otherwise `"👀"`. Set it to `""` to disable.
+
+`ackReactionScope` controls when reactions fire:
+- `group-mentions` (default): only when a group/room requires mentions **and** the bot was mentioned
+- `group-all`: all group/room messages
+- `direct`: direct messages only
+- `all`: all messages
 
 ### `talk`
 
@@ -474,14 +528,12 @@ Defaults for Talk mode (macOS/iOS/Android). Voice IDs fall back to `ELEVENLABS_V
 ### `agent`
 
 Controls the embedded agent runtime (model/thinking/verbose/timeouts).
-`allowedModels` lets `/model` list/filter and enforce a per-session allowlist
-(omit to show the full catalog).
-`modelAliases` adds short names for `/model` (alias -> provider/model).
-`modelFallbacks` lists ordered fallback models to try when the default fails.
-`imageModel` selects an image-capable model for the `image` tool.
-`imageModelFallbacks` lists ordered fallback image models for the `image` tool.
+`agent.models` defines the configured model catalog (and acts as the allowlist for `/model`).
+`agent.model.primary` sets the default model; `agent.model.fallbacks` are global failovers.
+`agent.imageModel` is optional and is **only used if the primary model lacks image input**.
 
-Clawdbot also ships a few built-in `modelAliases` shorthands (when an `agent` section exists):
+Clawdbot also ships a few built-in alias shorthands. Defaults only apply when the model
+is already present in `agent.models`:
 
 - `opus` -> `anthropic/claude-opus-4-5`
 - `sonnet` -> `anthropic/claude-sonnet-4-5`
@@ -495,23 +547,24 @@ If you configure the same alias name (case-insensitive) yourself, your value win
 ```json5
 {
   agent: {
-    model: "anthropic/claude-opus-4-5",
-    allowedModels: [
-      "anthropic/claude-opus-4-5",
-      "anthropic/claude-sonnet-4-1"
-    ],
-    modelAliases: {
-      Opus: "anthropic/claude-opus-4-5",
-      Sonnet: "anthropic/claude-sonnet-4-1"
+    models: {
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
+      "openrouter/deepseek/deepseek-r1:free": {}
     },
-    modelFallbacks: [
-      "openrouter/deepseek/deepseek-r1:free",
-      "openrouter/meta-llama/llama-3.3-70b-instruct:free"
-    ],
-    imageModel: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
-    imageModelFallbacks: [
-      "openrouter/google/gemini-2.0-flash-vision:free"
-    ],
+    model: {
+      primary: "anthropic/claude-opus-4-5",
+      fallbacks: [
+        "openrouter/deepseek/deepseek-r1:free",
+        "openrouter/meta-llama/llama-3.3-70b-instruct:free"
+      ]
+    },
+    imageModel: {
+      primary: "openrouter/qwen/qwen-2.5-vl-72b-instruct:free",
+      fallbacks: [
+        "openrouter/google/gemini-2.0-flash-vision:free"
+      ]
+    },
     thinkingDefault: "low",
     verboseDefault: "off",
     elevatedDefault: "on",
@@ -546,8 +599,8 @@ Block streaming:
   }
   ```
 
-`agent.model` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
-If `modelAliases` is configured, you may also use the alias key (e.g. `Opus`).
+`agent.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
+Aliases come from `agent.models.*.alias` (e.g. `Opus`).
 If you omit the provider, CLAWDBOT currently assumes `anthropic` as a temporary
 deprecation fallback.
 Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
@@ -560,6 +613,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
+- `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
 
 `agent.bash` configures background bash defaults:
 - `backgroundMs`: time before auto-background (ms, default 10000)
@@ -708,11 +762,16 @@ When `models.providers` is present, Clawdbot writes/merges a `models.json` into
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
 
-Select the model via `agent.model` (provider/model).
+Select the model via `agent.model.primary` (provider/model).
 
 ```json5
 {
-  agent: { model: "custom-proxy/llama-3.1-8b" },
+  agent: {
+    model: { primary: "custom-proxy/llama-3.1-8b" },
+    models: {
+      "custom-proxy/llama-3.1-8b": {}
+    }
+  },
   models: {
     mode: "merge",
     providers: {
@@ -745,14 +804,10 @@ via **LM Studio** using the **Responses API**.
 ```json5
 {
   agent: {
-    model: "Minimax",
-    allowedModels: [
-      "anthropic/claude-opus-4-5",
-      "lmstudio/minimax-m2.1-gs32"
-    ],
-    modelAliases: {
-      Opus: "anthropic/claude-opus-4-5",
-      Minimax: "lmstudio/minimax-m2.1-gs32"
+    model: { primary: "lmstudio/minimax-m2.1-gs32" },
+    models: {
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" }
     }
   },
   models: {

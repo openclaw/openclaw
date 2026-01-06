@@ -6,6 +6,11 @@ import bolt from "@slack/bolt";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import {
+  buildMentionRegexes,
+  matchesMentionPatterns,
+} from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -26,6 +31,7 @@ import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
 
@@ -379,6 +385,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.slashCommand ?? cfg.slack?.slashCommand,
   );
   const textLimit = resolveTextChunkLimit(cfg, "slack");
+  const mentionRegexes = buildMentionRegexes(cfg);
+  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.slack?.mediaMaxMb ?? 20) * 1024 * 1024;
 
@@ -581,7 +590,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const wasMentioned =
       opts.wasMentioned ??
       (!isDirectMessage &&
-        Boolean(botUserId && message.text?.includes(`<@${botUserId}>`)));
+        (Boolean(botUserId && message.text?.includes(`<@${botUserId}>`)) ||
+          matchesMentionPatterns(message.text ?? "", mentionRegexes)));
     const sender = await resolveUserName(message.user);
     const senderName = sender?.name ?? message.user;
     const allowList = normalizeAllowListLower(allowFrom);
@@ -600,9 +610,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(message.text ?? "");
+    const canDetectMention = Boolean(botUserId) || mentionRegexes.length > 0;
     if (
       isRoom &&
       channelConfig?.requireMention &&
+      canDetectMention &&
       !wasMentioned &&
       !shouldBypassMention
     ) {
@@ -620,6 +632,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
+    const shouldAckReaction = () => {
+      if (!ackReaction) return false;
+      if (ackReactionScope === "all") return true;
+      if (ackReactionScope === "direct") return isDirectMessage;
+      const isGroupChat = isRoom || isGroupDm;
+      if (ackReactionScope === "group-all") return isGroupChat;
+      if (ackReactionScope === "group-mentions") {
+        if (!isRoom) return false;
+        if (!channelConfig?.requireMention) return false;
+        if (!canDetectMention) return false;
+        return wasMentioned || shouldBypassMention;
+      }
+      return false;
+    };
+    if (shouldAckReaction() && message.ts) {
+      reactSlackMessage(message.channel, message.ts, ackReaction, {
+        token: botToken,
+        client: app.client,
+      }).catch((err) => {
+        logVerbose(
+          `slack react failed for channel ${message.channel}: ${String(err)}`,
+        );
+      });
+    }
 
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
@@ -700,6 +736,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
+    // Only thread replies if the incoming message was in a thread.
+    const incomingThreadTs = message.thread_ts;
     const dispatcher = createReplyDispatcher({
       responsePrefix: cfg.messages?.responsePrefix,
       deliver: async (payload) => {
@@ -709,6 +747,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           token: botToken,
           runtime,
           textLimit,
+          threadTs: incomingThreadTs,
         });
       },
       onError: (err, info) => {
@@ -718,31 +757,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       },
     });
 
-    const replyResult = await getReplyFromConfig(
-      ctxPayload,
-      {
-        onToolResult: (payload) => {
-          dispatcher.sendToolResult(payload);
-        },
-        onBlockReply: (payload) => {
-          dispatcher.sendBlockReply(payload);
-        },
-      },
+    const { queuedFinal, counts } = await dispatchReplyFromConfig({
+      ctx: ctxPayload,
       cfg,
-    );
-    const replies = replyResult
-      ? Array.isArray(replyResult)
-        ? replyResult
-        : [replyResult]
-      : [];
-    let queuedFinal = false;
-    for (const reply of replies) {
-      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-    }
-    await dispatcher.waitForIdle();
+      dispatcher,
+    });
     if (!queuedFinal) return;
     if (shouldLogVerbose()) {
-      const finalCount = dispatcher.getQueuedCounts().final;
+      const finalCount = counts.final;
       logVerbose(
         `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
@@ -1379,6 +1401,7 @@ async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   textLimit: number;
+  threadTs?: string;
 }) {
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
@@ -1389,12 +1412,11 @@ async function deliverReplies(params: {
 
     if (mediaList.length === 0) {
       for (const chunk of chunkText(text, chunkLimit)) {
-        const threadTs = undefined;
         const trimmed = chunk.trim();
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
-          threadTs,
+          threadTs: params.threadTs,
         });
       }
     } else {
@@ -1402,11 +1424,10 @@ async function deliverReplies(params: {
       for (const mediaUrl of mediaList) {
         const caption = first ? text : "";
         first = false;
-        const threadTs = undefined;
         await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
-          threadTs,
+          threadTs: params.threadTs,
         });
       }
     }

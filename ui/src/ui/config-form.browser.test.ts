@@ -1,7 +1,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 
-import { renderConfigForm } from "./views/config-form";
+import { analyzeConfigSchema, renderConfigForm } from "./views/config-form";
 
 const rootSchema = {
   type: "object",
@@ -28,6 +28,14 @@ const rootSchema = {
     enabled: {
       type: "boolean",
     },
+    bind: {
+      anyOf: [
+        { const: "auto" },
+        { const: "lan" },
+        { const: "tailnet" },
+        { const: "loopback" },
+      ],
+    },
   },
 };
 
@@ -35,12 +43,14 @@ describe("config form renderer", () => {
   it("renders inputs and patches values", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
     render(
       renderConfigForm({
-        schema: rootSchema,
+        schema: analysis.schema,
         uiHints: {
           "gateway.auth.token": { label: "Gateway Token", sensitive: true },
         },
+        unsupportedPaths: analysis.unsupportedPaths,
         value: {},
         onPatch,
       }),
@@ -62,7 +72,7 @@ describe("config form renderer", () => {
     const select = container.querySelector("select") as HTMLSelectElement | null;
     expect(select).not.toBeNull();
     if (!select) return;
-    select.value = "token";
+    select.value = "1";
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
@@ -79,10 +89,12 @@ describe("config form renderer", () => {
   it("adds and removes array entries", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
     render(
       renderConfigForm({
-        schema: rootSchema,
+        schema: analysis.schema,
         uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
         value: { allowFrom: ["+1"] },
         onPatch,
       }),
@@ -102,5 +114,103 @@ describe("config form renderer", () => {
     expect(removeButton).not.toBeUndefined();
     removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["allowFrom"], []);
+  });
+
+  it("renders union literals as select options", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const analysis = analyzeConfigSchema(rootSchema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { bind: "auto" },
+        onPatch,
+      }),
+      container,
+    );
+
+    const selects = Array.from(container.querySelectorAll("select"));
+    const bindSelect = selects.find((el) =>
+      Array.from(el.options).some((opt) => opt.value === "tailnet"),
+    ) as HTMLSelectElement | undefined;
+    expect(bindSelect).not.toBeUndefined();
+    if (!bindSelect) return;
+    bindSelect.value = "tailnet";
+    bindSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
+  });
+
+  it("renders map fields from additionalProperties", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        slack: {
+          type: "object",
+          additionalProperties: {
+            type: "string",
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { slack: { channelA: "ok" } },
+        onPatch,
+      }),
+      container,
+    );
+
+    const removeButton = Array.from(container.querySelectorAll("button")).find(
+      (btn) => btn.textContent?.trim() === "Remove",
+    );
+    expect(removeButton).not.toBeUndefined();
+    removeButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["slack"], {});
+  });
+
+  it("flags unsupported unions", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        mixed: {
+          anyOf: [{ type: "string" }, { type: "number" }],
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toContain("mixed");
+  });
+
+  it("supports nullable types", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        note: { type: ["string", "null"] },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).not.toContain("note");
+  });
+
+  it("flags additionalProperties true", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        extra: {
+          type: "object",
+          additionalProperties: true,
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toContain("extra");
   });
 });

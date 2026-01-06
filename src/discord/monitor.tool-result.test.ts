@@ -31,12 +31,11 @@ vi.mock("../config/sessions.js", () => ({
 
 vi.mock("discord.js", () => {
   const handlers = new Map<string, Set<(...args: unknown[]) => void>>();
-  let lastClient: Client | null = null;
-
   class Client {
+    static lastClient: Client | null = null;
     user = { id: "bot-id", tag: "bot#1" };
     constructor() {
-      lastClient = this;
+      Client.lastClient = this;
     }
     on(event: string, handler: (...args: unknown[]) => void) {
       if (!handlers.has(event)) handlers.set(event, new Set());
@@ -50,7 +49,7 @@ vi.mock("discord.js", () => {
     }
     emit(event: string, ...args: unknown[]) {
       for (const handler of handlers.get(event) ?? []) {
-        void handler(...args);
+        Promise.resolve(handler(...args)).catch(() => {});
       }
     }
     login = vi.fn().mockResolvedValue(undefined);
@@ -59,7 +58,7 @@ vi.mock("discord.js", () => {
 
   return {
     Client,
-    __getLastClient: () => lastClient,
+    __getLastClient: () => Client.lastClient,
     Events: {
       ClientReady: "ready",
       Error: "error",
@@ -147,5 +146,60 @@ describe("monitorDiscordProvider tool results", () => {
     expect(sendMock).toHaveBeenCalledTimes(2);
     expect(sendMock.mock.calls[0][1]).toBe("PFX tool update");
     expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
+  });
+
+  it("accepts guild messages when mentionPatterns match", async () => {
+    config = {
+      messages: { responsePrefix: "PFX" },
+      discord: {
+        dm: { enabled: true },
+        guilds: { "*": { requireMention: true } },
+      },
+      routing: {
+        allowFrom: [],
+        groupChat: { mentionPatterns: ["\\bclawd\\b"] },
+      },
+    };
+    replyMock.mockResolvedValue({ text: "hi" });
+
+    const controller = new AbortController();
+    const run = monitorDiscordProvider({
+      token: "token",
+      abortSignal: controller.signal,
+    });
+
+    const discord = await import("discord.js");
+    const client = await waitForClient();
+    if (!client) throw new Error("Discord client not created");
+
+    client.emit(discord.Events.MessageCreate, {
+      id: "m2",
+      content: "clawd: hello",
+      author: { id: "u1", bot: false, username: "Ada", tag: "Ada#1" },
+      member: { displayName: "Ada" },
+      channelId: "c1",
+      channel: {
+        type: discord.ChannelType.GuildText,
+        name: "general",
+        isSendable: () => false,
+      },
+      guild: { id: "g1", name: "Guild" },
+      mentions: {
+        has: () => false,
+        everyone: false,
+        users: { size: 0 },
+        roles: { size: 0 },
+      },
+      attachments: { first: () => undefined },
+      type: discord.MessageType.Default,
+      createdTimestamp: Date.now(),
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
   });
 });

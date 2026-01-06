@@ -55,7 +55,7 @@ imsg chats --limit 20
 
 ## Group chat behavior
 - Group messages set `ChatType=group`, `GroupSubject`, and `GroupMembers`.
-- Group activation respects `imessage.groups."*".requireMention` and `routing.groupChat.mentionPatterns`.
+- Group activation respects `imessage.groups."*".requireMention` and `routing.groupChat.mentionPatterns` (patterns are required to detect mentions on iMessage). When `imessage.groups` is set, it also acts as a group allowlist; include `"*"` to allow all groups.
 - Replies go back to the same `chat_id` (group or direct).
 
 ## Troubleshooting

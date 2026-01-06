@@ -16,6 +16,7 @@ import {
   resolveEmbeddedSessionLane,
   waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   normalizeElevatedLevel,
@@ -886,10 +887,6 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             timeoutMs?: number;
             idempotencyKey: string;
           };
-          const timeoutMs = Math.min(
-            Math.max(p.timeoutMs ?? 30_000, 0),
-            30_000,
-          );
           const normalizedAttachments =
             p.attachments?.map((a) => ({
               type: typeof a?.type === "string" ? a.type : undefined,
@@ -928,7 +925,13 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             }
           }
 
-          const { storePath, store, entry } = loadSessionEntry(p.sessionKey);
+          const { cfg, storePath, store, entry } = loadSessionEntry(
+            p.sessionKey,
+          );
+          const timeoutMs = resolveAgentTimeoutMs({
+            cfg,
+            overrideMs: p.timeoutMs,
+          });
           const now = Date.now();
           const sessionId = entry?.sessionId ?? randomUUID();
           const sessionEntry: SessionEntry = {

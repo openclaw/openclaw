@@ -118,7 +118,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Config quick map
 - `whatsapp.allowFrom` (DM allowlist).
-- `whatsapp.groups` (group mention gating defaults/overrides)
+- `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)
@@ -136,7 +136,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Logs + troubleshooting
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
-- Troubleshooting guide: `docs/refactor/web-gateway-troubleshooting.md`.
+- Troubleshooting guide: `docs/troubleshooting.md`.
 
 ## Tests
 - `src/web/auto-reply.test.ts` (mention gating, history injection, reply flow)

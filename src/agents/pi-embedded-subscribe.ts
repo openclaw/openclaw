@@ -555,6 +555,10 @@ export function subscribeEmbeddedPiSession(params: {
         compactionInFlight = true;
         ensureCompactionPromise();
         log.debug(`embedded run compaction start: runId=${params.runId}`);
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "start" },
+        });
       }
 
       if (evt.type === "auto_compaction_end") {
@@ -567,6 +571,10 @@ export function subscribeEmbeddedPiSession(params: {
         } else {
           maybeResolveCompactionWait();
         }
+        params.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "end", willRetry },
+        });
       }
 
       if (evt.type === "agent_end") {
@@ -596,6 +604,7 @@ export function subscribeEmbeddedPiSession(params: {
     assistantTexts,
     toolMetas,
     unsubscribe,
+    isCompacting: () => compactionInFlight || pendingCompactionRetry > 0,
     waitForCompactionRetry: () => {
       if (compactionInFlight || pendingCompactionRetry > 0) {
         ensureCompactionPromise();

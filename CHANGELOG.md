@@ -4,10 +4,36 @@
 
 ## Unreleased
 
+### Breaking
+- Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
+- Model config schema changes (auth profiles + model lists); doctor auto-migrates and the gateway rewrites legacy configs on startup.
+- Commands: gate all slash commands to authorized senders; add `/compact` to manually compact session context.
+- Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
+
 ### Fixes
+- Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
+- Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
+- Onboarding: prompt immediately for OpenAI Codex redirect URL on remote/headless logins.
+- Typing indicators: stop typing once the reply dispatcher drains to prevent stuck typing across Discord/Telegram/WhatsApp.
+- Typing indicators: fix a race that could keep the typing indicator stuck after quick replies. Thanks @thewilloftheshadow for PR #270.
+- Google: merge consecutive messages to satisfy strict role alternation for Google provider models. Thanks @Asleep123 for PR #266.
+- Postinstall: handle targetDir symlinks in the install script. Thanks @obviyus for PR #272.
+- WhatsApp/Telegram: add groupPolicy handling for group messages and normalize allowFrom matching (tg/telegram prefixes). Thanks @mneves75.
+- Auto-reply: add configurable ack reactions for inbound messages (default 👀 or `identity.emoji`) with scope controls. Thanks @obviyus for PR #178.
+- Polls: unify WhatsApp + Discord poll sends via the gateway + CLI (`clawdbot poll`). (#123) — thanks @dbhurley
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
-- Linux: prompt to enable systemd lingering when installing/restarting the gateway user service (prevents logout/idle shutdowns).
+- Onboarding: when OpenAI Codex OAuth is used, default to `openai-codex/gpt-5.2` and warn if the selected model lacks auth.
+- CLI: auto-migrate legacy config entries on command start (same behavior as gateway startup).
+- Gateway: add `gateway stop|restart` helpers and surface launchd/systemd/schtasks stop hints when the gateway is already running.
+- Gateway: honor `agent.timeoutSeconds` for `chat.send` and share timeout defaults across chat/cron/auto-reply. Thanks @MSch for PR #229.
+- Auth: prioritize OAuth profiles but fall back to API keys when refresh fails; stored profiles now load without explicit auth order.
+- Control UI: harden config Form view with schema normalization, map editing, and guardrails to prevent data loss on save.
+- Cron: normalize cron.add/update inputs, align channel enums/status fields across gateway/CLI/UI/macOS, and add protocol conformance tests. Thanks @mneves75 for PR #256.
+- Docs: add group chat participation guidance to the AGENTS template.
+- Gmail: stop restart loop when `gog gmail watch serve` fails to bind (address already in use).
+- Linux: auto-attempt lingering during onboarding (try without sudo, fallback to sudo) and prompt on install/restart to keep the gateway alive after logout/idle. Thanks @tobiasbischoff for PR #237.
 - TUI: migrate key handling to the updated pi-tui Key matcher API.
+- Logging: redact sensitive tokens in verbose tool summaries by default (configurable patterns).
 - macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Connections settings now use a custom sidebar to avoid toolbar toggle issues, with rounded styling and full-width row hit targets.
@@ -16,22 +42,44 @@
 - Model: `/model` list shows auth source (masked key or OAuth email) per provider.
 - Model: `/model list` is an alias for `/model`.
 - Model: `/model` output now includes auth source location (env/auth.json/models.json).
+- Model: avoid duplicate `missing (missing)` auth labels in `/model` list output.
+- Auth: when `openai` has no API key but Codex OAuth exists, suggest `openai-codex/gpt-5.2` vs `OPENAI_API_KEY`.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Control UI: show a reading indicator bubble while the assistant is responding.
 - Control UI: animate reading indicator dots (honors reduced-motion).
 - Control UI: stabilize chat streaming during tool runs (no flicker/vanishing text; correct run scoping).
+- Control UI: let config-form enums select empty-string values. Thanks @sreekaransrinath for PR #268.
 - Status: show runtime (docker/direct) and move shortcuts to `/help`.
 - Status: show model auth source (api-key/oauth).
 - Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.
 - Block streaming: preserve leading indentation in block replies (lists, indented fences).
 - Docs: document systemd lingering and logged-in session requirements on macOS/Windows.
-- Auto-reply: unify tool/block/final delivery across providers and apply consistent heartbeat/prefix handling. Thanks @MSch for PR #225 (superseded commit 92c953d0749143eb2a3f31f3cd6ad0e8eabf48c3).
+- Auto-reply: centralize tool/block/final dispatch across providers for consistent streaming + heartbeat/prefix handling. Thanks @MSch for PR #225.
+- Heartbeat: make HEARTBEAT_OK ack padding configurable across heartbeat and cron delivery. (#238) — thanks @jalehman
+- Skills: emit MEDIA token after Nano Banana Pro image generation. Thanks @Iamadig for PR #271.
+- WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.
+- Slack: keep auto-replies in the original thread when responding to thread messages. Thanks @scald for PR #251.
+- Discord: surface missing-permission hints (muted/role overrides) when replies fail.
+- Discord: use channel IDs for DMs instead of user IDs. Thanks @VACInc for PR #261.
+- Docs: clarify Slack manifest scopes (current vs optional) with references. Thanks @jarvis-medmatic for PR #235.
+- Control UI: avoid Slack config ReferenceError by reading slack config snapshots. Thanks @sreekaransrinath for PR #249.
+- Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks Kevin Kern (@regenrek) for PR #242.
+- Telegram: gate groups via `telegram.groups` allowlist (align with WhatsApp/iMessage). Thanks @kitze for PR #241.
+- Telegram: support media groups (multi-image messages). Thanks @obviyus for PR #220.
+- Telegram/WhatsApp: parse shared locations (pins, places, live) and expose structured ctx fields. Thanks @nachoiacovino for PR #194.
+- Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
+- Auto-reply: track compaction count in session status; verbose mode announces auto-compactions.
+- Telegram: send GIF media as animations (auto-play) and improve filename sniffing.
+- Bash tool: inherit gateway PATH so Nix-provided tools resolve during commands. Thanks @joshp123 for PR #202.
 
 ### Maintenance
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
+- Skills: add 1Password CLI skill with op examples.
 - Lint: organize imports and wrap long lines in reply commands.
+- Refactor: centralize group allowlist/mention policy across providers.
+- Deps: update to latest across the repo.
 
 ## 2026.1.5-3
 
@@ -57,6 +105,7 @@
 - Agent tools: new `image` tool routed to the image model (when configured).
 - Config: default model shorthands (`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`).
 - Docs: document built-in model shorthands + precedence (user config wins).
+- Bun: optional local install/build workflow without maintaining a Bun lockfile (see `docs/bun.md`).
 
 ### Fixes
 - Control UI: render Markdown in tool result cards.
@@ -80,6 +129,11 @@
 - Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 - Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
+- CLI: run `clawdbot agent` via the Gateway by default; use `--local` to force embedded mode.
+
+## 2026.1.5
+
+### Fixes
 - Control UI: render Markdown in chat messages (sanitized).
 
 

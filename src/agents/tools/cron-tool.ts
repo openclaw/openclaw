@@ -1,7 +1,13 @@
 import { Type } from "@sinclair/typebox";
-
+import {
+  normalizeCronJobCreate,
+  normalizeCronJobPatch,
+} from "../../cron/normalize.js";
+import { CronAddParamsSchema } from "../../gateway/protocol/schema.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
+
+const CronJobPatchSchema = Type.Partial(CronAddParamsSchema);
 
 const CronToolSchema = Type.Union([
   Type.Object({
@@ -22,7 +28,7 @@ const CronToolSchema = Type.Union([
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    job: Type.Object({}, { additionalProperties: true }),
+    job: CronAddParamsSchema,
   }),
   Type.Object({
     action: Type.Literal("update"),
@@ -30,7 +36,7 @@ const CronToolSchema = Type.Union([
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     id: Type.String(),
-    patch: Type.Object({}, { additionalProperties: true }),
+    patch: CronJobPatchSchema,
   }),
   Type.Object({
     action: Type.Literal("remove"),
@@ -97,8 +103,9 @@ export function createCronTool(): AnyAgentTool {
           if (!params.job || typeof params.job !== "object") {
             throw new Error("job required");
           }
+          const job = normalizeCronJobCreate(params.job) ?? params.job;
           return jsonResult(
-            await callGatewayTool("cron.add", gatewayOpts, params.job),
+            await callGatewayTool("cron.add", gatewayOpts, job),
           );
         }
         case "update": {
@@ -106,10 +113,11 @@ export function createCronTool(): AnyAgentTool {
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
+          const patch = normalizeCronJobPatch(params.patch) ?? params.patch;
           return jsonResult(
             await callGatewayTool("cron.update", gatewayOpts, {
               id,
-              patch: params.patch,
+              patch,
             }),
           );
         }
