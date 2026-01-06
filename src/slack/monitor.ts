@@ -6,6 +6,7 @@ import bolt from "@slack/bolt";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -757,31 +758,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       },
     });
 
-    const replyResult = await getReplyFromConfig(
-      ctxPayload,
-      {
-        onToolResult: (payload) => {
-          dispatcher.sendToolResult(payload);
-        },
-        onBlockReply: (payload) => {
-          dispatcher.sendBlockReply(payload);
-        },
-      },
+    const { queuedFinal, counts } = await dispatchReplyFromConfig({
+      ctx: ctxPayload,
       cfg,
-    );
-    const replies = replyResult
-      ? Array.isArray(replyResult)
-        ? replyResult
-        : [replyResult]
-      : [];
-    let queuedFinal = false;
-    for (const reply of replies) {
-      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-    }
-    await dispatcher.waitForIdle();
+      dispatcher,
+    });
     if (!queuedFinal) return;
     if (shouldLogVerbose()) {
-      const finalCount = dispatcher.getQueuedCounts().final;
+      const finalCount = counts.final;
       logVerbose(
         `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );

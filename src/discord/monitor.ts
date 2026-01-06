@@ -18,13 +18,13 @@ import {
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { TypingController } from "../auto-reply/reply/typing.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   DiscordSlashCommandConfig,
@@ -589,32 +589,17 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         },
       });
 
-      const replyResult = await getReplyFromConfig(
-        ctxPayload,
-        {
+      const { queuedFinal, counts } = await dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
           onReplyStart: () => sendTyping(message),
           onTypingController: (typing) => {
             typingController = typing;
           },
-          onToolResult: (payload) => {
-            dispatcher.sendToolResult(payload);
-          },
-          onBlockReply: (payload) => {
-            dispatcher.sendBlockReply(payload);
-          },
         },
-        cfg,
-      );
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-      let queuedFinal = false;
-      for (const reply of replies) {
-        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-      }
-      await dispatcher.waitForIdle();
+      });
       typingController?.markDispatchIdle();
       if (!queuedFinal) {
         if (
@@ -629,7 +614,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
       didSendReply = true;
       if (shouldLogVerbose()) {
-        const finalCount = dispatcher.getQueuedCounts().final;
+        const finalCount = counts.final;
         logVerbose(
           `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
         );

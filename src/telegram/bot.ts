@@ -7,13 +7,13 @@ import { Bot, InputFile, webhookCallback } from "grammy";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { TypingController } from "../auto-reply/reply/typing.js";
-import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -314,28 +314,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         },
       });
 
-      const replyResult = await getReplyFromConfig(
-        ctxPayload,
-        {
+      const { queuedFinal } = await dispatchReplyFromConfig({
+        ctx: ctxPayload,
+        cfg,
+        dispatcher,
+        replyOptions: {
           onReplyStart: sendTyping,
           onTypingController: (typing) => {
             typingController = typing;
           },
-          onToolResult: dispatcher.sendToolResult,
-          onBlockReply: dispatcher.sendBlockReply,
         },
-        cfg,
-      );
-      const replies = replyResult
-        ? Array.isArray(replyResult)
-          ? replyResult
-          : [replyResult]
-        : [];
-      let queuedFinal = false;
-      for (const reply of replies) {
-        queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
-      }
-      await dispatcher.waitForIdle();
+      });
       typingController?.markDispatchIdle();
       if (!queuedFinal) return;
     } catch (err) {

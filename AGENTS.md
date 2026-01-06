@@ -30,6 +30,9 @@
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
 - PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
+- When working on a PR: add a changelog entry with the PR ID and thank the contributor.
+- When working on an issue: reference the issue in the changelog entry.
+- When merging a PR: leave a PR comment that explains exactly what we did.
 
 ## Security & Configuration Tips
 - Web provider stores creds at `~/.clawdbot/credentials/`; rerun `clawdbot login` if logged out.

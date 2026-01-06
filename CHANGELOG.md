@@ -46,7 +46,7 @@
 - Block streaming: avoid splitting Markdown fenced blocks and reopen fences when forced to split.
 - Block streaming: preserve leading indentation in block replies (lists, indented fences).
 - Docs: document systemd lingering and logged-in session requirements on macOS/Windows.
-- Auto-reply: unify tool/block/final delivery across providers and apply consistent heartbeat/prefix handling. Thanks @MSch for PR #225 (superseded commit 92c953d0749143eb2a3f31f3cd6ad0e8eabf48c3).
+- Auto-reply: centralize tool/block/final dispatch across providers for consistent streaming + heartbeat/prefix handling. Thanks @MSch for PR #225.
 - Heartbeat: make HEARTBEAT_OK ack padding configurable across heartbeat and cron delivery. (#238) — thanks @jalehman
 - WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.
 - Slack: keep auto-replies in the original thread when responding to thread messages. Thanks @scald for PR #251.
