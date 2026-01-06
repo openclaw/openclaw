@@ -171,7 +171,7 @@ Example:
   - [Linux app](https://docs.clawd.bot/linux)
 - Ops and safety:
   - [Sessions](https://docs.clawd.bot/session)
-  - [Cron + wakeups](https://docs.clawd.bot/cron)
+  - [Cron jobs](https://docs.clawd.bot/cron-jobs)
   - [Security](https://docs.clawd.bot/security)
   - [Troubleshooting](https://docs.clawd.bot/troubleshooting)
 

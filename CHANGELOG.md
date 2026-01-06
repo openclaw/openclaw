@@ -17,7 +17,7 @@
 
 ### Fixes
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
-- Heartbeat: default interval now 30m with a new default prompt + HEARTBEAT.md template.
+- Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.
 - Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
 - Docs: add ClawdHub guide and hubs link for browsing, install, and sync workflows.
@@ -26,6 +26,7 @@
 - Browser: fix `browser snapshot`/`browser act` timeouts under Bun by patching Playwright’s CDP WebSocket selection. Thanks @azade-c for PR #307.
 - Browser: add `--browser-profile` flag and honor profile in tabs routes + browser tool. Thanks @jamesgroat for PR #324.
 - Telegram: stop typing after tool results. Thanks @AbhisekBasu1 for PR #322.
+- Telegram: include sender identity in group envelope headers. (#336)
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: flag error payloads and improve Bun socket error messaging. Thanks @emanuelst for PR #331.
@@ -120,6 +121,7 @@
 - Models: extend `clawdbot models` status output with a masked auth overview (profiles, env sources, and OAuth counts).
 
 ### Maintenance
+- Skills: add Himalaya email CLI skill. Thanks @dantelex for PR #335.
 - Agent: add `skipBootstrap` config option. Thanks @onutc for PR #292.
 - UI: add favicon.ico derived from the macOS app icon. Thanks @jeffersonwarrior for PR #305.
 - Tooling: replace tsx with bun for TypeScript execution. Thanks @obviyus for PR #278.

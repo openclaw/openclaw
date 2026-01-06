@@ -791,11 +791,11 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `model`: optional override model for heartbeat runs (`provider/model`).
 - `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (provider-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
-- `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`).
+- `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Overrides are sent verbatim; include a `Read HEARTBEAT.md if exists` line if you still want the file read.
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
 
-Heartbeats run full agent turns. Shorter intervals burn more tokens; adjust `every`
-and/or `model` accordingly.
+Heartbeats run full agent turns. Shorter intervals burn more tokens; be mindful
+of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 
 `agent.bash` configures background bash defaults:
 - `backgroundMs`: time before auto-background (ms, default 10000)
@@ -1482,7 +1482,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 
 ## Cron (Gateway scheduler)
 
-Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron + wakeups](https://docs.clawd.bot/cron) for the full RFC and CLI examples.
+Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs](https://docs.clawd.bot/cron-jobs) for the feature overview and CLI examples.
 
 ```json5
 {

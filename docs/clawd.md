@@ -166,6 +166,7 @@ By default, CLAWDBOT runs a heartbeat every 30 minutes with the prompt:
 Set `agent.heartbeat.every: "0m"` to disable.
 
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agent.heartbeat.ackMaxChars`), CLAWDBOT suppresses outbound delivery for that heartbeat.
+- Heartbeats run full agent turns — shorter intervals burn more tokens.
 
 ```json5
 {
@@ -205,7 +206,7 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 
 - WebChat: [WebChat](https://docs.clawd.bot/webchat)
 - Gateway ops: [Gateway runbook](https://docs.clawd.bot/gateway)
-- Cron + wakeups: [Cron + wakeups](https://docs.clawd.bot/cron)
+- Cron + wakeups: [Cron jobs](https://docs.clawd.bot/cron-jobs)
 - macOS menu bar companion: [Clawdbot macOS app](https://docs.clawd.bot/macos)
 - iOS node app: [iOS app](https://docs.clawd.bot/ios)
 - Android node app: [Android app](https://docs.clawd.bot/android)

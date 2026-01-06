@@ -241,6 +241,49 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
     const payload = replySpy.mock.calls[0][0];
     expect(payload.WasMentioned).toBe(true);
+    expect(payload.Body).toMatch(
+      /^\[Telegram Test Group id:7 from Ada id:9 2025-01-09T00:00Z\]/,
+    );
+  });
+
+  it("includes sender identity in group envelope headers", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      telegram: { groups: { "*": { requireMention: false } } },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 42, type: "group", title: "Ops" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 2,
+        from: {
+          id: 99,
+          first_name: "Ada",
+          last_name: "Lovelace",
+          username: "ada",
+        },
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.Body).toMatch(
+      /^\[Telegram Ops id:42 from Ada Lovelace \(@ada\) id:99 2025-01-09T00:00Z\]/,
+    );
   });
 
   it("reacts to mention-gated group messages when ackReaction is enabled", async () => {
