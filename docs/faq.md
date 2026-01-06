@@ -122,7 +122,7 @@ They're **separate billing**! An API key does NOT use your subscription.
 pnpm clawdbot login
 ```
 
-**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/credentials/oauth.json` to your server. The auth is just a JSON file.
+**If OAuth fails** (headless/container): Do OAuth on a normal machine, then copy `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (and `auth.json` if present) to your server. Legacy installs can still import `~/.clawdbot/credentials/oauth.json` on first use.
 
 ### How are env vars loaded?
 
@@ -152,7 +152,7 @@ Or set `CLAWDBOT_LOAD_SHELL_ENV=1` (timeout: `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=1500
 
 OAuth needs the callback to reach the machine running the CLI. Options:
 
-1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/credentials/oauth.json` to the container.
+1. **Copy auth manually** — Run OAuth on your laptop, copy `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (and `auth.json` if present) to the container. Legacy flow: copy `~/.clawdbot/credentials/oauth.json` to trigger import.
 2. **SSH tunnel** — `ssh -L 18789:localhost:18789 user@server`
 3. **Tailscale** — Put both machines on your tailnet.
 

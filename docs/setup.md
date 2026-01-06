@@ -77,7 +77,7 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs `src/index.ts gateway --force` and reloads on [`src/**/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/**/*.ts) changes.
+`gateway:watch` runs `src/entry.ts gateway --force` and reloads on [`src/**/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/**/*.ts) changes.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -102,7 +102,8 @@ pnpm clawdbot health
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Credentials: `~/.clawdbot/credentials/`
-  - Sessions/logs: `~/.clawdbot/sessions/`
+  - Sessions: `~/.clawdbot/agents/<agentId>/sessions/`
+  - Logs: `/tmp/clawdbot/`
 
 ## Updating (without wrecking your setup)
 

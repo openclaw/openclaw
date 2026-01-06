@@ -13,7 +13,7 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 1) **Version & metadata**
 - [ ] Bump `package.json` version (e.g., `1.1.0`).
 - [ ] Update CLI/version strings: [`src/cli/program.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/program.ts) and the Baileys user agent in [`src/provider-web.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/provider-web.ts).
-- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`dist/index.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/index.js) for `clawdbot`.
+- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`dist/entry.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/entry.js) for `clawdbot`.
 - [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
 
 2) **Build & artifacts**

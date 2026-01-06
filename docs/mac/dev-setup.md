@@ -57,7 +57,7 @@ The macOS app requires a symlink named `clawdbot` in `/usr/local/bin` or `/opt/h
 
 Alternatively, you can manually link it from your Admin account:
 ```bash
-sudo ln -sf "/Users/$(whoami)/clawdbot/dist/Clawdbot.app/Contents/Resources/Relay/clawdbot" /usr/local/bin/clawdbot
+sudo ln -sf "/Users/$(whoami)/Projects/clawdbot/dist/Clawdbot.app/Contents/Resources/Relay/clawdbot" /usr/local/bin/clawdbot
 ```
 
 ## Troubleshooting

@@ -1,3 +1,8 @@
+---
+summary: "Spec: groupPolicy hardening for Telegram allowlist parity"
+read_when:
+  - Reviewing historical Telegram allowlist normalization changes
+---
 # Engineering Execution Spec: groupPolicy Hardening (Telegram Allowlist Parity)
 
 **Date**: 2026-01-05  

@@ -68,7 +68,7 @@ pnpm test:docker:qr
 ### Notes
 
 - Gateway bind defaults to `lan` for container use.
-- The gateway container is the source of truth for sessions (`~/.clawdbot/sessions`).
+- The gateway container is the source of truth for sessions (`~/.clawdbot/agents/<agentId>/sessions/`).
 
 ## Per-session Agent Sandbox (host gateway + Docker tools)
 

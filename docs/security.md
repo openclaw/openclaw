@@ -162,7 +162,7 @@ If your AI does something bad:
 
 1. **Stop it:** stop the macOS app (if it’s supervising the Gateway) or terminate your `clawdbot gateway` process
 2. **Check logs:** `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
-3. **Review session:** Check `~/.clawdbot/sessions/` for what happened
+3. **Review session:** Check `~/.clawdbot/agents/<agentId>/sessions/` for what happened
 4. **Rotate secrets:** If credentials were exposed
 5. **Update rules:** Add to your security prompt
 

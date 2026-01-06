@@ -54,7 +54,7 @@ It does **not** install or change anything on the remote host.
    - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
-   - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agent/auth-profiles.json` (API keys + OAuth).
+  - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
 
 3) **Workspace**
    - Default `~/clawd` (configurable).
@@ -156,8 +156,8 @@ Typical fields in `~/.clawdbot/clawdbot.json`:
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
 
-WhatsApp credentials go to `~/.clawdbot/credentials/`.
-Sessions are stored under `~/.clawdbot/sessions/`.
+WhatsApp credentials go under `~/.clawdbot/credentials/whatsapp/<accountId>/`.
+Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
 
 ## Related docs
 
