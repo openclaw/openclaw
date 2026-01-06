@@ -76,8 +76,6 @@ export function createTypingController(params: {
   const ensureStart = async () => {
     if (!active) {
       active = true;
-      runComplete = false;
-      dispatchIdle = false;
     }
     if (started) return;
     started = true;
