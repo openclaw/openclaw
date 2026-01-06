@@ -275,22 +275,28 @@ export async function modelsScanCommand(
     for (const entry of selectedImages) {
       if (!nextModels[entry]) nextModels[entry] = {};
     }
+    const existingImageModel = cfg.agent?.imageModel as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
     const nextImageModel =
       selectedImages.length > 0
         ? {
-            ...((cfg.agent?.imageModel as {
-              primary?: string;
-              fallbacks?: string[];
-            }) ?? {}),
+            ...(existingImageModel?.primary
+              ? { primary: existingImageModel.primary }
+              : undefined),
             fallbacks: selectedImages,
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
         : cfg.agent?.imageModel;
+    const existingModel = cfg.agent?.model as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
     const agent = {
       ...cfg.agent,
       model: {
-        ...((cfg.agent?.model as { primary?: string; fallbacks?: string[] }) ??
-          {}),
+        ...(existingModel?.primary
+          ? { primary: existingModel.primary }
+          : undefined),
         fallbacks: selected,
         ...(opts.setDefault ? { primary: selected[0] } : {}),
       },

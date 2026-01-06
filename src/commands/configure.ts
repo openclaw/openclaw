@@ -333,10 +333,13 @@ async function promptAuthConfig(
           agent: {
             ...next.agent,
             model: {
-              ...((next.agent?.model as {
-                primary?: string;
-                fallbacks?: string[];
-              }) ?? {}),
+              ...(next.agent?.model &&
+              "fallbacks" in (next.agent.model as Record<string, unknown>)
+                ? {
+                    fallbacks: (next.agent.model as { fallbacks?: string[] })
+                      .fallbacks,
+                  }
+                : undefined),
               primary: "google-antigravity/claude-opus-4-5-thinking",
             },
             models: {
@@ -392,10 +395,13 @@ async function promptAuthConfig(
       agent: {
         ...next.agent,
         model: {
-          ...((next.agent?.model as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(next.agent?.model &&
+          "fallbacks" in (next.agent.model as Record<string, unknown>)
+            ? {
+                fallbacks: (next.agent.model as { fallbacks?: string[] })
+                  .fallbacks,
+              }
+            : undefined),
           primary: model,
         },
         models: {

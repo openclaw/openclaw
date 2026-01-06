@@ -64,15 +64,18 @@ export async function modelsImageFallbacksAddCommand(
 
     if (existingKeys.includes(targetKey)) return cfg;
 
+    const existingModel = cfg.agent?.imageModel as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+
     return {
       ...cfg,
       agent: {
         ...cfg.agent,
         imageModel: {
-          ...((cfg.agent?.imageModel as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(existingModel?.primary
+            ? { primary: existingModel.primary }
+            : undefined),
           fallbacks: [...existing, targetKey],
         },
         models: nextModels,
@@ -115,15 +118,18 @@ export async function modelsImageFallbacksRemoveCommand(
       throw new Error(`Image fallback not found: ${targetKey}`);
     }
 
+    const existingModel = cfg.agent?.imageModel as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+
     return {
       ...cfg,
       agent: {
         ...cfg.agent,
         imageModel: {
-          ...((cfg.agent?.imageModel as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(existingModel?.primary
+            ? { primary: existingModel.primary }
+            : undefined),
           fallbacks: filtered,
         },
       },
@@ -137,19 +143,23 @@ export async function modelsImageFallbacksRemoveCommand(
 }
 
 export async function modelsImageFallbacksClearCommand(runtime: RuntimeEnv) {
-  await updateConfig((cfg) => ({
-    ...cfg,
-    agent: {
-      ...cfg.agent,
-      imageModel: {
-        ...((cfg.agent?.imageModel as {
-          primary?: string;
-          fallbacks?: string[];
-        }) ?? {}),
-        fallbacks: [],
+  await updateConfig((cfg) => {
+    const existingModel = cfg.agent?.imageModel as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+    return {
+      ...cfg,
+      agent: {
+        ...cfg.agent,
+        imageModel: {
+          ...(existingModel?.primary
+            ? { primary: existingModel.primary }
+            : undefined),
+          fallbacks: [],
+        },
       },
-    },
-  }));
+    };
+  });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   runtime.log("Image fallback list cleared.");

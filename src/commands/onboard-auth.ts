@@ -94,8 +94,13 @@ export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
     agent: {
       ...cfg.agent,
       model: {
-        ...((cfg.agent?.model as { primary?: string; fallbacks?: string[] }) ??
-          {}),
+        ...(cfg.agent?.model &&
+        "fallbacks" in (cfg.agent.model as Record<string, unknown>)
+          ? {
+              fallbacks: (cfg.agent.model as { fallbacks?: string[] })
+                .fallbacks,
+            }
+          : undefined),
         primary: "lmstudio/minimax-m2.1-gs32",
       },
       models,

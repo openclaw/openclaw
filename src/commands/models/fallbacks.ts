@@ -64,15 +64,18 @@ export async function modelsFallbacksAddCommand(
 
     if (existingKeys.includes(targetKey)) return cfg;
 
+    const existingModel = cfg.agent?.model as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+
     return {
       ...cfg,
       agent: {
         ...cfg.agent,
         model: {
-          ...((cfg.agent?.model as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(existingModel?.primary
+            ? { primary: existingModel.primary }
+            : undefined),
           fallbacks: [...existing, targetKey],
         },
         models: nextModels,
@@ -115,15 +118,18 @@ export async function modelsFallbacksRemoveCommand(
       throw new Error(`Fallback not found: ${targetKey}`);
     }
 
+    const existingModel = cfg.agent?.model as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+
     return {
       ...cfg,
       agent: {
         ...cfg.agent,
         model: {
-          ...((cfg.agent?.model as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(existingModel?.primary
+            ? { primary: existingModel.primary }
+            : undefined),
           fallbacks: filtered,
         },
       },
@@ -137,17 +143,23 @@ export async function modelsFallbacksRemoveCommand(
 }
 
 export async function modelsFallbacksClearCommand(runtime: RuntimeEnv) {
-  await updateConfig((cfg) => ({
-    ...cfg,
-    agent: {
-      ...cfg.agent,
-      model: {
-        ...((cfg.agent?.model as { primary?: string; fallbacks?: string[] }) ??
-          {}),
-        fallbacks: [],
+  await updateConfig((cfg) => {
+    const existingModel = cfg.agent?.model as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
+    return {
+      ...cfg,
+      agent: {
+        ...cfg.agent,
+        model: {
+          ...(existingModel?.primary
+            ? { primary: existingModel.primary }
+            : undefined),
+          fallbacks: [],
+        },
       },
-    },
-  }));
+    };
+  });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   runtime.log("Fallback list cleared.");

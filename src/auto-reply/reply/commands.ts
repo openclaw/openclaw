@@ -337,7 +337,10 @@ export async function handleCommands(params: {
     const statusText = buildStatusMessage({
       agent: {
         ...cfg.agent,
-        model,
+        model: {
+          ...cfg.agent?.model,
+          primary: model,
+        },
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,
         verboseDefault: cfg.agent?.verboseDefault,

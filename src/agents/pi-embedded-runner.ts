@@ -82,6 +82,12 @@ export type EmbeddedPiRunMeta = {
   aborted?: boolean;
 };
 
+type ApiKeyInfo = {
+  apiKey: string;
+  profileId?: string;
+  source: string;
+};
+
 export type EmbeddedPiRunResult = {
   payloads?: Array<{
     text?: string;
@@ -396,8 +402,8 @@ export async function runEmbeddedPiAgent(params: {
       const initialThinkLevel = params.thinkLevel ?? "off";
       let thinkLevel = initialThinkLevel;
       const attemptedThinking = new Set<ThinkLevel>();
-      let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>> | null =
-        null;
+      let apiKeyInfo: ApiKeyInfo | null = null;
+      let lastProfileId: string | undefined;
 
       const resolveApiKeyForCandidate = async (candidate?: string) => {
         return getApiKeyForModel({
@@ -411,6 +417,7 @@ export async function runEmbeddedPiAgent(params: {
       const applyApiKeyInfo = async (candidate?: string): Promise<void> => {
         apiKeyInfo = await resolveApiKeyForCandidate(candidate);
         authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+        lastProfileId = apiKeyInfo.profileId;
       };
 
       const advanceAuthProfile = async (): Promise<boolean> => {
@@ -802,11 +809,11 @@ export async function runEmbeddedPiAgent(params: {
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
-          if (apiKeyInfo?.profileId) {
+          if (lastProfileId) {
             markAuthProfileGood({
               store: authStore,
               provider,
-              profileId: apiKeyInfo.profileId,
+              profileId: lastProfileId,
             });
           }
           return {

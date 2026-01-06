@@ -11,15 +11,17 @@ export async function modelsSetImageCommand(
     const key = `${resolved.provider}/${resolved.model}`;
     const nextModels = { ...cfg.agent?.models };
     if (!nextModels[key]) nextModels[key] = {};
+    const existingModel = cfg.agent?.imageModel as
+      | { primary?: string; fallbacks?: string[] }
+      | undefined;
     return {
       ...cfg,
       agent: {
         ...cfg.agent,
         imageModel: {
-          ...((cfg.agent?.imageModel as {
-            primary?: string;
-            fallbacks?: string[];
-          }) ?? {}),
+          ...(existingModel?.fallbacks
+            ? { fallbacks: existingModel.fallbacks }
+            : undefined),
           primary: key,
         },
         models: nextModels,
