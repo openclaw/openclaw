@@ -18,16 +18,23 @@ export function resolveCommandAuthorization(params: {
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;
   const surface = (ctx.Surface ?? "").trim().toLowerCase();
-  const isWhatsAppSurface =
-    surface === "whatsapp" ||
+  const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
+  const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
+  const hasWhatsappPrefix =
     (ctx.From ?? "").startsWith("whatsapp:") ||
     (ctx.To ?? "").startsWith("whatsapp:");
+  const looksLikeE164 = (value: string) =>
+    Boolean(value && /^\+?\d{3,}$/.test(value.replace(/[^\d+]/g, "")));
+  const inferWhatsApp =
+    !surface &&
+    Boolean(cfg.whatsapp?.allowFrom?.length) &&
+    (looksLikeE164(from) || looksLikeE164(to));
+  const isWhatsAppSurface =
+    surface === "whatsapp" || hasWhatsappPrefix || inferWhatsApp;
 
   const configuredAllowFrom = isWhatsAppSurface
     ? cfg.whatsapp?.allowFrom
     : undefined;
-  const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
-  const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const allowFromList =
     configuredAllowFrom?.filter((entry) => entry?.trim()) ?? [];
   const allowAll =
@@ -35,7 +42,9 @@ export function resolveCommandAuthorization(params: {
     allowFromList.length === 0 ||
     allowFromList.some((entry) => entry.trim() === "*");
 
-  const senderE164 = normalizeE164(ctx.SenderE164 ?? "");
+  const senderE164 = normalizeE164(
+    ctx.SenderE164 ?? (isWhatsAppSurface ? from : ""),
+  );
   const ownerCandidates =
     isWhatsAppSurface && !allowAll
       ? allowFromList.filter((entry) => entry !== "*")

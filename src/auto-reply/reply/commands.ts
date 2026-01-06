@@ -173,6 +173,7 @@ export async function handleCommands(params: {
   shouldContinue: boolean;
 }> {
   const {
+    ctx,
     cfg,
     command,
     directives,
@@ -192,6 +193,18 @@ export async function handleCommands(params: {
     contextTokens,
     isGroup,
   } = params;
+
+  const resetRequested =
+    command.commandBodyNormalized === "/reset" ||
+    command.commandBodyNormalized === "reset" ||
+    command.commandBodyNormalized === "/new" ||
+    command.commandBodyNormalized === "new";
+  if (resetRequested && !command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /reset from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+    );
+    return { shouldContinue: false };
+  }
 
   const activationCommand = parseActivationCommand(
     command.commandBodyNormalized,
