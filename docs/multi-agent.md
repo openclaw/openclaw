@@ -9,6 +9,52 @@ status: active
 
 Goal: multiple *isolated* agents (separate workspace + `agentDir` + sessions), plus multiple provider accounts (e.g. two WhatsApps) in one running Gateway. Inbound is routed to an agent via bindings.
 
+## What is “one agent”?
+
+An **agent** is a fully scoped brain with its own:
+
+- **Workspace** (files, AGENTS.md/SOUL.md/USER.md, local notes, persona rules).
+- **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
+- **Session store** (chat history + routing state) under `~/.clawdbot/agents/<agentId>/sessions`.
+
+The Gateway can host **one agent** (default) or **many agents** side-by-side.
+
+### Single-agent mode (default)
+
+If you do nothing, Clawdbot runs a single agent:
+
+- `agentId` defaults to **`main`**.
+- Sessions are keyed as `agent:main:<mainKey>`.
+- Workspace defaults to `~/clawd` (or `~/clawd-<profile>` when `CLAWDBOT_PROFILE` is set).
+- State defaults to `~/.clawdbot/agents/main/agent`.
+
+## Multiple agents = multiple people, multiple personalities
+
+With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
+
+- **Different phone numbers/accounts** (per provider `accountId`).
+- **Different personalities** (per-agent workspace files like `AGENTS.md` and `SOUL.md`).
+- **Separate auth + sessions** (no cross-talk unless explicitly enabled).
+
+This lets **multiple people** share one Gateway server while keeping their AI “brains” and data isolated.
+
+## Routing rules (how messages pick an agent)
+
+Bindings are **deterministic** and **most-specific wins**:
+
+1. `peer` match (exact DM/group/channel id)
+2. `guildId` (Discord)
+3. `teamId` (Slack)
+4. `accountId` match for a provider
+5. provider-level match (`accountId: "*"`)
+6. fallback to `routing.defaultAgentId` (default: `main`)
+
+## Multiple accounts / phone numbers
+
+Providers that support **multiple accounts** (e.g. WhatsApp) use `accountId` to identify
+each login. Each `accountId` can be routed to a different agent, so one server can host
+multiple phone numbers without mixing sessions.
+
 ## Concepts
 
 - `agentId`: one “brain” (workspace, per-agent auth, per-agent session store).
