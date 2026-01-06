@@ -17,7 +17,7 @@ read_when: "Setting up Slack or debugging Slack socket mode"
    - `channel_rename`
    - `pin_added`, `pin_removed`
 5) Invite the bot to channels you want it to read.
-6) Slash Commands → create the `/clawd` command (or your preferred name).
+6) Slash Commands → create `/clawd` if you use `slack.slashCommand`. If you enable `commands.native`, add slash commands for the built-in chat commands (same names as `/help`).
 7) App Home → enable the **Messages Tab** so users can DM the bot.
 
 Use the manifest below so scopes and events stay in sync.
@@ -97,6 +97,8 @@ Use this Slack app manifest to create the app quickly (adjust the name/command i
   }
 }
 ```
+
+If you enable `commands.native`, add one `slash_commands` entry per command you want to expose (matching the `/help` list).
 
 ## Scopes (current vs optional)
 Slack's Conversations API is type-scoped: you only need the scopes for the
@@ -190,6 +192,7 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
 - Native command registration is controlled by `commands.native`; text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
+- Full command list + config: https://docs.clawd.bot/slash-commands
 
 ## DM security (pairing)
 - Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.

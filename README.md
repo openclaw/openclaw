@@ -321,7 +321,7 @@ Details: [Security guide](https://docs.clawd.bot/security) · [Docker + sandboxi
 ### [Discord](https://docs.clawd.bot/discord)
 
 - Set `DISCORD_BOT_TOKEN` or `discord.token` (env wins).
-- Optional: set `discord.slashCommand`, `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
+- Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `discord.dm.allowFrom`, `discord.guilds`, or `discord.mediaMaxMb` as needed.
 
 ```json5
 {
