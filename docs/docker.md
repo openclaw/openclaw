@@ -124,7 +124,7 @@ container. The gateway stays on your host, but the tool execution is isolated:
         extraHosts: ["internal.service:10.0.0.5"]
       },
       tools: {
-        allow: ["bash", "process", "read", "write", "edit"],
+        allow: ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn"],
         deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
       },
       prune: {
