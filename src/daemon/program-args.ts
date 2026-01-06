@@ -166,7 +166,9 @@ export async function resolveGatewayProgramArguments(params: {
       const repoRoot = resolveRepoRootForDev();
       const devCliPath = path.join(repoRoot, "src", "index.ts");
       await fs.access(devCliPath);
-      const bunPath = isBunRuntime(execPath) ? execPath : await resolveBunPath();
+      const bunPath = isBunRuntime(execPath)
+        ? execPath
+        : await resolveBunPath();
       return {
         programArguments: [bunPath, devCliPath, ...gatewayArgs],
         workingDirectory: repoRoot,

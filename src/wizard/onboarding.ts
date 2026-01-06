@@ -21,6 +21,11 @@ import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
 } from "../commands/antigravity-oauth.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  GATEWAY_DAEMON_RUNTIME_OPTIONS,
+  type GatewayDaemonRuntime,
+} from "../commands/daemon-runtime.js";
 import { healthCommand } from "../commands/health.js";
 import {
   applyAuthProfileConfig,
@@ -52,11 +57,6 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "../commands/daemon-runtime.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,

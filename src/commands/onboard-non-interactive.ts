@@ -13,6 +13,10 @@ import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  isGatewayDaemonRuntime,
+} from "./daemon-runtime.js";
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
@@ -30,10 +34,6 @@ import type {
   OnboardMode,
   OnboardOptions,
 } from "./onboard-types.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  isGatewayDaemonRuntime,
-} from "./daemon-runtime.js";
 import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 
 export async function runNonInteractiveOnboarding(
