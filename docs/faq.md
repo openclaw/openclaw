@@ -250,7 +250,7 @@ Clawdbot can run as:
 - **bun binary (macOS app)** — Single executable, easy distribution, auto-restarts via launchd
 - **Node runtime** (`clawdbot gateway`) — More stable for WhatsApp
 
-If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys) and can corrupt memory on reconnect. Baileys: https://github.com/WhiskeySockets/Baileys
+If you see WebSocket errors like `ws.WebSocket 'upgrade' event is not implemented`, use Node instead of the bun binary. Bun's WebSocket implementation has edge cases that can break WhatsApp (Baileys) and can corrupt memory on reconnect. Baileys: https://github.com/WhiskeySockets/Baileys · Bun issue: https://github.com/oven-sh/bun/issues/5951
 
 **For stability:** Use launchd (macOS) or the Clawdbot.app — they handle process supervision (auto-restart on crash).
 

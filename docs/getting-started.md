@@ -91,7 +91,8 @@ Dashboard (local loopback): `http://127.0.0.1:18789/`
 ⚠️ **WhatsApp + Bun warning:** Baileys (WhatsApp Web library) uses a WebSocket
 path that is currently incompatible with Bun and can cause memory corruption on
 reconnect. If you use WhatsApp, run the Gateway with **Node** until this is
-resolved. Baileys: https://github.com/WhiskeySockets/Baileys
+resolved. Baileys: https://github.com/WhiskeySockets/Baileys · Bun issue:
+https://github.com/oven-sh/bun/issues/5951
 
 ## 5) Pair + connect your first chat surface
 
