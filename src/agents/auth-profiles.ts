@@ -368,6 +368,14 @@ export function markAuthProfileUsed(params: {
   saveAuthProfileStore(store);
 }
 
+export function calculateAuthProfileCooldownMs(errorCount: number): number {
+  const normalized = Math.max(1, errorCount);
+  return Math.min(
+    60 * 60 * 1000, // 1 hour max
+    60 * 1000 * 5 ** Math.min(normalized - 1, 3),
+  );
+}
+
 /**
  * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
@@ -384,10 +392,7 @@ export function markAuthProfileCooldown(params: {
   const errorCount = (existing.errorCount ?? 0) + 1;
 
   // Exponential backoff: 1min, 5min, 25min, capped at 1h
-  const backoffMs = Math.min(
-    60 * 60 * 1000, // 1 hour max
-    60 * 1000 * Math.pow(5, Math.min(errorCount - 1, 3)),
-  );
+  const backoffMs = calculateAuthProfileCooldownMs(errorCount);
 
   store.usageStats[profileId] = {
     ...existing,
