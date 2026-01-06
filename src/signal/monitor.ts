@@ -451,10 +451,11 @@ export async function monitorSignalProvider(
           id: isGroup ? (groupId ?? "unknown") : normalizeE164(sender),
         },
       });
+      const signalTo = isGroup ? `group:${groupId}` : `signal:${sender}`;
       const ctxPayload = {
         Body: body,
         From: isGroup ? `group:${groupId ?? "unknown"}` : `signal:${sender}`,
-        To: isGroup ? `group:${groupId ?? "unknown"}` : `signal:${sender}`,
+        To: signalTo,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
         ChatType: isGroup ? "group" : "direct",
@@ -468,6 +469,9 @@ export async function monitorSignalProvider(
         MediaType: mediaType,
         MediaUrl: mediaPath,
         CommandAuthorized: commandAuthorized,
+        // Originating channel for reply routing.
+        OriginatingChannel: "signal" as const,
+        OriginatingTo: signalTo,
       };
 
       if (!isGroup) {

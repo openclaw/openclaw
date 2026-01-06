@@ -809,12 +809,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
 
     const isRoomish = isRoom || isGroupDm;
+    const slackTo = isDirectMessage
+      ? `user:${message.user}`
+      : `channel:${message.channel}`;
     const ctxPayload = {
       Body: body,
       From: slackFrom,
-      To: isDirectMessage
-        ? `user:${message.user}`
-        : `channel:${message.channel}`,
+      To: slackTo,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
@@ -830,6 +831,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       MediaType: media?.contentType,
       MediaUrl: media?.path,
       CommandAuthorized: commandAuthorized,
+      // Originating channel for reply routing.
+      OriginatingChannel: "slack" as const,
+      OriginatingTo: slackTo,
     };
 
     const replyTarget = ctxPayload.To ?? undefined;
@@ -1570,6 +1574,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         AccountId: route.accountId,
         CommandSource: "native" as const,
         CommandAuthorized: commandAuthorized,
+        // Originating channel for reply routing.
+        OriginatingChannel: "slack" as const,
+        OriginatingTo: `user:${command.user_id}`,
       };
 
       const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);

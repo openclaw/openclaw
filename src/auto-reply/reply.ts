@@ -714,6 +714,9 @@ export async function getReplyFromConfig(
     prompt: queuedBody,
     summaryLine: baseBodyTrimmedRaw,
     enqueuedAt: Date.now(),
+    // Originating channel for reply routing.
+    originatingChannel: ctx.OriginatingChannel,
+    originatingTo: ctx.OriginatingTo,
     run: {
       agentId,
       agentDir,

@@ -414,6 +414,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       SenderId: senderId || undefined,
       SenderUsername: senderUsername || undefined,
       Provider: "telegram",
+      Surface: "telegram",
       MessageSid: String(msg.message_id),
       ReplyToId: replyTarget?.id,
       ReplyToBody: replyTarget?.body,
@@ -433,6 +434,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       CommandAuthorized: commandAuthorized,
       MessageThreadId: messageThreadId,
       IsForum: isForum,
+      // Originating channel for reply routing.
+      OriginatingChannel: "telegram" as const,
+      OriginatingTo: `telegram:${chatId}`,
     };
 
     if (replyTarget && shouldLogVerbose()) {

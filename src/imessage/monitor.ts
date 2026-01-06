@@ -351,10 +351,11 @@ export async function monitorIMessageProvider(
           : normalizeIMessageHandle(sender),
       },
     });
+    const imessageTo = chatTarget || `imessage:${sender}`;
     const ctxPayload = {
       Body: body,
       From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
-      To: chatTarget || `imessage:${sender}`,
+      To: imessageTo,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
@@ -372,6 +373,9 @@ export async function monitorIMessageProvider(
       MediaUrl: mediaPath,
       WasMentioned: mentioned,
       CommandAuthorized: commandAuthorized,
+      // Originating channel for reply routing.
+      OriginatingChannel: "imessage" as const,
+      OriginatingTo: imessageTo,
     };
 
     if (!isGroup) {

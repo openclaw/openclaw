@@ -741,14 +741,13 @@ export function createDiscordMessageHandler(params: {
         combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
       }
 
+      const discordTo = `channel:${message.channelId}`;
       const ctxPayload = {
         Body: combinedBody,
         From: isDirectMessage
           ? `discord:${author.id}`
           : `group:${message.channelId}`,
-        To: isDirectMessage
-          ? `user:${author.id}`
-          : `channel:${message.channelId}`,
+        To: discordTo,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
@@ -772,6 +771,9 @@ export function createDiscordMessageHandler(params: {
         MediaUrl: media?.path,
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
+        // Originating channel for reply routing.
+        OriginatingChannel: "discord" as const,
+        OriginatingTo: discordTo,
       };
       const replyTarget = ctxPayload.To ?? undefined;
       if (!replyTarget) {

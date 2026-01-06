@@ -3,6 +3,7 @@ import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { OriginatingChannelType } from "../templating.js";
 import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "./directives.js";
 export type QueueMode =
   | "steer"
@@ -22,6 +23,17 @@ export type FollowupRun = {
   prompt: string;
   summaryLine?: string;
   enqueuedAt: number;
+  /**
+   * Originating channel for reply routing.
+   * When set, replies should be routed back to this provider
+   * instead of using the session's lastChannel.
+   */
+  originatingChannel?: OriginatingChannelType;
+  /**
+   * Originating destination for reply routing.
+   * The chat/channel/user ID where the reply should be sent.
+   */
+  originatingTo?: string;
   run: {
     agentId: string;
     agentDir: string;
