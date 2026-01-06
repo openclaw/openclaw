@@ -16,6 +16,7 @@ import {
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -190,11 +191,17 @@ export async function agentCommand(
   const timeoutSecondsRaw =
     opts.timeout !== undefined
       ? Number.parseInt(String(opts.timeout), 10)
-      : (agentCfg?.timeoutSeconds ?? 600);
-  if (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw <= 0) {
+      : undefined;
+  if (
+    timeoutSecondsRaw !== undefined &&
+    (Number.isNaN(timeoutSecondsRaw) || timeoutSecondsRaw <= 0)
+  ) {
     throw new Error("--timeout must be a positive integer (seconds)");
   }
-  const timeoutMs = Math.max(timeoutSecondsRaw, 1) * 1000;
+  const timeoutMs = resolveAgentTimeoutMs({
+    cfg,
+    overrideSeconds: timeoutSecondsRaw,
+  });
 
   const sessionResolution = resolveSession({
     cfg,

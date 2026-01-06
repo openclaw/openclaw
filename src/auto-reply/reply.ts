@@ -11,6 +11,7 @@ import {
   resolveEmbeddedSessionLane,
 } from "../agents/pi-embedded.js";
 import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -221,8 +222,7 @@ export async function getReplyFromConfig(
     ensureBootstrapFiles: true,
   });
   const workspaceDir = workspace.dir;
-  const timeoutSeconds = Math.max(agentCfg?.timeoutSeconds ?? 600, 1);
-  const timeoutMs = timeoutSeconds * 1000;
+  const timeoutMs = resolveAgentTimeoutMs({ cfg });
   const configuredTypingSeconds =
     agentCfg?.typingIntervalSeconds ?? sessionCfg?.typingIntervalSeconds;
   const typingIntervalSeconds =
