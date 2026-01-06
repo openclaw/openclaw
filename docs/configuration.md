@@ -736,7 +736,7 @@ Defaults (if enabled):
 - Debian bookworm-slim based image
 - workspace per session under `~/.clawdbot/sandboxes`
 - auto-prune: idle > 24h OR age > 7d
-- tools: allow only `bash`, `process`, `read`, `write`, `edit` (deny wins)
+- tools: allow only `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn` (deny wins)
 - optional sandboxed browser (Chromium + CDP, noVNC observer)
 - hardening knobs: `network`, `user`, `pidsLimit`, `memory`, `cpus`, `ulimits`, `seccompProfile`, `apparmorProfile`
 
@@ -782,7 +782,7 @@ Defaults (if enabled):
         enableNoVnc: true
       },
       tools: {
-        allow: ["bash", "process", "read", "write", "edit"],
+        allow: ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn"],
         deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
       },
       prune: {
