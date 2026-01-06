@@ -19,6 +19,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { danger, setVerbose } from "../globals.js";
+import { autoMigrateLegacyAgentDir } from "../infra/state-migrations.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -126,6 +127,11 @@ export function buildProgram() {
       ),
     );
     process.exit(1);
+  });
+  program.hook("preAction", async (_thisCommand, actionCommand) => {
+    if (actionCommand.name() === "doctor") return;
+    const cfg = loadConfig();
+    await autoMigrateLegacyAgentDir({ cfg });
   });
   const examples = [
     [
