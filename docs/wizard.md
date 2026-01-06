@@ -82,7 +82,6 @@ It does **not** install or change anything on the remote host.
    - Windows: Scheduled Task
      - Runs on user logon; headless/system services are not configured by default.
    - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
-   - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
