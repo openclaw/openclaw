@@ -5,6 +5,7 @@ import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
 import { onboardCommand } from "../commands/onboard.js";
+import { pollCommand } from "../commands/poll.js";
 import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
@@ -379,6 +380,58 @@ Examples:
       const deps = createDefaultDeps();
       try {
         await sendCommand(opts, deps, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("poll")
+    .description("Create a WhatsApp poll in a chat or group")
+    .requiredOption(
+      "-t, --to <jid>",
+      "Recipient JID (e.g. +15555550123 or group JID)",
+    )
+    .requiredOption("-q, --question <text>", "Poll question")
+    .requiredOption(
+      "-o, --option <choice>",
+      "Poll option (use multiple times, 2-12 required)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option(
+      "-s, --selectable-count <n>",
+      "How many options can be selected (default: 1)",
+      "1",
+    )
+    .option("--dry-run", "Print payload and skip sending", false)
+    .option("--json", "Output result as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .addHelpText(
+      "after",
+      `
+Examples:
+  clawdbot poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
+  clawdbot poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
+  clawdbot poll --to +15555550123 -q "Favorite color?" -o "Red" -o "Blue" --json`,
+    )
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      const deps = createDefaultDeps();
+      try {
+        await pollCommand(
+          {
+            to: opts.to,
+            question: opts.question,
+            options: opts.option,
+            selectableCount: Number.parseInt(opts.selectableCount, 10) || 1,
+            json: opts.json,
+            dryRun: opts.dryRun,
+          },
+          deps,
+          defaultRuntime,
+        );
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

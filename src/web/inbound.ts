@@ -464,6 +464,24 @@ export async function monitorWebInbox(options: {
       const jid = toWhatsappJid(to);
       await sock.sendPresenceUpdate("composing", jid);
     },
+    /**
+     * Send a poll message through this connection's socket.
+     * Used by IPC to create WhatsApp polls in groups or chats.
+     */
+    sendPoll: async (
+      to: string,
+      poll: { question: string; options: string[]; selectableCount?: number },
+    ): Promise<{ messageId: string }> => {
+      const jid = toWhatsappJid(to);
+      const result = await sock.sendMessage(jid, {
+        poll: {
+          name: poll.question,
+          values: poll.options,
+          selectableCount: poll.selectableCount ?? 1,
+        },
+      });
+      return { messageId: result?.key?.id ?? "unknown" };
+    },
   } as const;
 }
 

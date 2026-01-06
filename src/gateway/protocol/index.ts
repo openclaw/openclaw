@@ -79,6 +79,8 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
+  type PollParams,
+  PollParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsDeleteParams,
@@ -147,6 +149,7 @@ export const validateResponseFrame =
   ajv.compile<ResponseFrame>(ResponseFrameSchema);
 export const validateEventFrame = ajv.compile<EventFrame>(EventFrameSchema);
 export const validateSendParams = ajv.compile(SendParamsSchema);
+export const validatePollParams = ajv.compile<PollParams>(PollParamsSchema);
 export const validateAgentParams = ajv.compile(AgentParamsSchema);
 export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(
   AgentWaitParamsSchema,
@@ -282,6 +285,7 @@ export {
   AgentEventSchema,
   ChatEventSchema,
   SendParamsSchema,
+  PollParamsSchema,
   AgentParamsSchema,
   WakeParamsSchema,
   NodePairRequestParamsSchema,
@@ -390,4 +394,5 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  PollParams,
 };

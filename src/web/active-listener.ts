@@ -2,6 +2,12 @@ export type ActiveWebSendOptions = {
   gifPlayback?: boolean;
 };
 
+export type PollOptions = {
+  question: string;
+  options: string[];
+  selectableCount?: number;
+};
+
 export type ActiveWebListener = {
   sendMessage: (
     to: string,
@@ -10,6 +16,7 @@ export type ActiveWebListener = {
     mediaType?: string,
     options?: ActiveWebSendOptions,
   ) => Promise<{ messageId: string }>;
+  sendPoll: (to: string, poll: PollOptions) => Promise<{ messageId: string }>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };

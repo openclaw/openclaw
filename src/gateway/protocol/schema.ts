@@ -198,6 +198,17 @@ export const SendParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const PollParamsSchema = Type.Object(
+  {
+    to: NonEmptyString,
+    question: NonEmptyString,
+    options: Type.Array(NonEmptyString, { minItems: 2, maxItems: 12 }),
+    selectableCount: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
 export const AgentParamsSchema = Type.Object(
   {
     message: NonEmptyString,
@@ -831,6 +842,7 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ErrorShape: ErrorShapeSchema,
   AgentEvent: AgentEventSchema,
   SendParams: SendParamsSchema,
+  PollParams: PollParamsSchema,
   AgentParams: AgentParamsSchema,
   AgentWaitParams: AgentWaitParamsSchema,
   WakeParams: WakeParamsSchema,
@@ -900,6 +912,7 @@ export type PresenceEntry = Static<typeof PresenceEntrySchema>;
 export type ErrorShape = Static<typeof ErrorShapeSchema>;
 export type StateVersion = Static<typeof StateVersionSchema>;
 export type AgentEvent = Static<typeof AgentEventSchema>;
+export type PollParams = Static<typeof PollParamsSchema>;
 export type AgentWaitParams = Static<typeof AgentWaitParamsSchema>;
 export type WakeParams = Static<typeof WakeParamsSchema>;
 export type NodePairRequestParams = Static<typeof NodePairRequestParamsSchema>;
