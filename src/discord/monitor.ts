@@ -24,6 +24,7 @@ import {
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import type { TypingController } from "../auto-reply/reply/typing.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   DiscordSlashCommandConfig,
@@ -541,6 +542,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       }
 
       let didSendReply = false;
+      let typingController: TypingController | undefined;
       const dispatcher = createReplyDispatcher({
         responsePrefix: cfg.messages?.responsePrefix,
         deliver: async (payload) => {
@@ -554,6 +556,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
           });
           didSendReply = true;
         },
+        onIdle: () => {
+          typingController?.markDispatchIdle();
+        },
         onError: (err, info) => {
           runtime.error?.(
             danger(`discord ${info.kind} reply failed: ${String(err)}`),
@@ -565,6 +570,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         ctxPayload,
         {
           onReplyStart: () => sendTyping(message),
+          onTypingController: (typing) => {
+            typingController = typing;
+          },
           onToolResult: (payload) => {
             dispatcher.sendToolResult(payload);
           },
@@ -584,6 +592,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
       }
       await dispatcher.waitForIdle();
+      typingController?.markDispatchIdle();
       if (!queuedFinal) {
         if (
           isGuildMessage &&

@@ -11,6 +11,7 @@
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
+- Typing indicators: stop typing once the reply dispatcher drains to prevent stuck typing across Discord/Telegram/WhatsApp.
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - Onboarding: when OpenAI Codex OAuth is used, default to `openai-codex/gpt-5.2` and warn if the selected model lacks auth.
 - CLI: auto-migrate legacy config entries on command start (same behavior as gateway startup).

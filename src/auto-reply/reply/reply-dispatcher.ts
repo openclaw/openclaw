@@ -18,6 +18,7 @@ export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;
   responsePrefix?: string;
   onHeartbeatStrip?: () => void;
+  onIdle?: () => void;
   onError?: ReplyDispatchErrorHandler;
 };
 
@@ -70,6 +71,8 @@ export function createReplyDispatcher(
   options: ReplyDispatcherOptions,
 ): ReplyDispatcher {
   let sendChain: Promise<void> = Promise.resolve();
+  // Track in-flight deliveries so we can emit a reliable "idle" signal.
+  let pending = 0;
   // Serialize outbound replies to preserve tool/block/final order.
   const queuedCounts: Record<ReplyDispatchKind, number> = {
     tool: 0,
@@ -81,10 +84,17 @@ export function createReplyDispatcher(
     const normalized = normalizeReplyPayload(payload, options);
     if (!normalized) return false;
     queuedCounts[kind] += 1;
+    pending += 1;
     sendChain = sendChain
       .then(() => options.deliver(normalized, { kind }))
       .catch((err) => {
         options.onError?.(err, { kind });
+      })
+      .finally(() => {
+        pending -= 1;
+        if (pending === 0) {
+          options.onIdle?.();
+        }
       });
     return true;
   };

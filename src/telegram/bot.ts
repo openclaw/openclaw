@@ -13,6 +13,7 @@ import {
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import type { TypingController } from "../auto-reply/reply/typing.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -235,6 +236,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         );
       }
 
+      let typingController: TypingController | undefined;
       const dispatcher = createReplyDispatcher({
         responsePrefix: cfg.messages?.responsePrefix,
         deliver: async (payload) => {
@@ -248,6 +250,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             textLimit,
           });
         },
+        onIdle: () => {
+          typingController?.markDispatchIdle();
+        },
         onError: (err, info) => {
           runtime.error?.(
             danger(`telegram ${info.kind} reply failed: ${String(err)}`),
@@ -259,6 +264,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         ctxPayload,
         {
           onReplyStart: sendTyping,
+          onTypingController: (typing) => {
+            typingController = typing;
+          },
           onToolResult: dispatcher.sendToolResult,
           onBlockReply: dispatcher.sendBlockReply,
         },
@@ -274,6 +282,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
       }
       await dispatcher.waitForIdle();
+      typingController?.markDispatchIdle();
       if (!queuedFinal) return;
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));

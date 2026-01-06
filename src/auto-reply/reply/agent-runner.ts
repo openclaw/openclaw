@@ -514,6 +514,6 @@ export async function runReplyAgent(params: {
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
     );
   } finally {
-    typing.cleanup();
+    typing.markRunComplete();
   }
 }

@@ -50,6 +50,8 @@ function createTyping(): TypingController {
     startTypingLoop: vi.fn(async () => {}),
     startTypingOnText: vi.fn(async () => {}),
     refreshTypingTtl: vi.fn(),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
     cleanup: vi.fn(),
   };
 }

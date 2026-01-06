@@ -233,6 +233,7 @@ export async function getReplyFromConfig(
     silentToken: SILENT_REPLY_TOKEN,
     log: defaultRuntime.log,
   });
+  opts?.onTypingController?.(typing);
 
   let transcribedText: string | undefined;
   if (cfg.routing?.transcribeAudio && isAudio(ctx.MediaType)) {

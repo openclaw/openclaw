@@ -15,6 +15,7 @@ import {
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
+import type { TypingController } from "../auto-reply/reply/typing.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { waitForever } from "../cli/wait.js";
@@ -1113,6 +1114,7 @@ export async function monitorWebProvider(
       const textLimit = resolveTextChunkLimit(cfg, "whatsapp");
       let didLogHeartbeatStrip = false;
       let didSendReply = false;
+      let typingController: TypingController | undefined;
       const dispatcher = createReplyDispatcher({
         responsePrefix: cfg.messages?.responsePrefix,
         onHeartbeatStrip: () => {
@@ -1163,6 +1165,9 @@ export async function monitorWebProvider(
             }
           }
         },
+        onIdle: () => {
+          typingController?.markDispatchIdle();
+        },
         onError: (err, info) => {
           const label =
             info.kind === "tool"
@@ -1202,6 +1207,9 @@ export async function monitorWebProvider(
         },
         {
           onReplyStart: msg.sendComposing,
+          onTypingController: (typing) => {
+            typingController = typing;
+          },
           onToolResult: (payload) => {
             dispatcher.sendToolResult(payload);
           },
@@ -1222,6 +1230,7 @@ export async function monitorWebProvider(
         queuedFinal = dispatcher.sendFinalReply(replyPayload) || queuedFinal;
       }
       await dispatcher.waitForIdle();
+      typingController?.markDispatchIdle();
       if (!queuedFinal) {
         if (shouldClearGroupHistory && didSendReply) {
           groupHistories.set(conversationId, []);
