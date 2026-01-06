@@ -7,7 +7,7 @@
 
 ## Build, Test, and Development Commands
 - Install deps: `pnpm install`
-- Run CLI in dev: `pnpm clawdbot ...` (tsx entry) or `pnpm dev` for `src/index.ts`.
+- Run CLI in dev: `pnpm clawdbot ...` (bun entry) or `pnpm dev` for `src/index.ts`.
 - Type-check/build: `pnpm build` (tsc)
 - Lint/format: `pnpm lint` (biome check), `pnpm format` (biome format)
 - Tests: `pnpm test` (vitest); coverage: `pnpm test:coverage`
