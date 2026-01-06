@@ -200,6 +200,11 @@
   background: rgba(245, 159, 74, 0.2);
 }
 
+.btn.active {
+  border-color: rgba(245, 159, 74, 0.55);
+  background: rgba(245, 159, 74, 0.16);
+}
+
 .btn.danger {
   border-color: rgba(255, 107, 107, 0.45);
   background: rgba(255, 107, 107, 0.18);
