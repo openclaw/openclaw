@@ -12,7 +12,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 ## Goals
 - Let you talk to Clawdbot via a Telegram bot in DMs and groups.
 - Share the same `main` session used by WhatsApp/WebChat; groups stay isolated as `telegram:group:<chatId>`.
-- Keep transport routing deterministic: replies always go back to the surface they arrived on.
+- Keep transport routing deterministic: replies always go back to the provider they arrived on.
 
 ## How it will work (Bot API)
 1) Create a bot with @BotFather and grab the token.
@@ -37,7 +37,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 
 ## Planned implementation details
 - Library: grammY is the only client for send + gateway (fetch fallback removed); grammY throttler is enabled by default to stay under Bot API limits.
-- Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention or a `routing.groupChat.mentionPatterns` match by default (override per chat in config).
+- Inbound normalization: maps Bot API updates to `MsgContext` with `Provider: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention or a `routing.groupChat.mentionPatterns` match by default (override per chat in config).
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
 - Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.dmPolicy`, `telegram.groups` (group allowlist + mention defaults), `telegram.allowFrom`, `telegram.groupAllowFrom`, `telegram.groupPolicy`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
   - Ack reactions are controlled globally via `messages.ackReaction` + `messages.ackReactionScope`.

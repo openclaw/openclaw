@@ -13,6 +13,31 @@ Status: external CLI integration. No daemon.
 - JSON-RPC runs over stdin/stdout (one JSON object per line).
 - Gateway owns the process; no TCP port needed.
 
+## Multi-account (Apple IDs)
+
+iMessage “multi-account” in one Gateway process is not currently supported in a meaningful way:
+- Messages accounts are owned by the signed-in macOS user session.
+- `imsg` reads the local Messages DB and sends via that user’s configured services.
+- There isn’t a robust “pick AppleID X as the sender” switch we can depend on.
+
+### Practical approach: multiple gateways on multiple Macs/users
+
+If you need two iMessage identities:
+- Run one Gateway on each macOS user/machine that’s signed into the desired Apple ID.
+- Connect to the desired Gateway remotely (Tailscale preferred; SSH tunnel is the universal fallback).
+
+See:
+- `docs/remote.md` (SSH tunnel to `127.0.0.1:18789`)
+- `docs/discovery.md` (bridge vs SSH transport model)
+
+### Could we do “iMessage over SSH” from a single Gateway?
+
+Maybe, but it’s a new design:
+- Outbound could theoretically pipe `imsg rpc` over SSH (stdio bridge).
+- Inbound still needs a remote watcher (DB polling / event stream) and a transport back to the main Gateway.
+
+That’s closer to “remote provider instances” (or “multi-gateway aggregation”) than a small config tweak.
+
 ## Requirements
 - macOS with Messages signed in.
 - Full Disk Access for Clawdbot + the `imsg` binary (Messages DB access).

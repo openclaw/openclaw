@@ -91,18 +91,21 @@ Env var equivalent:
 
 ### Auth storage (OAuth + API keys)
 
-Clawdbot stores **auth profiles** (OAuth + API keys) in:
-- `~/.clawdbot/agent/auth-profiles.json`
+Clawdbot stores **per-agent** auth profiles (OAuth + API keys) in:
+- `<agentDir>/auth-profiles.json` (default: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`)
 
 Legacy OAuth imports:
 - `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
 
 The embedded Pi agent maintains a runtime cache at:
-- `~/.clawdbot/agent/auth.json` (managed automatically; don’t edit manually)
+- `<agentDir>/auth.json` (managed automatically; don’t edit manually)
+
+Legacy agent dir (pre multi-agent):
+- `~/.clawdbot/agent/*` (migrated by `clawdbot doctor` into `~/.clawdbot/agents/<defaultAgentId>/agent/*`)
 
 Overrides:
 - OAuth dir (legacy import only): `CLAWDBOT_OAUTH_DIR`
-- Agent dir: `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
+- Agent dir (legacy/default agent only): `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
@@ -212,6 +215,29 @@ For groups, use `whatsapp.groupPolicy` + `whatsapp.groupAllowFrom`.
 }
 ```
 
+### `whatsapp.accounts` (multi-account)
+
+Run multiple WhatsApp accounts in one gateway:
+
+```json5
+{
+  whatsapp: {
+    accounts: {
+      default: {}, // optional; keeps the default id stable
+      personal: {},
+      biz: {
+        // Optional override. Default: ~/.clawdbot/credentials/whatsapp/biz
+        // authDir: "~/.clawdbot/credentials/whatsapp/biz",
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Outbound commands default to account `default` if present; otherwise the first configured account id (sorted).
+- The legacy single-account Baileys auth dir is migrated by `clawdbot doctor` into `whatsapp/default`.
+
 ### `routing.groupChat`
 
 Group messages default to **require mention** (either metadata mention or regex patterns). Applies to WhatsApp, Telegram, Discord, and iMessage group chats.
@@ -296,6 +322,69 @@ Notes:
 - Discord/Slack use channel allowlists (`discord.guilds.*.channels`, `slack.channels`).
 - Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
 
+### Multi-agent routing (`routing.agents` + `routing.bindings`)
+
+Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside one Gateway. Inbound messages are routed to an agent via bindings.
+
+- `routing.defaultAgentId`: fallback when no binding matches (default: `main`).
+- `routing.agents.<agentId>`: per-agent overrides.
+  - `workspace`: default `~/clawd-<agentId>` (for `main`, falls back to legacy `agent.workspace`).
+  - `agentDir`: default `~/.clawdbot/agents/<agentId>/agent`.
+- `routing.bindings[]`: routes inbound messages to an `agentId`.
+  - `match.provider` (required)
+  - `match.accountId` (optional; `*` = any account; omitted = default account)
+  - `match.peer` (optional; `{ kind: dm|group|channel, id }`)
+  - `match.guildId` / `match.teamId` (optional; provider-specific)
+
+Deterministic match order:
+1) `match.peer`
+2) `match.guildId`
+3) `match.teamId`
+4) `match.accountId` (exact, no peer/guild/team)
+5) `match.accountId: "*"` (provider-wide, no peer/guild/team)
+6) `routing.defaultAgentId`
+
+Within each match tier, the first matching entry in `routing.bindings` wins.
+
+Example: two WhatsApp accounts → two agents:
+
+```json5
+{
+  routing: {
+    defaultAgentId: "home",
+    agents: {
+      home: { workspace: "~/clawd-home" },
+      work: { workspace: "~/clawd-work" },
+    },
+    bindings: [
+      { agentId: "home", match: { provider: "whatsapp", accountId: "personal" } },
+      { agentId: "work", match: { provider: "whatsapp", accountId: "biz" } },
+    ],
+  },
+  whatsapp: {
+    accounts: {
+      personal: {},
+      biz: {},
+    }
+  }
+}
+```
+
+### `routing.agentToAgent` (optional)
+
+Agent-to-agent messaging is opt-in:
+
+```json5
+{
+  routing: {
+    agentToAgent: {
+      enabled: false,
+      allow: ["home", "work"]
+    }
+  }
+}
+```
+
 ### `routing.queue`
 
 Controls how inbound messages behave when an agent run is already active.
@@ -308,7 +397,7 @@ Controls how inbound messages behave when an agent run is already active.
       debounceMs: 1000,
       cap: 20,
       drop: "summarize", // old | new | summarize
-      bySurface: {
+      byProvider: {
         whatsapp: "collect",
         telegram: "collect",
         discord: "collect",
@@ -673,7 +762,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Omit or set
   `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
-- `target`: optional delivery channel (`last`, `whatsapp`, `telegram`, `discord`, `imessage`, `none`). Default: `last`.
+- `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `HEARTBEAT`).
 - `ackMaxChars`: max chars allowed after `HEARTBEAT_OK` before delivery (default: 30).
@@ -699,7 +788,7 @@ Example (disable browser/canvas everywhere):
 
 `agent.elevated` controls elevated (host) bash access:
 - `enabled`: allow elevated mode (default true)
-- `allowFrom`: per-surface allowlists (empty = disabled)
+- `allowFrom`: per-provider allowlists (empty = disabled)
   - `whatsapp`: E.164 numbers
   - `telegram`: chat ids or usernames
   - `discord`: user ids or usernames (falls back to `discord.dm.allowFrom` if omitted)
@@ -919,15 +1008,18 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
     scope: "per-sender",
     idleMinutes: 60,
     resetTriggers: ["/new", "/reset"],
-    store: "~/.clawdbot/sessions/sessions.json",
-    // mainKey is ignored; primary key is fixed to "main"
+    // Default is already per-agent under ~/.clawdbot/agents/<agentId>/sessions/sessions.json
+    // You can override with {agentId} templating:
+    store: "~/.clawdbot/agents/{agentId}/sessions/sessions.json",
+    // Direct chats collapse to agent:<agentId>:<mainKey> (default: "main").
+    mainKey: "main",
     agentToAgent: {
       // Max ping-pong reply turns between requester/target (0–5).
       maxPingPongTurns: 5
     },
     sendPolicy: {
       rules: [
-        { action: "deny", match: { surface: "discord", chatType: "group" } }
+        { action: "deny", match: { provider: "discord", chatType: "group" } }
       ],
       default: "allow"
     }
@@ -936,9 +1028,10 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
 ```
 
 Fields:
+- `mainKey`: direct-chat bucket key (default: `"main"`). Useful when you want to “rename” the primary DM thread without changing `agentId`.
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
-- `sendPolicy.rules[]`: match by `surface` (provider), `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
+- `sendPolicy.rules[]`: match by `provider`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.
 
 ### `skills` (skills config)
 
@@ -1171,7 +1264,7 @@ clawdbot gateway --port 19001
 
 ### `hooks` (Gateway webhooks)
 
-Enable a simple HTTP webhook surface on the Gateway HTTP server.
+Enable a simple HTTP webhook endpoint on the Gateway HTTP server.
 
 Defaults:
 - enabled: `false`
@@ -1208,7 +1301,7 @@ Requests must include the hook token:
 
 Endpoints:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, channel?, to?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, provider?, to?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -1338,7 +1431,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 |----------|-------------|
 | `{{Body}}` | Full inbound message body |
 | `{{BodyStripped}}` | Body with group mentions stripped (best default for agents) |
-| `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per surface) |
+| `{{From}}` | Sender identifier (E.164 for WhatsApp; may differ per provider) |
 | `{{To}}` | Destination identifier |
 | `{{MessageSid}}` | Provider message id (when available) |
 | `{{SessionId}}` | Current session UUID |
@@ -1352,7 +1445,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 | `{{GroupMembers}}` | Group members preview (best effort) |
 | `{{SenderName}}` | Sender display name (best effort) |
 | `{{SenderE164}}` | Sender phone number (best effort) |
-| `{{Surface}}` | Surface hint (whatsapp|telegram|discord|imessage|webchat|…) |
+| `{{Provider}}` | Provider hint (whatsapp|telegram|discord|imessage|webchat|…) |
 
 ## Cron (Gateway scheduler)
 

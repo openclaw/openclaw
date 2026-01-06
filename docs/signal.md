@@ -108,7 +108,7 @@ If you have a second phone:
 2) Launch daemon (HTTP preferred), store PID.
 3) Poll `/api/v1/check` until ready.
 4) Open SSE stream; parse `event: receive`.
-5) Translate receive payload into Clawdbot surface model.
+5) Translate receive payload into Clawdbot provider model.
 6) On SSE disconnect, backoff + reconnect.
 
 ## Storage

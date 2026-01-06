@@ -75,7 +75,7 @@ Each job is a JSON object with stable keys (unknown keys ignored for forward com
   - For `sessionTarget:"main"`, `wakeMode` controls whether we trigger the heartbeat immediately or just enqueue and wait.
 - `payload` (one of)
   - `{"kind":"systemEvent","text":string}` (enqueue as `System:`)
-  - `{"kind":"agentTurn","message":string,"deliver"?:boolean,"channel"?: "last"|"whatsapp"|"telegram"|"discord"|"signal"|"imessage","to"?:string,"timeoutSeconds"?:number}`
+  - `{"kind":"agentTurn","message":string,"deliver"?:boolean,"provider"?: "last"|"whatsapp"|"telegram"|"discord"|"signal"|"imessage","to"?:string,"timeoutSeconds"?:number}`
 - `isolation` (optional; only meaningful for isolated jobs)
   - `{"postToMainPrefix"?: string}`
 - `runtime` (optional)
@@ -173,7 +173,7 @@ When due:
 - Execute via the same agent runner path as other command-mode runs, but pinned to:
   - `sessionKey = cron:<jobId>`
   - `sessionId = store[sessionKey].sessionId` (create if missing)
-- Optionally deliver output (`payload.deliver === true`) to the configured channel/to.
+- Optionally deliver output (`payload.deliver === true`) to the configured provider/to.
 - Isolated jobs always enqueue a summary system event to the main session when they finish (derived from the last agent text output).
   - Prefix defaults to `Cron`, and can be customized via `isolation.postToMainPrefix`.
 - If `deliver` is omitted/false, nothing is sent to external providers; you still get the main-session summary and can inspect the full isolated transcript in `cron:<jobId>`.
@@ -275,7 +275,7 @@ Add a `cron` command group (all commands should also support `--json` where sens
     - `--wake now|next-heartbeat`
   - payload flags (choose one):
     - `--system-event "<text>"`
-    - `--message "<agent message>" [--deliver] [--channel last|whatsapp|telegram|discord|slack|signal|imessage] [--to <dest>]`
+    - `--message "<agent message>" [--deliver] [--provider last|whatsapp|telegram|discord|slack|signal|imessage] [--to <dest>]`
 
 - `clawdbot cron edit <id> ...` (patch-by-flags, non-interactive)
 - `clawdbot cron rm <id>`
@@ -313,7 +313,7 @@ clawdbot cron add \
   --wake now \
   --message "Daily check: scan calendar + inbox; deliver only if urgent." \
   --deliver \
-  --channel last
+  --provider last
 ```
 
 ### Run weekly (every Wednesday)
@@ -328,7 +328,7 @@ clawdbot cron add \
   --wake now \
   --message "Weekly: summarize status and remind me of goals." \
   --deliver \
-  --channel last
+  --provider last
 ```
 
 ### “Next heartbeat”

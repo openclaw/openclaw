@@ -7,10 +7,10 @@ read_when:
 
 Updated: 2025-12-23
 
-Status: WhatsApp Web via Baileys only. Gateway owns the single session.
+Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
 ## Goals
-- One WhatsApp identity, one gateway session.
+- Multiple WhatsApp accounts (multi-account) in one Gateway process.
 - Deterministic routing: replies return to WhatsApp, no model routing.
 - Model sees enough context to understand quoted replies.
 
@@ -37,9 +37,12 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Login + credentials
 - Login command: `clawdbot login` (QR via Linked Devices).
-- Credentials stored in `~/.clawdbot/credentials/creds.json`.
+- Multi-account login: `clawdbot login --account <id>` (`<id>` = `accountId`).
+- Default account (when `--account` is omitted): `default` if present, otherwise the first configured account id (sorted).
+- Credentials stored in `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`.
 - Backup copy at `creds.json.bak` (restored on corruption).
-- Logout: `clawdbot logout` deletes creds and session store.
+- Legacy compatibility: older installs stored Baileys files directly in `~/.clawdbot/credentials/`.
+- Logout: `clawdbot logout` (or `--account <id>`) deletes WhatsApp auth state (but keeps shared `oauth.json`).
 - Logged-out socket => error instructs re-link.
 
 ## Inbound flow (DM + group)
@@ -72,7 +75,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
   - `<media:image|video|audio|document|sticker>`
 
 ## Groups
-- Groups map to `whatsapp:group:<jid>` sessions.
+- Groups map to `agent:<agentId>:whatsapp:group:<jid>` sessions.
 - Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `open`).
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
@@ -89,7 +92,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Reply delivery (threading)
 - WhatsApp Web sends standard messages (no quoted reply threading in the current gateway).
-- Reply tags are ignored on this surface.
+- Reply tags are ignored on this provider.
 
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
@@ -113,7 +116,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
 - **Agent heartbeat** is global (`agent.heartbeat.*`) and runs in the main session.
   - Uses `HEARTBEAT` prompt + `HEARTBEAT_OK` skip behavior.
-  - Delivery defaults to the last used channel (or configured target).
+  - Delivery defaults to the last used provider (or configured target).
 
 ## Reconnect behavior
 - Backoff policy: `web.reconnect`:
@@ -124,6 +127,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Config quick map
 - `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `whatsapp.allowFrom` (DM allowlist).
+- `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
 - `whatsapp.groupAllowFrom` (group sender allowlist).
 - `whatsapp.groupPolicy` (group policy).
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
@@ -136,7 +140,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - `agent.heartbeat.model` (optional override)
 - `agent.heartbeat.target`
 - `agent.heartbeat.to`
-- `session.*` (scope, idle, store; `mainKey` is ignored)
+- `session.*` (scope, idle, store, mainKey)
 - `web.enabled` (disable provider startup when false)
 - `web.heartbeatSeconds`
 - `web.reconnect.*`

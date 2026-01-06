@@ -18,8 +18,9 @@ Everything lives under `~/.clawdbot/`:
 | `~/.clawdbot/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
 | `~/.clawdbot/agent/auth.json` | Runtime API key cache (managed automatically) |
 | `~/.clawdbot/credentials/` | WhatsApp/Telegram auth tokens |
-| `~/.clawdbot/sessions/` | Conversation history & state |
-| `~/.clawdbot/sessions/sessions.json` | Session metadata |
+| `~/.clawdbot/agents/` | Per-agent state (agentDir + sessions) |
+| `~/.clawdbot/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
+| `~/.clawdbot/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
 
 Your **workspace** (AGENTS.md, memory files, skills) is separate — configured via `agent.workspace` in your config (default: `~/clawd`).
 

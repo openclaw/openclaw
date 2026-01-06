@@ -5,7 +5,7 @@ read_when:
 ---
 # Session Management
 
-Clawdbot treats **one session as primary**. The canonical key is fixed to `main` for direct chats (or `global` when scope is global); no configuration is required. `session.mainKey` is ignored. Older/local sessions can stay on disk, but only the primary key is used for desktop/web chat and direct agent calls.
+Clawdbot treats **one direct-chat session per agent** as primary. Direct chats collapse to `agent:<agentId>:<mainKey>` (default `main`), while group/channel chats get their own keys. `session.mainKey` is honored.
 
 ## Gateway is the source of truth
 All session state is **owned by the gateway** (the “master” Clawdbot). UI clients (macOS app, WebChat, etc.) must query the gateway for session lists and token counts instead of reading local files.
@@ -15,17 +15,17 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 
 ## Where state lives
 - On the **gateway host**:
-  - Store file: `~/.clawdbot/sessions/sessions.json` (legacy: `~/.clawdbot/sessions.json`).
-  - Transcripts: `~/.clawdbot/sessions/<SessionId>.jsonl` (one file per session id).
+  - Store file: `~/.clawdbot/agents/<agentId>/sessions/sessions.json` (per agent).
+  - Transcripts: `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl` (one file per session id).
 - The store is a map `sessionKey -> { sessionId, updatedAt, ... }`. Deleting entries is safe; they are recreated on demand.
-- Group entries may include `displayName`, `surface`, `subject`, `room`, and `space` to label sessions in UIs.
+- Group entries may include `displayName`, `provider`, `subject`, `room`, and `space` to label sessions in UIs.
 - Clawdbot does **not** read legacy Pi/Tau session folders.
 
 ## Mapping transports → session keys
-- Direct chats (WhatsApp, Telegram, Discord, desktop Web Chat) all collapse to the **primary key** so they share context.
-- Multiple phone numbers can map to that same key; they act as transports into the same conversation.
-- Group chats isolate state with `surface:group:<id>` keys (rooms/channels use `surface:channel:<id>`); do not reuse the primary key for groups. (Discord display names show `discord:<guildSlug>#<channelSlug>`.)
-  - Legacy `group:<surface>:<id>` and `group:<id>` keys are still recognized.
+- Direct chats collapse to the per-agent primary key: `agent:<agentId>:<mainKey>`.
+  - Multiple phone numbers and providers can map to the same agent main key; they act as transports into one conversation.
+- Group chats isolate state: `agent:<agentId>:<provider>:group:<id>` (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
+  - Legacy `group:<id>` keys are still recognized for migration.
 - Other sources:
   - Cron jobs: `cron:<job.id>`
   - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)
@@ -44,7 +44,7 @@ Block delivery for specific session types without listing individual ids.
   session: {
     sendPolicy: {
       rules: [
-        { action: "deny", match: { surface: "discord", chatType: "group" } },
+        { action: "deny", match: { provider: "discord", chatType: "group" } },
         { action: "deny", match: { keyPrefix: "cron:" } }
       ],
       default: "allow"
@@ -66,8 +66,8 @@ Runtime override (owner only):
     scope: "per-sender",      // keep group keys separate
     idleMinutes: 120,
     resetTriggers: ["/new", "/reset"],
-    store: "~/.clawdbot/sessions/sessions.json",
-    // mainKey is ignored; primary key is fixed to "main"
+    store: "~/.clawdbot/agents/{agentId}/sessions/sessions.json",
+    mainKey: "main",
   }
 }
 ```

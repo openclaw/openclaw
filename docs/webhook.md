@@ -7,7 +7,7 @@ read_when:
 
 # Webhooks
 
-Gateway can expose a small HTTP webhook surface for external triggers.
+Gateway can expose a small HTTP webhook endpoint for external triggers.
 
 ## Enable
 
@@ -58,7 +58,7 @@ Payload:
   "sessionKey": "hook:email:msg-123",
   "wakeMode": "now",
   "deliver": false,
-  "channel": "last",
+  "provider": "last",
   "to": "+15551234567",
   "thinking": "low",
   "timeoutSeconds": 120
@@ -70,8 +70,8 @@ Payload:
 - `sessionKey` optional (default random `hook:<uuid>`)
 - `wakeMode` optional: `now` | `next-heartbeat` (default `now`)
 - `deliver` optional (default `false`)
-- `channel` optional: `last` | `whatsapp` | `telegram`
-- `to` optional (channel-specific target)
+- `provider` optional: `last` | `whatsapp` | `telegram`
+- `to` optional (provider-specific target)
 - `thinking` optional (override)
 - `timeoutSeconds` optional
 

@@ -16,7 +16,7 @@
 </p>
 
 **Clawdbot** is a *personal AI assistant* you run on your own devices.
-It answers you on the surfaces you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
+It answers you on the providers you already use (WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat), can speak and listen on macOS/iOS/Android, and can render a live Canvas you control. The Gateway is just the control plane — the product is the assistant.
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
@@ -104,7 +104,8 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 ## Highlights
 
 - **[Local-first Gateway](https://docs.clawd.bot/gateway)** — single control plane for sessions, providers, tools, and events.
-- **[Multi-surface inbox](https://docs.clawd.bot/surface)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat, macOS, iOS/Android.
+- **[Multi-provider inbox](https://docs.clawd.bot/surface)** — WhatsApp, Telegram, Slack, Discord, Signal, iMessage, WebChat, macOS, iOS/Android.
+- **[Multi-agent routing](docs/configuration.md)** — route inbound providers/accounts/peers to isolated agents (workspaces + per-agent sessions).
 - **[Voice Wake](https://docs.clawd.bot/voicewake) + [Talk Mode](https://docs.clawd.bot/talk)** — always-on speech for macOS/iOS/Android with ElevenLabs.
 - **[Live Canvas](https://docs.clawd.bot/mac/canvas)** — agent-driven visual workspace with [A2UI](https://docs.clawd.bot/mac/canvas#canvas-a2ui).
 - **[First-class tools](https://docs.clawd.bot/tools)** — browser, canvas, nodes, cron, sessions, and Discord/Slack actions.
@@ -120,9 +121,9 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 - [Session model](https://docs.clawd.bot/session): `main` for direct chats, group isolation, activation modes, queue modes, reply-back. Group rules: [Groups](https://docs.clawd.bot/groups).
 - [Media pipeline](https://docs.clawd.bot/images): images/audio/video, transcription hooks, size caps, temp file lifecycle. Audio details: [Audio](https://docs.clawd.bot/audio).
 
-### Surfaces + providers
+### Providers
 - [Providers](https://docs.clawd.bot/surface): [WhatsApp](https://docs.clawd.bot/whatsapp) (Baileys), [Telegram](https://docs.clawd.bot/telegram) (grammY), [Slack](https://docs.clawd.bot/slack) (Bolt), [Discord](https://docs.clawd.bot/discord) (discord.js), [Signal](https://docs.clawd.bot/signal) (signal-cli), [iMessage](https://docs.clawd.bot/imessage) (imsg), [WebChat](https://docs.clawd.bot/webchat).
-- [Group routing](https://docs.clawd.bot/group-messages): mention gating, reply tags, per-surface chunking and routing. Surface rules: [Surface routing](https://docs.clawd.bot/surface).
+- [Group routing](https://docs.clawd.bot/group-messages): mention gating, reply tags, per-provider chunking and routing. Provider rules: [Providers](https://docs.clawd.bot/surface).
 
 ### Apps + nodes
 - [macOS app](https://docs.clawd.bot/macos): menu bar control plane, [Voice Wake](https://docs.clawd.bot/voicewake)/PTT, [Talk Mode](https://docs.clawd.bot/talk) overlay, [WebChat](https://docs.clawd.bot/webchat), debug tools, [remote gateway](https://docs.clawd.bot/remote) control.

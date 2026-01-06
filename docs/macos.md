@@ -79,7 +79,7 @@ Query parameters:
 - `sessionKey` (optional): explicit session key to use.
 - `thinking` (optional): thinking hint (e.g. `low`; omit for default).
 - `deliver` (optional): `true|false` (default: false).
-- `to` / `channel` (optional): forwarded to the Gateway `agent` method (only meaningful with `deliver=true`).
+- `to` / `provider` (optional): forwarded to the Gateway `agent` method (only meaningful with `deliver=true`).
 - `timeoutSeconds` (optional): timeout hint forwarded to the Gateway.
 - `key` (optional): unattended mode key (see below).
 

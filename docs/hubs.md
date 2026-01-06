@@ -28,6 +28,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Architecture](https://docs.clawd.bot/architecture)
 - [Agent runtime](https://docs.clawd.bot/agent)
 - [Agent loop](https://docs.clawd.bot/agent-loop)
+- [Multi-agent routing](https://docs.clawd.bot/multi-agent)
 - [Sessions](https://docs.clawd.bot/session)
 - [Sessions (alias)](https://docs.clawd.bot/sessions)
 - [Session tools](https://docs.clawd.bot/session-tool)
@@ -37,7 +38,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Presence](https://docs.clawd.bot/presence)
 - [Discovery + transports](https://docs.clawd.bot/discovery)
 - [Bonjour](https://docs.clawd.bot/bonjour)
-- [Surface routing](https://docs.clawd.bot/surface)
+- [Provider routing](https://docs.clawd.bot/provider-routing)
 - [Groups](https://docs.clawd.bot/groups)
 - [Group messages](https://docs.clawd.bot/group-messages)
 

@@ -7,7 +7,7 @@ read_when:
 
 # Sub-agents
 
-Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat surface.
+Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat provider.
 
 Primary goals:
 - Parallelize “research / long task / slow tool” work without blocking the main run.
@@ -19,7 +19,7 @@ Primary goals:
 
 Use `sessions_spawn`:
 - Starts a sub-agent run (`deliver: false`, global lane: `subagent`)
-- Then runs an announce step and posts the announce reply to the requester chat surface
+- Then runs an announce step and posts the announce reply to the requester chat provider
 
 Tool params:
 - `task` (required)
@@ -32,7 +32,7 @@ Tool params:
 Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
-- Otherwise the announce reply is posted to the requester chat surface via the gateway `send` method.
+- Otherwise the announce reply is posted to the requester chat provider via the gateway `send` method.
 
 ## Tool Policy (sub-agent tools)
 
