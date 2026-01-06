@@ -6,7 +6,7 @@ read_when:
 ---
 # Skills (Clawdbot)
 
-Clawdbot uses **AgentSkills-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. Clawdbot loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
+Clawdbot uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. Clawdbot loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
 
 ## Locations and precedence
 
@@ -143,5 +143,9 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 ## Config reference
 
 See [`docs/skills-config.md`](https://docs.clawd.bot/skills-config) for the full configuration schema.
+
+## Looking for more skills?
+
+Browse [ClawdHub](https://docs.clawd.bot/clawdhub).
 
 ---
