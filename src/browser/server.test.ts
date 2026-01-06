@@ -894,6 +894,61 @@ describe("backward compatibility (profile parameter)", () => {
     // Should at least have the default clawd profile
     expect(result.profiles.some((p) => p.name === "clawd")).toBe(true);
   });
+
+  it("GET /tabs?profile=clawd returns tabs for specified profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    await realFetch(`${base}/start`, { method: "POST" });
+
+    const result = (await realFetch(`${base}/tabs?profile=clawd`).then((r) =>
+      r.json(),
+    )) as { running: boolean; tabs: unknown[] };
+    expect(result.running).toBe(true);
+    expect(Array.isArray(result.tabs)).toBe(true);
+  });
+
+  it("POST /tabs/open?profile=clawd opens tab in specified profile", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    await realFetch(`${base}/start`, { method: "POST" });
+
+    const result = (await realFetch(`${base}/tabs/open?profile=clawd`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    }).then((r) => r.json())) as { targetId?: string };
+    expect(result.targetId).toBe("newtab1");
+  });
+
+  it("GET /tabs?profile=unknown returns 404", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/tabs?profile=unknown`);
+    expect(result.status).toBe(404);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("not found");
+  });
+
+  it("POST /tabs/open?profile=unknown returns 404", async () => {
+    const { startBrowserControlServerFromConfig } = await import("./server.js");
+    await startBrowserControlServerFromConfig();
+    const base = `http://127.0.0.1:${testPort}`;
+
+    const result = await realFetch(`${base}/tabs/open?profile=unknown`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "https://example.com" }),
+    });
+    expect(result.status).toBe(404);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("not found");
+  });
 });
 
 describe("profile CRUD endpoints", () => {

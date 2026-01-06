@@ -182,7 +182,9 @@ export function createBrowserTool(opts?: {
           const targetUrl = readStringParam(params, "targetUrl", {
             required: true,
           });
-          return jsonResult(await browserOpenTab(baseUrl, targetUrl, { profile }));
+          return jsonResult(
+            await browserOpenTab(baseUrl, targetUrl, { profile }),
+          );
         }
         case "focus": {
           const targetId = readStringParam(params, "targetId", {
@@ -250,7 +252,11 @@ export function createBrowserTool(opts?: {
           });
           const targetId = readStringParam(params, "targetId");
           return jsonResult(
-            await browserNavigate(baseUrl, { url: targetUrl, targetId, profile }),
+            await browserNavigate(baseUrl, {
+              url: targetUrl,
+              targetId,
+              profile,
+            }),
           );
         }
         case "console": {
