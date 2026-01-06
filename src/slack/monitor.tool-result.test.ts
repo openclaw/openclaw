@@ -215,6 +215,39 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "456" });
   });
 
+  it("keeps replies in channel root when message is not threaded", async () => {
+    replyMock.mockResolvedValue({ text: "root reply" });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "789",
+        channel: "C1",
+        channel_type: "im",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: undefined });
+  });
+
   it("reacts to mention-gated room messages when ackReaction is enabled", async () => {
     replyMock.mockResolvedValue(undefined);
     const client = getSlackClient();
