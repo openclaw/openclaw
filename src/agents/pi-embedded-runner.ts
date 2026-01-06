@@ -593,9 +593,9 @@ export async function runEmbeddedPiAgent(params: {
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
 }): Promise<EmbeddedPiRunResult> {
-  const sessionLane = resolveSessionLane(
-    params.sessionKey?.trim() || params.sessionId,
-  );
+  // Use sessionKey as the lookup key for /stop, falling back to sessionId
+  const activeRunKey = params.sessionKey?.trim() || params.sessionId;
+  const sessionLane = resolveSessionLane(activeRunKey);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
     params.enqueue ??
@@ -859,7 +859,7 @@ export async function runEmbeddedPiAgent(params: {
             isCompacting: () => subscription.isCompacting(),
             abort: abortRun,
           };
-          ACTIVE_EMBEDDED_RUNS.set(params.sessionId, queueHandle);
+          ACTIVE_EMBEDDED_RUNS.set(activeRunKey, queueHandle);
 
           let abortWarnTimer: NodeJS.Timeout | undefined;
           const abortTimer = setTimeout(
@@ -919,9 +919,9 @@ export async function runEmbeddedPiAgent(params: {
               abortWarnTimer = undefined;
             }
             unsubscribe();
-            if (ACTIVE_EMBEDDED_RUNS.get(params.sessionId) === queueHandle) {
-              ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
-              notifyEmbeddedRunEnded(params.sessionId);
+            if (ACTIVE_EMBEDDED_RUNS.get(activeRunKey) === queueHandle) {
+              ACTIVE_EMBEDDED_RUNS.delete(activeRunKey);
+              notifyEmbeddedRunEnded(activeRunKey);
             }
             session.dispose();
             params.abortSignal?.removeEventListener?.("abort", onAbort);

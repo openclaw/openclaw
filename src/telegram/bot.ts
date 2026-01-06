@@ -121,6 +121,38 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
 
   const cfg = loadConfig();
+
+  // Handle /stop command - abort current agent run
+  // Registered before bot.on("message") to ensure it runs first via grammy's middleware chain
+  bot.command("stop", async (ctx) => {
+    const { abortEmbeddedPiRun, isEmbeddedPiRunActive } = await import(
+      "../agents/pi-embedded.js"
+    );
+    const msg = ctx.message;
+    const chatId = msg?.chat.id;
+    const isGroup =
+      msg?.chat.type === "group" || msg?.chat.type === "supergroup";
+    const messageThreadId = (msg as { message_thread_id?: number })
+      ?.message_thread_id;
+
+    // Build session key matching the format used by the reply flow
+    const sessionCfg = cfg.session;
+    const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
+    const sessionId = isGroup
+      ? messageThreadId
+        ? `telegram:group:${chatId}:topic:${messageThreadId}`
+        : `telegram:group:${chatId}`
+      : mainKey;
+
+    const wasActive = isEmbeddedPiRunActive(sessionId);
+    const aborted = abortEmbeddedPiRun(sessionId);
+    const statusMsg = wasActive
+      ? aborted
+        ? "🛑 stopped"
+        : "🛑 stop requested (finishing current step)"
+      : "nothing running";
+    await ctx.reply(statusMsg);
+  });
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
   const dmPolicy = cfg.telegram?.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
