@@ -10,13 +10,13 @@ import {
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
-import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   resolveEmbeddedSessionLane,
   waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   normalizeElevatedLevel,
