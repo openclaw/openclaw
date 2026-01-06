@@ -159,7 +159,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       (senderUsername &&
         normalizedAllowFromLower.some(
           (entry) =>
-            entry === senderUsernameLower || entry === `@${senderUsernameLower}`,
+            entry === senderUsernameLower ||
+            entry === `@${senderUsernameLower}`,
         ));
     const wasMentioned =
       (Boolean(botUsername) && hasBotMention(msg, botUsername)) ||

@@ -81,8 +81,6 @@ import {
   type ResponseFrame,
   ResponseFrameSchema,
   SendParamsSchema,
-  type PollParams,
-  PollParamsSchema,
   type SessionsCompactParams,
   SessionsCompactParamsSchema,
   type SessionsDeleteParams,
