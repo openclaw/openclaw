@@ -62,6 +62,21 @@ sudo ln -sf "/Users/$(whoami)/clawdbot/dist/Clawdbot.app/Contents/Resources/Rela
 
 ## Troubleshooting
 
+### Build Fails: Toolchain or SDK Mismatch
+The macOS app build expects the latest macOS SDK and Swift 6.2 toolchain.
+
+**System dependencies (required):**
+- **Latest macOS version available in Software Update** (required by Xcode 26.2 SDKs)
+- **Xcode 26.2** (Swift 6.2 toolchain)
+
+**Checks:**
+```bash
+xcodebuild -version
+xcrun swift --version
+```
+
+If versions don’t match, update macOS/Xcode and re-run the build.
+
 ### App Crashes on Permission Grant
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
 
