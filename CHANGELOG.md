@@ -54,7 +54,7 @@
 - Discord: use channel IDs for DMs instead of user IDs. Thanks @VACInc for PR #261.
 - Docs: clarify Slack manifest scopes (current vs optional) with references. Thanks @jarvis-medmatic for PR #235.
 - Control UI: avoid Slack config ReferenceError by reading slack config snapshots. Thanks @sreekaransrinath for PR #249.
-- Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks @regenrek for PR #242.
+- Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks Kevin Kern (@regenrek) for PR #242.
 - Telegram: gate groups via `telegram.groups` allowlist (align with WhatsApp/iMessage). Thanks @kitze for PR #241.
 - Telegram: support media groups (multi-image messages). Thanks @obviyus for PR #220.
 - Auto-reply: block unauthorized `/reset` and infer WhatsApp senders from E.164 inputs.
