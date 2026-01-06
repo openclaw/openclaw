@@ -193,6 +193,40 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
 
+  it("allows group messages when requireMention is enabled but mentions cannot be detected", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      routing: { groupChat: { mentionPatterns: [] } },
+      telegram: { groups: { "*": { requireMention: true } } },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "group", title: "Test Group" },
+        text: "hello everyone",
+        date: 1736380800,
+        message_id: 3,
+        from: { id: 9, first_name: "Ada" },
+      },
+      me: {},
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.WasMentioned).toBe(false);
+  });
+
   it("includes reply-to context when a Telegram reply is received", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();

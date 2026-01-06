@@ -110,7 +110,7 @@ Optional agent identity used for defaults and UX. This is written by the macOS o
 
 If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
 - `messages.responsePrefix` from `identity.emoji`
-- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups)
+- `routing.groupChat.mentionPatterns` from `identity.name` (so “@Samantha” works in groups across Telegram/Slack/Discord/iMessage/WhatsApp)
 
 ```json5
 {
@@ -183,6 +183,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 **Mention types:**
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
 - **Text patterns**: Regex patterns defined in `mentionPatterns`. Always checked regardless of self-chat mode.
+- Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
 
 ```json5
 {

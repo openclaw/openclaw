@@ -1,11 +1,13 @@
 ---
-summary: "Behavior and config for WhatsApp group message handling"
+summary: "Behavior and config for WhatsApp group message handling (mentionPatterns are shared across surfaces)"
 read_when:
   - Changing group message rules or mentions
 ---
 # Group messages (web provider)
 
 Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that thread separate from the personal DM session.
+
+Note: `routing.groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/iMessage as well; this doc focuses on WhatsApp-specific behavior.
 
 ## What’s implemented (2025-12-03)
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Defaults can be set in config (`whatsapp.groups`) and overridden per group via `/activation`.
