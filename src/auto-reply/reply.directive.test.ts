@@ -321,7 +321,7 @@ describe("directive parsing", () => {
           Body: "/elevated maybe",
           From: "+1222",
           To: "+1222",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+1222",
         },
         {},
@@ -709,7 +709,7 @@ describe("directive parsing", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Model set to openai/gpt-4.1-mini");
       const store = loadSessionStore(storePath);
-      const entry = store.main;
+      const entry = store["agent:main:main"];
       expect(entry.modelOverride).toBe("gpt-4.1-mini");
       expect(entry.providerOverride).toBe("openai");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -741,7 +741,7 @@ describe("directive parsing", () => {
       expect(text).toContain("Model set to Opus");
       expect(text).toContain("anthropic/claude-opus-4-5");
       const store = loadSessionStore(storePath);
-      const entry = store.main;
+      const entry = store["agent:main:main"];
       expect(entry.modelOverride).toBe("claude-opus-4-5");
       expect(entry.providerOverride).toBe("anthropic");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -791,7 +791,7 @@ describe("directive parsing", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Auth profile set to anthropic:work");
       const store = loadSessionStore(storePath);
-      const entry = store.main;
+      const entry = store["agent:main:main"];
       expect(entry.authProfileOverride).toBe("anthropic:work");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
@@ -932,7 +932,7 @@ describe("directive parsing", () => {
           Body: "hello",
           From: "+1004",
           To: "+2000",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+1004",
         },
         {},

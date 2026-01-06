@@ -2,10 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import {
-  ensureClawdbotAgentEnv,
-  resolveClawdbotAgentDir,
-} from "./agent-paths.js";
+import { resolveClawdbotAgentDir } from "./agent-paths.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
 
@@ -26,15 +23,21 @@ async function readJson(pathname: string): Promise<unknown> {
 
 export async function ensureClawdbotModelsJson(
   config?: ClawdbotConfig,
+  agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = config ?? loadConfig();
   const providers = cfg.models?.providers;
   if (!providers || Object.keys(providers).length === 0) {
-    return { agentDir: resolveClawdbotAgentDir(), wrote: false };
+    const agentDir = agentDirOverride?.trim()
+      ? agentDirOverride.trim()
+      : resolveClawdbotAgentDir();
+    return { agentDir, wrote: false };
   }
 
   const mode = cfg.models?.mode ?? DEFAULT_MODE;
-  const agentDir = ensureClawdbotAgentEnv();
+  const agentDir = agentDirOverride?.trim()
+    ? agentDirOverride.trim()
+    : resolveClawdbotAgentDir();
   const targetPath = path.join(agentDir, "models.json");
 
   let mergedProviders = providers;

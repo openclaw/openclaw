@@ -19,13 +19,13 @@ describe("resolveGroupRequireMention", () => {
       },
     };
     const ctx: TemplateContext = {
-      Surface: "discord",
+      Provider: "discord",
       From: "group:123",
       GroupRoom: "#general",
       GroupSpace: "145",
     };
     const groupResolution: GroupKeyResolution = {
-      surface: "discord",
+      provider: "discord",
       id: "123",
       chatType: "group",
     };
@@ -44,12 +44,12 @@ describe("resolveGroupRequireMention", () => {
       },
     };
     const ctx: TemplateContext = {
-      Surface: "slack",
+      Provider: "slack",
       From: "slack:channel:C123",
       GroupSubject: "#general",
     };
     const groupResolution: GroupKeyResolution = {
-      surface: "slack",
+      provider: "slack",
       id: "C123",
       chatType: "group",
     };

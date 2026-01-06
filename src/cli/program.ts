@@ -13,6 +13,7 @@ import { statusCommand } from "../commands/status.js";
 import { updateCommand } from "../commands/update.js";
 import {
   isNixMode,
+  loadConfig,
   migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
@@ -21,6 +22,7 @@ import { danger, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -324,11 +326,18 @@ export function buildProgram() {
     .description("Link your personal WhatsApp via QR (web provider)")
     .option("--verbose", "Verbose connection logs", false)
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .option("--account <id>", "WhatsApp account id (accountId)")
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
       try {
         const provider = opts.provider ?? "whatsapp";
-        await loginWeb(Boolean(opts.verbose), provider);
+        await loginWeb(
+          Boolean(opts.verbose),
+          provider,
+          undefined,
+          defaultRuntime,
+          opts.account as string | undefined,
+        );
       } catch (err) {
         defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
         defaultRuntime.exit(1);
@@ -339,10 +348,20 @@ export function buildProgram() {
     .command("logout")
     .description("Clear cached WhatsApp Web credentials")
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .option("--account <id>", "WhatsApp account id (accountId)")
     .action(async (opts) => {
       try {
         void opts.provider; // placeholder for future multi-provider; currently web only.
-        await logoutWeb(defaultRuntime);
+        const cfg = loadConfig();
+        const account = resolveWhatsAppAccount({
+          cfg,
+          accountId: opts.account as string | undefined,
+        });
+        await logoutWeb({
+          runtime: defaultRuntime,
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+        });
       } catch (err) {
         defaultRuntime.error(danger(`Logout failed: ${String(err)}`));
         defaultRuntime.exit(1);
@@ -372,6 +391,7 @@ export function buildProgram() {
       "--provider <provider>",
       "Delivery provider: whatsapp|telegram|discord|slack|signal|imessage (default: whatsapp)",
     )
+    .option("--account <id>", "WhatsApp account id (accountId)")
     .option("--dry-run", "Print payload and skip sending", false)
     .option("--json", "Output result as JSON", false)
     .option("--verbose", "Verbose logging", false)
@@ -388,7 +408,14 @@ Examples:
       setVerbose(Boolean(opts.verbose));
       const deps = createDefaultDeps();
       try {
-        await sendCommand(opts, deps, defaultRuntime);
+        await sendCommand(
+          {
+            ...opts,
+            account: opts.account as string | undefined,
+          },
+          deps,
+          defaultRuntime,
+        );
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);

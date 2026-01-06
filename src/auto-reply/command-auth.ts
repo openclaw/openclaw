@@ -3,7 +3,7 @@ import { normalizeE164 } from "../utils.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
-  isWhatsAppSurface: boolean;
+  isWhatsAppProvider: boolean;
   ownerList: string[];
   senderE164?: string;
   isAuthorizedSender: boolean;
@@ -17,7 +17,7 @@ export function resolveCommandAuthorization(params: {
   commandAuthorized: boolean;
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;
-  const surface = (ctx.Surface ?? "").trim().toLowerCase();
+  const provider = (ctx.Provider ?? "").trim().toLowerCase();
   const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
   const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
   const hasWhatsappPrefix =
@@ -26,30 +26,30 @@ export function resolveCommandAuthorization(params: {
   const looksLikeE164 = (value: string) =>
     Boolean(value && /^\+?\d{3,}$/.test(value.replace(/[^\d+]/g, "")));
   const inferWhatsApp =
-    !surface &&
+    !provider &&
     Boolean(cfg.whatsapp?.allowFrom?.length) &&
     (looksLikeE164(from) || looksLikeE164(to));
-  const isWhatsAppSurface =
-    surface === "whatsapp" || hasWhatsappPrefix || inferWhatsApp;
+  const isWhatsAppProvider =
+    provider === "whatsapp" || hasWhatsappPrefix || inferWhatsApp;
 
-  const configuredAllowFrom = isWhatsAppSurface
+  const configuredAllowFrom = isWhatsAppProvider
     ? cfg.whatsapp?.allowFrom
     : undefined;
   const allowFromList =
     configuredAllowFrom?.filter((entry) => entry?.trim()) ?? [];
   const allowAll =
-    !isWhatsAppSurface ||
+    !isWhatsAppProvider ||
     allowFromList.length === 0 ||
     allowFromList.some((entry) => entry.trim() === "*");
 
   const senderE164 = normalizeE164(
-    ctx.SenderE164 ?? (isWhatsAppSurface ? from : ""),
+    ctx.SenderE164 ?? (isWhatsAppProvider ? from : ""),
   );
   const ownerCandidates =
-    isWhatsAppSurface && !allowAll
+    isWhatsAppProvider && !allowAll
       ? allowFromList.filter((entry) => entry !== "*")
       : [];
-  if (isWhatsAppSurface && !allowAll && ownerCandidates.length === 0 && to) {
+  if (isWhatsAppProvider && !allowAll && ownerCandidates.length === 0 && to) {
     ownerCandidates.push(to);
   }
   const ownerList = ownerCandidates
@@ -57,14 +57,14 @@ export function resolveCommandAuthorization(params: {
     .filter((entry): entry is string => Boolean(entry));
 
   const isOwner =
-    !isWhatsAppSurface ||
+    !isWhatsAppProvider ||
     allowAll ||
     ownerList.length === 0 ||
     (senderE164 ? ownerList.includes(senderE164) : false);
   const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
-    isWhatsAppSurface,
+    isWhatsAppProvider,
     ownerList,
     senderE164: senderE164 || undefined,
     isAuthorizedSender,

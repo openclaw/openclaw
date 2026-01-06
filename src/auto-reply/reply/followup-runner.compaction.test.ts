@@ -90,7 +90,7 @@ describe("createFollowupRunner compaction", () => {
       run: {
         sessionId: "session",
         sessionKey: "main",
-        surface: "whatsapp",
+        messageProvider: "whatsapp",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
         config: {},

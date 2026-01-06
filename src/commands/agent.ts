@@ -59,7 +59,8 @@ type AgentCommandOpts = {
   json?: boolean;
   timeout?: string;
   deliver?: boolean;
-  surface?: string;
+  /** Message provider context (webchat|voicewake|whatsapp|...). */
+  messageProvider?: string;
   provider?: string; // delivery provider (whatsapp|telegram|...)
   bestEffortDeliver?: boolean;
   abortSignal?: AbortSignal;
@@ -231,7 +232,7 @@ export async function agentCommand(
       cfg,
       entry: sessionEntry,
       sessionKey,
-      surface: sessionEntry?.surface,
+      provider: sessionEntry?.provider,
       chatType: sessionEntry?.chatType,
     });
     if (sendPolicy === "deny") {
@@ -379,8 +380,8 @@ export async function agentCommand(
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const surface =
-      opts.surface?.trim().toLowerCase() ||
+    const messageProvider =
+      opts.messageProvider?.trim().toLowerCase() ||
       (() => {
         const raw = opts.provider?.trim().toLowerCase();
         if (!raw) return undefined;
@@ -394,7 +395,7 @@ export async function agentCommand(
         runEmbeddedPiAgent({
           sessionId,
           sessionKey,
-          surface,
+          messageProvider,
           sessionFile,
           workspaceDir,
           config: cfg,

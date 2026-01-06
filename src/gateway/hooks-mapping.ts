@@ -18,7 +18,7 @@ export type HookMappingResolved = {
   messageTemplate?: string;
   textTemplate?: string;
   deliver?: boolean;
-  channel?:
+  provider?:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -57,7 +57,7 @@ export type HookAction =
       wakeMode: "now" | "next-heartbeat";
       sessionKey?: string;
       deliver?: boolean;
-      channel?:
+      provider?:
         | "last"
         | "whatsapp"
         | "telegram"
@@ -101,7 +101,7 @@ type HookTransformResult = Partial<{
   name: string;
   sessionKey: string;
   deliver: boolean;
-  channel:
+  provider:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -196,7 +196,7 @@ function normalizeHookMapping(
     messageTemplate: mapping.messageTemplate,
     textTemplate: mapping.textTemplate,
     deliver: mapping.deliver,
-    channel: mapping.channel,
+    provider: mapping.provider,
     to: mapping.to,
     thinking: mapping.thinking,
     timeoutSeconds: mapping.timeoutSeconds,
@@ -241,7 +241,7 @@ function buildActionFromMapping(
       wakeMode: mapping.wakeMode ?? "now",
       sessionKey: renderOptional(mapping.sessionKey, ctx),
       deliver: mapping.deliver,
-      channel: mapping.channel,
+      provider: mapping.provider,
       to: renderOptional(mapping.to, ctx),
       thinking: renderOptional(mapping.thinking, ctx),
       timeoutSeconds: mapping.timeoutSeconds,
@@ -291,7 +291,7 @@ function mergeAction(
       typeof override.deliver === "boolean"
         ? override.deliver
         : baseAgent?.deliver,
-    channel: override.channel ?? baseAgent?.channel,
+    provider: override.provider ?? baseAgent?.provider,
     to: override.to ?? baseAgent?.to,
     thinking: override.thinking ?? baseAgent?.thinking,
     timeoutSeconds: override.timeoutSeconds ?? baseAgent?.timeoutSeconds,

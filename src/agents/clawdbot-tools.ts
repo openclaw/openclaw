@@ -16,11 +16,15 @@ import { createSlackTool } from "./tools/slack-tool.js";
 export function createClawdbotTools(options?: {
   browserControlUrl?: string;
   agentSessionKey?: string;
-  agentSurface?: string;
+  agentProvider?: string;
+  agentDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
 }): AnyAgentTool[] {
-  const imageTool = createImageTool({ config: options?.config });
+  const imageTool = createImageTool({
+    config: options?.config,
+    agentDir: options?.agentDir,
+  });
   return [
     createBrowserTool({ defaultControlUrl: options?.browserControlUrl }),
     createCanvasTool(),
@@ -39,12 +43,12 @@ export function createClawdbotTools(options?: {
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
-      agentSurface: options?.agentSurface,
+      agentProvider: options?.agentProvider,
       sandboxed: options?.sandboxed,
     }),
     createSessionsSpawnTool({
       agentSessionKey: options?.agentSessionKey,
-      agentSurface: options?.agentSurface,
+      agentProvider: options?.agentProvider,
       sandboxed: options?.sandboxed,
     }),
     ...(imageTool ? [imageTool] : []),

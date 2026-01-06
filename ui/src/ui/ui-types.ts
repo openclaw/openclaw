@@ -162,7 +162,7 @@ export type CronFormState = {
   payloadKind: "systemEvent" | "agentTurn";
   payloadText: string;
   deliver: boolean;
-  channel:
+  provider:
     | "last"
     | "whatsapp"
     | "telegram"

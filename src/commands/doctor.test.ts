@@ -135,6 +135,37 @@ vi.mock("./onboard-helpers.js", () => ({
   printWizardHeader: vi.fn(),
 }));
 
+vi.mock("./doctor-state-migrations.js", () => ({
+  detectLegacyStateMigrations: vi.fn().mockResolvedValue({
+    targetAgentId: "main",
+    targetMainKey: "main",
+    stateDir: "/tmp/state",
+    oauthDir: "/tmp/oauth",
+    sessions: {
+      legacyDir: "/tmp/state/sessions",
+      legacyStorePath: "/tmp/state/sessions/sessions.json",
+      targetDir: "/tmp/state/agents/main/sessions",
+      targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
+      hasLegacy: false,
+    },
+    agentDir: {
+      legacyDir: "/tmp/state/agent",
+      targetDir: "/tmp/state/agents/main/agent",
+      hasLegacy: false,
+    },
+    whatsappAuth: {
+      legacyDir: "/tmp/oauth",
+      targetDir: "/tmp/oauth/whatsapp/default",
+      hasLegacy: false,
+    },
+    preview: [],
+  }),
+  runLegacyStateMigrations: vi.fn().mockResolvedValue({
+    changes: [],
+    warnings: [],
+  }),
+}));
+
 describe("doctor", () => {
   it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
     readConfigFileSnapshot.mockResolvedValue({

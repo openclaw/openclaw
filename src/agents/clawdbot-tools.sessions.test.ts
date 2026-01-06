@@ -36,14 +36,14 @@ describe("sessions tools", () => {
               kind: "direct",
               sessionId: "s-main",
               updatedAt: 10,
-              lastChannel: "whatsapp",
+              lastProvider: "whatsapp",
             },
             {
               key: "discord:group:dev",
               kind: "group",
               sessionId: "s-group",
               updatedAt: 11,
-              surface: "discord",
+              provider: "discord",
               displayName: "discord:g-dev",
             },
             {
@@ -196,7 +196,7 @@ describe("sessions tools", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: requesterKey,
-      agentSurface: "discord",
+      agentProvider: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_send tool");
@@ -340,7 +340,7 @@ describe("sessions tools", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: requesterKey,
-      agentSurface: "discord",
+      agentProvider: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
     expect(tool).toBeDefined();
     if (!tool) throw new Error("missing sessions_send tool");

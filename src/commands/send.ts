@@ -14,6 +14,7 @@ export async function sendCommand(
     dryRun?: boolean;
     media?: string;
     gifPlayback?: boolean;
+    account?: string;
   },
   deps: CliDeps,
   runtime: RuntimeEnv,
@@ -173,6 +174,7 @@ export async function sendCommand(
         message: opts.message,
         mediaUrl: opts.media,
         gifPlayback: opts.gifPlayback,
+        accountId: opts.account,
         provider,
         idempotencyKey: randomIdempotencyKey(),
       },

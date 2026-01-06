@@ -34,6 +34,10 @@ import { defaultRuntime } from "../runtime.js";
 import { readTelegramAllowFromStore } from "../telegram/pairing-store.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164, resolveUserPath, sleep } from "../utils.js";
+import {
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+} from "./doctor-state-migrations.js";
 import { healthCommand } from "./health.js";
 import {
   applyWizardMetadata,
@@ -832,6 +836,29 @@ export async function doctorCommand(
   if (normalized.changes.length > 0) {
     note(normalized.changes.join("\n"), "Doctor changes");
     cfg = normalized.config;
+  }
+
+  const legacyState = await detectLegacyStateMigrations({ cfg });
+  if (legacyState.preview.length > 0) {
+    note(legacyState.preview.join("\n"), "Legacy state detected");
+    const migrate = guardCancel(
+      await confirm({
+        message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+        initialValue: true,
+      }),
+      runtime,
+    );
+    if (migrate) {
+      const migrated = await runLegacyStateMigrations({
+        detected: legacyState,
+      });
+      if (migrated.changes.length > 0) {
+        note(migrated.changes.join("\n"), "Doctor changes");
+      }
+      if (migrated.warnings.length > 0) {
+        note(migrated.warnings.join("\n"), "Doctor warnings");
+      }
+    }
   }
 
   cfg = await maybeRepairSandboxImages(cfg, runtime);

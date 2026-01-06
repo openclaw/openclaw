@@ -193,6 +193,7 @@ export const SendParamsSchema = Type.Object(
     mediaUrl: Type.Optional(Type.String()),
     gifPlayback: Type.Optional(Type.Boolean()),
     provider: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -206,6 +207,7 @@ export const PollParamsSchema = Type.Object(
     maxSelections: Type.Optional(Type.Integer({ minimum: 1, maximum: 12 })),
     durationHours: Type.Optional(Type.Integer({ minimum: 1 })),
     provider: Type.Optional(Type.String()),
+    accountId: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
   },
   { additionalProperties: false },
@@ -218,7 +220,7 @@ export const AgentParamsSchema = Type.Object(
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
-    channel: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
@@ -543,6 +545,7 @@ export const WebLoginStartParamsSchema = Type.Object(
     force: Type.Optional(Type.Boolean()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
     verbose: Type.Optional(Type.Boolean()),
+    accountId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -550,6 +553,7 @@ export const WebLoginStartParamsSchema = Type.Object(
 export const WebLoginWaitParamsSchema = Type.Object(
   {
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    accountId: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -642,7 +646,7 @@ export const CronPayloadSchema = Type.Union([
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
       deliver: Type.Optional(Type.Boolean()),
-      channel: Type.Optional(
+      provider: Type.Optional(
         Type.Union([
           Type.Literal("last"),
           Type.Literal("whatsapp"),

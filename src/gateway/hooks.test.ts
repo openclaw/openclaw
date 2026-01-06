@@ -56,7 +56,7 @@ describe("gateway hooks helpers", () => {
     expect(normalizeWakePayload({ text: "  ", mode: "now" }).ok).toBe(false);
   });
 
-  test("normalizeAgentPayload defaults + validates channel", () => {
+  test("normalizeAgentPayload defaults + validates provider", () => {
     const ok = normalizeAgentPayload(
       { message: "hello" },
       { idFactory: () => "fixed" },
@@ -64,20 +64,20 @@ describe("gateway hooks helpers", () => {
     expect(ok.ok).toBe(true);
     if (ok.ok) {
       expect(ok.value.sessionKey).toBe("hook:fixed");
-      expect(ok.value.channel).toBe("last");
+      expect(ok.value.provider).toBe("last");
       expect(ok.value.name).toBe("Hook");
     }
 
     const imsg = normalizeAgentPayload(
-      { message: "yo", channel: "imsg" },
+      { message: "yo", provider: "imsg" },
       { idFactory: () => "x" },
     );
     expect(imsg.ok).toBe(true);
     if (imsg.ok) {
-      expect(imsg.value.channel).toBe("imessage");
+      expect(imsg.value.provider).toBe("imessage");
     }
 
-    const bad = normalizeAgentPayload({ message: "yo", channel: "sms" });
+    const bad = normalizeAgentPayload({ message: "yo", provider: "sms" });
     expect(bad.ok).toBe(false);
   });
 });

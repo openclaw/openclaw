@@ -5,7 +5,7 @@ import OSLog
 
 private let gatewayConnectionLogger = Logger(subsystem: "com.clawdbot", category: "gateway.connection")
 
-enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
+enum GatewayAgentProvider: String, Codable, CaseIterable, Sendable {
     case last
     case whatsapp
     case telegram
@@ -17,7 +17,7 @@ enum GatewayAgentChannel: String, Codable, CaseIterable, Sendable {
 
     init(raw: String?) {
         let normalized = (raw ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        self = GatewayAgentChannel(rawValue: normalized) ?? .last
+        self = GatewayAgentProvider(rawValue: normalized) ?? .last
     }
 
     var isDeliverable: Bool { self != .webchat }
@@ -31,7 +31,7 @@ struct GatewayAgentInvocation: Sendable {
     var thinking: String?
     var deliver: Bool = false
     var to: String?
-    var channel: GatewayAgentChannel = .last
+    var provider: GatewayAgentProvider = .last
     var timeoutSeconds: Int?
     var idempotencyKey: String = UUID().uuidString
 }
@@ -368,7 +368,7 @@ extension GatewayConnection {
             "thinking": AnyCodable(invocation.thinking ?? "default"),
             "deliver": AnyCodable(invocation.deliver),
             "to": AnyCodable(invocation.to ?? ""),
-            "channel": AnyCodable(invocation.channel.rawValue),
+            "provider": AnyCodable(invocation.provider.rawValue),
             "idempotencyKey": AnyCodable(invocation.idempotencyKey),
         ]
         if let timeout = invocation.timeoutSeconds {
@@ -389,7 +389,7 @@ extension GatewayConnection {
         sessionKey: String,
         deliver: Bool,
         to: String?,
-        channel: GatewayAgentChannel = .last,
+        provider: GatewayAgentProvider = .last,
         timeoutSeconds: Int? = nil,
         idempotencyKey: String = UUID().uuidString) async -> (ok: Bool, error: String?)
     {
@@ -399,7 +399,7 @@ extension GatewayConnection {
             thinking: thinking,
             deliver: deliver,
             to: to,
-            channel: channel,
+            provider: provider,
             timeoutSeconds: timeoutSeconds,
             idempotencyKey: idempotencyKey))
     }

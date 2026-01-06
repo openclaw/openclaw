@@ -33,6 +33,7 @@ import {
   type NormalizedLocation,
   toLocationContext,
 } from "../providers/location.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import {
@@ -165,13 +166,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const resolveGroupPolicy = (chatId: string | number) =>
     resolveProviderGroupPolicy({
       cfg,
-      surface: "telegram",
+      provider: "telegram",
       groupId: String(chatId),
     });
   const resolveGroupRequireMention = (chatId: string | number) =>
     resolveProviderGroupRequireMention({
       cfg,
-      surface: "telegram",
+      provider: "telegram",
       groupId: String(chatId),
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
@@ -363,7 +364,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }]\n${replyTarget.body}\n[/Replying]`
       : "";
     const body = formatAgentEnvelope({
-      surface: "Telegram",
+      provider: "Telegram",
       from: isGroup
         ? buildGroupLabel(msg, chatId)
         : buildSenderLabel(msg, chatId),
@@ -371,16 +372,26 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       body: `${bodyText}${replySuffix}`,
     });
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "telegram",
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: String(chatId),
+      },
+    });
     const ctxPayload = {
       Body: body,
       From: isGroup ? `group:${chatId}` : `telegram:${chatId}`,
       To: `telegram:${chatId}`,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
       SenderName: buildSenderName(msg),
       SenderId: senderId || undefined,
       SenderUsername: senderUsername || undefined,
-      Surface: "telegram",
+      Provider: "telegram",
       MessageSid: String(msg.message_id),
       ReplyToId: replyTarget?.id,
       ReplyToBody: replyTarget?.body,
@@ -409,13 +420,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     if (!isGroup) {
       const sessionCfg = cfg.session;
-      const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-      const storePath = resolveStorePath(sessionCfg?.store);
+      const storePath = resolveStorePath(sessionCfg?.store, {
+        agentId: route.agentId,
+      });
       await updateLastRoute({
         storePath,
-        sessionKey: mainKey,
-        channel: "telegram",
+        sessionKey: route.mainSessionKey,
+        provider: "telegram",
         to: String(chatId),
+        accountId: route.accountId,
       });
     }
 

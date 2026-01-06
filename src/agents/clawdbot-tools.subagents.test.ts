@@ -22,7 +22,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
 import { createClawdbotTools } from "./clawdbot-tools.js";
 
 describe("subagents", () => {
-  it("sessions_spawn announces back to the requester group surface", async () => {
+  it("sessions_spawn announces back to the requester group provider", async () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
@@ -83,7 +83,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "discord:group:req",
-      agentSurface: "discord",
+      agentProvider: "discord",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
@@ -103,14 +103,14 @@ describe("subagents", () => {
       | undefined;
     expect(first?.lane).toBe("subagent");
     expect(first?.deliver).toBe(false);
-    expect(first?.sessionKey?.startsWith("subagent:")).toBe(true);
+    expect(first?.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
 
     expect(sendParams).toMatchObject({
       provider: "discord",
       to: "channel:req",
       message: "announce now",
     });
-    expect(deletedKey?.startsWith("subagent:")).toBe(true);
+    expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
   it("sessions_spawn resolves main announce target from sessions.list", async () => {
@@ -129,7 +129,7 @@ describe("subagents", () => {
           sessions: [
             {
               key: "main",
-              lastChannel: "whatsapp",
+              lastProvider: "whatsapp",
               lastTo: "+123",
             },
           ],
@@ -182,7 +182,7 @@ describe("subagents", () => {
 
     const tool = createClawdbotTools({
       agentSessionKey: "main",
-      agentSurface: "whatsapp",
+      agentProvider: "whatsapp",
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 

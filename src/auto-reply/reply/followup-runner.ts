@@ -76,7 +76,7 @@ export function createFollowupRunner(params: {
             runEmbeddedPiAgent({
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
-              surface: queued.run.surface,
+              messageProvider: queued.run.messageProvider,
               sessionFile: queued.run.sessionFile,
               workspaceDir: queued.run.workspaceDir,
               config: queued.run.config,

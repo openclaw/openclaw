@@ -2,6 +2,11 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
 import {
@@ -78,7 +83,7 @@ export function createSessionsHistoryTool(opts?: {
         opts?.sandboxed === true &&
         visibility === "spawned" &&
         requesterInternalKey &&
-        !requesterInternalKey.toLowerCase().startsWith("subagent:");
+        !isSubagentSessionKey(requesterInternalKey);
       if (restrictToSpawned) {
         const ok = await isSpawnedSessionAllowed({
           requesterSessionKey: requesterInternalKey,
@@ -91,6 +96,48 @@ export function createSessionsHistoryTool(opts?: {
           });
         }
       }
+
+      const routingA2A = cfg.routing?.agentToAgent;
+      const a2aEnabled = routingA2A?.enabled === true;
+      const allowPatterns = Array.isArray(routingA2A?.allow)
+        ? routingA2A.allow
+        : [];
+      const matchesAllow = (agentId: string) => {
+        if (allowPatterns.length === 0) return true;
+        return allowPatterns.some((pattern) => {
+          const raw = String(pattern ?? "").trim();
+          if (!raw) return false;
+          if (raw === "*") return true;
+          if (!raw.includes("*")) return raw === agentId;
+          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
+          return re.test(agentId);
+        });
+      };
+      const requesterAgentId = normalizeAgentId(
+        parseAgentSessionKey(requesterInternalKey)?.agentId,
+      );
+      const targetAgentId = normalizeAgentId(
+        parseAgentSessionKey(resolvedKey)?.agentId,
+      );
+      const isCrossAgent = requesterAgentId !== targetAgentId;
+      if (isCrossAgent) {
+        if (!a2aEnabled) {
+          return jsonResult({
+            status: "forbidden",
+            error:
+              "Agent-to-agent history is disabled. Set routing.agentToAgent.enabled=true to allow cross-agent access.",
+          });
+        }
+        if (!matchesAllow(requesterAgentId) || !matchesAllow(targetAgentId)) {
+          return jsonResult({
+            status: "forbidden",
+            error:
+              "Agent-to-agent history denied by routing.agentToAgent.allow.",
+          });
+        }
+      }
+
       const limit =
         typeof params.limit === "number" && Number.isFinite(params.limit)
           ? Math.max(1, Math.floor(params.limit))

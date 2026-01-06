@@ -15,7 +15,7 @@ describe("gateway session utils", () => {
   test("parseGroupKey handles group prefixes", () => {
     expect(parseGroupKey("group:abc")).toEqual({ id: "abc" });
     expect(parseGroupKey("discord:group:dev")).toEqual({
-      surface: "discord",
+      provider: "discord",
       kind: "group",
       id: "dev",
     });

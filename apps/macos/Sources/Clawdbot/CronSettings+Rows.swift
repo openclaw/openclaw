@@ -206,7 +206,7 @@ extension CronSettings {
                 Text(text)
                     .font(.callout)
                     .textSelection(.enabled)
-            case let .agentTurn(message, thinking, timeoutSeconds, deliver, channel, to, _):
+            case let .agentTurn(message, thinking, timeoutSeconds, deliver, provider, to, _):
                 VStack(alignment: .leading, spacing: 4) {
                     Text(message)
                         .font(.callout)
@@ -216,7 +216,7 @@ extension CronSettings {
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
                         if deliver ?? false {
                             StatusPill(text: "deliver", tint: .secondary)
-                            if let channel, !channel.isEmpty { StatusPill(text: channel, tint: .secondary) }
+                            if let provider, !provider.isEmpty { StatusPill(text: provider, tint: .secondary) }
                             if let to, !to.isEmpty { StatusPill(text: to, tint: .secondary) }
                         }
                     }

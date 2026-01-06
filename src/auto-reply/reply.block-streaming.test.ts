@@ -78,7 +78,7 @@ describe("block streaming", () => {
           From: "+1004",
           To: "+2000",
           MessageSid: "msg-123",
-          Surface: "discord",
+          Provider: "discord",
         },
         {
           onReplyStart,
@@ -124,7 +124,7 @@ describe("block streaming", () => {
           From: "+1004",
           To: "+2000",
           MessageSid: "msg-124",
-          Surface: "discord",
+          Provider: "discord",
         },
         {
           onBlockReply,

@@ -186,9 +186,11 @@ export async function runReplyAgent(params: {
           runEmbeddedPiAgent({
             sessionId: followupRun.run.sessionId,
             sessionKey,
-            surface: sessionCtx.Surface?.trim().toLowerCase() || undefined,
+            messageProvider:
+              sessionCtx.Provider?.trim().toLowerCase() || undefined,
             sessionFile: followupRun.run.sessionFile,
             workspaceDir: followupRun.run.workspaceDir,
+            agentDir: followupRun.run.agentDir,
             config: followupRun.run.config,
             skillsSnapshot: followupRun.run.skillsSnapshot,
             prompt: commandBody,

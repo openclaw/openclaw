@@ -407,7 +407,7 @@ describe("monitorIMessageProvider", () => {
 
     expect(updateLastRouteMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        channel: "imessage",
+        provider: "imessage",
         to: "chat_id:7",
       }),
     );

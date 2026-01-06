@@ -137,7 +137,7 @@ export type HookAgentPayload = {
   wakeMode: "now" | "next-heartbeat";
   sessionKey: string;
   deliver: boolean;
-  channel:
+  provider:
     | "last"
     | "whatsapp"
     | "telegram"
@@ -173,26 +173,26 @@ export function normalizeAgentPayload(
     typeof sessionKeyRaw === "string" && sessionKeyRaw.trim()
       ? sessionKeyRaw.trim()
       : `hook:${idFactory()}`;
-  const channelRaw = payload.channel;
-  const channel =
-    channelRaw === "whatsapp" ||
-    channelRaw === "telegram" ||
-    channelRaw === "discord" ||
-    channelRaw === "slack" ||
-    channelRaw === "signal" ||
-    channelRaw === "imessage" ||
-    channelRaw === "last"
-      ? channelRaw
-      : channelRaw === "imsg"
+  const providerRaw = payload.provider;
+  const provider =
+    providerRaw === "whatsapp" ||
+    providerRaw === "telegram" ||
+    providerRaw === "discord" ||
+    providerRaw === "slack" ||
+    providerRaw === "signal" ||
+    providerRaw === "imessage" ||
+    providerRaw === "last"
+      ? providerRaw
+      : providerRaw === "imsg"
         ? "imessage"
-        : channelRaw === undefined
+        : providerRaw === undefined
           ? "last"
           : null;
-  if (channel === null) {
+  if (provider === null) {
     return {
       ok: false,
       error:
-        "channel must be last|whatsapp|telegram|discord|slack|signal|imessage",
+        "provider must be last|whatsapp|telegram|discord|slack|signal|imessage",
     };
   }
   const toRaw = payload.to;
@@ -219,7 +219,7 @@ export function normalizeAgentPayload(
       wakeMode,
       sessionKey,
       deliver,
-      channel,
+      provider,
       to,
       thinking,
       timeoutSeconds,
