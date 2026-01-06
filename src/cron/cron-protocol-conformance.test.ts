@@ -9,22 +9,22 @@ type SchemaLike = {
   const?: unknown;
 };
 
-type ChannelSchema = {
+type ProviderSchema = {
   anyOf?: Array<{ const?: unknown }>;
 };
 
-function extractCronChannels(schema: SchemaLike): string[] {
+function extractCronProviders(schema: SchemaLike): string[] {
   const union = schema.anyOf ?? [];
-  const payloadWithChannel = union.find((entry) =>
-    Boolean(entry?.properties && "channel" in entry.properties),
+  const payloadWithProvider = union.find((entry) =>
+    Boolean(entry?.properties && "provider" in entry.properties),
   );
-  const channelSchema = payloadWithChannel?.properties
-    ? (payloadWithChannel.properties.channel as ChannelSchema)
+  const providerSchema = payloadWithProvider?.properties
+    ? (payloadWithProvider.properties.provider as ProviderSchema)
     : undefined;
-  const channels = (channelSchema?.anyOf ?? [])
+  const providers = (providerSchema?.anyOf ?? [])
     .map((entry) => entry?.const)
     .filter((value): value is string => typeof value === "string");
-  return channels;
+  return providers;
 }
 
 const UI_FILES = [
@@ -36,28 +36,28 @@ const UI_FILES = [
 const SWIFT_FILES = ["apps/macos/Sources/Clawdbot/GatewayConnection.swift"];
 
 describe("cron protocol conformance", () => {
-  it("ui + swift include all cron channels from gateway schema", async () => {
-    const channels = extractCronChannels(CronPayloadSchema as SchemaLike);
-    expect(channels.length).toBeGreaterThan(0);
+  it("ui + swift include all cron providers from gateway schema", async () => {
+    const providers = extractCronProviders(CronPayloadSchema as SchemaLike);
+    expect(providers.length).toBeGreaterThan(0);
 
     const cwd = process.cwd();
     for (const relPath of UI_FILES) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
-      for (const channel of channels) {
+      for (const provider of providers) {
         expect(
-          content.includes(`"${channel}"`),
-          `${relPath} missing ${channel}`,
+          content.includes(`"${provider}"`),
+          `${relPath} missing ${provider}`,
         ).toBe(true);
       }
     }
 
     for (const relPath of SWIFT_FILES) {
       const content = await fs.readFile(path.join(cwd, relPath), "utf-8");
-      for (const channel of channels) {
-        const pattern = new RegExp(`\\bcase\\s+${channel}\\b`);
+      for (const provider of providers) {
+        const pattern = new RegExp(`\\bcase\\s+${provider}\\b`);
         expect(
           pattern.test(content),
-          `${relPath} missing case ${channel}`,
+          `${relPath} missing case ${provider}`,
         ).toBe(true);
       }
     }

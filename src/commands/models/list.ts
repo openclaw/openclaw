@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import type { Api, Model } from "@mariozechner/pi-ai";
 import {
   discoverAuthStorage,
@@ -10,6 +12,8 @@ import {
   type AuthProfileStore,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  resolveAuthProfileDisplayLabel,
+  resolveAuthStorePathForDisplay,
 } from "../../agents/auth-profiles.js";
 import {
   getCustomProviderApiKey,
@@ -28,7 +32,12 @@ import {
   loadConfig,
 } from "../../config/config.js";
 import { info } from "../../globals.js";
+import {
+  getShellEnvAppliedKeys,
+  shouldEnableShellEnvFallback,
+} from "../../infra/shell-env.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { shortenHomePath } from "../../utils.js";
 import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -54,6 +63,13 @@ const truncate = (value: string, max: number) => {
   if (value.length <= max) return value;
   if (max <= 3) return value.slice(0, max);
   return `${value.slice(0, max - 3)}...`;
+};
+
+const maskApiKey = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return "missing";
+  if (trimmed.length <= 16) return trimmed;
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-8)}`;
 };
 
 type ConfiguredEntry = {
@@ -100,6 +116,109 @@ const hasAuthForProvider = (
   if (getCustomProviderApiKey(cfg, provider)) return true;
   return false;
 };
+
+type ProviderAuthOverview = {
+  provider: string;
+  effective: {
+    kind: "profiles" | "env" | "models.json" | "missing";
+    detail: string;
+  };
+  profiles: {
+    count: number;
+    oauth: number;
+    apiKey: number;
+    labels: string[];
+  };
+  env?: { value: string; source: string };
+  modelsJson?: { value: string; source: string };
+};
+
+function resolveProviderAuthOverview(params: {
+  provider: string;
+  cfg: ClawdbotConfig;
+  store: AuthProfileStore;
+  modelsPath: string;
+}): ProviderAuthOverview {
+  const { provider, cfg, store } = params;
+  const profiles = listProfilesForProvider(store, provider);
+  const labels = profiles.map((profileId) => {
+    const profile = store.profiles[profileId];
+    if (!profile) return `${profileId}=missing`;
+    if (profile.type === "api_key") {
+      return `${profileId}=${maskApiKey(profile.key)}`;
+    }
+    const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
+    const suffix =
+      display === profileId
+        ? ""
+        : display.startsWith(profileId)
+          ? display.slice(profileId.length).trim()
+          : `(${display})`;
+    return `${profileId}=OAuth${suffix ? ` ${suffix}` : ""}`;
+  });
+  const oauthCount = profiles.filter(
+    (id) => store.profiles[id]?.type === "oauth",
+  ).length;
+  const apiKeyCount = profiles.filter(
+    (id) => store.profiles[id]?.type === "api_key",
+  ).length;
+
+  const envKey = resolveEnvApiKey(provider);
+  const customKey = getCustomProviderApiKey(cfg, provider);
+
+  const effective: ProviderAuthOverview["effective"] = (() => {
+    if (profiles.length > 0) {
+      return {
+        kind: "profiles",
+        detail: shortenHomePath(resolveAuthStorePathForDisplay()),
+      };
+    }
+    if (envKey) {
+      const isOAuthEnv =
+        envKey.source.includes("OAUTH_TOKEN") ||
+        envKey.source.toLowerCase().includes("oauth");
+      return {
+        kind: "env",
+        detail: isOAuthEnv ? "OAuth (env)" : maskApiKey(envKey.apiKey),
+      };
+    }
+    if (customKey) {
+      return { kind: "models.json", detail: maskApiKey(customKey) };
+    }
+    return { kind: "missing", detail: "missing" };
+  })();
+
+  return {
+    provider,
+    effective,
+    profiles: {
+      count: profiles.length,
+      oauth: oauthCount,
+      apiKey: apiKeyCount,
+      labels,
+    },
+    ...(envKey
+      ? {
+          env: {
+            value:
+              envKey.source.includes("OAUTH_TOKEN") ||
+              envKey.source.toLowerCase().includes("oauth")
+                ? "OAuth (env)"
+                : maskApiKey(envKey.apiKey),
+            source: envKey.source,
+          },
+        }
+      : {}),
+    ...(customKey
+      ? {
+          modelsJson: {
+            value: maskApiKey(customKey),
+            source: `models.json: ${shortenHomePath(params.modelsPath)}`,
+          },
+        }
+      : {}),
+  };
+}
 
 const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
   const resolvedDefault = resolveConfiguredModelRef({
@@ -462,11 +581,97 @@ export async function modelsStatusCommand(
   }, {});
   const allowed = Object.keys(cfg.agent?.models ?? {});
 
+  const agentDir = resolveClawdbotAgentDir();
+  const store = ensureAuthProfileStore();
+  const modelsPath = path.join(agentDir, "models.json");
+
+  const providersFromStore = new Set(
+    Object.values(store.profiles)
+      .map((profile) => profile.provider)
+      .filter((p): p is string => Boolean(p)),
+  );
+  const providersFromConfig = new Set(
+    Object.keys(cfg.models?.providers ?? {})
+      .map((p) => p.trim())
+      .filter(Boolean),
+  );
+  const providersFromModels = new Set<string>();
+  for (const raw of [
+    defaultLabel,
+    ...fallbacks,
+    imageModel,
+    ...imageFallbacks,
+    ...allowed,
+  ]) {
+    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    if (parsed?.provider) providersFromModels.add(parsed.provider);
+  }
+
+  const providersFromEnv = new Set<string>();
+  // Keep in sync with resolveEnvApiKey() mappings (we want visibility even when
+  // a provider isn't currently selected in config/models).
+  const envProbeProviders = [
+    "anthropic",
+    "github-copilot",
+    "google-vertex",
+    "openai",
+    "google",
+    "groq",
+    "cerebras",
+    "xai",
+    "openrouter",
+    "zai",
+    "mistral",
+  ];
+  for (const provider of envProbeProviders) {
+    if (resolveEnvApiKey(provider)) providersFromEnv.add(provider);
+  }
+
+  const providers = Array.from(
+    new Set([
+      ...providersFromStore,
+      ...providersFromConfig,
+      ...providersFromModels,
+      ...providersFromEnv,
+    ]),
+  )
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .sort((a, b) => a.localeCompare(b));
+
+  const applied = getShellEnvAppliedKeys();
+  const shellFallbackEnabled =
+    shouldEnableShellEnvFallback(process.env) ||
+    cfg.env?.shellEnv?.enabled === true;
+
+  const providerAuth = providers
+    .map((provider) =>
+      resolveProviderAuthOverview({ provider, cfg, store, modelsPath }),
+    )
+    .filter((entry) => {
+      const hasAny =
+        entry.profiles.count > 0 ||
+        Boolean(entry.env) ||
+        Boolean(entry.modelsJson);
+      return hasAny;
+    });
+
+  const providersWithOauth = providerAuth
+    .filter(
+      (entry) => entry.profiles.oauth > 0 || entry.env?.value === "OAuth (env)",
+    )
+    .map((entry) => {
+      const count =
+        entry.profiles.oauth || (entry.env?.value === "OAuth (env)" ? 1 : 0);
+      return `${entry.provider} (${count})`;
+    });
+
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
           configPath: CONFIG_PATH_CLAWDBOT,
+          agentDir,
           defaultModel: defaultLabel,
           resolvedDefault: `${resolved.provider}/${resolved.model}`,
           fallbacks,
@@ -474,6 +679,15 @@ export async function modelsStatusCommand(
           imageFallbacks,
           aliases,
           allowed,
+          auth: {
+            storePath: resolveAuthStorePathForDisplay(),
+            shellEnvFallback: {
+              enabled: shellFallbackEnabled,
+              appliedKeys: applied,
+            },
+            providersWithOAuth: providersWithOauth,
+            providers: providerAuth,
+          },
         },
         null,
         2,
@@ -488,6 +702,7 @@ export async function modelsStatusCommand(
   }
 
   runtime.log(info(`Config: ${CONFIG_PATH_CLAWDBOT}`));
+  runtime.log(info(`Agent dir: ${shortenHomePath(agentDir)}`));
   runtime.log(`Default: ${defaultLabel}`);
   runtime.log(
     `Fallbacks (${fallbacks.length || 0}): ${fallbacks.join(", ") || "-"}`,
@@ -512,4 +727,36 @@ export async function modelsStatusCommand(
       allowed.length ? allowed.join(", ") : "all"
     }`,
   );
+
+  runtime.log("");
+  runtime.log(info("Auth overview"));
+  runtime.log(
+    `Auth store: ${shortenHomePath(resolveAuthStorePathForDisplay())}`,
+  );
+  runtime.log(
+    `Shell env fallback: ${shellFallbackEnabled ? "on" : "off"}${
+      applied.length ? ` (applied: ${applied.join(", ")})` : ""
+    }`,
+  );
+  runtime.log(
+    `Providers with OAuth (${providersWithOauth.length || 0}): ${
+      providersWithOauth.length ? providersWithOauth.join(", ") : "-"
+    }`,
+  );
+
+  for (const entry of providerAuth) {
+    const bits: string[] = [];
+    bits.push(`effective=${entry.effective.kind}:${entry.effective.detail}`);
+    if (entry.profiles.count > 0) {
+      bits.push(
+        `profiles=${entry.profiles.count} (oauth=${entry.profiles.oauth}, api_key=${entry.profiles.apiKey})`,
+      );
+      if (entry.profiles.labels.length > 0) {
+        bits.push(entry.profiles.labels.join(", "));
+      }
+    }
+    if (entry.env) bits.push(`env=${entry.env.value} (${entry.env.source})`);
+    if (entry.modelsJson) bits.push(`models.json=${entry.modelsJson.value}`);
+    runtime.log(`${entry.provider}: ${bits.join(" | ")}`);
+  }
 }

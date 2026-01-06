@@ -69,10 +69,10 @@ export type GatewayRequestContext = {
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
   getRuntimeSnapshot: () => ProviderRuntimeSnapshot;
-  startWhatsAppProvider: () => Promise<void>;
-  stopWhatsAppProvider: () => Promise<void>;
+  startWhatsAppProvider: (accountId?: string) => Promise<void>;
+  stopWhatsAppProvider: (accountId?: string) => Promise<void>;
   stopTelegramProvider: () => Promise<void>;
-  markWhatsAppLoggedOut: (cleared: boolean) => void;
+  markWhatsAppLoggedOut: (cleared: boolean, accountId?: string) => void;
   wizardRunner: (
     opts: import("../../commands/onboard-types.js").OnboardOptions,
     runtime: import("../../runtime.js").RuntimeEnv,

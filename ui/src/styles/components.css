@@ -200,6 +200,11 @@
   background: rgba(245, 159, 74, 0.2);
 }
 
+.btn.active {
+  border-color: rgba(245, 159, 74, 0.55);
+  background: rgba(245, 159, 74, 0.16);
+}
+
 .btn.danger {
   border-color: rgba(255, 107, 107, 0.45);
   background: rgba(255, 107, 107, 0.18);
@@ -818,6 +823,13 @@
   padding-top: 12px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, var(--panel) 35%);
   border-top: 1px solid var(--border);
+}
+
+.shell--chat-focus .chat-compose {
+  bottom: calc(var(--shell-pad) + 8px);
+  padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  border-bottom-left-radius: 18px;
+  border-bottom-right-radius: 18px;
 }
 
 .chat-compose__field {

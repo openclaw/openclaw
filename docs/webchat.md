@@ -30,5 +30,5 @@ Updated: 2025-12-17
 - No fallback transport; the Gateway WS is required.
 
 ## Dev notes
-- macOS glue: `apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift` + `apps/macos/Sources/Clawdbot/WebChatManager.swift`.
-- Remote tunnel helper: `apps/macos/Sources/Clawdbot/RemotePortTunnel.swift`.
+- macOS glue: [`apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift) + [`apps/macos/Sources/Clawdbot/WebChatManager.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/WebChatManager.swift).
+- Remote tunnel helper: [`apps/macos/Sources/Clawdbot/RemotePortTunnel.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/RemotePortTunnel.swift).

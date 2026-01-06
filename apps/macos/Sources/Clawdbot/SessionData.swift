@@ -9,7 +9,7 @@ struct GatewaySessionDefaultsRecord: Codable {
 struct GatewaySessionEntryRecord: Codable {
     let key: String
     let displayName: String?
-    let surface: String?
+    let provider: String?
     let subject: String?
     let room: String?
     let space: String?
@@ -71,7 +71,7 @@ struct SessionRow: Identifiable {
     let key: String
     let kind: SessionKind
     let displayName: String?
-    let surface: String?
+    let provider: String?
     let subject: String?
     let room: String?
     let space: String?
@@ -141,7 +141,7 @@ extension SessionRow {
                 key: "user@example.com",
                 kind: .direct,
                 displayName: nil,
-                surface: nil,
+                provider: nil,
                 subject: nil,
                 room: nil,
                 space: nil,
@@ -158,7 +158,7 @@ extension SessionRow {
                 key: "discord:channel:release-squad",
                 kind: .group,
                 displayName: "discord:#release-squad",
-                surface: "discord",
+                provider: "discord",
                 subject: nil,
                 room: "#release-squad",
                 space: nil,
@@ -175,7 +175,7 @@ extension SessionRow {
                 key: "global",
                 kind: .global,
                 displayName: nil,
-                surface: nil,
+                provider: nil,
                 subject: nil,
                 room: nil,
                 space: nil,
@@ -298,7 +298,7 @@ enum SessionLoader {
                 key: entry.key,
                 kind: SessionKind.from(key: entry.key),
                 displayName: entry.displayName,
-                surface: entry.surface,
+                provider: entry.provider,
                 subject: entry.subject,
                 room: entry.room,
                 space: entry.space,

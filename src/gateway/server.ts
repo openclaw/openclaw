@@ -482,7 +482,7 @@ export async function startGatewayServer(
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    channel:
+    provider:
       | "last"
       | "whatsapp"
       | "telegram"
@@ -514,7 +514,7 @@ export async function startGatewayServer(
         thinking: value.thinking,
         timeoutSeconds: value.timeoutSeconds,
         deliver: value.deliver,
-        channel: value.channel,
+        provider: value.provider,
         to: value.to,
       },
       state: { nextRunAtMs: now },
@@ -671,6 +671,10 @@ export async function startGatewayServer(
   >();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
   setCommandLaneConcurrency("main", cfgAtStart.agent?.maxConcurrent ?? 1);
+  setCommandLaneConcurrency(
+    "subagent",
+    cfgAtStart.agent?.subagents?.maxConcurrent ?? 1,
+  );
 
   const cronLogger = getChildLogger({
     module: "cron",
@@ -1757,6 +1761,10 @@ export async function startGatewayServer(
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency("main", nextConfig.agent?.maxConcurrent ?? 1);
+    setCommandLaneConcurrency(
+      "subagent",
+      nextConfig.agent?.subagents?.maxConcurrent ?? 1,
+    );
 
     if (plan.hotReasons.length > 0) {
       logReload.info(

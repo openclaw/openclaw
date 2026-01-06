@@ -25,8 +25,8 @@ The UI talks directly to the Gateway WS and supports:
 
 ## Webhooks
 
-When `hooks.enabled=true`, the Gateway also exposes a small webhook surface on the same HTTP server.
-See `docs/configuration.md` → `hooks` for auth + payloads.
+When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
+See [`docs/configuration.md`](https://docs.clawd.bot/configuration) → `hooks` for auth + payloads.
 
 ## Config (default-on)
 
@@ -110,6 +110,6 @@ Open:
 The Gateway serves static files from `dist/control-ui`. Build them with:
 
 ```bash
-pnpm ui:install
-pnpm ui:build
+bun run ui:install
+bun run ui:build
 ```

@@ -24,7 +24,7 @@ export function registerBrowserInspectCommands(
     .action(async (targetId: string | undefined, opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserScreenshotAction(baseUrl, {
           targetId: targetId?.trim() || undefined,
@@ -59,7 +59,7 @@ export function registerBrowserInspectCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       const format = opts.format === "aria" ? "aria" : "ai";
       try {
         const result = await browserSnapshot(baseUrl, {

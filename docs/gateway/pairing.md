@@ -20,7 +20,7 @@ This enables:
 - **Bridge**: direct transport endpoint owned by the gateway. The bridge does not decide membership.
 
 ## API surface (gateway protocol)
-These are conceptual method names; wire them into `src/gateway/protocol/schema.ts` and regenerate Swift types.
+These are conceptual method names; wire them into [`src/gateway/protocol/schema.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/protocol/schema.ts) and regenerate Swift types.
 
 ### Events
 - `node.pair.requested`
@@ -78,10 +78,10 @@ Optional interactive helper:
 - `clawdbot nodes watch` (subscribe to `node.pair.requested` and prompt in-place)
 
 Implementation pointers:
-- CLI commands: `src/cli/nodes-cli.ts`
-- Gateway handlers + events: `src/gateway/server.ts`
-- Pairing store: `src/infra/node-pairing.ts` (under `~/.clawdbot/nodes/`)
-- Optional macOS UI prompt (frontend only): `apps/macos/Sources/Clawdbot/NodePairingApprovalPrompter.swift`
+- CLI commands: [`src/cli/nodes-cli.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/nodes-cli.ts)
+- Gateway handlers + events: [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts) + [`src/gateway/server-methods/nodes.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-methods/nodes.ts)
+- Pairing store: [`src/infra/node-pairing.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/node-pairing.ts) (under `~/.clawdbot/nodes/`)
+- Optional macOS UI prompt (frontend only): [`apps/macos/Sources/Clawdbot/NodePairingApprovalPrompter.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/NodePairingApprovalPrompter.swift)
   - Push-first: listens to `node.pair.requested`/`node.pair.resolved`, does a `node.pair.list` on startup/reconnect,
     and only runs a slow safety poll while a request is pending/visible.
 

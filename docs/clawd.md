@@ -18,7 +18,7 @@ You’re putting an agent in a position to:
 Start conservative:
 - Always set `whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Keep heartbeats disabled until you trust the setup (omit `agent.heartbeat` or set `agent.heartbeat.every: "0m"`).
+- Heartbeats now default to every 30 minutes. Disable until you trust the setup by setting `agent.heartbeat.every: "0m"`.
 
 ## Prerequisites
 
@@ -81,11 +81,11 @@ clawdbot gateway --port 18789
 
 Now message the assistant number from your allowlisted phone.
 
-## Give the agent a workspace (AGENTS.md)
+## Give the agent a workspace (AGENTS)
 
 Clawd reads operating instructions and “memory” from its workspace directory.
 
-By default, Clawdbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`) automatically on setup/first agent run.
+By default, Clawdbot uses `~/clawd` as the agent workspace, and will create it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`) automatically on setup/first agent run. `BOOTSTRAP.md` is only created when the workspace is brand new (it should not come back after you delete it).
 
 Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideally private) so your `AGENTS.md` + memory files are backed up.
 
@@ -99,6 +99,16 @@ Optional: choose a different workspace with `agent.workspace` (supports `~`).
 {
   agent: {
     workspace: "~/clawd"
+  }
+}
+```
+
+If you already ship your own workspace files from a repo, you can disable bootstrap file creation entirely:
+
+```json5
+{
+  agent: {
+    skipBootstrap: true
   }
 }
 ```
@@ -144,14 +154,16 @@ Example:
 
 ## Sessions and memory
 
-- Session files: `~/.clawdbot/sessions/{{SessionId}}.jsonl`
-- Session metadata (token usage, last route, etc): `~/.clawdbot/sessions/sessions.json` (legacy: `~/.clawdbot/sessions.json`)
+- Session files: `~/.clawdbot/agents/<agentId>/sessions/{{SessionId}}.jsonl`
+- Session metadata (token usage, last route, etc): `~/.clawdbot/agents/<agentId>/sessions/sessions.json` (legacy: `~/.clawdbot/sessions/sessions.json`)
 - `/new` or `/reset` starts a fresh session for that chat (configurable via `resetTriggers`). If sent alone, the agent replies with a short hello to confirm the reset.
 - `/compact [instructions]` compacts the session context and reports the remaining context budget.
 
 ## Heartbeats (proactive mode)
 
-When `agent.heartbeat.every` is set to a positive interval, CLAWDBOT periodically runs a heartbeat prompt (default: `HEARTBEAT`).
+By default, CLAWDBOT runs a heartbeat every 30 minutes with the prompt:
+`Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
+Set `agent.heartbeat.every: "0m"` to disable.
 
 - If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agent.heartbeat.ackMaxChars`), CLAWDBOT suppresses outbound delivery for that heartbeat.
 
@@ -191,12 +203,12 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 
 ## Next steps
 
-- WebChat: [WebChat](./webchat.md)
-- Gateway ops: [Gateway runbook](./gateway.md)
-- Cron + wakeups: [Cron + wakeups](./cron.md)
-- macOS menu bar companion: [Clawdbot macOS app](./macos.md)
-- iOS node app: [iOS app](./ios.md)
-- Android node app: [Android app](./android.md)
-- Windows status: [Windows app](./windows.md)
-- Linux status: [Linux app](./linux.md)
-- Security: [Security](./security.md)
+- WebChat: [WebChat](https://docs.clawd.bot/webchat)
+- Gateway ops: [Gateway runbook](https://docs.clawd.bot/gateway)
+- Cron + wakeups: [Cron + wakeups](https://docs.clawd.bot/cron)
+- macOS menu bar companion: [Clawdbot macOS app](https://docs.clawd.bot/macos)
+- iOS node app: [iOS app](https://docs.clawd.bot/ios)
+- Android node app: [Android app](https://docs.clawd.bot/android)
+- Windows status: [Windows app](https://docs.clawd.bot/windows)
+- Linux status: [Linux app](https://docs.clawd.bot/linux)
+- Security: [Security](https://docs.clawd.bot/security)

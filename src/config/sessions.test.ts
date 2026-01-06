@@ -33,30 +33,30 @@ describe("sessions", () => {
     );
   });
 
-  it("prefixes group keys with surface when available", () => {
+  it("prefixes group keys with provider when available", () => {
     expect(
       deriveSessionKey("per-sender", {
         From: "12345-678@g.us",
         ChatType: "group",
-        Surface: "whatsapp",
+        Provider: "whatsapp",
       }),
     ).toBe("whatsapp:group:12345-678@g.us");
   });
 
-  it("keeps explicit surface when provided in group key", () => {
+  it("keeps explicit provider when provided in group key", () => {
     expect(
       resolveSessionKey(
         "per-sender",
         { From: "group:discord:12345", ChatType: "group" },
         "main",
       ),
-    ).toBe("discord:group:12345");
+    ).toBe("agent:main:discord:group:12345");
   });
 
   it("builds discord display name with guild+channel slugs", () => {
     expect(
       buildGroupDisplayName({
-        surface: "discord",
+        provider: "discord",
         room: "#general",
         space: "friends-of-clawd",
         id: "123",
@@ -66,22 +66,24 @@ describe("sessions", () => {
   });
 
   it("collapses direct chats to main by default", () => {
-    expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe("main");
+    expect(resolveSessionKey("per-sender", { From: "+1555" })).toBe(
+      "agent:main:main",
+    );
   });
 
   it("collapses direct chats to main even when sender missing", () => {
-    expect(resolveSessionKey("per-sender", {})).toBe("main");
+    expect(resolveSessionKey("per-sender", {})).toBe("agent:main:main");
   });
 
   it("maps direct chats to main key when provided", () => {
     expect(
       resolveSessionKey("per-sender", { From: "whatsapp:+1555" }, "main"),
-    ).toBe("main");
+    ).toBe("agent:main:main");
   });
 
   it("uses custom main key when provided", () => {
     expect(resolveSessionKey("per-sender", { From: "+1555" }, "primary")).toBe(
-      "primary",
+      "agent:main:primary",
     );
   });
 
@@ -92,17 +94,18 @@ describe("sessions", () => {
   it("leaves groups untouched even with main key", () => {
     expect(
       resolveSessionKey("per-sender", { From: "12345-678@g.us" }, "main"),
-    ).toBe("group:12345-678@g.us");
+    ).toBe("agent:main:group:12345-678@g.us");
   });
 
-  it("updateLastRoute persists channel and target", async () => {
+  it("updateLastRoute persists provider and target", async () => {
+    const mainSessionKey = "agent:main:main";
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
     const storePath = path.join(dir, "sessions.json");
     await fs.writeFile(
       storePath,
       JSON.stringify(
         {
-          main: {
+          [mainSessionKey]: {
             sessionId: "sess-1",
             updatedAt: 123,
             systemSent: true,
@@ -117,16 +120,16 @@ describe("sessions", () => {
 
     await updateLastRoute({
       storePath,
-      sessionKey: "main",
-      channel: "telegram",
+      sessionKey: mainSessionKey,
+      provider: "telegram",
       to: "  12345  ",
     });
 
     const store = loadSessionStore(storePath);
-    expect(store.main?.sessionId).toBe("sess-1");
-    expect(store.main?.updatedAt).toBeGreaterThanOrEqual(123);
-    expect(store.main?.lastChannel).toBe("telegram");
-    expect(store.main?.lastTo).toBe("12345");
+    expect(store[mainSessionKey]?.sessionId).toBe("sess-1");
+    expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
+    expect(store[mainSessionKey]?.lastProvider).toBe("telegram");
+    expect(store[mainSessionKey]?.lastTo).toBe("12345");
   });
 
   it("derives session transcripts dir from CLAWDBOT_STATE_DIR", () => {
@@ -134,7 +137,7 @@ describe("sessions", () => {
       { CLAWDBOT_STATE_DIR: "/custom/state" } as NodeJS.ProcessEnv,
       () => "/home/ignored",
     );
-    expect(dir).toBe("/custom/state/sessions");
+    expect(dir).toBe("/custom/state/agents/main/sessions");
   });
 
   it("falls back to CLAWDIS_STATE_DIR for session transcripts dir", () => {
@@ -142,6 +145,6 @@ describe("sessions", () => {
       { CLAWDIS_STATE_DIR: "/legacy/state" } as NodeJS.ProcessEnv,
       () => "/home/ignored",
     );
-    expect(dir).toBe("/legacy/state/sessions");
+    expect(dir).toBe("/legacy/state/agents/main/sessions");
   });
 });

@@ -17,7 +17,9 @@ describe("config view", () => {
         schema: {
           type: "object",
           properties: {
-            mixed: { anyOf: [{ type: "string" }, { type: "number" }] },
+            mixed: {
+              anyOf: [{ type: "string" }, { type: "object", properties: {} }],
+            },
           },
         },
         schemaLoading: false,

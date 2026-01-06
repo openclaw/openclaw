@@ -1,10 +1,10 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import { resolveTextChunkLimit, type TextChunkSurface } from "../chunk.js";
+import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
 
-const BLOCK_CHUNK_SURFACES = new Set<TextChunkSurface>([
+const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
   "whatsapp",
   "telegram",
   "discord",
@@ -14,24 +14,26 @@ const BLOCK_CHUNK_SURFACES = new Set<TextChunkSurface>([
   "webchat",
 ]);
 
-function normalizeChunkSurface(surface?: string): TextChunkSurface | undefined {
-  if (!surface) return undefined;
-  const cleaned = surface.trim().toLowerCase();
-  return BLOCK_CHUNK_SURFACES.has(cleaned as TextChunkSurface)
-    ? (cleaned as TextChunkSurface)
+function normalizeChunkProvider(
+  provider?: string,
+): TextChunkProvider | undefined {
+  if (!provider) return undefined;
+  const cleaned = provider.trim().toLowerCase();
+  return BLOCK_CHUNK_PROVIDERS.has(cleaned as TextChunkProvider)
+    ? (cleaned as TextChunkProvider)
     : undefined;
 }
 
 export function resolveBlockStreamingChunking(
   cfg: ClawdbotConfig | undefined,
-  surface?: string,
+  provider?: string,
 ): {
   minChars: number;
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
-  const surfaceKey = normalizeChunkSurface(surface);
-  const textLimit = resolveTextChunkLimit(cfg, surfaceKey);
+  const providerKey = normalizeChunkProvider(provider);
+  const textLimit = resolveTextChunkLimit(cfg, providerKey);
   const chunkCfg = cfg?.agent?.blockStreamingChunk;
   const maxRequested = Math.max(
     1,

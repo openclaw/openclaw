@@ -70,10 +70,19 @@ describe("config form renderer", () => {
     );
 
     const select = container.querySelector("select") as HTMLSelectElement | null;
-    expect(select).not.toBeNull();
-    if (!select) return;
-    select.value = "token";
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+    const selects = Array.from(container.querySelectorAll("select"));
+    const modeSelect = selects.find((el) =>
+      Array.from(el.options).some((opt) => opt.textContent?.trim() === "token"),
+    ) as HTMLSelectElement | undefined;
+    expect(modeSelect).not.toBeUndefined();
+    if (!modeSelect) return;
+    const tokenOption = Array.from(modeSelect.options).find(
+      (opt) => opt.textContent?.trim() === "token",
+    );
+    expect(tokenOption).not.toBeUndefined();
+    if (!tokenOption) return;
+    modeSelect.value = tokenOption.value;
+    modeSelect.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["mode"], "token");
 
     const checkbox = container.querySelector(
@@ -133,11 +142,16 @@ describe("config form renderer", () => {
 
     const selects = Array.from(container.querySelectorAll("select"));
     const bindSelect = selects.find((el) =>
-      Array.from(el.options).some((opt) => opt.value === "tailnet"),
+      Array.from(el.options).some((opt) => opt.textContent?.trim() === "tailnet"),
     ) as HTMLSelectElement | undefined;
     expect(bindSelect).not.toBeUndefined();
     if (!bindSelect) return;
-    bindSelect.value = "tailnet";
+    const tailnetOption = Array.from(bindSelect.options).find(
+      (opt) => opt.textContent?.trim() === "tailnet",
+    );
+    expect(tailnetOption).not.toBeUndefined();
+    if (!tailnetOption) return;
+    bindSelect.value = tailnetOption.value;
     bindSelect.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onPatch).toHaveBeenCalledWith(["bind"], "tailnet");
   });
@@ -181,7 +195,7 @@ describe("config form renderer", () => {
       type: "object",
       properties: {
         mixed: {
-          anyOf: [{ type: "string" }, { type: "number" }],
+          anyOf: [{ type: "string" }, { type: "object", properties: {} }],
         },
       },
     };

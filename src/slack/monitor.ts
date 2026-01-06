@@ -1,16 +1,25 @@
-import type {
-  SlackCommandMiddlewareArgs,
-  SlackEventMiddlewareArgs,
+import {
+  App,
+  type SlackCommandMiddlewareArgs,
+  type SlackEventMiddlewareArgs,
 } from "@slack/bolt";
-import bolt from "@slack/bolt";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
+import {
+  buildCommandText,
+  listNativeCommandSpecs,
+  shouldHandleTextCommands,
+} from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -29,7 +38,13 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
 
@@ -341,7 +356,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const chatType = isRoom ? "room" : isGroup ? "group" : "direct";
     return resolveSessionKey(
       sessionScope,
-      { From: from, ChatType: chatType, Surface: "slack" },
+      { From: from, ChatType: chatType, Provider: "slack" },
       mainKey,
     );
   };
@@ -372,11 +387,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   };
 
   const dmConfig = cfg.slack?.dm;
+  const dmPolicy = dmConfig?.policy ?? "pairing";
   const allowFrom = normalizeAllowList(dmConfig?.allowFrom);
   const groupDmEnabled = dmConfig?.groupEnabled ?? false;
   const groupDmChannels = normalizeAllowList(dmConfig?.groupChannels);
   const channelsConfig = cfg.slack?.channels;
   const dmEnabled = dmConfig?.enabled ?? true;
+  const groupPolicy = cfg.slack?.groupPolicy ?? "open";
+  const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = cfg.slack?.reactionNotifications ?? "own";
   const reactionAllowlist = cfg.slack?.reactionAllowlist ?? [];
   const slashCommand = resolveSlackSlashCommandConfig(
@@ -384,6 +402,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   );
   const textLimit = resolveTextChunkLimit(cfg, "slack");
   const mentionRegexes = buildMentionRegexes(cfg);
+  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? cfg.slack?.mediaMaxMb ?? 20) * 1024 * 1024;
 
@@ -413,7 +433,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     return false;
   };
 
-  const { App } = bolt;
   const app = new App({
     token: botToken,
     appToken,
@@ -421,9 +440,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
 
   let botUserId = "";
+  let teamId = "";
   try {
     const auth = await app.client.auth.test({ token: botToken });
     botUserId = auth.user_id ?? "";
+    teamId = auth.team_id ?? "";
   } catch (err) {
     runtime.error?.(danger(`slack auth failed: ${String(err)}`));
   }
@@ -478,6 +499,41 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
 
+  const setSlackThreadStatus = async (params: {
+    channelId: string;
+    threadTs?: string;
+    status: string;
+  }) => {
+    if (!params.threadTs) return;
+    const payload = {
+      token: botToken,
+      channel_id: params.channelId,
+      thread_ts: params.threadTs,
+      status: params.status,
+    };
+    const client = app.client as unknown as {
+      assistant?: {
+        threads?: {
+          setStatus?: (args: typeof payload) => Promise<unknown>;
+        };
+      };
+      apiCall?: (method: string, args: typeof payload) => Promise<unknown>;
+    };
+    try {
+      if (client.assistant?.threads?.setStatus) {
+        await client.assistant.threads.setStatus(payload);
+        return;
+      }
+      if (typeof client.apiCall === "function") {
+        await client.apiCall("assistant.threads.setStatus", payload);
+      }
+    } catch (err) {
+      logVerbose(
+        `slack status update failed for channel ${params.channelId}: ${String(err)}`,
+      );
+    }
+  };
+
   const isChannelAllowed = (params: {
     channelId?: string;
     channelName?: string;
@@ -513,7 +569,19 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         channelName: params.channelName,
         channels: channelsConfig,
       });
-      if (channelConfig?.allowed === false) return false;
+      const channelAllowed = channelConfig?.allowed !== false;
+      const channelAllowlistConfigured =
+        Boolean(channelsConfig) && Object.keys(channelsConfig ?? {}).length > 0;
+      if (
+        !isSlackRoomAllowedByPolicy({
+          groupPolicy,
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        return false;
+      }
+      if (!channelAllowed) return false;
     }
 
     return true;
@@ -562,16 +630,62 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       return;
     }
 
-    if (isDirectMessage && allowFrom.length > 0) {
-      const permitted = allowListMatches({
-        allowList: normalizeAllowListLower(allowFrom),
-        id: message.user,
-      });
-      if (!permitted) {
-        logVerbose(
-          `Blocked unauthorized slack sender ${message.user} (not in allowFrom)`,
-        );
+    const storeAllowFrom = await readProviderAllowFromStore("slack").catch(
+      () => [],
+    );
+    const effectiveAllowFrom = normalizeAllowList([
+      ...allowFrom,
+      ...storeAllowFrom,
+    ]);
+    const effectiveAllowFromLower = normalizeAllowListLower(effectiveAllowFrom);
+
+    if (isDirectMessage) {
+      if (!dmEnabled || dmPolicy === "disabled") {
+        logVerbose("slack: drop dm (dms disabled)");
         return;
+      }
+      if (dmPolicy !== "open") {
+        const permitted = allowListMatches({
+          allowList: effectiveAllowFromLower,
+          id: message.user,
+        });
+        if (!permitted) {
+          if (dmPolicy === "pairing") {
+            const sender = await resolveUserName(message.user);
+            const senderName = sender?.name ?? undefined;
+            const { code } = await upsertProviderPairingRequest({
+              provider: "slack",
+              id: message.user,
+              meta: { name: senderName },
+            });
+            logVerbose(
+              `slack pairing request sender=${message.user} name=${senderName ?? "unknown"} code=${code}`,
+            );
+            try {
+              await sendMessageSlack(
+                message.channel,
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider slack <code>",
+                ].join("\n"),
+                { token: botToken, client: app.client },
+              );
+            } catch (err) {
+              logVerbose(
+                `slack pairing reply failed for ${message.user}: ${String(err)}`,
+              );
+            }
+          } else {
+            logVerbose(
+              `Blocked unauthorized slack sender ${message.user} (dmPolicy=${dmPolicy})`,
+            );
+          }
+          return;
+        }
       }
     }
 
@@ -590,7 +704,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           matchesMentionPatterns(message.text ?? "", mentionRegexes)));
     const sender = await resolveUserName(message.user);
     const senderName = sender?.name ?? message.user;
-    const allowList = normalizeAllowListLower(allowFrom);
+    const allowList = effectiveAllowFromLower;
     const commandAuthorized =
       allowList.length === 0 ||
       allowListMatches({
@@ -599,7 +713,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         name: senderName,
       });
     const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
+    const allowTextCommands = shouldHandleTextCommands({
+      cfg,
+      surface: "slack",
+    });
     const shouldBypassMention =
+      allowTextCommands &&
       isRoom &&
       channelConfig?.requireMention &&
       !wasMentioned &&
@@ -628,6 +747,30 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     });
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
+    const shouldAckReaction = () => {
+      if (!ackReaction) return false;
+      if (ackReactionScope === "all") return true;
+      if (ackReactionScope === "direct") return isDirectMessage;
+      const isGroupChat = isRoom || isGroupDm;
+      if (ackReactionScope === "group-all") return isGroupChat;
+      if (ackReactionScope === "group-mentions") {
+        if (!isRoom) return false;
+        if (!channelConfig?.requireMention) return false;
+        if (!canDetectMention) return false;
+        return wasMentioned || shouldBypassMention;
+      }
+      return false;
+    };
+    if (shouldAckReaction() && message.ts) {
+      reactSlackMessage(message.channel, message.ts, ackReaction, {
+        token: botToken,
+        client: app.client,
+      }).catch((err) => {
+        logVerbose(
+          `slack react failed for channel ${message.channel}: ${String(err)}`,
+        );
+      });
+    }
 
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
@@ -640,15 +783,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       : isRoom
         ? `slack:channel:${message.channel}`
         : `slack:group:${message.channel}`;
-    const sessionKey = resolveSessionKey(
-      sessionScope,
-      {
-        From: slackFrom,
-        ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
-        Surface: "slack",
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "slack",
+      teamId: teamId || undefined,
+      peer: {
+        kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
+        id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
       },
-      mainKey,
-    );
+    });
+    const sessionKey = route.sessionKey;
     enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
       sessionKey,
       contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
@@ -656,7 +800,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     const textWithId = `${rawBody}\n[slack message id: ${message.ts} channel: ${message.channel}]`;
     const body = formatAgentEnvelope({
-      surface: "Slack",
+      provider: "Slack",
       from: senderName,
       timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
       body: textWithId,
@@ -669,11 +813,13 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       To: isDirectMessage
         ? `user:${message.user}`
         : `channel:${message.channel}`,
+      SessionKey: route.sessionKey,
+      AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
       GroupSubject: isRoomish ? roomLabel : undefined,
       SenderName: senderName,
       SenderId: message.user,
-      Surface: "slack" as const,
+      Provider: "slack" as const,
       MessageSid: message.ts,
       ReplyToId: message.thread_ts ?? message.ts,
       Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
@@ -692,13 +838,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     if (isDirectMessage) {
       const sessionCfg = cfg.session;
-      const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-      const storePath = resolveStorePath(sessionCfg?.store);
+      const storePath = resolveStorePath(sessionCfg?.store, {
+        agentId: route.agentId,
+      });
       await updateLastRoute({
         storePath,
-        sessionKey: mainKey,
-        channel: "slack",
+        sessionKey: route.mainSessionKey,
+        provider: "slack",
         to: `user:${message.user}`,
+        accountId: route.accountId,
       });
     }
 
@@ -710,51 +858,61 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     // Only thread replies if the incoming message was in a thread.
     const incomingThreadTs = message.thread_ts;
-
-    const dispatcher = createReplyDispatcher({
-      responsePrefix: cfg.messages?.responsePrefix,
-      deliver: async (payload) => {
-        await deliverReplies({
-          replies: [payload],
-          target: replyTarget,
-          token: botToken,
-          runtime,
-          textLimit,
-          threadTs: incomingThreadTs,
-        });
-      },
-      onError: (err, info) => {
-        runtime.error?.(
-          danger(`slack ${info.kind} reply failed: ${String(err)}`),
-        );
-      },
-    });
-
-    const replyResult = await getReplyFromConfig(
-      ctxPayload,
-      {
-        onToolResult: (payload) => {
-          dispatcher.sendToolResult(payload);
+    const statusThreadTs = message.thread_ts ?? message.ts;
+    let didSetStatus = false;
+    const onReplyStart = async () => {
+      didSetStatus = true;
+      await setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "is typing...",
+      });
+    };
+    const { dispatcher, replyOptions, markDispatchIdle } =
+      createReplyDispatcherWithTyping({
+        responsePrefix: cfg.messages?.responsePrefix,
+        deliver: async (payload) => {
+          await deliverReplies({
+            replies: [payload],
+            target: replyTarget,
+            token: botToken,
+            runtime,
+            textLimit,
+            threadTs: incomingThreadTs,
+          });
         },
-        onBlockReply: (payload) => {
-          dispatcher.sendBlockReply(payload);
+        onError: (err, info) => {
+          runtime.error?.(
+            danger(`slack ${info.kind} reply failed: ${String(err)}`),
+          );
+          if (didSetStatus) {
+            void setSlackThreadStatus({
+              channelId: message.channel,
+              threadTs: statusThreadTs,
+              status: "",
+            });
+          }
         },
-      },
+        onReplyStart,
+      });
+
+    const { queuedFinal, counts } = await dispatchReplyFromConfig({
+      ctx: ctxPayload,
       cfg,
-    );
-    const replies = replyResult
-      ? Array.isArray(replyResult)
-        ? replyResult
-        : [replyResult]
-      : [];
-    let queuedFinal = false;
-    for (const reply of replies) {
-      queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
+      dispatcher,
+      replyOptions,
+    });
+    markDispatchIdle();
+    if (didSetStatus) {
+      await setSlackThreadStatus({
+        channelId: message.channel,
+        threadTs: statusThreadTs,
+        status: "",
+      });
     }
-    await dispatcher.waitForIdle();
     if (!queuedFinal) return;
     if (shouldLogVerbose()) {
-      const finalCount = dispatcher.getQueuedCounts().final;
+      const finalCount = counts.final;
       logVerbose(
         `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
@@ -1217,150 +1375,242 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     },
   );
 
-  if (slashCommand.enabled) {
-    app.command(
-      slashCommand.name,
-      async ({ command, ack, respond }: SlackCommandMiddlewareArgs) => {
-        try {
-          const prompt = command.text?.trim();
-          if (!prompt) {
-            await ack({
-              text: "Message required.",
-              response_type: "ephemeral",
-            });
-            return;
-          }
-          await ack();
+  const handleSlashCommand = async (params: {
+    command: SlackCommandMiddlewareArgs["command"];
+    ack: SlackCommandMiddlewareArgs["ack"];
+    respond: SlackCommandMiddlewareArgs["respond"];
+    prompt: string;
+  }) => {
+    const { command, ack, respond, prompt } = params;
+    try {
+      if (!prompt.trim()) {
+        await ack({
+          text: "Message required.",
+          response_type: "ephemeral",
+        });
+        return;
+      }
+      await ack();
 
-          if (botUserId && command.user_id === botUserId) return;
+      if (botUserId && command.user_id === botUserId) return;
 
-          const channelInfo = await resolveChannelName(command.channel_id);
-          const channelType =
-            channelInfo?.type ??
-            (command.channel_name === "directmessage" ? "im" : undefined);
-          const isDirectMessage = channelType === "im";
-          const isGroupDm = channelType === "mpim";
-          const isRoom = channelType === "channel" || channelType === "group";
+      const channelInfo = await resolveChannelName(command.channel_id);
+      const channelType =
+        channelInfo?.type ??
+        (command.channel_name === "directmessage" ? "im" : undefined);
+      const isDirectMessage = channelType === "im";
+      const isGroupDm = channelType === "mpim";
+      const isRoom = channelType === "channel" || channelType === "group";
 
-          if (isDirectMessage && !dmEnabled) {
-            await respond({
-              text: "Slack DMs are disabled.",
-              response_type: "ephemeral",
-            });
-            return;
-          }
-          if (isGroupDm && !groupDmEnabled) {
-            await respond({
-              text: "Slack group DMs are disabled.",
-              response_type: "ephemeral",
-            });
-            return;
-          }
-          if (isGroupDm && groupDmChannels.length > 0) {
-            const allowList = normalizeAllowListLower(groupDmChannels);
-            const channelName = channelInfo?.name;
-            const candidates = [
-              command.channel_id,
-              channelName ? `#${channelName}` : undefined,
-              channelName,
-              channelName ? normalizeSlackSlug(channelName) : undefined,
-            ]
-              .filter((value): value is string => Boolean(value))
-              .map((value) => value.toLowerCase());
-            const permitted =
-              allowList.includes("*") ||
-              candidates.some((candidate) => allowList.includes(candidate));
-            if (!permitted) {
+      if (isDirectMessage && !dmEnabled) {
+        await respond({
+          text: "Slack DMs are disabled.",
+          response_type: "ephemeral",
+        });
+        return;
+      }
+      if (isGroupDm && !groupDmEnabled) {
+        await respond({
+          text: "Slack group DMs are disabled.",
+          response_type: "ephemeral",
+        });
+        return;
+      }
+      if (isGroupDm && groupDmChannels.length > 0) {
+        const allowList = normalizeAllowListLower(groupDmChannels);
+        const channelName = channelInfo?.name;
+        const candidates = [
+          command.channel_id,
+          channelName ? `#${channelName}` : undefined,
+          channelName,
+          channelName ? normalizeSlackSlug(channelName) : undefined,
+        ]
+          .filter((value): value is string => Boolean(value))
+          .map((value) => value.toLowerCase());
+        const permitted =
+          allowList.includes("*") ||
+          candidates.some((candidate) => allowList.includes(candidate));
+        if (!permitted) {
+          await respond({
+            text: "This group DM is not allowed.",
+            response_type: "ephemeral",
+          });
+          return;
+        }
+      }
+
+      const storeAllowFrom = await readProviderAllowFromStore("slack").catch(
+        () => [],
+      );
+      const effectiveAllowFrom = normalizeAllowList([
+        ...allowFrom,
+        ...storeAllowFrom,
+      ]);
+      const effectiveAllowFromLower =
+        normalizeAllowListLower(effectiveAllowFrom);
+
+      let commandAuthorized = true;
+      if (isDirectMessage) {
+        if (!dmEnabled || dmPolicy === "disabled") {
+          await respond({
+            text: "Slack DMs are disabled.",
+            response_type: "ephemeral",
+          });
+          return;
+        }
+        if (dmPolicy !== "open") {
+          const sender = await resolveUserName(command.user_id);
+          const senderName = sender?.name ?? undefined;
+          const permitted = allowListMatches({
+            allowList: effectiveAllowFromLower,
+            id: command.user_id,
+            name: senderName,
+          });
+          if (!permitted) {
+            if (dmPolicy === "pairing") {
+              const { code } = await upsertProviderPairingRequest({
+                provider: "slack",
+                id: command.user_id,
+                meta: { name: senderName },
+              });
               await respond({
-                text: "This group DM is not allowed.",
+                text: [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider slack <code>",
+                ].join("\n"),
                 response_type: "ephemeral",
               });
-              return;
-            }
-          }
-
-          if (isDirectMessage && allowFrom.length > 0) {
-            const sender = await resolveUserName(command.user_id);
-            const permitted = allowListMatches({
-              allowList: normalizeAllowListLower(allowFrom),
-              id: command.user_id,
-              name: sender?.name ?? undefined,
-            });
-            if (!permitted) {
+            } else {
               await respond({
                 text: "You are not authorized to use this command.",
                 response_type: "ephemeral",
               });
-              return;
             }
+            return;
           }
+          commandAuthorized = true;
+        }
+      }
 
-          if (isRoom) {
-            const channelConfig = resolveSlackChannelConfig({
-              channelId: command.channel_id,
-              channelName: channelInfo?.name,
-              channels: channelsConfig,
-            });
-            if (channelConfig?.allowed === false) {
-              await respond({
-                text: "This channel is not allowed.",
-                response_type: "ephemeral",
-              });
-              return;
-            }
-          }
-
-          const sender = await resolveUserName(command.user_id);
-          const senderName =
-            sender?.name ?? command.user_name ?? command.user_id;
-          const channelName = channelInfo?.name;
-          const roomLabel = channelName
-            ? `#${channelName}`
-            : `#${command.channel_id}`;
-          const isRoomish = isRoom || isGroupDm;
-
-          const ctxPayload = {
-            Body: prompt,
-            From: isDirectMessage
-              ? `slack:${command.user_id}`
-              : isRoom
-                ? `slack:channel:${command.channel_id}`
-                : `slack:group:${command.channel_id}`,
-            To: `slash:${command.user_id}`,
-            ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
-            GroupSubject: isRoomish ? roomLabel : undefined,
-            SenderName: senderName,
-            Surface: "slack" as const,
-            WasMentioned: true,
-            MessageSid: command.trigger_id,
-            Timestamp: Date.now(),
-            SessionKey: `${slashCommand.sessionPrefix}:${command.user_id}`,
-          };
-
-          const replyResult = await getReplyFromConfig(
-            ctxPayload,
-            undefined,
-            cfg,
-          );
-          const replies = replyResult
-            ? Array.isArray(replyResult)
-              ? replyResult
-              : [replyResult]
-            : [];
-
-          await deliverSlackSlashReplies({
-            replies,
-            respond,
-            ephemeral: slashCommand.ephemeral,
-            textLimit,
-          });
-        } catch (err) {
-          runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
+      if (isRoom) {
+        const channelConfig = resolveSlackChannelConfig({
+          channelId: command.channel_id,
+          channelName: channelInfo?.name,
+          channels: channelsConfig,
+        });
+        if (
+          useAccessGroups &&
+          !isSlackRoomAllowedByPolicy({
+            groupPolicy,
+            channelAllowlistConfigured:
+              Boolean(channelsConfig) &&
+              Object.keys(channelsConfig ?? {}).length > 0,
+            channelAllowed: channelConfig?.allowed !== false,
+          })
+        ) {
           await respond({
-            text: "Sorry, something went wrong handling that command.",
+            text: "This channel is not allowed.",
             response_type: "ephemeral",
           });
+          return;
         }
+        if (useAccessGroups && channelConfig?.allowed === false) {
+          await respond({
+            text: "This channel is not allowed.",
+            response_type: "ephemeral",
+          });
+          return;
+        }
+      }
+
+      const sender = await resolveUserName(command.user_id);
+      const senderName = sender?.name ?? command.user_name ?? command.user_id;
+      const channelName = channelInfo?.name;
+      const roomLabel = channelName
+        ? `#${channelName}`
+        : `#${command.channel_id}`;
+      const isRoomish = isRoom || isGroupDm;
+      const route = resolveAgentRoute({
+        cfg,
+        provider: "slack",
+        teamId: teamId || undefined,
+        peer: {
+          kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
+          id: isDirectMessage ? command.user_id : command.channel_id,
+        },
+      });
+
+      const ctxPayload = {
+        Body: prompt,
+        From: isDirectMessage
+          ? `slack:${command.user_id}`
+          : isRoom
+            ? `slack:channel:${command.channel_id}`
+            : `slack:group:${command.channel_id}`,
+        To: `slash:${command.user_id}`,
+        ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
+        GroupSubject: isRoomish ? roomLabel : undefined,
+        SenderName: senderName,
+        SenderId: command.user_id,
+        Provider: "slack" as const,
+        Surface: "slack" as const,
+        WasMentioned: true,
+        MessageSid: command.trigger_id,
+        Timestamp: Date.now(),
+        SessionKey: `agent:${route.agentId}:${slashCommand.sessionPrefix}:${command.user_id}`,
+        AccountId: route.accountId,
+        CommandSource: "native" as const,
+        CommandAuthorized: commandAuthorized,
+      };
+
+      const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);
+      const replies = replyResult
+        ? Array.isArray(replyResult)
+          ? replyResult
+          : [replyResult]
+        : [];
+
+      await deliverSlackSlashReplies({
+        replies,
+        respond,
+        ephemeral: slashCommand.ephemeral,
+        textLimit,
+      });
+    } catch (err) {
+      runtime.error?.(danger(`slack slash handler failed: ${String(err)}`));
+      await respond({
+        text: "Sorry, something went wrong handling that command.",
+        response_type: "ephemeral",
+      });
+    }
+  };
+
+  const nativeCommands =
+    cfg.commands?.native === true ? listNativeCommandSpecs() : [];
+  if (nativeCommands.length > 0) {
+    for (const command of nativeCommands) {
+      app.command(
+        `/${command.name}`,
+        async ({ command: cmd, ack, respond }: SlackCommandMiddlewareArgs) => {
+          const prompt = buildCommandText(command.name, cmd.text);
+          await handleSlashCommand({ command: cmd, ack, respond, prompt });
+        },
+      );
+    }
+  } else if (slashCommand.enabled) {
+    app.command(
+      slashCommand.name,
+      async ({ command, ack, respond }: SlackCommandMiddlewareArgs) => {
+        await handleSlashCommand({
+          command,
+          ack,
+          respond,
+          prompt: command.text?.trim() ?? "",
+        });
       },
     );
   }
@@ -1401,7 +1651,7 @@ async function deliverReplies(params: {
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(text, chunkLimit)) {
+      for (const chunk of chunkMarkdownText(text, chunkLimit)) {
         const trimmed = chunk.trim();
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
@@ -1430,6 +1680,18 @@ type SlackRespondFn = (payload: {
   response_type?: "ephemeral" | "in_channel";
 }) => Promise<unknown>;
 
+export function isSlackRoomAllowedByPolicy(params: {
+  groupPolicy: "open" | "disabled" | "allowlist";
+  channelAllowlistConfigured: boolean;
+  channelAllowed: boolean;
+}): boolean {
+  const { groupPolicy, channelAllowlistConfigured, channelAllowed } = params;
+  if (groupPolicy === "disabled") return false;
+  if (groupPolicy === "open") return true;
+  if (!channelAllowlistConfigured) return false;
+  return channelAllowed;
+}
+
 async function deliverSlackSlashReplies(params: {
   replies: ReplyPayload[];
   respond: SlackRespondFn;
@@ -1451,7 +1713,7 @@ async function deliverSlackSlashReplies(params: {
       .filter(Boolean)
       .join("\n");
     if (!combined) continue;
-    for (const chunk of chunkText(combined, chunkLimit)) {
+    for (const chunk of chunkMarkdownText(combined, chunkLimit)) {
       messages.push(chunk);
     }
   }

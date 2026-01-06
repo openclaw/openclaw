@@ -17,7 +17,7 @@ Last updated: 2026-01-01
 ## Prereqs (from source)
 - Node `>=22`
 - `pnpm`
-- Docker (optional; only for containerized setup/e2e — see `docs/docker.md`)
+- Docker (optional; only for containerized setup/e2e — see [`docs/docker.md`](https://docs.clawd.bot/docker))
 
 ## Tailoring strategy (so updates don’t hurt)
 
@@ -77,7 +77,7 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs `src/index.ts gateway --force` and reloads on `src/**/*.ts` changes.
+`gateway:watch` runs `src/entry.ts gateway --force` and reloads on [`src/**/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/**/*.ts) changes.
 
 ### 2) Point the macOS app at your running Gateway
 
@@ -102,7 +102,8 @@ pnpm clawdbot health
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Credentials: `~/.clawdbot/credentials/`
-  - Sessions/logs: `~/.clawdbot/sessions/`
+  - Sessions: `~/.clawdbot/agents/<agentId>/sessions/`
+  - Logs: `/tmp/clawdbot/`
 
 ## Updating (without wrecking your setup)
 
@@ -120,12 +121,12 @@ sudo loginctl enable-linger $USER
 ```
 
 For always-on or multi-user servers, consider a **system** service instead of a
-user service (no lingering needed). See `docs/gateway.md` for the systemd notes.
+user service (no lingering needed). See [`docs/gateway.md`](https://docs.clawd.bot/gateway) for the systemd notes.
 
 ## Related docs
 
-- `docs/gateway.md` (Gateway runbook; flags, supervision, ports)
-- `docs/configuration.md` (config schema + examples)
-- `docs/discord.md` and `docs/telegram.md` (reply tags + replyToMode settings)
-- `docs/clawd.md` (personal assistant setup)
-- `docs/macos.md` (macOS app behavior; gateway lifecycle + “Attach only”)
+- [`docs/gateway.md`](https://docs.clawd.bot/gateway) (Gateway runbook; flags, supervision, ports)
+- [`docs/configuration.md`](https://docs.clawd.bot/configuration) (config schema + examples)
+- [`docs/discord.md`](https://docs.clawd.bot/discord) and [`docs/telegram.md`](https://docs.clawd.bot/telegram) (reply tags + replyToMode settings)
+- [`docs/clawd.md`](https://docs.clawd.bot/clawd) (personal assistant setup)
+- [`docs/macos.md`](https://docs.clawd.bot/macos) (macOS app behavior; gateway lifecycle + “Attach only”)

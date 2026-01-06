@@ -114,7 +114,17 @@ const DEFAULT_SANDBOX_CONTAINER_PREFIX = "clawdbot-sbx-";
 const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
-const DEFAULT_TOOL_ALLOW = ["bash", "process", "read", "write", "edit"];
+const DEFAULT_TOOL_ALLOW = [
+  "bash",
+  "process",
+  "read",
+  "write",
+  "edit",
+  "sessions_list",
+  "sessions_history",
+  "sessions_send",
+  "sessions_spawn",
+];
 const DEFAULT_TOOL_DENY = [
   "browser",
   "canvas",
@@ -424,7 +434,11 @@ async function dockerContainerState(name: string) {
   return { exists: true, running: result.stdout.trim() === "true" };
 }
 
-async function ensureSandboxWorkspace(workspaceDir: string, seedFrom?: string) {
+async function ensureSandboxWorkspace(
+  workspaceDir: string,
+  seedFrom?: string,
+  skipBootstrap?: boolean,
+) {
   await fs.mkdir(workspaceDir, { recursive: true });
   if (seedFrom) {
     const seed = resolveUserPath(seedFrom);
@@ -451,7 +465,10 @@ async function ensureSandboxWorkspace(workspaceDir: string, seedFrom?: string) {
       }
     }
   }
-  await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+  await ensureAgentWorkspace({
+    dir: workspaceDir,
+    ensureBootstrapFiles: !skipBootstrap,
+  });
 }
 
 function normalizeDockerLimit(value?: string | number) {
@@ -846,7 +863,11 @@ export async function resolveSandboxContext(params: {
     : workspaceRoot;
   const seedWorkspace =
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
-  await ensureSandboxWorkspace(workspaceDir, seedWorkspace);
+  await ensureSandboxWorkspace(
+    workspaceDir,
+    seedWorkspace,
+    params.config?.agent?.skipBootstrap,
+  );
 
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
@@ -889,7 +910,11 @@ export async function ensureSandboxWorkspaceForSession(params: {
     : workspaceRoot;
   const seedWorkspace =
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
-  await ensureSandboxWorkspace(workspaceDir, seedWorkspace);
+  await ensureSandboxWorkspace(
+    workspaceDir,
+    seedWorkspace,
+    params.config?.agent?.skipBootstrap,
+  );
 
   return {
     workspaceDir,

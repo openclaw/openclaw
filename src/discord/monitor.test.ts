@@ -1,7 +1,9 @@
+import type { Guild } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
 import {
   allowListMatches,
   type DiscordGuildEntryResolved,
+  isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
   normalizeDiscordSlug,
   resolveDiscordChannelConfig,
@@ -11,8 +13,7 @@ import {
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
 
-const fakeGuild = (id: string, name: string) =>
-  ({ id, name }) as unknown as import("discord.js").Guild;
+const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
 
 const makeEntries = (
   entries: Record<string, Partial<DiscordGuildEntryResolved>>,
@@ -129,6 +130,58 @@ describe("discord guild/channel resolution", () => {
       channelSlug: "random",
     });
     expect(channel?.allowed).toBe(false);
+  });
+});
+
+describe("discord groupPolicy gating", () => {
+  it("allows when policy is open", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "open",
+        channelAllowlistConfigured: false,
+        channelAllowed: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks when policy is disabled", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "disabled",
+        channelAllowlistConfigured: true,
+        channelAllowed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks allowlist when no channel allowlist configured", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        channelAllowlistConfigured: false,
+        channelAllowed: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("allows allowlist when channel is allowed", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        channelAllowlistConfigured: true,
+        channelAllowed: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks allowlist when channel is not allowed", () => {
+    expect(
+      isDiscordGroupAllowedByPolicy({
+        groupPolicy: "allowlist",
+        channelAllowlistConfigured: true,
+        channelAllowed: false,
+      }),
+    ).toBe(false);
   });
 });
 

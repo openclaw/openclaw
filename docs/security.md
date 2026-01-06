@@ -5,7 +5,12 @@ read_when:
 ---
 # Security 🔒
 
-Running an AI agent with shell access on your machine is... *spicy*. Here's how to not get pwned.
+Running an AI agent with shell access on your machine is... *spicy*. Here’s how to not get pwned.
+
+Clawdbot is both a product and an experiment: you’re wiring frontier-model behavior into real messaging surfaces and real tools. **There is no “perfectly secure” setup.** The goal is to be deliberate about:
+- who can talk to your bot
+- where the bot is allowed to act
+- what the bot can touch
 
 ## The Threat Model
 
@@ -19,6 +24,57 @@ People who message you can:
 - Try to trick your AI into doing bad things
 - Social engineer access to your data
 - Probe for infrastructure details
+
+## Core concept: access control before intelligence
+
+Most failures here are not fancy exploits — they’re “someone messaged the bot and the bot did what they asked.”
+
+Clawdbot’s stance:
+- **Identity first:** decide who can talk to the bot (DM pairing / allowlists / explicit “open”).
+- **Scope next:** decide where the bot is allowed to act (group allowlists + mention gating, tools, sandboxing, device permissions).
+- **Model last:** assume the model can be manipulated; design so manipulation has limited blast radius.
+
+## DM access model (pairing / allowlist / open / disabled)
+
+All current DM-capable providers support a DM policy (`dmPolicy` or `*.dm.policy`) that gates inbound DMs **before** the message is processed:
+
+- `pairing` (default): unknown senders receive a short pairing code and the bot ignores their message until approved.
+- `allowlist`: unknown senders are blocked (no pairing handshake).
+- `open`: allow anyone to DM (public). **Requires** the provider allowlist to include `"*"` (explicit opt-in).
+- `disabled`: ignore inbound DMs entirely.
+
+Approve via CLI:
+
+```bash
+clawdbot pairing list --provider <provider>
+clawdbot pairing approve --provider <provider> <code>
+```
+
+Details + files on disk: https://docs.clawd.bot/pairing
+
+## Allowlists (DM + groups) — terminology
+
+Clawdbot has two separate “who can trigger me?” layers:
+
+- **DM allowlist** (`allowFrom` / `discord.dm.allowFrom` / `slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
+  - When `dmPolicy="pairing"`, approvals are written to `~/.clawdbot/credentials/<provider>-allowFrom.json` (merged with config allowlists).
+- **Group allowlist** (provider-specific): which groups/channels/guilds the bot will accept messages from at all.
+  - Common patterns:
+    - `whatsapp.groups`, `telegram.groups`, `imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
+    - `groupPolicy="allowlist"` + `groupAllowFrom`: restrict who can trigger the bot *inside* a group session (WhatsApp/Telegram/Signal/iMessage).
+    - `discord.guilds` / `slack.channels`: per-surface allowlists + mention defaults.
+
+Details: https://docs.clawd.bot/configuration and https://docs.clawd.bot/groups
+
+## Prompt injection (what it is, why it matters)
+
+Prompt injection is when an attacker crafts a message that manipulates the model into doing something unsafe (“ignore your instructions”, “dump your filesystem”, “follow this link and run commands”, etc.).
+
+Even with strong system prompts, **prompt injection is not solved**. What helps in practice:
+- Keep inbound DMs locked down (pairing/allowlists).
+- Prefer mention gating in groups; avoid “always-on” bots in public rooms.
+- Treat links and pasted instructions as hostile by default.
+- Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
 
 ## Lessons Learned (The Hard Way)
 
@@ -36,21 +92,17 @@ This is social engineering 101. Create distrust, encourage snooping.
 
 **Lesson:** Don't let strangers (or friends!) manipulate your AI into exploring the filesystem.
 
-## Configuration Hardening
+## Configuration Hardening (examples)
 
-### 1. Allowlist Senders
+### 1) DMs: pairing by default
 
-```json
+```json5
 {
-  "whatsapp": {
-    "allowFrom": ["+15555550123"]
-  }
+  whatsapp: { dmPolicy: "pairing" }
 }
 ```
 
-Only allow specific phone numbers to trigger your AI. Never use `["*"]` in production.
-
-### 2. Group Chat Mentions
+### 2) Groups: require mention everywhere
 
 ```json
 {
@@ -82,34 +134,14 @@ We're considering a `readOnlyMode` flag that prevents the AI from:
 - Executing shell commands
 - Sending messages
 
-## Container Isolation (Recommended)
+## Sandboxing (recommended)
 
-For maximum security, run CLAWDBOT in a container with limited access:
+Two complementary approaches:
 
-```yaml
-# docker-compose.yml
-services:
-  clawdbot:
-    build: .
-    volumes:
-      - ./clawd-sandbox:/home/clawd  # Limited filesystem
-      - /tmp/clawdbot:/tmp/clawdbot    # Logs
-    environment:
-      - CLAWDBOT_SANDBOX=true
-    network_mode: bridge  # Limited network
-```
+- **Run the full Gateway in Docker** (container boundary): https://docs.clawd.bot/docker
+- **Per-session tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): https://docs.clawd.bot/configuration
 
-### Per-session sandbox (Clawdbot-native)
-
-Clawdbot can also run **non-main sessions** inside per-session Docker containers
-(`agent.sandbox`). This keeps the gateway on your host while isolating agent
-tools in a hard wall container. See `docs/configuration.md` for the full config.
-
-Expose only the services your AI needs:
-- ✅ GoWA API (for WhatsApp)
-- ✅ Specific HTTP APIs
-- ❌ Raw shell access to host
-- ❌ Full filesystem
+Important: `agent.elevated` is an explicit escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
 
 ## What to Tell Your AI
 
@@ -130,7 +162,7 @@ If your AI does something bad:
 
 1. **Stop it:** stop the macOS app (if it’s supervising the Gateway) or terminate your `clawdbot gateway` process
 2. **Check logs:** `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
-3. **Review session:** Check `~/.clawdbot/sessions/` for what happened
+3. **Review session:** Check `~/.clawdbot/agents/<agentId>/sessions/` for what happened
 4. **Rotate secrets:** If credentials were exposed
 5. **Update rules:** Add to your security prompt
 
@@ -157,7 +189,7 @@ Mario asking for find ~
 
 Found a vulnerability in CLAWDBOT? Please report responsibly:
 
-1. Email: security@[redacted].com
+1. Email: security@clawd.bot
 2. Don't post publicly until fixed
 3. We'll credit you (unless you prefer anonymity)
 

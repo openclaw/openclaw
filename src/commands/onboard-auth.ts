@@ -1,4 +1,5 @@
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
+import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
 
@@ -6,17 +7,22 @@ export async function writeOAuthCredentials(
   provider: OAuthProvider,
   creds: OAuthCredentials,
 ): Promise<void> {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  const agentDir = resolveDefaultAgentDir();
   upsertAuthProfile({
-    profileId: `${provider}:default`,
+    profileId: `${provider}:${creds.email ?? "default"}`,
     credential: {
       type: "oauth",
       provider,
       ...creds,
     },
+    agentDir,
   });
 }
 
 export async function setAnthropicApiKey(key: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  const agentDir = resolveDefaultAgentDir();
   upsertAuthProfile({
     profileId: "anthropic:default",
     credential: {
@@ -24,6 +30,7 @@ export async function setAnthropicApiKey(key: string) {
       provider: "anthropic",
       key,
     },
+    agentDir,
   });
 }
 
@@ -44,16 +51,25 @@ export function applyAuthProfileConfig(
       ...(params.email ? { email: params.email } : {}),
     },
   };
-  const order = { ...cfg.auth?.order };
-  const list = order[params.provider] ? [...order[params.provider]] : [];
-  if (!list.includes(params.profileId)) list.push(params.profileId);
-  order[params.provider] = list;
+
+  // Only maintain `auth.order` when the user explicitly configured it.
+  // Default behavior: no explicit order -> resolveAuthProfileOrder can round-robin by lastUsed.
+  const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const order =
+    existingProviderOrder !== undefined
+      ? {
+          ...cfg.auth?.order,
+          [params.provider]: existingProviderOrder.includes(params.profileId)
+            ? existingProviderOrder
+            : [...existingProviderOrder, params.profileId],
+        }
+      : cfg.auth?.order;
   return {
     ...cfg,
     auth: {
       ...cfg.auth,
       profiles,
-      order,
+      ...(order ? { order } : {}),
     },
   };
 }

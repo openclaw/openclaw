@@ -57,10 +57,25 @@ The macOS app requires a symlink named `clawdbot` in `/usr/local/bin` or `/opt/h
 
 Alternatively, you can manually link it from your Admin account:
 ```bash
-sudo ln -sf "/Users/$(whoami)/clawdbot/dist/Clawdbot.app/Contents/Resources/Relay/clawdbot" /usr/local/bin/clawdbot
+sudo ln -sf "/Users/$(whoami)/Projects/clawdbot/dist/Clawdbot.app/Contents/Resources/Relay/clawdbot" /usr/local/bin/clawdbot
 ```
 
 ## Troubleshooting
+
+### Build Fails: Toolchain or SDK Mismatch
+The macOS app build expects the latest macOS SDK and Swift 6.2 toolchain.
+
+**System dependencies (required):**
+- **Latest macOS version available in Software Update** (required by Xcode 26.2 SDKs)
+- **Xcode 26.2** (Swift 6.2 toolchain)
+
+**Checks:**
+```bash
+xcodebuild -version
+xcrun swift --version
+```
+
+If versions don’t match, update macOS/Xcode and re-run the build.
 
 ### App Crashes on Permission Grant
 If the app crashes when you try to allow **Speech Recognition** or **Microphone** access, it may be due to a corrupted TCC cache or signature mismatch.
@@ -70,7 +85,7 @@ If the app crashes when you try to allow **Speech Recognition** or **Microphone*
    ```bash
    tccutil reset All com.clawdbot.mac.debug
    ```
-2. If that fails, change the `BUNDLE_ID` temporarily in `scripts/package-mac-app.sh` to force a "clean slate" from macOS.
+2. If that fails, change the `BUNDLE_ID` temporarily in [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) to force a "clean slate" from macOS.
 
 ### Gateway "Starting..." indefinitely
 If the gateway status stays on "Starting...", check if a zombie process is holding the port:

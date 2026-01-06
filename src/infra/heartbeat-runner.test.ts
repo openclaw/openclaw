@@ -13,8 +13,11 @@ import {
 } from "./heartbeat-runner.js";
 
 describe("resolveHeartbeatIntervalMs", () => {
-  it("returns null when unset or invalid", () => {
-    expect(resolveHeartbeatIntervalMs({})).toBeNull();
+  it("returns default when unset", () => {
+    expect(resolveHeartbeatIntervalMs({})).toBe(30 * 60_000);
+  });
+
+  it("returns null when invalid or zero", () => {
     expect(
       resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "0m" } } }),
     ).toBeNull();
@@ -60,7 +63,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       agent: { heartbeat: { target: "none" } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "none",
+      provider: "none",
       reason: "target-none",
     });
   });
@@ -69,11 +72,11 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     const cfg: ClawdbotConfig = {};
     const entry = {
       ...baseEntry,
-      lastChannel: "whatsapp" as const,
+      lastProvider: "whatsapp" as const,
       lastTo: "+1555",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      channel: "whatsapp",
+      provider: "whatsapp",
       to: "+1555",
     });
   });
@@ -82,11 +85,11 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     const cfg: ClawdbotConfig = {};
     const entry = {
       ...baseEntry,
-      lastChannel: "webchat" as const,
+      lastProvider: "webchat" as const,
       lastTo: "web",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      channel: "none",
+      provider: "none",
       reason: "no-target",
     });
   });
@@ -98,11 +101,11 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     };
     const entry = {
       ...baseEntry,
-      lastChannel: "whatsapp" as const,
+      lastProvider: "whatsapp" as const,
       lastTo: "+1222",
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
-      channel: "whatsapp",
+      provider: "whatsapp",
       to: "+1555",
       reason: "allowFrom-fallback",
     });
@@ -113,7 +116,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       agent: { heartbeat: { target: "telegram", to: "123" } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
-      channel: "telegram",
+      provider: "telegram",
       to: "123",
     });
   });
@@ -132,7 +135,7 @@ describe("runHeartbeatOnce", () => {
             main: {
               sessionId: "sid",
               updatedAt: Date.now(),
-              lastChannel: "whatsapp",
+              lastProvider: "whatsapp",
               lastTo: "+1555",
             },
           },
@@ -193,7 +196,7 @@ describe("runHeartbeatOnce", () => {
             main: {
               sessionId: "sid",
               updatedAt: Date.now(),
-              lastChannel: "whatsapp",
+              lastProvider: "whatsapp",
               lastTo: "+1555",
             },
           },
@@ -251,7 +254,7 @@ describe("runHeartbeatOnce", () => {
             main: {
               sessionId: "sid",
               updatedAt: Date.now(),
-              lastChannel: "whatsapp",
+              lastProvider: "whatsapp",
               lastTo: "+1555",
             },
           },

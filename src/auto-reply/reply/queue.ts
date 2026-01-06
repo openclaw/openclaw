@@ -23,9 +23,11 @@ export type FollowupRun = {
   summaryLine?: string;
   enqueuedAt: number;
   run: {
+    agentId: string;
+    agentDir: string;
     sessionId: string;
     sessionKey?: string;
-    surface?: string;
+    messageProvider?: string;
     sessionFile: string;
     workspaceDir: string;
     config: ClawdbotConfig;
@@ -425,8 +427,8 @@ export function scheduleFollowupDrain(
     }
   })();
 }
-function defaultQueueModeForSurface(surface?: string): QueueMode {
-  const normalized = surface?.trim().toLowerCase();
+function defaultQueueModeForProvider(provider?: string): QueueMode {
+  const normalized = provider?.trim().toLowerCase();
   if (normalized === "discord") return "collect";
   if (normalized === "webchat") return "collect";
   if (normalized === "whatsapp") return "collect";
@@ -437,23 +439,23 @@ function defaultQueueModeForSurface(surface?: string): QueueMode {
 }
 export function resolveQueueSettings(params: {
   cfg: ClawdbotConfig;
-  surface?: string;
+  provider?: string;
   sessionEntry?: SessionEntry;
   inlineMode?: QueueMode;
   inlineOptions?: Partial<QueueSettings>;
 }): QueueSettings {
-  const surfaceKey = params.surface?.trim().toLowerCase();
+  const providerKey = params.provider?.trim().toLowerCase();
   const queueCfg = params.cfg.routing?.queue;
-  const surfaceModeRaw =
-    surfaceKey && queueCfg?.bySurface
-      ? (queueCfg.bySurface as Record<string, string | undefined>)[surfaceKey]
+  const providerModeRaw =
+    providerKey && queueCfg?.byProvider
+      ? (queueCfg.byProvider as Record<string, string | undefined>)[providerKey]
       : undefined;
   const resolvedMode =
     params.inlineMode ??
     normalizeQueueMode(params.sessionEntry?.queueMode) ??
-    normalizeQueueMode(surfaceModeRaw) ??
+    normalizeQueueMode(providerModeRaw) ??
     normalizeQueueMode(queueCfg?.mode) ??
-    defaultQueueModeForSurface(surfaceKey);
+    defaultQueueModeForProvider(providerKey);
   const debounceRaw =
     params.inlineOptions?.debounceMs ??
     params.sessionEntry?.queueDebounceMs ??

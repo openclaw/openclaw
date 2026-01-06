@@ -51,6 +51,8 @@ function createTyping(): TypingController {
     startTypingLoop: vi.fn(async () => {}),
     startTypingOnText: vi.fn(async () => {}),
     refreshTypingTtl: vi.fn(),
+    markRunComplete: vi.fn(),
+    markDispatchIdle: vi.fn(),
     cleanup: vi.fn(),
   };
 }
@@ -70,7 +72,7 @@ function createMinimalRun(params?: {
   const typing = createTyping();
   const opts = params?.opts;
   const sessionCtx = {
-    Surface: "whatsapp",
+    Provider: "whatsapp",
     MessageSid: "msg",
   } as unknown as TemplateContext;
   const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
@@ -82,7 +84,7 @@ function createMinimalRun(params?: {
     run: {
       sessionId: "session",
       sessionKey,
-      surface: "whatsapp",
+      messageProvider: "whatsapp",
       sessionFile: "/tmp/session.jsonl",
       workspaceDir: "/tmp",
       config: {},
@@ -208,7 +210,6 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payloads[0]?.text).toContain("count 1");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
-
   it("resets corrupted Gemini sessions and deletes transcripts", async () => {
     const prevStateDir = process.env.CLAWDBOT_STATE_DIR;
     const stateDir = await fs.mkdtemp(
@@ -353,5 +354,27 @@ describe("runReplyAgent typing (heartbeat)", () => {
         delete process.env.CLAWDBOT_STATE_DIR;
       }
     }
+  });
+
+  it("rewrites Bun socket errors into friendly text", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [
+        {
+          text: "TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+          isError: true,
+        },
+      ],
+      meta: {},
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+    expect(payloads.length).toBe(1);
+    expect(payloads[0]?.text).toContain("LLM connection failed");
+    expect(payloads[0]?.text).toContain(
+      "socket connection was closed unexpectedly",
+    );
+    expect(payloads[0]?.text).toContain("```");
   });
 });

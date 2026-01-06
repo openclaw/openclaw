@@ -15,7 +15,7 @@ Goal: ship **Clawdbot.app** with a self-contained relay binary that can run both
 App bundle layout:
 
 - `Clawdbot.app/Contents/Resources/Relay/clawdbot`
-  - bun `--compile` relay executable built from `dist/macos/relay.js`
+  - bun `--compile` relay executable built from [`dist/macos/relay.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/macos/relay.js)
   - Supports:
     - `clawdbot …` (CLI)
     - `clawdbot gateway-daemon …` (LaunchAgent daemon)
@@ -31,7 +31,7 @@ Why the sidecar files matter:
 ## Build pipeline
 
 Packaging script:
-- `scripts/package-mac-app.sh`
+- [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh)
 
 It builds:
 - TS: `pnpm exec tsc`
@@ -47,7 +47,7 @@ Important bundler flags:
 
 Version injection:
 - `--define "__CLAWDBOT_VERSION__=\"<pkg version>\""`
-- `src/version.ts` also supports `__CLAWDBOT_VERSION__` (and `CLAWDBOT_BUNDLED_VERSION`) so `--version` doesn’t depend on reading `package.json` at runtime.
+- [`src/version.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/version.ts) also supports `__CLAWDBOT_VERSION__` (and `CLAWDBOT_BUNDLED_VERSION`) so `--version` doesn’t depend on reading `package.json` at runtime.
 
 ## Launchd (Gateway as LaunchAgent)
 
@@ -58,7 +58,7 @@ Plist location (per-user):
 - `~/Library/LaunchAgents/com.clawdbot.gateway.plist`
 
 Manager:
-- `apps/macos/Sources/Clawdbot/GatewayLaunchAgentManager.swift`
+- [`apps/macos/Sources/Clawdbot/GatewayLaunchAgentManager.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/GatewayLaunchAgentManager.swift)
 
 Behavior:
 - “Clawdbot Active” enables/disables the LaunchAgent.
@@ -77,7 +77,7 @@ Symptom (when mis-signed):
 
 Fix:
 - The bun executable needs JIT-ish permissions under hardened runtime.
-- `scripts/codesign-mac-app.sh` signs `Relay/clawdbot` with:
+- [`scripts/codesign-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/codesign-mac-app.sh) signs `Relay/clawdbot` with:
   - `com.apple.security.cs.allow-jit`
   - `com.apple.security.cs.allow-unsigned-executable-memory`
 
@@ -87,17 +87,17 @@ Problem:
 - bun can’t load some native Node addons like `sharp` (and we don’t want to ship native addon trees for the gateway).
 
 Solution:
-- Central helper `src/media/image-ops.ts`
+- Central helper [`src/media/image-ops.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/media/image-ops.ts)
   - Prefers `/usr/bin/sips` on macOS (esp. when running under bun)
   - Falls back to `sharp` when available (Node/dev)
 - Used by:
-  - `src/web/media.ts` (optimize inbound/outbound images)
-  - `src/browser/screenshot.ts`
-  - `src/agents/pi-tools.ts` (image sanitization)
+  - [`src/web/media.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/media.ts) (optimize inbound/outbound images)
+  - [`src/browser/screenshot.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/browser/screenshot.ts)
+  - [`src/agents/pi-tools.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-tools.ts) (image sanitization)
 
 ## Browser control server
 
-The Gateway starts the browser control server (loopback only) from `src/gateway/server.ts`.
+The Gateway starts the browser control server (loopback only) from [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts).
 It’s started from the relay daemon process, so the relay binary includes Playwright deps.
 
 ## Tests / smoke checks
@@ -125,7 +125,7 @@ Bun may leave dotfiles like `*.bun-build` in the repo root or subfolders.
 
 ## DMG styling (human installer)
 
-`scripts/create-dmg.sh` styles the DMG via Finder AppleScript.
+[`scripts/create-dmg.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/create-dmg.sh) styles the DMG via Finder AppleScript.
 
 Rules of thumb:
 - Use a **72dpi** background image that matches the Finder window size in points.

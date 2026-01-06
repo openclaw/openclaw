@@ -79,14 +79,15 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
                 GatewayProcessManager.shared.setActive(true)
             }
 
-            let result = await GatewayConnection.shared.sendAgent(GatewayAgentInvocation(
-                message: text,
-                sessionKey: self.sessionKey,
-                thinking: "low",
-                deliver: false,
-                to: nil,
-                channel: .last,
-                idempotencyKey: actionId))
+            let result = await GatewayConnection.shared.sendAgent(
+                GatewayAgentInvocation(
+                    message: text,
+                    sessionKey: self.sessionKey,
+                    thinking: "low",
+                    deliver: false,
+                    to: nil,
+                    provider: .last,
+                    idempotencyKey: actionId))
 
             await MainActor.run {
                 guard let webView else { return }

@@ -416,7 +416,8 @@ final class AppState {
             : nil
 
         Task { @MainActor in
-            var root = await ConfigStore.load()
+            // Keep app-only connection settings local to avoid overwriting remote gateway config.
+            var root = ClawdbotConfigFile.loadDict()
             var gateway = root["gateway"] as? [String: Any] ?? [:]
             var changed = false
 
@@ -446,8 +447,12 @@ final class AppState {
             }
 
             guard changed else { return }
-            root["gateway"] = gateway
-            try? await ConfigStore.save(root)
+            if gateway.isEmpty {
+                root.removeValue(forKey: "gateway")
+            } else {
+                root["gateway"] = gateway
+            }
+            ClawdbotConfigFile.saveDict(root)
         }
     }
 

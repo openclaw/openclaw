@@ -69,7 +69,7 @@ The bridge port (default `18790`) is a plain TCP service. By default it binds to
 For a tailnet-only setup, bind it to the Tailscale IP instead:
 
 - Set `bridge.bind: "tailnet"` in `~/.clawdbot/clawdbot.json`.
-- Restart the Gateway (or restart the macOS menubar app via `./scripts/restart-mac.sh` on that machine).
+- Restart the Gateway (or restart the macOS menubar app via [`./scripts/restart-mac.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/restart-mac.sh) on that machine).
 
 This keeps the bridge reachable only from devices on your tailnet (while still listening on loopback for local/SSH port-forwards).
 
@@ -77,8 +77,8 @@ This keeps the bridge reachable only from devices on your tailnet (while still l
 
 Only the **Node Gateway** (`clawd` / `clawdbot gateway`) advertises Bonjour beacons.
 
-- Implementation: `src/infra/bonjour.ts`
-- Gateway wiring: `src/gateway/server.ts`
+- Implementation: [`src/infra/bonjour.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/bonjour.ts)
+- Gateway wiring: [`src/gateway/server.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server.ts)
 
 ## Service types
 
@@ -136,7 +136,7 @@ The log includes browser state transitions (`ready`, `waiting`, `failed`, `cance
 - **Sleep / interface churn**: macOS may temporarily drop mDNS results when switching networks; retry.
 - **Browse works but resolve fails (iOS “NoSuchRecord”)**: make sure the advertiser publishes a valid SRV target hostname.
   - Implementation detail: `@homebridge/ciao` defaults `hostname` to the *service instance name* when `hostname` is omitted. If your instance name contains spaces/parentheses, some resolvers can fail to resolve the implied A/AAAA record.
-  - Fix: set an explicit DNS-safe `hostname` (single label; no `.local`) in `src/infra/bonjour.ts`.
+  - Fix: set an explicit DNS-safe `hostname` (single label; no `.local`) in [`src/infra/bonjour.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/bonjour.ts).
 
 ## Escaped instance names (`\\032`)
 Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\\DDD` sequences (e.g. spaces become `\\032`).
@@ -155,5 +155,5 @@ Bonjour/DNS-SD often escapes bytes in service instance names as decimal `\\DDD` 
 
 ## Related docs
 
-- Discovery policy and transport selection: `docs/discovery.md`
-- Node pairing + approvals: `docs/gateway/pairing.md`
+- Discovery policy and transport selection: [`docs/discovery.md`](https://docs.clawd.bot/discovery)
+- Node pairing + approvals: [`docs/gateway/pairing.md`](https://docs.clawd.bot/gateway/pairing)

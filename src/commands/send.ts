@@ -14,6 +14,7 @@ export async function sendCommand(
     dryRun?: boolean;
     media?: string;
     gifPlayback?: boolean;
+    account?: string;
   },
   deps: CliDeps,
   runtime: RuntimeEnv,
@@ -167,13 +168,13 @@ export async function sendCommand(
     callGateway<{
       messageId: string;
     }>({
-      url: "ws://127.0.0.1:18789",
       method: "send",
       params: {
         to: opts.to,
         message: opts.message,
         mediaUrl: opts.media,
         gifPlayback: opts.gifPlayback,
+        accountId: opts.account,
         provider,
         idempotencyKey: randomIdempotencyKey(),
       },

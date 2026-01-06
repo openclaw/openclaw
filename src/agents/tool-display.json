@@ -165,6 +165,11 @@
       "title": "Session Send",
       "detailKeys": ["sessionKey", "timeoutSeconds"]
     },
+    "sessions_spawn": {
+      "emoji": "🧑‍🔧",
+      "title": "Sub-agent",
+      "detailKeys": ["label", "timeoutSeconds", "cleanup"]
+    },
     "whatsapp_login": {
       "emoji": "🟢",
       "title": "WhatsApp Login",

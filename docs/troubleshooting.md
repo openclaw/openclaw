@@ -14,7 +14,7 @@ When your CLAWDBOT misbehaves, here's how to fix it.
 The agent was interrupted mid-response.
 
 **Causes:**
-- User sent `stop`, `abort`, `esc`, or `exit`
+- User sent `stop`, `abort`, `esc`, `wait`, or `exit`
 - Timeout exceeded
 - Process crashed
 
@@ -50,7 +50,7 @@ Known issue: When you send an image with ONLY a mention (no other text), WhatsAp
 
 **Check 1:** Is the session file there?
 ```bash
-ls -la ~/.clawdbot/sessions/
+ls -la ~/.clawdbot/agents/<agentId>/sessions/
 ```
 
 **Check 2:** Is `idleMinutes` too short?
@@ -146,7 +146,7 @@ tccutil reset All com.clawdbot.mac.debug
 ```
 
 **Fix 2: Force New Bundle ID**
-If resetting doesn't work, change the `BUNDLE_ID` in `scripts/package-mac-app.sh` (e.g., add a `.test` suffix) and rebuild. This forces macOS to treat it as a new app.
+If resetting doesn't work, change the `BUNDLE_ID` in [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) (e.g., add a `.test` suffix) and rebuild. This forces macOS to treat it as a new app.
 
 ### Gateway stuck on "Starting..."
 
@@ -168,7 +168,7 @@ clawdbot gateway stop
 ```
 
 **Fix 2: Check embedded gateway**
-Ensure the gateway relay was properly bundled. Run `./scripts/package-mac-app.sh` and ensure `bun` is installed.
+Ensure the gateway relay was properly bundled. Run [`./scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) and ensure `bun` is installed.
 
 ## Debug Mode
 
@@ -188,7 +188,7 @@ clawdbot login --verbose
 | Log | Location |
 |-----|----------|
 | Main logs (default) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` |
-| Session files | `~/.clawdbot/sessions/` |
+| Session files | `~/.clawdbot/agents/<agentId>/sessions/` |
 | Media cache | `~/.clawdbot/media/` |
 | Credentials | `~/.clawdbot/credentials/` |
 
@@ -254,4 +254,4 @@ Then set in config:
 }
 ```
 
-**Full guide:** See [browser-linux-troubleshooting.md](./browser-linux-troubleshooting.md)
+**Full guide:** See [browser-linux-troubleshooting](https://docs.clawd.bot/browser-linux-troubleshooting)

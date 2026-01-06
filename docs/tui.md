@@ -52,6 +52,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/think <off|minimal|low|medium|high>`
 - `/verbose <on|off>`
 - `/elevated <on|off>`
+- `/elev <on|off>`
 - `/activation <mention|always>`
 - `/deliver <on|off>`
 - `/new` or `/reset`
@@ -65,6 +66,6 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - It registers as a Gateway client with `mode: "tui"` for presence and debugging.
 
 ## Files
-- CLI: `src/cli/tui-cli.ts`
-- Runner: `src/tui/tui.ts`
-- Gateway client: `src/tui/gateway-chat.ts`
+- CLI: [`src/cli/tui-cli.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/tui-cli.ts)
+- Runner: [`src/tui/tui.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/tui/tui.ts)
+- Gateway client: [`src/tui/gateway-chat.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/tui/gateway-chat.ts)

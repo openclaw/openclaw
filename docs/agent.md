@@ -9,13 +9,13 @@ CLAWDBOT runs a single embedded agent runtime derived from **p-mono** (internal 
 
 ## Workspace (required)
 
-You must set an agent home directory via `agent.workspace`. CLAWDBOT uses this as the agent’s **only** working directory (`cwd`) for tools and context.
+CLAWDBOT uses a single agent workspace directory (`agent.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
 
 Recommended: use `clawdbot setup` to create `~/.clawdbot/clawdbot.json` if missing and initialize the workspace files.
 
 If `agent.sandbox` is enabled, non-main sessions can override this with
 per-session workspaces under `agent.sandbox.workspaceRoot` (see
-`docs/configuration.md`).
+[`docs/configuration.md`](https://docs.clawd.bot/configuration)).
 
 ## Bootstrap files (injected)
 
@@ -31,6 +31,14 @@ On the first turn of a new session, CLAWDBOT injects the contents of these files
 
 If a file is missing, CLAWDBOT injects a single “missing file” marker line (and `clawdbot setup` will create a safe default template).
 
+`BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.
+
+To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
+
+```json5
+{ agent: { skipBootstrap: true } }
+```
+
 ## Built-in tools (internal)
 
 p’s embedded core tools (read/bash/edit/write and related internals) are defined in code and always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
@@ -42,7 +50,7 @@ Clawdbot loads skills from three locations (workspace wins on name conflict):
 - Managed/local: `~/.clawdbot/skills`
 - Workspace: `<workspace>/skills`
 
-Skills can be gated by config/env (see `skills` in `docs/configuration.md`).
+Skills can be gated by config/env (see `skills` in [`docs/configuration.md`](https://docs.clawd.bot/configuration)).
 
 ## p-mono integration
 
@@ -66,7 +74,7 @@ Apply these notes **only** when the user is Peter Steinberger at steipete.
 ## Sessions
 
 Session transcripts are stored as JSONL at:
-- `~/.clawdbot/sessions/<SessionId>.jsonl`
+- `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by CLAWDBOT.
 Legacy Pi/Tau session folders are **not** read.
@@ -81,7 +89,7 @@ message is injected before the next assistant response.
 
 When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
-`docs/queue.md` for mode + debounce/cap behavior.
+[`docs/queue.md`](https://docs.clawd.bot/queue) for mode + debounce/cap behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; disable
 via `agent.blockStreamingDefault: "off"` if you only want the final response.
@@ -99,4 +107,4 @@ At minimum, set:
 
 ---
 
-*Next: [Group Chats](./group-messages.md)* 🦞
+*Next: [Group Chats](https://docs.clawd.bot/group-messages)* 🦞

@@ -13,11 +13,17 @@ import {
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { hasNonzeroUsage } from "../agents/usage.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  chunkText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   stripHeartbeatToken,
@@ -28,6 +34,8 @@ import type { ClawdbotConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveMainSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
@@ -86,7 +94,7 @@ function isHeartbeatOnlyResponse(
 function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
   jobPayload: {
-    channel?:
+    provider?:
       | "last"
       | "whatsapp"
       | "telegram"
@@ -97,36 +105,37 @@ function resolveDeliveryTarget(
     to?: string;
   },
 ) {
-  const requestedChannel =
-    typeof jobPayload.channel === "string" ? jobPayload.channel : "last";
+  const requestedProvider =
+    typeof jobPayload.provider === "string" ? jobPayload.provider : "last";
   const explicitTo =
     typeof jobPayload.to === "string" && jobPayload.to.trim()
       ? jobPayload.to.trim()
       : undefined;
 
   const sessionCfg = cfg.session;
-  const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-  const storePath = resolveStorePath(sessionCfg?.store);
+  const mainSessionKey = resolveMainSessionKey(cfg);
+  const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const main = store[mainKey];
-  const lastChannel =
-    main?.lastChannel && main.lastChannel !== "webchat"
-      ? main.lastChannel
+  const main = store[mainSessionKey];
+  const lastProvider =
+    main?.lastProvider && main.lastProvider !== "webchat"
+      ? main.lastProvider
       : undefined;
   const lastTo = typeof main?.lastTo === "string" ? main.lastTo.trim() : "";
 
-  const channel = (() => {
+  const provider = (() => {
     if (
-      requestedChannel === "whatsapp" ||
-      requestedChannel === "telegram" ||
-      requestedChannel === "discord" ||
-      requestedChannel === "slack" ||
-      requestedChannel === "signal" ||
-      requestedChannel === "imessage"
+      requestedProvider === "whatsapp" ||
+      requestedProvider === "telegram" ||
+      requestedProvider === "discord" ||
+      requestedProvider === "slack" ||
+      requestedProvider === "signal" ||
+      requestedProvider === "imessage"
     ) {
-      return requestedChannel;
+      return requestedProvider;
     }
-    return lastChannel ?? "whatsapp";
+    return lastProvider ?? "whatsapp";
   })();
 
   const to = (() => {
@@ -135,7 +144,7 @@ function resolveDeliveryTarget(
   })();
 
   const sanitizedWhatsappTo = (() => {
-    if (channel !== "whatsapp") return to;
+    if (provider !== "whatsapp") return to;
     const rawAllow = cfg.whatsapp?.allowFrom ?? [];
     if (rawAllow.includes("*")) return to;
     const allowFrom = rawAllow
@@ -149,8 +158,8 @@ function resolveDeliveryTarget(
   })();
 
   return {
-    channel,
-    to: channel === "whatsapp" ? sanitizedWhatsappTo : to,
+    provider,
+    to: provider === "whatsapp" ? sanitizedWhatsappTo : to,
   };
 }
 
@@ -180,7 +189,7 @@ function resolveCronSession(params: {
     model: entry?.model,
     contextTokens: entry?.contextTokens,
     sendPolicy: entry?.sendPolicy,
-    lastChannel: entry?.lastChannel,
+    lastProvider: entry?.lastProvider,
     lastTo: entry?.lastTo,
   };
   return { storePath, store, sessionEntry, systemSent, isNewSession: !fresh };
@@ -199,7 +208,7 @@ export async function runCronIsolatedAgentTurn(params: {
     params.cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: true,
+    ensureBootstrapFiles: !params.cfg.agent?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
 
@@ -234,12 +243,13 @@ export async function runCronIsolatedAgentTurn(params: {
     });
   }
 
-  const timeoutSecondsRaw =
-    params.job.payload.kind === "agentTurn" && params.job.payload.timeoutSeconds
-      ? params.job.payload.timeoutSeconds
-      : (agentCfg?.timeoutSeconds ?? 600);
-  const timeoutSeconds = Math.max(Math.floor(timeoutSecondsRaw), 1);
-  const timeoutMs = timeoutSeconds * 1000;
+  const timeoutMs = resolveAgentTimeoutMs({
+    cfg: params.cfg,
+    overrideSeconds:
+      params.job.payload.kind === "agentTurn"
+        ? params.job.payload.timeoutSeconds
+        : undefined,
+  });
 
   const delivery =
     params.job.payload.kind === "agentTurn" &&
@@ -249,9 +259,9 @@ export async function runCronIsolatedAgentTurn(params: {
     params.job.payload.bestEffortDeliver === true;
 
   const resolvedDelivery = resolveDeliveryTarget(params.cfg, {
-    channel:
+    provider:
       params.job.payload.kind === "agentTurn"
-        ? params.job.payload.channel
+        ? params.job.payload.provider
         : "last",
     to:
       params.job.payload.kind === "agentTurn"
@@ -300,7 +310,7 @@ export async function runCronIsolatedAgentTurn(params: {
     registerAgentRunContext(cronSession.sessionEntry.sessionId, {
       sessionKey: params.sessionKey,
     });
-    const surface = resolvedDelivery.channel;
+    const messageProvider = resolvedDelivery.provider;
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfg,
       provider,
@@ -309,7 +319,7 @@ export async function runCronIsolatedAgentTurn(params: {
         runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: params.sessionKey,
-          surface,
+          messageProvider,
           sessionFile,
           workspaceDir,
           config: params.cfg,
@@ -352,7 +362,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
-    if (usage) {
+    if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const promptTokens =
@@ -378,7 +388,7 @@ export async function runCronIsolatedAgentTurn(params: {
     delivery && isHeartbeatOnlyResponse(payloads, Math.max(0, ackMaxChars));
 
   if (delivery && !skipHeartbeatDelivery) {
-    if (resolvedDelivery.channel === "whatsapp") {
+    if (resolvedDelivery.provider === "whatsapp") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
           return {
@@ -413,7 +423,7 @@ export async function runCronIsolatedAgentTurn(params: {
           return { status: "error", summary, error: String(err) };
         return { status: "ok", summary };
       }
-    } else if (resolvedDelivery.channel === "telegram") {
+    } else if (resolvedDelivery.provider === "telegram") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
           return {
@@ -433,7 +443,10 @@ export async function runCronIsolatedAgentTurn(params: {
           const mediaList =
             payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           if (mediaList.length === 0) {
-            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
+            for (const chunk of chunkMarkdownText(
+              payload.text ?? "",
+              textLimit,
+            )) {
               await params.deps.sendMessageTelegram(chatId, chunk, {
                 verbose: false,
                 token: telegramToken || undefined,
@@ -457,14 +470,14 @@ export async function runCronIsolatedAgentTurn(params: {
           return { status: "error", summary, error: String(err) };
         return { status: "ok", summary };
       }
-    } else if (resolvedDelivery.channel === "discord") {
+    } else if (resolvedDelivery.provider === "discord") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
           return {
             status: "error",
             summary,
             error:
-              "Cron delivery to Discord requires --channel discord and --to <channelId|user:ID>",
+              "Cron delivery to Discord requires --provider discord and --to <channelId|user:ID>",
           };
         return {
           status: "skipped",
@@ -501,14 +514,14 @@ export async function runCronIsolatedAgentTurn(params: {
           return { status: "error", summary, error: String(err) };
         return { status: "ok", summary };
       }
-    } else if (resolvedDelivery.channel === "slack") {
+    } else if (resolvedDelivery.provider === "slack") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
           return {
             status: "error",
             summary,
             error:
-              "Cron delivery to Slack requires --channel slack and --to <channelId|user:ID>",
+              "Cron delivery to Slack requires --provider slack and --to <channelId|user:ID>",
           };
         return {
           status: "skipped",
@@ -522,7 +535,10 @@ export async function runCronIsolatedAgentTurn(params: {
           const mediaList =
             payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           if (mediaList.length === 0) {
-            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
+            for (const chunk of chunkMarkdownText(
+              payload.text ?? "",
+              textLimit,
+            )) {
               await params.deps.sendMessageSlack(slackTarget, chunk);
             }
           } else {
@@ -541,7 +557,7 @@ export async function runCronIsolatedAgentTurn(params: {
           return { status: "error", summary, error: String(err) };
         return { status: "ok", summary };
       }
-    } else if (resolvedDelivery.channel === "signal") {
+    } else if (resolvedDelivery.provider === "signal") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
           return {
@@ -580,7 +596,7 @@ export async function runCronIsolatedAgentTurn(params: {
           return { status: "error", summary, error: String(err) };
         return { status: "ok", summary };
       }
-    } else if (resolvedDelivery.channel === "imessage") {
+    } else if (resolvedDelivery.provider === "imessage") {
       if (!resolvedDelivery.to) {
         if (!bestEffortDeliver)
           return {

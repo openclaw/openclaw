@@ -31,7 +31,7 @@ export function registerBrowserManageCommands(
       const baseUrl = resolveBrowserControlUrl(parent?.url);
       try {
         const status = await browserStatus(baseUrl, {
-          profile: parent?.profile,
+          profile: parent?.browserProfile,
         });
         if (parent?.json) {
           defaultRuntime.log(JSON.stringify(status, null, 2));
@@ -61,7 +61,7 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         await browserStart(baseUrl, { profile });
         const status = await browserStatus(baseUrl, { profile });
@@ -85,7 +85,7 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         await browserStop(baseUrl, { profile });
         const status = await browserStatus(baseUrl, { profile });
@@ -109,7 +109,7 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserResetProfile(baseUrl, { profile });
         if (parent?.json) {
@@ -134,7 +134,7 @@ export function registerBrowserManageCommands(
     .action(async (_opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const tabs = await browserTabs(baseUrl, { profile });
         if (parent?.json) {
@@ -166,7 +166,7 @@ export function registerBrowserManageCommands(
     .action(async (url: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const tab = await browserOpenTab(baseUrl, url, { profile });
         if (parent?.json) {
@@ -187,7 +187,7 @@ export function registerBrowserManageCommands(
     .action(async (targetId: string, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         await browserFocusTab(baseUrl, targetId, { profile });
         if (parent?.json) {
@@ -208,7 +208,7 @@ export function registerBrowserManageCommands(
     .action(async (targetId: string | undefined, _opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         if (targetId?.trim()) {
           await browserCloseTab(baseUrl, targetId.trim(), { profile });

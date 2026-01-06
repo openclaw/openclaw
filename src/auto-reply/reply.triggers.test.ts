@@ -23,6 +23,8 @@ import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
+const MAIN_SESSION_KEY = "agent:main:main";
+
 const webMocks = vi.hoisted(() => ({
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(120_000),
@@ -113,8 +115,15 @@ describe("trigger handling", () => {
     });
   });
 
-  it("reports status when /status appears inline", async () => {
+  it("ignores inline /status and runs the agent", async () => {
     await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
       const res = await getReplyFromConfig(
         {
           Body: "please /status now",
@@ -125,8 +134,8 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Status");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(text).not.toContain("Status");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
     });
   });
 
@@ -166,7 +175,7 @@ describe("trigger handling", () => {
           Body: "/send off",
           From: "+1000",
           To: "+2000",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+1000",
         },
         {},
@@ -180,7 +189,7 @@ describe("trigger handling", () => {
         string,
         { sendPolicy?: string }
       >;
-      expect(store.main?.sendPolicy).toBe("deny");
+      expect(store[MAIN_SESSION_KEY]?.sendPolicy).toBe("deny");
     });
   });
 
@@ -205,7 +214,7 @@ describe("trigger handling", () => {
           Body: "/elevated on",
           From: "+1000",
           To: "+2000",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+1000",
         },
         {},
@@ -219,7 +228,7 @@ describe("trigger handling", () => {
         string,
         { elevatedLevel?: string }
       >;
-      expect(store.main?.elevatedLevel).toBe("on");
+      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
     });
   });
 
@@ -245,7 +254,7 @@ describe("trigger handling", () => {
           Body: "/elevated on",
           From: "+1000",
           To: "+2000",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+1000",
         },
         {},
@@ -259,12 +268,19 @@ describe("trigger handling", () => {
         string,
         { elevatedLevel?: string }
       >;
-      expect(store.main?.elevatedLevel).toBeUndefined();
+      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBeUndefined();
     });
   });
 
-  it("rejects elevated inline directive for unapproved sender", async () => {
+  it("ignores inline elevated directive for unapproved sender", async () => {
     await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
       const cfg = {
         agent: {
           model: "anthropic/claude-opus-4-5",
@@ -284,15 +300,15 @@ describe("trigger handling", () => {
           Body: "please /elevated on now",
           From: "+2000",
           To: "+2000",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+2000",
         },
         {},
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("elevated is not available right now.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+      expect(text).not.toBe("elevated is not available right now.");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
     });
   });
 
@@ -316,7 +332,7 @@ describe("trigger handling", () => {
           Body: "/elevated on",
           From: "discord:123",
           To: "user:123",
-          Surface: "discord",
+          Provider: "discord",
           SenderName: "Peter Steinberger",
           SenderUsername: "steipete",
           SenderTag: "steipete",
@@ -332,7 +348,7 @@ describe("trigger handling", () => {
         string,
         { elevatedLevel?: string }
       >;
-      expect(store.main?.elevatedLevel).toBe("on");
+      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
     });
   });
 
@@ -359,7 +375,7 @@ describe("trigger handling", () => {
           Body: "/elevated on",
           From: "discord:123",
           To: "user:123",
-          Surface: "discord",
+          Provider: "discord",
           SenderName: "steipete",
         },
         {},
@@ -510,7 +526,7 @@ describe("trigger handling", () => {
           From: "123@g.us",
           To: "+2000",
           ChatType: "group",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+2000",
         },
         {},
@@ -521,7 +537,9 @@ describe("trigger handling", () => {
       const store = JSON.parse(
         await fs.readFile(cfg.session.store, "utf-8"),
       ) as Record<string, { groupActivation?: string }>;
-      expect(store["whatsapp:group:123@g.us"]?.groupActivation).toBe("always");
+      expect(store["agent:main:whatsapp:group:123@g.us"]?.groupActivation).toBe(
+        "always",
+      );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -535,7 +553,7 @@ describe("trigger handling", () => {
           From: "123@g.us",
           To: "+2000",
           ChatType: "group",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+999",
         },
         {},
@@ -563,7 +581,7 @@ describe("trigger handling", () => {
           From: "123@g.us",
           To: "+2000",
           ChatType: "group",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
           SenderE164: "+2000",
           GroupSubject: "Test Group",
           GroupMembers: "Alice (+1), Bob (+2)",
@@ -879,7 +897,7 @@ describe("trigger handling", () => {
         From: "group:whatsapp:demo",
         To: "+2000",
         ChatType: "group" as const,
-        Surface: "whatsapp" as const,
+        Provider: "whatsapp" as const,
         MediaPath: mediaPath,
         MediaType: "image/jpeg",
         MediaUrl: mediaPath,
@@ -942,7 +960,7 @@ describe("group intro prompts", () => {
           ChatType: "group",
           GroupSubject: "Release Squad",
           GroupMembers: "Alice, Bob",
-          Surface: "discord",
+          Provider: "discord",
         },
         {},
         makeCfg(home),
@@ -975,7 +993,7 @@ describe("group intro prompts", () => {
           To: "+1999",
           ChatType: "group",
           GroupSubject: "Ops",
-          Surface: "whatsapp",
+          Provider: "whatsapp",
         },
         {},
         makeCfg(home),
@@ -1008,7 +1026,7 @@ describe("group intro prompts", () => {
           To: "+1777",
           ChatType: "group",
           GroupSubject: "Dev Chat",
-          Surface: "telegram",
+          Provider: "telegram",
         },
         {},
         makeCfg(home),

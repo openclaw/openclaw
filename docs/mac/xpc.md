@@ -21,7 +21,7 @@ read_when:
 - UI automation uses a separate UNIX socket named `bridge.sock` and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app → Claude.app → Clawdbot.app → local execution.
 - Security: bridge hosts require TeamID `Y5PE65HELJ`; DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
-- See: `docs/mac/peekaboo.md` for the Clawdbot plan and naming.
+- See: [`docs/mac/peekaboo.md`](https://docs.clawd.bot/mac/peekaboo) for the Clawdbot plan and naming.
 
 ### Mach/XPC (future direction)
 - Still optional for internal app services, but **not required** for automation now that node.invoke is the surface.
@@ -37,4 +37,4 @@ read_when:
 - Prefer requiring a TeamID match for all privileged surfaces.
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
-- TCC prompts originate only from the GUI app bundle; run `scripts/package-mac-app.sh` so the signed bundle ID stays stable.
+- TCC prompts originate only from the GUI app bundle; run [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) so the signed bundle ID stays stable.

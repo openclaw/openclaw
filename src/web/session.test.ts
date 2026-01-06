@@ -70,22 +70,28 @@ describe("web session", () => {
   });
 
   it("logWebSelfId prints cached E.164 when creds exist", () => {
-    const existsSpy = vi
-      .spyOn(fsSync, "existsSync")
-      .mockReturnValue(true as never);
-    const readSpy = vi
-      .spyOn(fsSync, "readFileSync")
-      .mockReturnValue(JSON.stringify({ me: { id: "12345@s.whatsapp.net" } }));
+    const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
+      if (typeof p !== "string") return false;
+      return p.endsWith("creds.json");
+    });
+    const readSpy = vi.spyOn(fsSync, "readFileSync").mockImplementation((p) => {
+      if (typeof p === "string" && p.endsWith("creds.json")) {
+        return JSON.stringify({ me: { id: "12345@s.whatsapp.net" } });
+      }
+      throw new Error(`unexpected readFileSync path: ${String(p)}`);
+    });
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     };
 
-    logWebSelfId(runtime as never, true);
+    logWebSelfId("/tmp/wa-creds", runtime as never, true);
 
     expect(runtime.log).toHaveBeenCalledWith(
-      "Web Provider: +12345 (jid 12345@s.whatsapp.net)",
+      expect.stringContaining(
+        "Web Provider: +12345 (jid 12345@s.whatsapp.net)",
+      ),
     );
     existsSpy.mockRestore();
     readSpy.mockRestore();
@@ -111,7 +117,13 @@ describe("web session", () => {
   });
 
   it("does not clobber creds backup when creds.json is corrupted", async () => {
-    const credsSuffix = path.join(".clawdbot", "credentials", "creds.json");
+    const credsSuffix = path.join(
+      ".clawdbot",
+      "credentials",
+      "whatsapp",
+      "default",
+      "creds.json",
+    );
 
     const copySpy = vi
       .spyOn(fsSync, "copyFileSync")
@@ -191,10 +203,18 @@ describe("web session", () => {
   });
 
   it("rotates creds backup when creds.json is valid JSON", async () => {
-    const credsSuffix = path.join(".clawdbot", "credentials", "creds.json");
+    const credsSuffix = path.join(
+      ".clawdbot",
+      "credentials",
+      "whatsapp",
+      "default",
+      "creds.json",
+    );
     const backupSuffix = path.join(
       ".clawdbot",
       "credentials",
+      "whatsapp",
+      "default",
       "creds.json.bak",
     );
 

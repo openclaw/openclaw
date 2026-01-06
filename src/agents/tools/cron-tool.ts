@@ -3,11 +3,23 @@ import {
   normalizeCronJobCreate,
   normalizeCronJobPatch,
 } from "../../cron/normalize.js";
-import { CronAddParamsSchema } from "../../gateway/protocol/schema.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool, type GatewayCallOptions } from "./gateway.js";
 
-const CronJobPatchSchema = Type.Partial(CronAddParamsSchema);
+// NOTE: We use Type.Object({}, { additionalProperties: true }) for job/patch
+// instead of CronAddParamsSchema/CronJobPatchSchema because:
+//
+// 1. CronAddParamsSchema contains nested Type.Union (for schedule, payload, etc.)
+// 2. TypeBox compiles Type.Union to JSON Schema `anyOf`
+// 3. pi-ai's sanitizeSchemaForGoogle() strips `anyOf` from nested properties
+// 4. This leaves empty schemas `{}` which Claude rejects as invalid
+//
+// The actual validation happens at runtime via normalizeCronJobCreate/Patch
+// and the gateway's validateCronAddParams. This schema just needs to accept
+// any object so the AI can pass through the job definition.
+//
+// See: https://github.com/anthropics/anthropic-cookbook/blob/main/misc/tool_use_best_practices.md
+// Claude requires valid JSON Schema 2020-12 with explicit types.
 
 const CronToolSchema = Type.Union([
   Type.Object({
@@ -28,7 +40,7 @@ const CronToolSchema = Type.Union([
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    job: CronAddParamsSchema,
+    job: Type.Object({}, { additionalProperties: true }),
   }),
   Type.Object({
     action: Type.Literal("update"),
@@ -36,7 +48,7 @@ const CronToolSchema = Type.Union([
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
     id: Type.String(),
-    patch: CronJobPatchSchema,
+    patch: Type.Object({}, { additionalProperties: true }),
   }),
   Type.Object({
     action: Type.Literal("remove"),

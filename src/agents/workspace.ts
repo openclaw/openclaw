@@ -22,6 +22,7 @@ export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
+export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 
 const DEFAULT_AGENTS_TEMPLATE = `# AGENTS.md - Clawdbot Workspace
@@ -53,6 +54,9 @@ git commit -m "Add agent workspace"
 - On session start, read today + yesterday if present.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
+## Heartbeats (optional)
+- HEARTBEAT.md can hold a tiny checklist for heartbeat runs; keep it small.
+
 ## Customize
 - Add your preferred style, rules, and "memory" here.
 `;
@@ -81,6 +85,12 @@ It does not define which tools exist; Clawdbot provides built-in tools internall
 - Text-to-speech: specify voice, target speaker/room, and whether to stream.
 
 Add whatever else you want the assistant to know about your local toolchain.
+`;
+
+const DEFAULT_HEARTBEAT_TEMPLATE = `# HEARTBEAT.md - Optional heartbeat notes
+
+Keep this file small. Leave it empty unless you want a short checklist or reminders
+to follow during heartbeat runs.
 `;
 
 const DEFAULT_BOOTSTRAP_TEMPLATE = `# BOOTSTRAP.md - First Run Ritual (delete after)
@@ -174,6 +184,7 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_TOOLS_FILENAME
   | typeof DEFAULT_IDENTITY_FILENAME
   | typeof DEFAULT_USER_FILENAME
+  | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME;
 
 export type WorkspaceBootstrapFile = {
@@ -205,6 +216,7 @@ export async function ensureAgentWorkspace(params?: {
   toolsPath?: string;
   identityPath?: string;
   userPath?: string;
+  heartbeatPath?: string;
   bootstrapPath?: string;
 }> {
   const rawDir = params?.dir?.trim()
@@ -220,7 +232,30 @@ export async function ensureAgentWorkspace(params?: {
   const toolsPath = path.join(dir, DEFAULT_TOOLS_FILENAME);
   const identityPath = path.join(dir, DEFAULT_IDENTITY_FILENAME);
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
+  const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
+
+  const isBrandNewWorkspace = await (async () => {
+    const paths = [
+      agentsPath,
+      soulPath,
+      toolsPath,
+      identityPath,
+      userPath,
+      heartbeatPath,
+    ];
+    const existing = await Promise.all(
+      paths.map(async (p) => {
+        try {
+          await fs.access(p);
+          return true;
+        } catch {
+          return false;
+        }
+      }),
+    );
+    return existing.every((v) => !v);
+  })();
 
   const agentsTemplate = await loadTemplate(
     DEFAULT_AGENTS_FILENAME,
@@ -242,6 +277,10 @@ export async function ensureAgentWorkspace(params?: {
     DEFAULT_USER_FILENAME,
     DEFAULT_USER_TEMPLATE,
   );
+  const heartbeatTemplate = await loadTemplate(
+    DEFAULT_HEARTBEAT_FILENAME,
+    DEFAULT_HEARTBEAT_TEMPLATE,
+  );
   const bootstrapTemplate = await loadTemplate(
     DEFAULT_BOOTSTRAP_FILENAME,
     DEFAULT_BOOTSTRAP_TEMPLATE,
@@ -252,7 +291,10 @@ export async function ensureAgentWorkspace(params?: {
   await writeFileIfMissing(toolsPath, toolsTemplate);
   await writeFileIfMissing(identityPath, identityTemplate);
   await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  if (isBrandNewWorkspace) {
+    await writeFileIfMissing(bootstrapPath, bootstrapTemplate);
+  }
 
   return {
     dir,
@@ -261,6 +303,7 @@ export async function ensureAgentWorkspace(params?: {
     toolsPath,
     identityPath,
     userPath,
+    heartbeatPath,
     bootstrapPath,
   };
 }
@@ -293,6 +336,10 @@ export async function loadWorkspaceBootstrapFiles(
     {
       name: DEFAULT_USER_FILENAME,
       filePath: path.join(resolvedDir, DEFAULT_USER_FILENAME),
+    },
+    {
+      name: DEFAULT_HEARTBEAT_FILENAME,
+      filePath: path.join(resolvedDir, DEFAULT_HEARTBEAT_FILENAME),
     },
     {
       name: DEFAULT_BOOTSTRAP_FILENAME,

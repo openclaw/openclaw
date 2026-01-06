@@ -16,6 +16,7 @@ import { info } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import {
   getWebAuthAgeMs,
@@ -60,8 +61,9 @@ export type StatusSummary = {
 
 export async function getStatusSummary(): Promise<StatusSummary> {
   const cfg = loadConfig();
-  const linked = await webAuthExists();
-  const authAgeMs = getWebAuthAgeMs();
+  const account = resolveWhatsAppAccount({ cfg });
+  const linked = await webAuthExists(account.authDir);
+  const authAgeMs = getWebAuthAgeMs(account.authDir);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
   const providerSummary = await buildProviderSummary(cfg);
   const queuedSystemEvents = peekSystemEvents();
@@ -230,7 +232,9 @@ export async function statusCommand(
     `Web session: ${summary.web.linked ? "linked" : "not linked"}${summary.web.linked ? ` (last refreshed ${formatAge(summary.web.authAgeMs)})` : ""}`,
   );
   if (summary.web.linked) {
-    logWebSelfId(runtime, true);
+    const cfg = loadConfig();
+    const account = resolveWhatsAppAccount({ cfg });
+    logWebSelfId(account.authDir, runtime, true);
   }
   runtime.log(info("System:"));
   for (const line of summary.providerSummary) {

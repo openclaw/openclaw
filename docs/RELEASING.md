@@ -12,12 +12,12 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 
 1) **Version & metadata**
 - [ ] Bump `package.json` version (e.g., `1.1.0`).
-- [ ] Update CLI/version strings: `src/cli/program.ts` and the Baileys user agent in `src/provider-web.ts`.
-- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to `dist/index.js` for `clawdbot`.
+- [ ] Update CLI/version strings: [`src/cli/program.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/program.ts) and the Baileys user agent in [`src/provider-web.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/provider-web.ts).
+- [ ] Confirm package metadata (name, description, repository, keywords, license) and `bin` map points to [`dist/entry.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/entry.js) for `clawdbot`.
 - [ ] If dependencies changed, run `pnpm install` so `pnpm-lock.yaml` is current.
 
 2) **Build & artifacts**
-- [ ] If A2UI inputs changed, run `pnpm canvas:a2ui:bundle` and commit any updated `src/canvas-host/a2ui/a2ui.bundle.js`.
+- [ ] If A2UI inputs changed, run `pnpm canvas:a2ui:bundle` and commit any updated [`src/canvas-host/a2ui/a2ui.bundle.js`](https://github.com/clawdbot/clawdbot/blob/main/src/canvas-host/a2ui/a2ui.bundle.js).
 - [ ] `pnpm run build` (regenerates `dist/`).
 - [ ] Optional: `npm pack --pack-destination /tmp` after the build; inspect the tarball contents and keep it handy for the GitHub release (do **not** commit it).
 
@@ -34,11 +34,11 @@ Use `pnpm` (Node 22+) from the repo root. Keep the working tree clean before tag
 
 5) **macOS app (Sparkle)**
 - [ ] Build + sign the macOS app, then zip it for distribution.
-- [ ] Generate the Sparkle appcast (HTML notes via `scripts/make_appcast.sh`) and update `appcast.xml`.
+- [ ] Generate the Sparkle appcast (HTML notes via [`scripts/make_appcast.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/make_appcast.sh)) and update `appcast.xml`.
 - [ ] Keep the app zip (and optional dSYM zip) ready to attach to the GitHub release.
-- [ ] Follow `docs/mac/release.md` for the exact commands and required env vars.
+- [ ] Follow [`docs/mac/release.md`](https://docs.clawd.bot/mac/release) for the exact commands and required env vars.
   - `APP_BUILD` must be numeric + monotonic (no `-beta`) so Sparkle compares versions correctly.
-  - If notarizing, use the `clawdbot-notary` keychain profile created from App Store Connect API env vars (see `docs/mac/release.md`).
+  - If notarizing, use the `clawdbot-notary` keychain profile created from App Store Connect API env vars (see [`docs/mac/release.md`](https://docs.clawd.bot/mac/release)).
 
 6) **Publish (npm)**
 - [ ] Confirm git status is clean; commit and push as needed.

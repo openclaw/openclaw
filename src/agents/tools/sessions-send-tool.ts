@@ -4,8 +4,15 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
+import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+import { resolveAnnounceTarget } from "./sessions-announce-target.js";
 import {
   extractAssistantText,
   resolveDisplaySessionKey,
@@ -14,13 +21,11 @@ import {
   stripToolMessages,
 } from "./sessions-helpers.js";
 import {
-  type AnnounceTarget,
   buildAgentToAgentAnnounceContext,
   buildAgentToAgentMessageContext,
   buildAgentToAgentReplyContext,
   isAnnounceSkip,
   isReplySkip,
-  resolveAnnounceTargetFromKey,
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
 
@@ -32,7 +37,8 @@ const SessionsSendToolSchema = Type.Object({
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
-  agentSurface?: string;
+  agentProvider?: string;
+  sandboxed?: boolean;
 }): AnyAgentTool {
   return {
     label: "Session Send",
@@ -47,11 +53,64 @@ export function createSessionsSendTool(opts?: {
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
+      const visibility =
+        cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+      const requesterInternalKey =
+        typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
+          ? resolveInternalSessionKey({
+              key: opts.agentSessionKey,
+              alias,
+              mainKey,
+            })
+          : undefined;
       const resolvedKey = resolveInternalSessionKey({
         key: sessionKey,
         alias,
         mainKey,
       });
+      const restrictToSpawned =
+        opts?.sandboxed === true &&
+        visibility === "spawned" &&
+        requesterInternalKey &&
+        !isSubagentSessionKey(requesterInternalKey);
+      if (restrictToSpawned) {
+        try {
+          const list = (await callGateway({
+            method: "sessions.list",
+            params: {
+              includeGlobal: false,
+              includeUnknown: false,
+              limit: 500,
+              spawnedBy: requesterInternalKey,
+            },
+          })) as { sessions?: Array<Record<string, unknown>> };
+          const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
+          const ok = sessions.some((entry) => entry?.key === resolvedKey);
+          if (!ok) {
+            return jsonResult({
+              runId: crypto.randomUUID(),
+              status: "forbidden",
+              error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
+              sessionKey: resolveDisplaySessionKey({
+                key: sessionKey,
+                alias,
+                mainKey,
+              }),
+            });
+          }
+        } catch {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
+            sessionKey: resolveDisplaySessionKey({
+              key: sessionKey,
+              alias,
+              mainKey,
+            }),
+          });
+        }
+      }
       const timeoutSeconds =
         typeof params.timeoutSeconds === "number" &&
         Number.isFinite(params.timeoutSeconds)
@@ -66,9 +125,55 @@ export function createSessionsSendTool(opts?: {
         alias,
         mainKey,
       });
+
+      const routingA2A = cfg.routing?.agentToAgent;
+      const a2aEnabled = routingA2A?.enabled === true;
+      const allowPatterns = Array.isArray(routingA2A?.allow)
+        ? routingA2A.allow
+        : [];
+      const matchesAllow = (agentId: string) => {
+        if (allowPatterns.length === 0) return true;
+        return allowPatterns.some((pattern) => {
+          const raw = String(pattern ?? "").trim();
+          if (!raw) return false;
+          if (raw === "*") return true;
+          if (!raw.includes("*")) return raw === agentId;
+          const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const re = new RegExp(`^${escaped.replaceAll("\\*", ".*")}$`, "i");
+          return re.test(agentId);
+        });
+      };
+      const requesterAgentId = normalizeAgentId(
+        parseAgentSessionKey(requesterInternalKey)?.agentId,
+      );
+      const targetAgentId = normalizeAgentId(
+        parseAgentSessionKey(resolvedKey)?.agentId,
+      );
+      const isCrossAgent = requesterAgentId !== targetAgentId;
+      if (isCrossAgent) {
+        if (!a2aEnabled) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Agent-to-agent messaging is disabled. Set routing.agentToAgent.enabled=true to allow cross-agent sends.",
+            sessionKey: displayKey,
+          });
+        }
+        if (!matchesAllow(requesterAgentId) || !matchesAllow(targetAgentId)) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "forbidden",
+            error:
+              "Agent-to-agent messaging denied by routing.agentToAgent.allow.",
+            sessionKey: displayKey,
+          });
+        }
+      }
+
       const agentMessageContext = buildAgentToAgentMessageContext({
         requesterSessionKey: opts?.agentSessionKey,
-        requesterSurface: opts?.agentSurface,
+        requesterProvider: opts?.agentProvider,
         targetSessionKey: displayKey,
       });
       const sendParams = {
@@ -80,89 +185,8 @@ export function createSessionsSendTool(opts?: {
         extraSystemPrompt: agentMessageContext,
       };
       const requesterSessionKey = opts?.agentSessionKey;
-      const requesterSurface = opts?.agentSurface;
+      const requesterProvider = opts?.agentProvider;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
-
-      const resolveAnnounceTarget =
-        async (): Promise<AnnounceTarget | null> => {
-          const parsed = resolveAnnounceTargetFromKey(resolvedKey);
-          if (parsed) return parsed;
-          try {
-            const list = (await callGateway({
-              method: "sessions.list",
-              params: {
-                includeGlobal: true,
-                includeUnknown: true,
-                limit: 200,
-              },
-            })) as { sessions?: Array<Record<string, unknown>> };
-            const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-            const match =
-              sessions.find((entry) => entry?.key === resolvedKey) ??
-              sessions.find((entry) => entry?.key === displayKey);
-            const channel =
-              typeof match?.lastChannel === "string"
-                ? match.lastChannel
-                : undefined;
-            const to =
-              typeof match?.lastTo === "string" ? match.lastTo : undefined;
-            if (channel && to) return { channel, to };
-          } catch {
-            // ignore; fall through to null
-          }
-          return null;
-        };
-
-      const readLatestAssistantReply = async (
-        sessionKeyToRead: string,
-      ): Promise<string | undefined> => {
-        const history = (await callGateway({
-          method: "chat.history",
-          params: { sessionKey: sessionKeyToRead, limit: 50 },
-        })) as { messages?: unknown[] };
-        const filtered = stripToolMessages(
-          Array.isArray(history?.messages) ? history.messages : [],
-        );
-        const last =
-          filtered.length > 0 ? filtered[filtered.length - 1] : undefined;
-        return last ? extractAssistantText(last) : undefined;
-      };
-
-      const runAgentStep = async (step: {
-        sessionKey: string;
-        message: string;
-        extraSystemPrompt: string;
-        timeoutMs: number;
-      }): Promise<string | undefined> => {
-        const stepIdem = crypto.randomUUID();
-        const response = (await callGateway({
-          method: "agent",
-          params: {
-            message: step.message,
-            sessionKey: step.sessionKey,
-            idempotencyKey: stepIdem,
-            deliver: false,
-            lane: "nested",
-            extraSystemPrompt: step.extraSystemPrompt,
-          },
-          timeoutMs: 10_000,
-        })) as { runId?: string; acceptedAt?: number };
-        const stepRunId =
-          typeof response?.runId === "string" && response.runId
-            ? response.runId
-            : stepIdem;
-        const stepWaitMs = Math.min(step.timeoutMs, 60_000);
-        const wait = (await callGateway({
-          method: "agent.wait",
-          params: {
-            runId: stepRunId,
-            timeoutMs: stepWaitMs,
-          },
-          timeoutMs: stepWaitMs + 2000,
-        })) as { status?: string };
-        if (wait?.status !== "ok") return undefined;
-        return readLatestAssistantReply(step.sessionKey);
-      };
 
       const runAgentToAgentFlow = async (
         roundOneReply?: string,
@@ -182,13 +206,18 @@ export function createSessionsSendTool(opts?: {
               timeoutMs: waitMs + 2000,
             })) as { status?: string };
             if (wait?.status === "ok") {
-              primaryReply = await readLatestAssistantReply(resolvedKey);
+              primaryReply = await readLatestAssistantReply({
+                sessionKey: resolvedKey,
+              });
               latestReply = primaryReply;
             }
           }
           if (!latestReply) return;
-          const announceTarget = await resolveAnnounceTarget();
-          const targetChannel = announceTarget?.channel ?? "unknown";
+          const announceTarget = await resolveAnnounceTarget({
+            sessionKey: resolvedKey,
+            displayKey,
+          });
+          const targetProvider = announceTarget?.provider ?? "unknown";
           if (
             maxPingPongTurns > 0 &&
             requesterSessionKey &&
@@ -204,9 +233,9 @@ export function createSessionsSendTool(opts?: {
                   : "target";
               const replyPrompt = buildAgentToAgentReplyContext({
                 requesterSessionKey,
-                requesterSurface,
+                requesterProvider,
                 targetSessionKey: displayKey,
-                targetChannel,
+                targetProvider,
                 currentRole,
                 turn,
                 maxTurns: maxPingPongTurns,
@@ -216,6 +245,7 @@ export function createSessionsSendTool(opts?: {
                 message: incomingMessage,
                 extraSystemPrompt: replyPrompt,
                 timeoutMs: announceTimeoutMs,
+                lane: "nested",
               });
               if (!replyText || isReplySkip(replyText)) {
                 break;
@@ -229,9 +259,9 @@ export function createSessionsSendTool(opts?: {
           }
           const announcePrompt = buildAgentToAgentAnnounceContext({
             requesterSessionKey,
-            requesterSurface,
+            requesterProvider,
             targetSessionKey: displayKey,
-            targetChannel,
+            targetProvider,
             originalMessage: message,
             roundOneReply: primaryReply,
             latestReply,
@@ -241,6 +271,7 @@ export function createSessionsSendTool(opts?: {
             message: "Agent-to-agent announce step.",
             extraSystemPrompt: announcePrompt,
             timeoutMs: announceTimeoutMs,
+            lane: "nested",
           });
           if (
             announceTarget &&
@@ -253,7 +284,8 @@ export function createSessionsSendTool(opts?: {
               params: {
                 to: announceTarget.to,
                 message: announceReply.trim(),
-                provider: announceTarget.channel,
+                provider: announceTarget.provider,
+                accountId: announceTarget.accountId,
                 idempotencyKey: crypto.randomUUID(),
               },
               timeoutMs: 10_000,

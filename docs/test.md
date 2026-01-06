@@ -11,10 +11,10 @@ read_when:
 
 ## Model latency bench (local keys)
 
-Script: `scripts/bench-model.ts`
+Script: [`scripts/bench-model.ts`](https://github.com/clawdbot/clawdbot/blob/main/scripts/bench-model.ts)
 
 Usage:
-- `source ~/.profile && pnpm tsx scripts/bench-model.ts --runs 10`
+- `source ~/.profile && bun scripts/bench-model.ts --runs 10`
 - Optional env: `MINIMAX_API_KEY`, `MINIMAX_BASE_URL`, `MINIMAX_MODEL`, `ANTHROPIC_API_KEY`
 - Default prompt: “Reply with a single word: ok. No punctuation or extra text.”
 

@@ -1,10 +1,11 @@
 import chalk from "chalk";
 import { Command } from "commander";
-import { agentCommand } from "../commands/agent.js";
+import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
 import { onboardCommand } from "../commands/onboard.js";
+import { pollCommand } from "../commands/poll.js";
 import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
@@ -12,6 +13,7 @@ import { statusCommand } from "../commands/status.js";
 import { updateCommand } from "../commands/update.js";
 import {
   isNixMode,
+  loadConfig,
   migrateLegacyConfig,
   readConfigFileSnapshot,
   writeConfigFile,
@@ -20,6 +22,7 @@ import { danger, setVerbose } from "../globals.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
+import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -29,7 +32,9 @@ import { registerGatewayCli } from "./gateway-cli.js";
 import { registerHooksCli } from "./hooks-cli.js";
 import { registerModelsCli } from "./models-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
+import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
+import { registerTelegramCli } from "./telegram-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
 
 export { forceFreePort };
@@ -288,9 +293,16 @@ export function buildProgram() {
   program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and providers")
-    .action(async () => {
+    .option(
+      "--no-workspace-suggestions",
+      "Disable workspace memory system suggestions",
+      false,
+    )
+    .action(async (opts) => {
       try {
-        await doctorCommand(defaultRuntime);
+        await doctorCommand(defaultRuntime, {
+          workspaceSuggestions: opts.workspaceSuggestions,
+        });
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
@@ -314,11 +326,18 @@ export function buildProgram() {
     .description("Link your personal WhatsApp via QR (web provider)")
     .option("--verbose", "Verbose connection logs", false)
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .option("--account <id>", "WhatsApp account id (accountId)")
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
       try {
         const provider = opts.provider ?? "whatsapp";
-        await loginWeb(Boolean(opts.verbose), provider);
+        await loginWeb(
+          Boolean(opts.verbose),
+          provider,
+          undefined,
+          defaultRuntime,
+          opts.account as string | undefined,
+        );
       } catch (err) {
         defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
         defaultRuntime.exit(1);
@@ -329,10 +348,20 @@ export function buildProgram() {
     .command("logout")
     .description("Clear cached WhatsApp Web credentials")
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .option("--account <id>", "WhatsApp account id (accountId)")
     .action(async (opts) => {
       try {
         void opts.provider; // placeholder for future multi-provider; currently web only.
-        await logoutWeb(defaultRuntime);
+        const cfg = loadConfig();
+        const account = resolveWhatsAppAccount({
+          cfg,
+          accountId: opts.account as string | undefined,
+        });
+        await logoutWeb({
+          runtime: defaultRuntime,
+          authDir: account.authDir,
+          isLegacyAuthDir: account.isLegacyAuthDir,
+        });
       } catch (err) {
         defaultRuntime.error(danger(`Logout failed: ${String(err)}`));
         defaultRuntime.exit(1);
@@ -362,6 +391,7 @@ export function buildProgram() {
       "--provider <provider>",
       "Delivery provider: whatsapp|telegram|discord|slack|signal|imessage (default: whatsapp)",
     )
+    .option("--account <id>", "WhatsApp account id (accountId)")
     .option("--dry-run", "Print payload and skip sending", false)
     .option("--json", "Output result as JSON", false)
     .option("--verbose", "Verbose logging", false)
@@ -378,7 +408,63 @@ Examples:
       setVerbose(Boolean(opts.verbose));
       const deps = createDefaultDeps();
       try {
-        await sendCommand(opts, deps, defaultRuntime);
+        await sendCommand(
+          {
+            ...opts,
+            account: opts.account as string | undefined,
+          },
+          deps,
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("poll")
+    .description("Create a poll via WhatsApp or Discord")
+    .requiredOption(
+      "-t, --to <id>",
+      "Recipient: WhatsApp JID/number or Discord channel/user",
+    )
+    .requiredOption("-q, --question <text>", "Poll question")
+    .requiredOption(
+      "-o, --option <choice>",
+      "Poll option (use multiple times, 2-12 required)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option(
+      "-s, --max-selections <n>",
+      "How many options can be selected (default: 1)",
+    )
+    .option(
+      "--duration-hours <n>",
+      "Poll duration in hours (Discord only, default: 24)",
+    )
+    .option(
+      "--provider <provider>",
+      "Delivery provider: whatsapp|discord (default: whatsapp)",
+    )
+    .option("--dry-run", "Print payload and skip sending", false)
+    .option("--json", "Output result as JSON", false)
+    .option("--verbose", "Verbose logging", false)
+    .addHelpText(
+      "after",
+      `
+Examples:
+  clawdbot poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
+  clawdbot poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
+  clawdbot poll --to channel:123456789 -q "Snack?" -o "Pizza" -o "Sushi" --provider discord
+  clawdbot poll --to channel:123456789 -q "Plan?" -o "A" -o "B" --provider discord --duration-hours 48`,
+    )
+    .action(async (opts) => {
+      setVerbose(Boolean(opts.verbose));
+      const deps = createDefaultDeps();
+      try {
+        await pollCommand(opts, deps, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
@@ -387,9 +473,7 @@ Examples:
 
   program
     .command("agent")
-    .description(
-      "Talk directly to the configured agent (no chat send; optional delivery)",
-    )
+    .description("Run an agent turn via the Gateway (use --local for embedded)")
     .requiredOption("-m, --message <text>", "Message body for the agent")
     .option(
       "-t, --to <number>",
@@ -404,6 +488,11 @@ Examples:
     .option(
       "--provider <provider>",
       "Delivery provider: whatsapp|telegram|discord|slack|signal|imessage (default: whatsapp)",
+    )
+    .option(
+      "--local",
+      "Run the embedded agent locally (requires provider API keys in your shell)",
+      false,
     )
     .option(
       "--deliver",
@@ -430,9 +519,9 @@ Examples:
         typeof opts.verbose === "string" ? opts.verbose.toLowerCase() : "";
       setVerbose(verboseLevel === "on");
       // Build default deps (keeps parity with other commands; future-proofing).
-      void createDefaultDeps();
+      const deps = createDefaultDeps();
       try {
-        await agentCommand(opts, defaultRuntime);
+        await agentCliCommand(opts, defaultRuntime, deps);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
@@ -447,6 +536,8 @@ Examples:
   registerCronCli(program);
   registerDnsCli(program);
   registerHooksCli(program);
+  registerPairingCli(program);
+  registerTelegramCli(program);
 
   program
     .command("status")

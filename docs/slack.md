@@ -17,7 +17,7 @@ read_when: "Setting up Slack or debugging Slack socket mode"
    - `channel_rename`
    - `pin_added`, `pin_removed`
 5) Invite the bot to channels you want it to read.
-6) Slash Commands → create the `/clawd` command (or your preferred name).
+6) Slash Commands → create `/clawd` if you use `slack.slashCommand`. If you enable `commands.native`, add slash commands for the built-in chat commands (same names as `/help`).
 7) App Home → enable the **Messages Tab** so users can DM the bot.
 
 Use the manifest below so scopes and events stay in sync.
@@ -98,6 +98,8 @@ Use this Slack app manifest to create the app quickly (adjust the name/command i
 }
 ```
 
+If you enable `commands.native`, add one `slash_commands` entry per command you want to expose (matching the `/help` list).
+
 ## Scopes (current vs optional)
 Slack's Conversations API is type-scoped: you only need the scopes for the
 conversation types you actually touch (channels, groups, im, mpim). See
@@ -109,12 +111,12 @@ https://api.slack.com/docs/conversations-api for the overview.
 - `im:write` (open DMs via `conversations.open` for user DMs)
   https://api.slack.com/methods/conversations.open
 - `channels:history`, `groups:history`, `im:history`, `mpim:history`
-  (`conversations.history` in `src/slack/actions.ts`)
+  (`conversations.history` in [`src/slack/actions.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/actions.ts))
   https://api.slack.com/methods/conversations.history
 - `channels:read`, `groups:read`, `im:read`, `mpim:read`
-  (`conversations.info` in `src/slack/monitor.ts`)
+  (`conversations.info` in [`src/slack/monitor.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/monitor.ts))
   https://api.slack.com/methods/conversations.info
-- `users:read` (`users.info` in `src/slack/monitor.ts` + `src/slack/actions.ts`)
+- `users:read` (`users.info` in [`src/slack/monitor.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/monitor.ts) + [`src/slack/actions.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/actions.ts))
   https://api.slack.com/methods/users.info
 - `reactions:read`, `reactions:write` (`reactions.get` / `reactions.add`)
   https://api.slack.com/methods/reactions.get
@@ -145,8 +147,10 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     "enabled": true,
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
+    "groupPolicy": "open",
     "dm": {
       "enabled": true,
+      "policy": "pairing",
       "allowFrom": ["U123", "U456", "*"],
       "groupEnabled": false,
       "groupChannels": ["G123"]
@@ -180,10 +184,24 @@ Tokens can also be supplied via env vars:
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
+
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
+- Native command registration is controlled by `commands.native`; text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
+- Full command list + config: https://docs.clawd.bot/slash-commands
+
+## DM security (pairing)
+- Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.
+- Approve via: `clawdbot pairing approve --provider slack <code>`.
+- To allow anyone: set `slack.dm.policy="open"` and `slack.dm.allowFrom=["*"]`.
+
+## Group policy
+- `slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).
+- `allowlist` requires channels to be listed in `slack.channels`.
 
 ## Delivery targets
 Use these with cron/CLI sends:

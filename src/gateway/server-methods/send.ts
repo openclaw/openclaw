@@ -1,16 +1,18 @@
 import { loadConfig } from "../../config/config.js";
-import { sendMessageDiscord } from "../../discord/index.js";
+import { sendMessageDiscord, sendPollDiscord } from "../../discord/index.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { sendMessageIMessage } from "../../imessage/index.js";
 import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
-import { sendMessageWhatsApp } from "../../web/outbound.js";
+import { resolveDefaultWhatsAppAccountId } from "../../web/accounts.js";
+import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
+  validatePollParams,
   validateSendParams,
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
@@ -36,6 +38,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       mediaUrl?: string;
       gifPlayback?: boolean;
       provider?: string;
+      accountId?: string;
       idempotencyKey: string;
     };
     const idem = request.idempotencyKey;
@@ -147,10 +150,17 @@ export const sendHandlers: GatewayRequestHandlers = {
         });
         respond(true, payload, undefined, { provider });
       } else {
+        const cfg = loadConfig();
+        const accountId =
+          typeof request.accountId === "string" &&
+          request.accountId.trim().length > 0
+            ? request.accountId.trim()
+            : resolveDefaultWhatsAppAccountId(cfg);
         const result = await sendMessageWhatsApp(to, message, {
           mediaUrl: request.mediaUrl,
           verbose: shouldLogVerbose(),
           gifPlayback: request.gifPlayback,
+          accountId,
         });
         const payload = {
           runId: idem,
@@ -168,6 +178,109 @@ export const sendHandlers: GatewayRequestHandlers = {
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       context.dedupe.set(`send:${idem}`, {
+        ts: Date.now(),
+        ok: false,
+        error,
+      });
+      respond(false, undefined, error, {
+        provider,
+        error: formatForLog(err),
+      });
+    }
+  },
+  poll: async ({ params, respond, context }) => {
+    const p = params as Record<string, unknown>;
+    if (!validatePollParams(p)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid poll params: ${formatValidationErrors(validatePollParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const request = p as {
+      to: string;
+      question: string;
+      options: string[];
+      maxSelections?: number;
+      durationHours?: number;
+      provider?: string;
+      accountId?: string;
+      idempotencyKey: string;
+    };
+    const idem = request.idempotencyKey;
+    const cached = context.dedupe.get(`poll:${idem}`);
+    if (cached) {
+      respond(cached.ok, cached.payload, cached.error, {
+        cached: true,
+      });
+      return;
+    }
+    const to = request.to.trim();
+    const providerRaw = (request.provider ?? "whatsapp").toLowerCase();
+    const provider = providerRaw === "imsg" ? "imessage" : providerRaw;
+    if (provider !== "whatsapp" && provider !== "discord") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `unsupported poll provider: ${provider}`,
+        ),
+      );
+      return;
+    }
+    const poll = {
+      question: request.question,
+      options: request.options,
+      maxSelections: request.maxSelections,
+      durationHours: request.durationHours,
+    };
+    try {
+      if (provider === "discord") {
+        const result = await sendPollDiscord(to, poll);
+        const payload = {
+          runId: idem,
+          messageId: result.messageId,
+          channelId: result.channelId,
+          provider,
+        };
+        context.dedupe.set(`poll:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { provider });
+      } else {
+        const cfg = loadConfig();
+        const accountId =
+          typeof request.accountId === "string" &&
+          request.accountId.trim().length > 0
+            ? request.accountId.trim()
+            : resolveDefaultWhatsAppAccountId(cfg);
+        const result = await sendPollWhatsApp(to, poll, {
+          verbose: shouldLogVerbose(),
+          accountId,
+        });
+        const payload = {
+          runId: idem,
+          messageId: result.messageId,
+          toJid: result.toJid ?? `${to}@s.whatsapp.net`,
+          provider,
+        };
+        context.dedupe.set(`poll:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { provider });
+      }
+    } catch (err) {
+      const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+      context.dedupe.set(`poll:${idem}`, {
         ts: Date.now(),
         ok: false,
         error,

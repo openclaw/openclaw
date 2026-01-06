@@ -15,6 +15,10 @@ import {
 import { monitorTelegramProvider } from "../telegram/monitor.js";
 import { probeTelegram } from "../telegram/probe.js";
 import { resolveTelegramToken } from "../telegram/token.js";
+import {
+  listEnabledWhatsAppAccounts,
+  resolveDefaultWhatsAppAccountId,
+} from "../web/accounts.js";
 import type { WebProviderStatus } from "../web/auto-reply.js";
 import { readWebSelfId } from "../web/session.js";
 import { formatError } from "./server-utils.js";
@@ -60,6 +64,7 @@ export type IMessageRuntimeStatus = {
 
 export type ProviderRuntimeSnapshot = {
   whatsapp: WebProviderStatus;
+  whatsappAccounts?: Record<string, WebProviderStatus>;
   telegram: TelegramRuntimeStatus;
   discord: DiscordRuntimeStatus;
   slack: SlackRuntimeStatus;
@@ -88,8 +93,8 @@ type ProviderManagerOptions = {
 export type ProviderManager = {
   getRuntimeSnapshot: () => ProviderRuntimeSnapshot;
   startProviders: () => Promise<void>;
-  startWhatsAppProvider: () => Promise<void>;
-  stopWhatsAppProvider: () => Promise<void>;
+  startWhatsAppProvider: (accountId?: string) => Promise<void>;
+  stopWhatsAppProvider: (accountId?: string) => Promise<void>;
   startTelegramProvider: () => Promise<void>;
   stopTelegramProvider: () => Promise<void>;
   startDiscordProvider: () => Promise<void>;
@@ -100,7 +105,7 @@ export type ProviderManager = {
   stopSignalProvider: () => Promise<void>;
   startIMessageProvider: () => Promise<void>;
   stopIMessageProvider: () => Promise<void>;
-  markWhatsAppLoggedOut: (cleared: boolean) => void;
+  markWhatsAppLoggedOut: (cleared: boolean, accountId?: string) => void;
 };
 
 export function createProviderManager(
@@ -122,20 +127,21 @@ export function createProviderManager(
     imessageRuntimeEnv,
   } = opts;
 
-  let whatsappAbort: AbortController | null = null;
+  const whatsappAborts = new Map<string, AbortController>();
   let telegramAbort: AbortController | null = null;
   let discordAbort: AbortController | null = null;
   let slackAbort: AbortController | null = null;
   let signalAbort: AbortController | null = null;
   let imessageAbort: AbortController | null = null;
-  let whatsappTask: Promise<unknown> | null = null;
+  const whatsappTasks = new Map<string, Promise<unknown>>();
   let telegramTask: Promise<unknown> | null = null;
   let discordTask: Promise<unknown> | null = null;
   let slackTask: Promise<unknown> | null = null;
   let signalTask: Promise<unknown> | null = null;
   let imessageTask: Promise<unknown> | null = null;
 
-  let whatsappRuntime: WebProviderStatus = {
+  const whatsappRuntimes = new Map<string, WebProviderStatus>();
+  const defaultWhatsAppStatus = (): WebProviderStatus => ({
     running: false,
     connected: false,
     reconnectAttempts: 0,
@@ -144,7 +150,7 @@ export function createProviderManager(
     lastMessageAt: null,
     lastEventAt: null,
     lastError: null,
-  };
+  });
   let telegramRuntime: TelegramRuntimeStatus = {
     running: false,
     lastStartAt: null,
@@ -180,86 +186,134 @@ export function createProviderManager(
     dbPath: null,
   };
 
-  const updateWhatsAppStatus = (next: WebProviderStatus) => {
-    whatsappRuntime = next;
+  const updateWhatsAppStatus = (accountId: string, next: WebProviderStatus) => {
+    whatsappRuntimes.set(accountId, next);
   };
 
-  const startWhatsAppProvider = async () => {
-    if (whatsappTask) return;
+  const startWhatsAppProvider = async (accountId?: string) => {
     const cfg = loadConfig();
+    const enabledAccounts = listEnabledWhatsAppAccounts(cfg);
+    const targets = accountId
+      ? enabledAccounts.filter((a) => a.accountId === accountId)
+      : enabledAccounts;
+    if (targets.length === 0) return;
+
     if (cfg.web?.enabled === false) {
-      whatsappRuntime = {
-        ...whatsappRuntime,
-        running: false,
-        connected: false,
-        lastError: "disabled",
-      };
+      for (const account of targets) {
+        const current =
+          whatsappRuntimes.get(account.accountId) ?? defaultWhatsAppStatus();
+        whatsappRuntimes.set(account.accountId, {
+          ...current,
+          running: false,
+          connected: false,
+          lastError: "disabled",
+        });
+      }
       logWhatsApp.info("skipping provider start (web.enabled=false)");
       return;
     }
-    if (!(await webAuthExists())) {
-      whatsappRuntime = {
-        ...whatsappRuntime,
-        running: false,
-        connected: false,
-        lastError: "not linked",
-      };
-      logWhatsApp.info("skipping provider start (no linked session)");
-      return;
-    }
-    const { e164, jid } = readWebSelfId();
-    const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
-    logWhatsApp.info(`starting provider (${identity})`);
-    whatsappAbort = new AbortController();
-    whatsappRuntime = {
-      ...whatsappRuntime,
-      running: true,
-      connected: false,
-      lastError: null,
-    };
-    const task = monitorWebProvider(
-      shouldLogVerbose(),
-      undefined,
-      true,
-      undefined,
-      whatsappRuntimeEnv,
-      whatsappAbort.signal,
-      { statusSink: updateWhatsAppStatus },
-    )
-      .catch((err) => {
-        whatsappRuntime = {
-          ...whatsappRuntime,
-          lastError: formatError(err),
-        };
-        logWhatsApp.error(`provider exited: ${formatError(err)}`);
-      })
-      .finally(() => {
-        whatsappAbort = null;
-        whatsappTask = null;
-        whatsappRuntime = {
-          ...whatsappRuntime,
-          running: false,
+
+    await Promise.all(
+      targets.map(async (account) => {
+        if (whatsappTasks.has(account.accountId)) return;
+        const current =
+          whatsappRuntimes.get(account.accountId) ?? defaultWhatsAppStatus();
+        if (!(await webAuthExists(account.authDir))) {
+          whatsappRuntimes.set(account.accountId, {
+            ...current,
+            running: false,
+            connected: false,
+            lastError: "not linked",
+          });
+          logWhatsApp.info(
+            `[${account.accountId}] skipping provider start (no linked session)`,
+          );
+          return;
+        }
+
+        const { e164, jid } = readWebSelfId(account.authDir);
+        const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
+        logWhatsApp.info(
+          `[${account.accountId}] starting provider (${identity})`,
+        );
+        const abort = new AbortController();
+        whatsappAborts.set(account.accountId, abort);
+        whatsappRuntimes.set(account.accountId, {
+          ...current,
+          running: true,
           connected: false,
-        };
-      });
-    whatsappTask = task;
+          lastError: null,
+        });
+
+        const task = monitorWebProvider(
+          shouldLogVerbose(),
+          undefined,
+          true,
+          undefined,
+          whatsappRuntimeEnv,
+          abort.signal,
+          {
+            statusSink: (next) => updateWhatsAppStatus(account.accountId, next),
+            accountId: account.accountId,
+          },
+        )
+          .catch((err) => {
+            const latest =
+              whatsappRuntimes.get(account.accountId) ??
+              defaultWhatsAppStatus();
+            whatsappRuntimes.set(account.accountId, {
+              ...latest,
+              lastError: formatError(err),
+            });
+            logWhatsApp.error(
+              `[${account.accountId}] provider exited: ${formatError(err)}`,
+            );
+          })
+          .finally(() => {
+            whatsappAborts.delete(account.accountId);
+            whatsappTasks.delete(account.accountId);
+            const latest =
+              whatsappRuntimes.get(account.accountId) ??
+              defaultWhatsAppStatus();
+            whatsappRuntimes.set(account.accountId, {
+              ...latest,
+              running: false,
+              connected: false,
+            });
+          });
+
+        whatsappTasks.set(account.accountId, task);
+      }),
+    );
   };
 
-  const stopWhatsAppProvider = async () => {
-    if (!whatsappAbort && !whatsappTask) return;
-    whatsappAbort?.abort();
-    try {
-      await whatsappTask;
-    } catch {
-      // ignore
-    }
-    whatsappAbort = null;
-    whatsappTask = null;
-    whatsappRuntime = {
-      ...whatsappRuntime,
-      running: false,
-      connected: false,
-    };
+  const stopWhatsAppProvider = async (accountId?: string) => {
+    const ids = accountId
+      ? [accountId]
+      : Array.from(
+          new Set([...whatsappAborts.keys(), ...whatsappTasks.keys()]),
+        );
+    await Promise.all(
+      ids.map(async (id) => {
+        const abort = whatsappAborts.get(id);
+        const task = whatsappTasks.get(id);
+        if (!abort && !task) return;
+        abort?.abort();
+        try {
+          await task;
+        } catch {
+          // ignore
+        }
+        whatsappAborts.delete(id);
+        whatsappTasks.delete(id);
+        const latest = whatsappRuntimes.get(id) ?? defaultWhatsAppStatus();
+        whatsappRuntimes.set(id, {
+          ...latest,
+          running: false,
+          connected: false,
+        });
+      }),
+    );
   };
 
   const startTelegramProvider = async () => {
@@ -419,7 +473,6 @@ export function createProviderManager(
       token: discordToken.trim(),
       runtime: discordRuntimeEnv,
       abortSignal: discordAbort.signal,
-      slashCommand: cfg.discord?.slashCommand,
       mediaMaxMb: cfg.discord?.mediaMaxMb,
       historyLimit: cfg.discord?.historyLimit,
     })
@@ -754,23 +807,38 @@ export function createProviderManager(
     await startIMessageProvider();
   };
 
-  const markWhatsAppLoggedOut = (cleared: boolean) => {
-    whatsappRuntime = {
-      ...whatsappRuntime,
+  const markWhatsAppLoggedOut = (cleared: boolean, accountId?: string) => {
+    const cfg = loadConfig();
+    const resolvedId = accountId ?? resolveDefaultWhatsAppAccountId(cfg);
+    const current = whatsappRuntimes.get(resolvedId) ?? defaultWhatsAppStatus();
+    whatsappRuntimes.set(resolvedId, {
+      ...current,
       running: false,
       connected: false,
-      lastError: cleared ? "logged out" : whatsappRuntime.lastError,
-    };
+      lastError: cleared ? "logged out" : current.lastError,
+    });
   };
 
-  const getRuntimeSnapshot = (): ProviderRuntimeSnapshot => ({
-    whatsapp: { ...whatsappRuntime },
-    telegram: { ...telegramRuntime },
-    discord: { ...discordRuntime },
-    slack: { ...slackRuntime },
-    signal: { ...signalRuntime },
-    imessage: { ...imessageRuntime },
-  });
+  const getRuntimeSnapshot = (): ProviderRuntimeSnapshot => {
+    const cfg = loadConfig();
+    const defaultId = resolveDefaultWhatsAppAccountId(cfg);
+    const whatsapp = whatsappRuntimes.get(defaultId) ?? defaultWhatsAppStatus();
+    const whatsappAccounts = Object.fromEntries(
+      Array.from(whatsappRuntimes.entries()).map(([id, status]) => [
+        id,
+        { ...status },
+      ]),
+    );
+    return {
+      whatsapp: { ...whatsapp },
+      whatsappAccounts,
+      telegram: { ...telegramRuntime },
+      discord: { ...discordRuntime },
+      slack: { ...slackRuntime },
+      signal: { ...signalRuntime },
+      imessage: { ...imessageRuntime },
+    };
+  };
 
   return {
     getRuntimeSnapshot,

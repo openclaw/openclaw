@@ -105,7 +105,7 @@ const makeSessionStore = async (
 };
 
 describe("partial reply gating", () => {
-  it("does not send partial replies for WhatsApp surface", async () => {
+  it("does not send partial replies for WhatsApp provider", async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn().mockResolvedValue(undefined);
     const sendMedia = vi.fn().mockResolvedValue(undefined);
@@ -153,8 +153,9 @@ describe("partial reply gating", () => {
 
   it("updates last-route for direct chats without senderE164", async () => {
     const now = Date.now();
+    const mainSessionKey = "agent:main:main";
     const store = await makeSessionStore({
-      main: { sessionId: "sid", updatedAt: now - 1 },
+      [mainSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
     });
 
     const replyResolver = vi.fn().mockResolvedValue(undefined);
@@ -163,7 +164,7 @@ describe("partial reply gating", () => {
       whatsapp: {
         allowFrom: ["*"],
       },
-      session: { store: store.storePath, mainKey: "main" },
+      session: { store: store.storePath },
     };
 
     setLoadConfigMock(mockConfig);
@@ -190,18 +191,95 @@ describe("partial reply gating", () => {
       replyResolver,
     );
 
-    let stored: { main?: { lastChannel?: string; lastTo?: string } } | null =
-      null;
+    let stored: Record<
+      string,
+      { lastProvider?: string; lastTo?: string }
+    > | null = null;
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
-        main?: { lastChannel?: string; lastTo?: string };
-      };
-      if (stored.main?.lastChannel && stored.main?.lastTo) break;
+      stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
+        string,
+        { lastProvider?: string; lastTo?: string }
+      >;
+      if (
+        stored[mainSessionKey]?.lastProvider &&
+        stored[mainSessionKey]?.lastTo
+      )
+        break;
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     if (!stored) throw new Error("store not loaded");
-    expect(stored.main?.lastChannel).toBe("whatsapp");
-    expect(stored.main?.lastTo).toBe("+1000");
+    expect(stored[mainSessionKey]?.lastProvider).toBe("whatsapp");
+    expect(stored[mainSessionKey]?.lastTo).toBe("+1000");
+
+    resetLoadConfigMock();
+    await store.cleanup();
+  });
+
+  it("updates last-route for group chats with account id", async () => {
+    const now = Date.now();
+    const groupSessionKey = "agent:main:whatsapp:group:123@g.us";
+    const store = await makeSessionStore({
+      [groupSessionKey]: { sessionId: "sid", updatedAt: now - 1 },
+    });
+
+    const replyResolver = vi.fn().mockResolvedValue(undefined);
+
+    const mockConfig: ClawdbotConfig = {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
+      session: { store: store.storePath },
+    };
+
+    setLoadConfigMock(mockConfig);
+
+    await monitorWebProvider(
+      false,
+      async ({ onMessage }) => {
+        await onMessage({
+          id: "g1",
+          from: "123@g.us",
+          conversationId: "123@g.us",
+          to: "+2000",
+          body: "hello",
+          timestamp: now,
+          chatType: "group",
+          chatId: "123@g.us",
+          accountId: "work",
+          senderE164: "+1000",
+          senderName: "Alice",
+          selfE164: "+2000",
+          sendComposing: vi.fn().mockResolvedValue(undefined),
+          reply: vi.fn().mockResolvedValue(undefined),
+          sendMedia: vi.fn().mockResolvedValue(undefined),
+        });
+        return { close: vi.fn().mockResolvedValue(undefined) };
+      },
+      false,
+      replyResolver,
+    );
+
+    let stored: Record<
+      string,
+      { lastProvider?: string; lastTo?: string; lastAccountId?: string }
+    > | null = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      stored = JSON.parse(await fs.readFile(store.storePath, "utf8")) as Record<
+        string,
+        { lastProvider?: string; lastTo?: string; lastAccountId?: string }
+      >;
+      if (
+        stored[groupSessionKey]?.lastProvider &&
+        stored[groupSessionKey]?.lastTo &&
+        stored[groupSessionKey]?.lastAccountId
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    if (!stored) throw new Error("store not loaded");
+    expect(stored[groupSessionKey]?.lastProvider).toBe("whatsapp");
+    expect(stored[groupSessionKey]?.lastTo).toBe("123@g.us");
+    expect(stored[groupSessionKey]?.lastAccountId).toBe("work");
 
     resetLoadConfigMock();
     await store.cleanup();
@@ -241,6 +319,63 @@ describe("partial reply gating", () => {
     );
     expect(allowed).toEqual({ text: "ok" });
     expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+  });
+});
+
+describe("typing controller idle", () => {
+  it("marks dispatch idle after replies flush", async () => {
+    const markDispatchIdle = vi.fn();
+    const typingMock = {
+      onReplyStart: vi.fn(async () => {}),
+      startTypingLoop: vi.fn(async () => {}),
+      startTypingOnText: vi.fn(async () => {}),
+      refreshTypingTtl: vi.fn(),
+      markRunComplete: vi.fn(),
+      markDispatchIdle,
+      cleanup: vi.fn(),
+    };
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
+
+    const replyResolver = vi.fn().mockImplementation(async (_ctx, opts) => {
+      opts?.onTypingController?.(typingMock);
+      return { text: "final reply" };
+    });
+
+    const mockConfig: ClawdbotConfig = {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
+    };
+
+    setLoadConfigMock(mockConfig);
+
+    await monitorWebProvider(
+      false,
+      async ({ onMessage }) => {
+        await onMessage({
+          id: "m1",
+          from: "+1000",
+          conversationId: "+1000",
+          to: "+2000",
+          body: "hello",
+          timestamp: Date.now(),
+          chatType: "direct",
+          chatId: "direct:+1000",
+          sendComposing,
+          reply,
+          sendMedia,
+        });
+        return { close: vi.fn().mockResolvedValue(undefined) };
+      },
+      false,
+      replyResolver,
+    );
+
+    resetLoadConfigMock();
+
+    expect(markDispatchIdle).toHaveBeenCalled();
   });
 });
 
@@ -1045,6 +1180,57 @@ describe("web auto-reply", () => {
     resetLoadConfigMock();
   });
 
+  it("blocks group messages when whatsapp groups is set without a wildcard", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+
+    setLoadConfigMock(() => ({
+      whatsapp: {
+        allowFrom: ["*"],
+        groups: { "999@g.us": { requireMention: false } },
+      },
+      routing: { groupChat: { mentionPatterns: ["@clawd"] } },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "@clawd hello",
+      from: "123@g.us",
+      conversationId: "123@g.us",
+      chatId: "123@g.us",
+      chatType: "group",
+      to: "+2",
+      id: "g-allowlist-block",
+      senderE164: "+111",
+      senderName: "Alice",
+      mentionedJids: ["999@s.whatsapp.net"],
+      selfE164: "+999",
+      selfJid: "999@s.whatsapp.net",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).not.toHaveBeenCalled();
+    resetLoadConfigMock();
+  });
+
   it("honors per-group mention overrides when conversationId uses session key", async () => {
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -1107,7 +1293,7 @@ describe("web auto-reply", () => {
       .mockResolvedValueOnce({ text: "ok" });
 
     const { storePath, cleanup } = await makeSessionStore({
-      "whatsapp:group:123@g.us": {
+      "agent:main:whatsapp:group:123@g.us": {
         sessionId: "g-1",
         updatedAt: Date.now(),
         groupActivation: "always",

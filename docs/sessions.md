@@ -5,4 +5,4 @@ read_when:
 ---
 # Sessions
 
-Canonical session management docs live in `docs/session.md`.
+Canonical session management docs live in [`docs/session.md`](https://docs.clawd.bot/session).

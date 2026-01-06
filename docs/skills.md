@@ -142,6 +142,6 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 
 ## Config reference
 
-See `docs/skills-config.md` for the full configuration schema.
+See [`docs/skills-config.md`](https://docs.clawd.bot/skills-config) for the full configuration schema.
 
 ---

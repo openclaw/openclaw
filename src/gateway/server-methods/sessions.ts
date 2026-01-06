@@ -24,11 +24,11 @@ import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
-  resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../../config/sessions.js";
 import { clearCommandLane } from "../../process/command-queue.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeSendPolicy } from "../../sessions/send-policy.js";
 import {
   ErrorCodes,
@@ -43,7 +43,8 @@ import {
 import {
   archiveFileOnDisk,
   listSessionsFromStore,
-  loadSessionEntry,
+  loadCombinedSessionStoreForGateway,
+  resolveGatewaySessionStoreTarget,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
 } from "../session-utils.js";
@@ -64,8 +65,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const p = params as import("../protocol/index.js").SessionsListParams;
     const cfg = loadConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
-    const store = loadSessionStore(storePath);
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
     const result = listSessionsFromStore({
       cfg,
       storePath,
@@ -98,17 +98,74 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const cfg = loadConfig();
-    const storePath = resolveStorePath(cfg.session?.store);
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const storePath = target.storePath;
     const store = loadSessionStore(storePath);
     const now = Date.now();
 
-    const existing = store[key];
+    const primaryKey = target.storeKeys[0] ?? key;
+    const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+    if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+      store[primaryKey] = store[existingKey];
+      delete store[existingKey];
+    }
+    const existing = store[primaryKey];
     const next: SessionEntry = existing
       ? {
           ...existing,
           updatedAt: Math.max(existing.updatedAt ?? 0, now),
         }
       : { sessionId: randomUUID(), updatedAt: now };
+
+    if ("spawnedBy" in p) {
+      const raw = p.spawnedBy;
+      if (raw === null) {
+        if (existing?.spawnedBy) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawnedBy cannot be cleared once set",
+            ),
+          );
+          return;
+        }
+      } else if (raw !== undefined) {
+        const trimmed = String(raw).trim();
+        if (!trimmed) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "invalid spawnedBy: empty"),
+          );
+          return;
+        }
+        if (!isSubagentSessionKey(primaryKey)) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawnedBy is only supported for subagent:* sessions",
+            ),
+          );
+          return;
+        }
+        if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "spawnedBy cannot be changed once set",
+            ),
+          );
+          return;
+        }
+        next.spawnedBy = trimmed;
+      }
+    }
 
     if ("thinkingLevel" in p) {
       const raw = p.thinkingLevel;
@@ -261,12 +318,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    store[key] = next;
+    store[primaryKey] = next;
     await saveSessionStore(storePath, store);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
-      key,
+      key: target.canonicalKey,
       entry: next,
     };
     respond(true, result, undefined);
@@ -294,7 +351,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const { storePath, store, entry } = loadSessionEntry(key);
+    const cfg = loadConfig();
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const storePath = target.storePath;
+    const store = loadSessionStore(storePath);
+    const primaryKey = target.storeKeys[0] ?? key;
+    const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+    if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+      store[primaryKey] = store[existingKey];
+      delete store[existingKey];
+    }
+    const entry = store[primaryKey];
     const now = Date.now();
     const next: SessionEntry = {
       sessionId: randomUUID(),
@@ -306,13 +373,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       model: entry?.model,
       contextTokens: entry?.contextTokens,
       sendPolicy: entry?.sendPolicy,
-      lastChannel: entry?.lastChannel,
+      lastProvider: entry?.lastProvider,
       lastTo: entry?.lastTo,
       skillsSnapshot: entry?.skillsSnapshot,
     };
-    store[key] = next;
+    store[primaryKey] = next;
     await saveSessionStore(storePath, store);
-    respond(true, { ok: true, key, entry: next }, undefined);
+    respond(
+      true,
+      { ok: true, key: target.canonicalKey, entry: next },
+      undefined,
+    );
   },
   "sessions.delete": async ({ params, respond }) => {
     if (!validateSessionsDeleteParams(params)) {
@@ -337,8 +408,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const mainKey = resolveMainSessionKey(loadConfig());
-    if (key === mainKey) {
+    const cfg = loadConfig();
+    const mainKey = resolveMainSessionKey(cfg);
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    if (target.canonicalKey === mainKey) {
       respond(
         false,
         undefined,
@@ -353,10 +426,18 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const deleteTranscript =
       typeof p.deleteTranscript === "boolean" ? p.deleteTranscript : true;
 
-    const { storePath, store, entry } = loadSessionEntry(key);
+    const storePath = target.storePath;
+    const store = loadSessionStore(storePath);
+    const primaryKey = target.storeKeys[0] ?? key;
+    const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+    if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+      store[primaryKey] = store[existingKey];
+      delete store[existingKey];
+    }
+    const entry = store[primaryKey];
     const sessionId = entry?.sessionId;
-    const existed = Boolean(store[key]);
-    clearCommandLane(resolveEmbeddedSessionLane(key));
+    const existed = Boolean(entry);
+    clearCommandLane(resolveEmbeddedSessionLane(target.canonicalKey));
     if (sessionId && isEmbeddedPiRunActive(sessionId)) {
       abortEmbeddedPiRun(sessionId);
       const ended = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
@@ -372,7 +453,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    if (existed) delete store[key];
+    if (existed) delete store[primaryKey];
     await saveSessionStore(storePath, store);
 
     const archived: string[] = [];
@@ -380,6 +461,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       for (const candidate of resolveSessionTranscriptCandidates(
         sessionId,
         storePath,
+        target.agentId,
       )) {
         if (!fs.existsSync(candidate)) continue;
         try {
@@ -390,7 +472,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
 
-    respond(true, { ok: true, key, deleted: existed, archived }, undefined);
+    respond(
+      true,
+      { ok: true, key: target.canonicalKey, deleted: existed, archived },
+      undefined,
+    );
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!validateSessionsCompactParams(params)) {
@@ -420,12 +506,27 @@ export const sessionsHandlers: GatewayRequestHandlers = {
         ? Math.max(1, Math.floor(p.maxLines))
         : 400;
 
-    const { storePath, store, entry } = loadSessionEntry(key);
+    const cfg = loadConfig();
+    const target = resolveGatewaySessionStoreTarget({ cfg, key });
+    const storePath = target.storePath;
+    const store = loadSessionStore(storePath);
+    const primaryKey = target.storeKeys[0] ?? key;
+    const existingKey = target.storeKeys.find((candidate) => store[candidate]);
+    if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+      store[primaryKey] = store[existingKey];
+      delete store[existingKey];
+    }
+    const entry = store[primaryKey];
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(
         true,
-        { ok: true, key, compacted: false, reason: "no sessionId" },
+        {
+          ok: true,
+          key: target.canonicalKey,
+          compacted: false,
+          reason: "no sessionId",
+        },
         undefined,
       );
       return;
@@ -434,11 +535,17 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const filePath = resolveSessionTranscriptCandidates(
       sessionId,
       storePath,
+      target.agentId,
     ).find((candidate) => fs.existsSync(candidate));
     if (!filePath) {
       respond(
         true,
-        { ok: true, key, compacted: false, reason: "no transcript" },
+        {
+          ok: true,
+          key: target.canonicalKey,
+          compacted: false,
+          reason: "no transcript",
+        },
         undefined,
       );
       return;
@@ -449,7 +556,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (lines.length <= maxLines) {
       respond(
         true,
-        { ok: true, key, compacted: false, kept: lines.length },
+        {
+          ok: true,
+          key: target.canonicalKey,
+          compacted: false,
+          kept: lines.length,
+        },
         undefined,
       );
       return;
@@ -459,11 +571,11 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const keptLines = lines.slice(-maxLines);
     fs.writeFileSync(filePath, `${keptLines.join("\n")}\n`, "utf-8");
 
-    if (store[key]) {
-      delete store[key].inputTokens;
-      delete store[key].outputTokens;
-      delete store[key].totalTokens;
-      store[key].updatedAt = Date.now();
+    if (store[primaryKey]) {
+      delete store[primaryKey].inputTokens;
+      delete store[primaryKey].outputTokens;
+      delete store[primaryKey].totalTokens;
+      store[primaryKey].updatedAt = Date.now();
       await saveSessionStore(storePath, store);
     }
 
@@ -471,7 +583,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       true,
       {
         ok: true,
-        key,
+        key: target.canonicalKey,
         compacted: true,
         archived,
         kept: keptLines.length,

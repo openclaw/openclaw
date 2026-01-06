@@ -13,7 +13,7 @@ Author: steipete · Status: draft spec · Date: 2025-12-20
   - Shows native notifications for Clawdbot/clawdbot events.
   - Owns TCC prompts (Notifications, Accessibility, Screen Recording, Automation/AppleScript, Microphone, Speech Recognition).
   - Runs (or connects to) the **Gateway** and exposes itself as a **node** so agents can reach macOS‑only features.
-  - Hosts **PeekabooBridge** for UI automation (consumed by `peekaboo`; see `docs/mac/peekaboo.md`).
+  - Hosts **PeekabooBridge** for UI automation (consumed by `peekaboo`; see [`docs/mac/peekaboo.md`](https://docs.clawd.bot/mac/peekaboo)).
   - Installs a single CLI (`clawdbot`) by symlinking the bundled binary.
 
 ## High-level design
@@ -79,7 +79,7 @@ Query parameters:
 - `sessionKey` (optional): explicit session key to use.
 - `thinking` (optional): thinking hint (e.g. `low`; omit for default).
 - `deliver` (optional): `true|false` (default: false).
-- `to` / `channel` (optional): forwarded to the Gateway `agent` method (only meaningful with `deliver=true`).
+- `to` / `provider` (optional): forwarded to the Gateway `agent` method (only meaningful with `deliver=true`).
 - `timeoutSeconds` (optional): timeout hint forwarded to the Gateway.
 - `key` (optional): unattended mode key (see below).
 
@@ -96,7 +96,7 @@ Notes:
 ## Build & dev workflow (native)
 - `cd apps/macos && swift build` (debug) / `swift build -c release`.
 - Run app for dev: `swift run Clawdbot` (or Xcode scheme).
-- Package app + CLI: `scripts/package-mac-app.sh` (builds bun CLI + gateway).
+- Package app + CLI: [`scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) (builds bun CLI + gateway).
 - Tests: add Swift Testing suites under `apps/macos/Tests`.
 
 ## Open questions / decisions
