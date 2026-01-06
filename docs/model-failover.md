@@ -17,7 +17,7 @@ This doc explains the runtime rules and the data that backs them.
 
 Clawdbot uses **auth profiles** for both API keys and OAuth tokens.
 
-- Secrets live in `~/.clawdbot/agent/auth-profiles.json` (default agent; multi-agent stores under `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`).
+- Secrets live in `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.clawdbot/agent/auth-profiles.json`).
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
 - Legacy import-only OAuth file: `~/.clawdbot/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
 
@@ -31,7 +31,7 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 - Default: `provider:default` when no email is available.
 - OAuth with email: `provider:<email>` (for example `google-antigravity:user@gmail.com`).
 
-Profiles live in `~/.clawdbot/agent/auth-profiles.json` under `profiles`.
+Profiles live in `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` under `profiles`.
 
 ## Rotation order
 

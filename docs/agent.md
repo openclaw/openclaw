@@ -74,7 +74,7 @@ Apply these notes **only** when the user is Peter Steinberger at steipete.
 ## Sessions
 
 Session transcripts are stored as JSONL at:
-- `~/.clawdbot/sessions/<SessionId>.jsonl`
+- `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl`
 
 The session ID is stable and chosen by CLAWDBOT.
 Legacy Pi/Tau session folders are **not** read.

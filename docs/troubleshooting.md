@@ -14,7 +14,7 @@ When your CLAWDBOT misbehaves, here's how to fix it.
 The agent was interrupted mid-response.
 
 **Causes:**
-- User sent `stop`, `abort`, `esc`, or `exit`
+- User sent `stop`, `abort`, `esc`, `wait`, or `exit`
 - Timeout exceeded
 - Process crashed
 
@@ -50,7 +50,7 @@ Known issue: When you send an image with ONLY a mention (no other text), WhatsAp
 
 **Check 1:** Is the session file there?
 ```bash
-ls -la ~/.clawdbot/sessions/
+ls -la ~/.clawdbot/agents/<agentId>/sessions/
 ```
 
 **Check 2:** Is `idleMinutes` too short?
@@ -188,7 +188,7 @@ clawdbot login --verbose
 | Log | Location |
 |-----|----------|
 | Main logs (default) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` |
-| Session files | `~/.clawdbot/sessions/` |
+| Session files | `~/.clawdbot/agents/<agentId>/sessions/` |
 | Media cache | `~/.clawdbot/media/` |
 | Credentials | `~/.clawdbot/credentials/` |
 

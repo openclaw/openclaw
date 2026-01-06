@@ -108,7 +108,7 @@ Save this as `~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist`:
 ### Load the Launch Agent
 
 ```bash
-launchctl load ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
 ```
 
 The tunnel will now:
@@ -130,13 +130,13 @@ lsof -i :18789
 **Restart the tunnel:**
 
 ```bash
-launchctl restart com.clawdbot.ssh-tunnel
+launchctl kickstart -k gui/$UID/com.clawdbot.ssh-tunnel
 ```
 
 **Stop the tunnel:**
 
 ```bash
-launchctl unload ~/Library/LaunchAgents/com.clawdbot.ssh-tunnel.plist
+launchctl bootout gui/$UID/com.clawdbot.ssh-tunnel
 ```
 
 ---

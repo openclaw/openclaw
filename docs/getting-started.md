@@ -69,8 +69,8 @@ Wizard doc: https://docs.clawd.bot/wizard
 
 ### Auth: where it lives (important)
 
-- OAuth credentials: `~/.clawdbot/credentials/oauth.json`
-- Auth profiles (OAuth + API keys): `~/.clawdbot/agent/auth-profiles.json`
+- OAuth credentials (legacy import): `~/.clawdbot/credentials/oauth.json`
+- Auth profiles (OAuth + API keys): `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
 
 Headless/server tip: do OAuth on a normal machine first, then copy `oauth.json` to the gateway host.
 

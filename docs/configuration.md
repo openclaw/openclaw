@@ -933,11 +933,11 @@ URL is injected per session.
 
 Clawdbot uses the **pi-coding-agent** model catalog. You can add custom providers
 (LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
-`~/.clawdbot/agent/models.json` or by defining the same schema inside your
+`~/.clawdbot/agents/<agentId>/agent/models.json` or by defining the same schema inside your
 Clawdbot config under `models.providers`.
 
 When `models.providers` is present, Clawdbot writes/merges a `models.json` into
-`~/.clawdbot/agent/` on startup:
+`~/.clawdbot/agents/<agentId>/agent/` on startup:
 - default behavior: **merge** (keeps existing providers, overrides on name)
 - set `models.mode: "replace"` to overwrite the file contents
 
