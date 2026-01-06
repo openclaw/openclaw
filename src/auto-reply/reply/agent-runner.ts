@@ -237,7 +237,8 @@ export async function runReplyAgent(params: {
               : undefined,
             onAgentEvent: (evt) => {
               if (evt.stream !== "compaction") return;
-              const phase = String(evt.data.phase ?? "");
+              const phase =
+                typeof evt.data.phase === "string" ? evt.data.phase : "";
               const willRetry = Boolean(evt.data.willRetry);
               if (phase === "end" && !willRetry) {
                 autoCompactionCompleted = true;

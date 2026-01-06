@@ -61,7 +61,7 @@ export function applyMessageDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   if (hasAckReaction && hasAckScope) return cfg;
 
   const fallbackEmoji = cfg.identity?.emoji?.trim() || "👀";
-  const nextMessages = { ...(messages ?? {}) };
+  const nextMessages = messages ? { ...messages } : {};
   let mutated = false;
 
   if (!hasAckReaction) {
