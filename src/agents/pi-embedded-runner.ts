@@ -65,6 +65,7 @@ import {
   type SkillSnapshot,
 } from "./skills.js";
 import { buildAgentSystemPromptAppend } from "./system-prompt.js";
+import { normalizeUsage, type UsageLike } from "./usage.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 export type EmbeddedPiAgentMeta = {
@@ -1000,20 +1001,12 @@ export async function runEmbeddedPiAgent(params: {
             }
           }
 
-          const usage = lastAssistant?.usage;
+          const usage = normalizeUsage(lastAssistant?.usage as UsageLike);
           const agentMeta: EmbeddedPiAgentMeta = {
             sessionId: sessionIdUsed,
             provider: lastAssistant?.provider ?? provider,
             model: lastAssistant?.model ?? model.id,
-            usage: usage
-              ? {
-                  input: usage.input,
-                  output: usage.output,
-                  cacheRead: usage.cacheRead,
-                  cacheWrite: usage.cacheWrite,
-                  total: usage.totalTokens,
-                }
-              : undefined,
+            usage,
           };
 
           const replyItems: Array<{ text: string; media?: string[] }> = [];

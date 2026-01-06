@@ -6,6 +6,7 @@ import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
+import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
   type SessionEntry,
@@ -450,7 +451,7 @@ export async function runReplyAgent(params: {
         sessionEntry?.contextTokens ??
         DEFAULT_CONTEXT_TOKENS;
 
-      if (usage) {
+      if (hasNonzeroUsage(usage)) {
         const entry = sessionEntry ?? sessionStore[sessionKey];
         if (entry) {
           const input = usage.input ?? 0;

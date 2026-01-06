@@ -17,6 +17,7 @@ import {
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { hasNonzeroUsage } from "../agents/usage.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   ensureAgentWorkspace,
@@ -482,7 +483,7 @@ export async function agentCommand(
       contextTokens,
     };
     next.abortedLastRun = result.meta.aborted ?? false;
-    if (usage) {
+    if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
       const promptTokens =
