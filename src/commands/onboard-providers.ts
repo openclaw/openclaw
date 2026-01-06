@@ -287,17 +287,22 @@ async function maybeConfigureDmPolicies(params: {
   if (!wants) return params.cfg;
 
   let cfg = params.cfg;
-  const selectPolicy = async (label: string, keyHint: string) => {
+  const selectPolicy = async (params: {
+    label: string;
+    provider: ProviderChoice;
+    policyKey: string;
+    allowFromKey: string;
+  }) => {
     await prompter.note(
       [
         "Default: pairing (unknown DMs get a pairing code).",
-        `Approve: clawdbot pairing approve --provider ${label.toLowerCase()} <code>`,
-        `Public DMs: ${keyHint}="open" + allowFrom includes "*".`,
+        `Approve: clawdbot pairing approve --provider ${params.provider} <code>`,
+        `Public DMs: ${params.policyKey}="open" + ${params.allowFromKey} includes "*".`,
       ].join("\n"),
-      `${label} DM access`,
+      `${params.label} DM access`,
     );
     return (await prompter.select({
-      message: `${label} DM policy`,
+      message: `${params.label} DM policy`,
       options: [
         { value: "pairing", label: "Pairing (recommended)" },
         { value: "open", label: "Open (public inbound DMs)" },
@@ -308,27 +313,52 @@ async function maybeConfigureDmPolicies(params: {
 
   if (selection.includes("telegram")) {
     const current = cfg.telegram?.dmPolicy ?? "pairing";
-    const policy = await selectPolicy("Telegram", "telegram.dmPolicy");
+    const policy = await selectPolicy({
+      label: "Telegram",
+      provider: "telegram",
+      policyKey: "telegram.dmPolicy",
+      allowFromKey: "telegram.allowFrom",
+    });
     if (policy !== current) cfg = setTelegramDmPolicy(cfg, policy);
   }
   if (selection.includes("discord")) {
     const current = cfg.discord?.dm?.policy ?? "pairing";
-    const policy = await selectPolicy("Discord", "discord.dm.policy");
+    const policy = await selectPolicy({
+      label: "Discord",
+      provider: "discord",
+      policyKey: "discord.dm.policy",
+      allowFromKey: "discord.dm.allowFrom",
+    });
     if (policy !== current) cfg = setDiscordDmPolicy(cfg, policy);
   }
   if (selection.includes("slack")) {
     const current = cfg.slack?.dm?.policy ?? "pairing";
-    const policy = await selectPolicy("Slack", "slack.dm.policy");
+    const policy = await selectPolicy({
+      label: "Slack",
+      provider: "slack",
+      policyKey: "slack.dm.policy",
+      allowFromKey: "slack.dm.allowFrom",
+    });
     if (policy !== current) cfg = setSlackDmPolicy(cfg, policy);
   }
   if (selection.includes("signal")) {
     const current = cfg.signal?.dmPolicy ?? "pairing";
-    const policy = await selectPolicy("Signal", "signal.dmPolicy");
+    const policy = await selectPolicy({
+      label: "Signal",
+      provider: "signal",
+      policyKey: "signal.dmPolicy",
+      allowFromKey: "signal.allowFrom",
+    });
     if (policy !== current) cfg = setSignalDmPolicy(cfg, policy);
   }
   if (selection.includes("imessage")) {
     const current = cfg.imessage?.dmPolicy ?? "pairing";
-    const policy = await selectPolicy("iMessage", "imessage.dmPolicy");
+    const policy = await selectPolicy({
+      label: "iMessage",
+      provider: "imessage",
+      policyKey: "imessage.dmPolicy",
+      allowFromKey: "imessage.allowFrom",
+    });
     if (policy !== current) cfg = setIMessageDmPolicy(cfg, policy);
   }
   return cfg;
