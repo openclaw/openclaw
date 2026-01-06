@@ -462,7 +462,7 @@ export async function runOnboardingWizard(
       if (oauthCreds) {
         await writeOAuthCredentials("google-antigravity", oauthCreds);
         nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: "google-antigravity:default",
+          profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
           provider: "google-antigravity",
           mode: "oauth",
         });
