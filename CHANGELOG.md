@@ -16,6 +16,7 @@
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
+- Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
