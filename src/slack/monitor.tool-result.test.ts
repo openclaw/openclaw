@@ -70,7 +70,7 @@ vi.mock("@slack/bolt", () => {
     start = vi.fn().mockResolvedValue(undefined);
     stop = vi.fn().mockResolvedValue(undefined);
   }
-  return { default: { App } };
+  return { App, default: { App } };
 });
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
