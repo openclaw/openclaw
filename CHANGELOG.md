@@ -70,6 +70,7 @@
 - Model: avoid duplicate `missing (missing)` auth labels in `/model` list output.
 - Auth: when `openai` has no API key but Codex OAuth exists, suggest `openai-codex/gpt-5.2` vs `OPENAI_API_KEY`.
 - Docs: clarify auth storage, migration, and OpenAI Codex OAuth onboarding.
+- Docs: clarify per-session sandbox isolation and `perSession` sharing risks.
 - Sandbox: copy inbound media into sandbox workspaces so agent tools can read attachments.
 - Sandbox: enable session tools in sandboxed sessions with spawned-only visibility by default (opt-in `agent.sandbox.sessionToolsVisibility = "all"`).
 - Control UI: show a reading indicator bubble while the assistant is responding.

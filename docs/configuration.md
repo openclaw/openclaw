@@ -859,12 +859,15 @@ Defaults (if enabled):
 - optional sandboxed browser (Chromium + CDP, noVNC observer)
 - hardening knobs: `network`, `user`, `pidsLimit`, `memory`, `cpus`, `ulimits`, `seccompProfile`, `apparmorProfile`
 
+Warning: `perSession: false` means a shared container and shared workspace. No
+cross-session isolation.
+
 ```json5
 {
   agent: {
     sandbox: {
       mode: "non-main", // off | non-main | all
-      perSession: true,
+      perSession: true, // recommended for isolation (false = shared container/workspace)
       workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
         image: "clawdbot-sandbox:bookworm-slim",

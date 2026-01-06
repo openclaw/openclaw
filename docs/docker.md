@@ -81,6 +81,9 @@ container. The gateway stays on your host, but the tool execution is isolated:
 - allow/deny tool policy (deny wins)
 - inbound media is copied into the sandbox workspace (`media/inbound/*`) so tools can read it
 
+Warning: setting `perSession: false` disables per-session isolation. All sessions
+share one container and one workspace, so there is no cross-session isolation.
+
 ### Default behavior
 
 - Image: `clawdbot-sandbox:bookworm-slim`

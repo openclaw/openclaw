@@ -141,6 +141,9 @@ Two complementary approaches:
 - **Run the full Gateway in Docker** (container boundary): https://docs.clawd.bot/docker
 - **Per-session tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): https://docs.clawd.bot/configuration
 
+Note: to prevent cross-agent access, keep `perSession: true` so each session gets
+its own container + workspace. `perSession: false` shares a single container.
+
 Important: `agent.elevated` is an explicit escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
 
 ## What to Tell Your AI
