@@ -1,6 +1,9 @@
 import { type FilesUploadV2Arguments, WebClient } from "@slack/web-api";
 
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveSlackBotToken } from "./token.js";
@@ -144,7 +147,7 @@ export async function sendMessageSlack(
   const cfg = loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "slack");
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
-  const chunks = chunkText(trimmedMessage, chunkLimit);
+  const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
   const mediaMaxBytes =
     typeof cfg.slack?.mediaMaxMb === "number"
       ? cfg.slack.mediaMaxMb * 1024 * 1024

@@ -1,4 +1,7 @@
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import {
   normalizeGroupActivation,
@@ -556,7 +559,7 @@ async function deliverWebReply(params: {
     skipLog,
   } = params;
   const replyStarted = Date.now();
-  const textChunks = chunkText(replyResult.text || "", textLimit);
+  const textChunks = chunkMarkdownText(replyResult.text || "", textLimit);
   const mediaList = replyResult.mediaUrls?.length
     ? replyResult.mediaUrls
     : replyResult.mediaUrl

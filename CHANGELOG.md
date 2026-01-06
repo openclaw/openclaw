@@ -101,6 +101,7 @@
 - Telegram: notify users when inbound media exceeds size limits. Thanks @jarvis-medmatic for PR #283.
 - Telegram: send GIF media as animations (auto-play) and improve filename sniffing.
 - Bash tool: inherit gateway PATH so Nix-provided tools resolve during commands. Thanks @joshp123 for PR #202.
+- Delivery chunking: keep Markdown fenced code blocks valid when splitting long replies (close + reopen fences).
 
 ### Maintenance
 - Agent: add `skipBootstrap` config option. Thanks @onutc for PR #292.

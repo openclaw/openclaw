@@ -3,7 +3,10 @@ import {
   type SlackCommandMiddlewareArgs,
   type SlackEventMiddlewareArgs,
 } from "@slack/bolt";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import {
+  chunkMarkdownText,
+  resolveTextChunkLimit,
+} from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -1525,7 +1528,7 @@ async function deliverReplies(params: {
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(text, chunkLimit)) {
+      for (const chunk of chunkMarkdownText(text, chunkLimit)) {
         const trimmed = chunk.trim();
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
@@ -1587,7 +1590,7 @@ async function deliverSlackSlashReplies(params: {
       .filter(Boolean)
       .join("\n");
     if (!combined) continue;
-    for (const chunk of chunkText(combined, chunkLimit)) {
+    for (const chunk of chunkMarkdownText(combined, chunkLimit)) {
       messages.push(chunk);
     }
   }
