@@ -13,7 +13,7 @@ Goal: Gmail watch -> Pub/Sub push -> `gog gmail watch serve` -> Clawdbot webhook
 
 - `gcloud` installed and logged in ([install guide](https://docs.cloud.google.com/sdk/docs/install-sdk)).
 - `gog` (gogcli) installed and authorized for the Gmail account ([gogcli.sh](https://gogcli.sh/)).
-- Clawdbot hooks enabled (see [`docs/webhook.md`](/webhook)).
+- Clawdbot hooks enabled (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).
 - `tailscale` logged in ([tailscale.com](https://tailscale.com/)). Supported setup uses Tailscale Funnel for the public HTTPS endpoint.
   Other tunnel services can work, but are DIY/unsupported and require manual wiring.
   Right now, Tailscale is what we support.
@@ -32,7 +32,7 @@ Example hook config (enable Gmail preset mapping):
 ```
 
 To customize payload handling, add `hooks.mappings` or a JS/TS transform module
-under `hooks.transformsDir` (see [`docs/webhook.md`](/webhook)).
+under `hooks.transformsDir` (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).
 
 ## Wizard (recommended)
 

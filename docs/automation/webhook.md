@@ -93,6 +93,7 @@ Mapping options (summary):
 - Use `match.source` to keep a generic ingest endpoint (payload-driven routing).
 - TS transforms require a TS loader (e.g. `bun`) or precompiled `.js` at runtime.
 - `clawdbot hooks gmail setup` writes `hooks.gmail` config for `clawdbot hooks gmail run`.
+See [`docs/gmail-pubsub.md`](https://docs.clawd.bot/automation/gmail-pubsub) for the full Gmail watch flow.
 
 ## Responses
 

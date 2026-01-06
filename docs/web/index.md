@@ -11,22 +11,13 @@ The Gateway serves a small **browser Control UI** (Vite + Lit) from the same por
 - default: `http://<host>:18789/`
 - optional prefix: set `gateway.controlUi.basePath` (e.g. `/clawdbot`)
 
-The UI talks directly to the Gateway WS and supports:
-- Chat (`chat.history`, `chat.send`, `chat.abort`)
-- Chat tool cards (agent tool events)
-- Connections (provider status, WhatsApp QR, Telegram config)
-- Instances (`system-presence`)
-- Sessions (`sessions.list`, `sessions.patch`)
-- Cron (`cron.*`)
-- Skills (`skills.status`, `skills.update`, `skills.install`)
-- Nodes (`node.list`, `node.describe`, `node.invoke`)
-- Config (`config.get`, `config.set`) for `~/.clawdbot/clawdbot.json`
-- Debug (status/health/models snapshots + manual calls)
+Capabilities live in [`docs/control-ui.md`](https://docs.clawd.bot/web/control-ui).
+This page focuses on bind modes, security, and web-facing surfaces.
 
 ## Webhooks
 
 When `hooks.enabled=true`, the Gateway also exposes a small webhook endpoint on the same HTTP server.
-See [`docs/configuration.md`](/configuration) → `hooks` for auth + payloads.
+See [`docs/configuration.md`](https://docs.clawd.bot/gateway/configuration) → `hooks` for auth + payloads.
 
 ## Config (default-on)
 
