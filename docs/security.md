@@ -75,6 +75,7 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Prefer mention gating in groups; avoid “always-on” bots in public rooms.
 - Treat links and pasted instructions as hostile by default.
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
+- **Model choice matters:** we recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)). Using weaker models increases risk.
 
 ## Lessons Learned (The Hard Way)
 

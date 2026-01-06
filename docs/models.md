@@ -12,6 +12,10 @@ See [`docs/model-failover.md`](https://docs.clawd.bot/model-failover) for how au
 Goal: give clear model visibility + control (configured vs available), plus scan tooling
 that prefers tool-call + image-capable models and maintains ordered fallbacks.
 
+## Model recommendations
+
+Through testing, we’ve found Anthropic Opus 4.5 is the most useful general-purpose model for anything coding-related. We suggest GPT 5.2 Codex as another strong option. For personal assistant work, nothing comes close to Opus. If you’re going all-in on Claude, we recommend the Max $200 subscription: https://claude.com/pricing
+
 ## Command tree (draft)
 
 - `clawdbot models list`
