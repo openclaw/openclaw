@@ -38,6 +38,7 @@ Status: ready for bot-mode use with grammY (long-polling by default; webhook sup
 - Inbound normalization: maps Bot API updates to `MsgContext` with `Surface: "telegram"`, `ChatType: direct|group`, `SenderName`, `MediaPath`/`MediaType` when attachments arrive, `Timestamp`, and reply-to metadata (`ReplyToId`, `ReplyToBody`, `ReplyToSender`) when the user replies; reply context is appended to `Body` as a `[Replying to ...]` block (includes `id:` when available); groups require @bot mention or a `routing.groupChat.mentionPatterns` match by default (override per chat in config).
 - Outbound: text and media (photo/video/audio/document) with optional caption; chunked to limits. Typing cue sent best-effort.
 - Config: `TELEGRAM_BOT_TOKEN` env or `telegram.botToken` required; `telegram.groups` (group allowlist + mention defaults), `telegram.allowFrom`, `telegram.mediaMaxMb`, `telegram.replyToMode`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`, `telegram.webhookPath` supported.
+  - Ack reactions are controlled globally via `messages.ackReaction` + `messages.ackReactionScope`.
   - Mention gating precedence (most specific wins): `telegram.groups.<chatId>.requireMention` → `telegram.groups."*".requireMention` → default `true`.
 
 Example config:

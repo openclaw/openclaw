@@ -180,6 +180,9 @@ Tokens can also be supplied via env vars:
 - `SLACK_BOT_TOKEN`
 - `SLACK_APP_TOKEN`
 
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
+
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `slack:channel:<channelId>` sessions.

@@ -97,6 +97,8 @@ const FIELD_LABELS: Record<string, string> = {
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
   "session.agentToAgent.maxPingPongTurns": "Agent-to-Agent Ping-Pong Turns",
+  "messages.ackReaction": "Ack Reaction Emoji",
+  "messages.ackReactionScope": "Ack Reaction Scope",
   "talk.apiKey": "Talk API Key",
   "telegram.botToken": "Telegram Bot Token",
   "discord.token": "Discord Bot Token",
@@ -131,6 +133,10 @@ const FIELD_HELP: Record<string, string> = {
     "Ordered fallback image models (provider/model).",
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
+  "messages.ackReaction":
+    "Emoji reaction used to acknowledge inbound messages (empty disables).",
+  "messages.ackReactionScope":
+    'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {

@@ -146,6 +146,8 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     (opts.mediaMaxMb ?? cfg.discord?.mediaMaxMb ?? 8) * 1024 * 1024;
   const textLimit = resolveTextChunkLimit(cfg, "discord");
   const mentionRegexes = buildMentionRegexes(cfg);
+  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+  const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const historyLimit = Math.max(
     0,
     opts.historyLimit ?? cfg.discord?.historyLimit ?? 20,
@@ -409,6 +411,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
         return;
+      }
+      const shouldAckReaction = () => {
+        if (!ackReaction) return false;
+        if (ackReactionScope === "all") return true;
+        if (ackReactionScope === "direct") return isDirectMessage;
+        const isGroupChat = isGuildMessage || isGroupDm;
+        if (ackReactionScope === "group-all") return isGroupChat;
+        if (ackReactionScope === "group-mentions") {
+          if (!isGuildMessage) return false;
+          if (!resolvedRequireMention) return false;
+          if (!canDetectMention) return false;
+          return wasMentioned || shouldBypassMention;
+        }
+        return false;
+      };
+      if (shouldAckReaction()) {
+        message.react(ackReaction).catch((err) => {
+          logVerbose(
+            `discord react failed for channel ${message.channelId}: ${String(err)}`,
+          );
+        });
       }
 
       const fromLabel = isDirectMessage

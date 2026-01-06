@@ -203,6 +203,9 @@ Notes:
 }
 ```
 
+Ack reactions are controlled globally via `messages.ackReaction` +
+`messages.ackReactionScope`.
+
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
 - `dm.allowFrom`: DM allowlist (user ids or names). Omit or set to `["*"]` to allow any DM sender.
 - `dm.groupEnabled`: enable group DMs (default `false`).

@@ -11,6 +11,7 @@ import {
 import {
   applyIdentityDefaults,
   applyLoggingDefaults,
+  applyMessageDefaults,
   applyModelDefaults,
   applySessionDefaults,
   applyTalkApiKey,
@@ -117,7 +118,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const cfg = applyModelDefaults(
         applySessionDefaults(
           applyLoggingDefaults(
-            applyIdentityDefaults(validated.data as ClawdbotConfig),
+            applyMessageDefaults(
+              applyIdentityDefaults(validated.data as ClawdbotConfig),
+            ),
           ),
         ),
       );
@@ -148,7 +151,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const config = applyTalkApiKey(
-        applyModelDefaults(applySessionDefaults({})),
+        applyModelDefaults(applySessionDefaults(applyMessageDefaults({}))),
       );
       const legacyIssues: LegacyConfigIssue[] = [];
       return {
@@ -205,7 +208,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         valid: true,
         config: applyTalkApiKey(
           applyModelDefaults(
-            applySessionDefaults(applyLoggingDefaults(validated.config)),
+            applySessionDefaults(
+              applyLoggingDefaults(applyMessageDefaults(validated.config)),
+            ),
           ),
         ),
         issues: [],

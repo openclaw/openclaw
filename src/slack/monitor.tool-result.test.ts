@@ -5,6 +5,7 @@ import { monitorSlackProvider } from "./monitor.js";
 const sendMock = vi.fn();
 const replyMock = vi.fn();
 const updateLastRouteMock = vi.fn();
+const reactMock = vi.fn();
 let config: Record<string, unknown> = {};
 const getSlackHandlers = () =>
   (
@@ -12,6 +13,8 @@ const getSlackHandlers = () =>
       __slackHandlers?: Map<string, (args: unknown) => Promise<void>>;
     }
   ).__slackHandlers;
+const getSlackClient = () =>
+  (globalThis as { __slackClient?: Record<string, unknown> }).__slackClient;
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -39,20 +42,25 @@ vi.mock("@slack/bolt", () => {
   const handlers = new Map<string, (args: unknown) => Promise<void>>();
   (globalThis as { __slackHandlers?: typeof handlers }).__slackHandlers =
     handlers;
+  const client = {
+    auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
+    conversations: {
+      info: vi.fn().mockResolvedValue({
+        channel: { name: "dm", is_im: true },
+      }),
+    },
+    users: {
+      info: vi.fn().mockResolvedValue({
+        user: { profile: { display_name: "Ada" } },
+      }),
+    },
+    reactions: {
+      add: (...args: unknown[]) => reactMock(...args),
+    },
+  };
+  (globalThis as { __slackClient?: typeof client }).__slackClient = client;
   class App {
-    client = {
-      auth: { test: vi.fn().mockResolvedValue({ user_id: "bot-user" }) },
-      conversations: {
-        info: vi.fn().mockResolvedValue({
-          channel: { name: "dm", is_im: true },
-        }),
-      },
-      users: {
-        info: vi.fn().mockResolvedValue({
-          user: { profile: { display_name: "Ada" } },
-        }),
-      },
-    };
+    client = client;
     event(name: string, handler: (args: unknown) => Promise<void>) {
       handlers.set(name, handler);
     }
@@ -76,13 +84,18 @@ async function waitForEvent(name: string) {
 
 beforeEach(() => {
   config = {
-    messages: { responsePrefix: "PFX" },
+    messages: {
+      responsePrefix: "PFX",
+      ackReaction: "👀",
+      ackReactionScope: "group-mentions",
+    },
     slack: { dm: { enabled: true }, groupDm: { enabled: false } },
     routing: { allowFrom: [] },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();
   updateLastRouteMock.mockReset();
+  reactMock.mockReset();
 });
 
 describe("monitorSlackProvider tool results", () => {
@@ -200,5 +213,49 @@ describe("monitorSlackProvider tool results", () => {
 
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0][2]).toMatchObject({ threadTs: "456" });
+  });
+
+  it("reacts to mention-gated room messages when ackReaction is enabled", async () => {
+    replyMock.mockResolvedValue(undefined);
+    const client = getSlackClient();
+    if (!client) throw new Error("Slack client not registered");
+    const conversations = client.conversations as {
+      info: ReturnType<typeof vi.fn>;
+    };
+    conversations.info.mockResolvedValueOnce({
+      channel: { name: "general", is_channel: true },
+    });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "<@bot-user> hello",
+        ts: "456",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(reactMock).toHaveBeenCalledWith({
+      channel: "C1",
+      timestamp: "456",
+      name: "👀",
+    });
   });
 });

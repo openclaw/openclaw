@@ -449,6 +449,10 @@ export type RoutingConfig = {
 export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
+  /** Emoji reaction used to acknowledge inbound messages (empty disables). */
+  ackReaction?: string;
+  /** When to send ack reactions. Default: "group-mentions". */
+  ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
 };
 
 export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
