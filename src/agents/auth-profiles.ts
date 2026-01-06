@@ -433,19 +433,14 @@ export function resolveAuthProfileOrder(params: {
         .filter(([, profile]) => profile.provider === provider)
         .map(([profileId]) => profileId)
     : [];
-  const lastGood = store.lastGood?.[provider];
   const baseOrder =
     configuredOrder ??
     (explicitProfiles.length > 0
       ? explicitProfiles
       : listProfilesForProvider(store, provider));
   if (baseOrder.length === 0) return [];
-  const order =
-    configuredOrder && configuredOrder.length > 0
-      ? baseOrder
-      : orderProfilesByMode(baseOrder, store);
 
-  const filtered = order.filter((profileId) => {
+  const filtered = baseOrder.filter((profileId) => {
     const cred = store.profiles[profileId];
     return cred ? cred.provider === provider : true;
   });
@@ -453,21 +448,29 @@ export function resolveAuthProfileOrder(params: {
   for (const entry of filtered) {
     if (!deduped.includes(entry)) deduped.push(entry);
   }
-  if (preferredProfile && deduped.includes(preferredProfile)) {
-    const rest = deduped.filter((entry) => entry !== preferredProfile);
-    if (lastGood && rest.includes(lastGood)) {
+
+  // If user specified explicit order in config, respect it exactly
+  if (configuredOrder && configuredOrder.length > 0) {
+    // Still put preferredProfile first if specified
+    if (preferredProfile && deduped.includes(preferredProfile)) {
       return [
         preferredProfile,
-        lastGood,
-        ...rest.filter((entry) => entry !== lastGood),
+        ...deduped.filter((e) => e !== preferredProfile),
       ];
     }
-    return [preferredProfile, ...rest];
+    return deduped;
   }
-  if (lastGood && deduped.includes(lastGood)) {
-    return [lastGood, ...deduped.filter((entry) => entry !== lastGood)];
+
+  // Otherwise, use round-robin: sort by lastUsed (oldest first)
+  // preferredProfile goes first if specified (for explicit user choice)
+  // lastGood is NOT prioritized - that would defeat round-robin
+  const sorted = orderProfilesByMode(deduped, store);
+
+  if (preferredProfile && sorted.includes(preferredProfile)) {
+    return [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)];
   }
-  return deduped;
+
+  return sorted;
 }
 
 function orderProfilesByMode(
