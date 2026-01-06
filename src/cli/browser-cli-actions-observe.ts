@@ -20,7 +20,7 @@ export function registerBrowserActionObserveCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserConsoleMessages(baseUrl, {
           level: opts.level?.trim() || undefined,
@@ -45,7 +45,7 @@ export function registerBrowserActionObserveCommands(
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const baseUrl = resolveBrowserControlUrl(parent?.url);
-      const profile = parent?.profile;
+      const profile = parent?.browserProfile;
       try {
         const result = await browserPdfSave(baseUrl, {
           targetId: opts.targetId?.trim() || undefined,
