@@ -11,6 +11,7 @@
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
+- Auto-reply: require slash for control commands to avoid false triggers in normal text.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
 - Onboarding: prompt immediately for OpenAI Codex redirect URL on remote/headless logins.
