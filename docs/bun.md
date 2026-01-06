@@ -37,6 +37,10 @@ To add a new patch that works in both pnpm + Bun:
 2. Add the patch file under `patches/`
 3. Run `pnpm install` (updates `pnpm-lock.yaml` patch hash)
 
+## Legacy patch files
+
+`patches/@mariozechner__pi-coding-agent@0.32.3.patch` is currently **unused** (not referenced from `package.json#pnpm.patchedDependencies`), so neither pnpm nor Bun will apply it.
+
 ## Bun lifecycle scripts (blocked by default)
 
 Bun may block dependency lifecycle scripts unless explicitly trusted (`bun pm untrusted` / `bun pm trust`).
