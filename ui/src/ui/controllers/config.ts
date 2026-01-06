@@ -402,7 +402,9 @@ export function updateConfigFormValue(
   path: Array<string | number>,
   value: unknown,
 ) {
-  const base = cloneConfigObject(state.configForm ?? {});
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
   setPathValue(base, path, value);
   state.configForm = base;
   state.configFormDirty = true;
@@ -412,7 +414,9 @@ export function removeConfigFormValue(
   state: ConfigState,
   path: Array<string | number>,
 ) {
-  const base = cloneConfigObject(state.configForm ?? {});
+  const base = cloneConfigObject(
+    state.configForm ?? state.configSnapshot?.config ?? {},
+  );
   removePathValue(base, path);
   state.configForm = base;
   state.configFormDirty = true;

@@ -132,9 +132,13 @@ describe("getApiKeyForModel", () => {
       vi.resetModules();
       const { resolveApiKeyForProvider } = await import("./model-auth.js");
 
-      await expect(
-        resolveApiKeyForProvider({ provider: "openai" }),
-      ).rejects.toThrow(/openai-codex\/gpt-5\\.2/);
+      let error: unknown = null;
+      try {
+        await resolveApiKeyForProvider({ provider: "openai" });
+      } catch (err) {
+        error = err;
+      }
+      expect(String(error)).toContain("openai-codex/gpt-5.2");
     } finally {
       if (previousOpenAiKey === undefined) {
         delete process.env.OPENAI_API_KEY;

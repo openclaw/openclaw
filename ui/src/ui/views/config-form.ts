@@ -2,9 +2,11 @@ import { html, nothing } from "lit";
 import type { ConfigUiHint, ConfigUiHints } from "../types";
 
 export type ConfigFormProps = {
-  schema: unknown | null;
+  schema: JsonSchema | null;
   uiHints: ConfigUiHints;
   value: Record<string, unknown> | null;
+  disabled?: boolean;
+  unsupportedPaths?: string[];
   onPatch: (path: Array<string | number>, value: unknown) => void;
 };
 
@@ -14,22 +16,26 @@ type JsonSchema = {
   description?: string;
   properties?: Record<string, JsonSchema>;
   items?: JsonSchema | JsonSchema[];
+  additionalProperties?: JsonSchema | boolean;
   enum?: unknown[];
+  const?: unknown;
   default?: unknown;
   anyOf?: JsonSchema[];
   oneOf?: JsonSchema[];
   allOf?: JsonSchema[];
+  nullable?: boolean;
 };
 
 export function renderConfigForm(props: ConfigFormProps) {
   if (!props.schema) {
     return html`<div class="muted">Schema unavailable.</div>`;
   }
-  const schema = props.schema as JsonSchema;
+  const schema = props.schema;
   const value = props.value ?? {};
   if (schemaType(schema) !== "object" || !schema.properties) {
     return html`<div class="callout danger">Unsupported schema. Use Raw.</div>`;
   }
+  const unsupported = new Set(props.unsupportedPaths ?? []);
   const entries = Object.entries(schema.properties);
   const sorted = entries.sort((a, b) => {
     const orderA = hintForPath([a[0]], props.uiHints)?.order ?? 0;
@@ -46,6 +52,8 @@ export function renderConfigForm(props: ConfigFormProps) {
           value: (value as Record<string, unknown>)[key],
           path: [key],
           hints: props.uiHints,
+          unsupported,
+          disabled: props.disabled ?? false,
           onPatch: props.onPatch,
         }),
       )}
@@ -58,13 +66,24 @@ function renderNode(params: {
   value: unknown;
   path: Array<string | number>;
   hints: ConfigUiHints;
+  unsupported: Set<string>;
+  disabled: boolean;
+  showLabel?: boolean;
   onPatch: (path: Array<string | number>, value: unknown) => void;
 }) {
-  const { schema, value, path, hints, onPatch } = params;
+  const { schema, value, path, hints, unsupported, disabled, onPatch } = params;
+  const showLabel = params.showLabel ?? true;
   const type = schemaType(schema);
   const hint = hintForPath(path, hints);
   const label = hint?.label ?? schema.title ?? humanize(String(path.at(-1)));
   const help = hint?.help ?? schema.description;
+  const key = pathKey(path);
+
+  if (unsupported.has(key)) {
+    return html`<div class="callout danger">
+      ${label}: unsupported schema node. Use Raw.
+    </div>`;
+  }
 
   if (schema.anyOf || schema.oneOf || schema.allOf) {
     return html`<div class="callout danger">
@@ -75,7 +94,11 @@ function renderNode(params: {
   if (type === "object") {
     const props = schema.properties ?? {};
     const entries = Object.entries(props);
-    if (entries.length === 0) return nothing;
+    const hasMap =
+      schema.additionalProperties &&
+      typeof schema.additionalProperties === "object";
+    if (entries.length === 0 && !hasMap) return nothing;
+    const reservedKeys = new Set(entries.map(([key]) => key));
     return html`
       <fieldset class="field-group">
         <legend>${label}</legend>
@@ -86,9 +109,23 @@ function renderNode(params: {
             value: value && typeof value === "object" ? (value as any)[key] : undefined,
             path: [...path, key],
             hints,
+            unsupported,
             onPatch,
+            disabled,
           }),
         )}
+        ${hasMap
+          ? renderMapField({
+              schema: schema.additionalProperties as JsonSchema,
+              value: value && typeof value === "object" ? (value as any) : {},
+              path,
+              hints,
+              unsupported,
+              disabled,
+              reservedKeys,
+              onPatch,
+            })
+          : nothing}
       </fieldset>
     `;
   }
@@ -101,14 +138,15 @@ function renderNode(params: {
     return html`
       <div class="field">
         <div class="row" style="justify-content: space-between;">
-          <span>${label}</span>
-          <button
-            class="btn"
-            @click=${() => {
-              const next = [...arr, defaultValue(itemSchema)];
-              onPatch(path, next);
-            }}
-          >
+          ${showLabel ? html`<span>${label}</span>` : nothing}
+        <button
+          class="btn"
+          ?disabled=${disabled}
+          @click=${() => {
+            const next = [...arr, defaultValue(itemSchema)];
+            onPatch(path, next);
+          }}
+        >
             Add
           </button>
         </div>
@@ -121,11 +159,14 @@ function renderNode(params: {
                   value: entry,
                   path: [...path, index],
                   hints,
+                  unsupported,
+                  disabled,
                   onPatch,
                 })
               : nothing}
             <button
               class="btn danger"
+              ?disabled=${disabled}
               @click=${() => {
                 const next = arr.slice();
                 next.splice(index, 1);
@@ -143,10 +184,11 @@ function renderNode(params: {
   if (schema.enum) {
     return html`
       <label class="field">
-        <span>${label}</span>
+        ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <select
           .value=${value == null ? "" : String(value)}
+          ?disabled=${disabled}
           @change=${(e: Event) =>
             onPatch(path, (e.target as HTMLSelectElement).value)}
         >
@@ -161,11 +203,12 @@ function renderNode(params: {
   if (type === "boolean") {
     return html`
       <label class="field">
-        <span>${label}</span>
+        ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <input
           type="checkbox"
           .checked=${Boolean(value)}
+          ?disabled=${disabled}
           @change=${(e: Event) =>
             onPatch(path, (e.target as HTMLInputElement).checked)}
         />
@@ -176,11 +219,12 @@ function renderNode(params: {
   if (type === "number" || type === "integer") {
     return html`
       <label class="field">
-        <span>${label}</span>
+        ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <input
           type="number"
           .value=${value == null ? "" : String(value)}
+          ?disabled=${disabled}
           @input=${(e: Event) => {
             const raw = (e.target as HTMLInputElement).value;
             const parsed = raw === "" ? undefined : Number(raw);
@@ -196,12 +240,13 @@ function renderNode(params: {
     const placeholder = hint?.placeholder ?? (isSensitive ? "••••" : "");
     return html`
       <label class="field">
-        <span>${label}</span>
+        ${showLabel ? html`<span>${label}</span>` : nothing}
         ${help ? html`<div class="muted">${help}</div>` : nothing}
         <input
           type=${isSensitive ? "password" : "text"}
           placeholder=${placeholder}
           .value=${value == null ? "" : String(value)}
+          ?disabled=${disabled}
           @input=${(e: Event) =>
             onPatch(path, (e.target as HTMLInputElement).value)}
         />
@@ -210,7 +255,7 @@ function renderNode(params: {
   }
 
   return html`<div class="field">
-    <span>${label}</span>
+    ${showLabel ? html`<span>${label}</span>` : nothing}
     <div class="muted">Unsupported type. Use Raw.</div>
   </div>`;
 }
@@ -271,4 +316,272 @@ function isSensitivePath(path: Array<string | number>): boolean {
     key.includes("apikey") ||
     key.endsWith("key")
   );
+}
+
+function renderMapField(params: {
+  schema: JsonSchema;
+  value: Record<string, unknown>;
+  path: Array<string | number>;
+  hints: ConfigUiHints;
+  unsupported: Set<string>;
+  disabled: boolean;
+  reservedKeys: Set<string>;
+  onPatch: (path: Array<string | number>, value: unknown) => void;
+}) {
+  const {
+    schema,
+    value,
+    path,
+    hints,
+    unsupported,
+    disabled,
+    reservedKeys,
+    onPatch,
+  } = params;
+  const entries = Object.entries(value ?? {}).filter(
+    ([key]) => !reservedKeys.has(key),
+  );
+  return html`
+    <div class="field" style="margin-top: 12px;">
+      <div class="row" style="justify-content: space-between;">
+        <span class="muted">Extra entries</span>
+        <button
+          class="btn"
+          ?disabled=${disabled}
+          @click=${() => {
+            const next = { ...(value ?? {}) };
+            let index = 1;
+            let key = `new-${index}`;
+            while (key in next) {
+              index += 1;
+              key = `new-${index}`;
+            }
+            next[key] = defaultValue(schema);
+            onPatch(path, next);
+          }}
+        >
+          Add
+        </button>
+      </div>
+      ${entries.length === 0
+        ? html`<div class="muted">No entries yet.</div>`
+        : entries.map(([key, entryValue]) => {
+            const valuePath = [...path, key];
+            return html`<div class="array-item" style="gap: 8px;">
+              <input
+                class="mono"
+                style="min-width: 140px;"
+                ?disabled=${disabled}
+                .value=${key}
+                @change=${(e: Event) => {
+                  const nextKey = (e.target as HTMLInputElement).value.trim();
+                  if (!nextKey || nextKey === key) return;
+                  const next = { ...(value ?? {}) };
+                  if (nextKey in next) return;
+                  next[nextKey] = next[key];
+                  delete next[key];
+                  onPatch(path, next);
+                }}
+              />
+              <div style="flex: 1;">
+                ${renderNode({
+                  schema,
+                  value: entryValue,
+                  path: valuePath,
+                  hints,
+                  unsupported,
+                  disabled,
+                  showLabel: false,
+                  onPatch,
+                })}
+              </div>
+              <button
+                class="btn danger"
+                ?disabled=${disabled}
+                @click=${() => {
+                  const next = { ...(value ?? {}) };
+                  delete next[key];
+                  onPatch(path, next);
+                }}
+              >
+                Remove
+              </button>
+            </div>`;
+          })}
+    </div>
+  `;
+}
+
+export type ConfigSchemaAnalysis = {
+  schema: JsonSchema | null;
+  unsupportedPaths: string[];
+};
+
+export function analyzeConfigSchema(raw: unknown): ConfigSchemaAnalysis {
+  if (!raw || typeof raw !== "object") {
+    return { schema: null, unsupportedPaths: ["<root>"] };
+  }
+  const result = normalizeSchemaNode(raw as JsonSchema, []);
+  return result;
+}
+
+function normalizeSchemaNode(
+  schema: JsonSchema,
+  path: Array<string | number>,
+): ConfigSchemaAnalysis {
+  const unsupportedPaths: string[] = [];
+  const normalized = { ...schema };
+  const pathLabel = pathKey(path) || "<root>";
+
+  if (schema.anyOf || schema.oneOf || schema.allOf) {
+    const union = normalizeUnion(schema, path);
+    if (union) return union;
+    unsupportedPaths.push(pathLabel);
+    return { schema, unsupportedPaths };
+  }
+
+  const nullable =
+    Array.isArray(schema.type) && schema.type.includes("null");
+  const type =
+    schemaType(schema) ??
+    (schema.properties || schema.additionalProperties ? "object" : undefined);
+  normalized.type = type ?? schema.type;
+  normalized.nullable = nullable || schema.nullable;
+
+  if (normalized.enum) {
+    const { enumValues, nullable: enumNullable } = normalizeEnumValues(
+      normalized.enum,
+    );
+    normalized.enum = enumValues;
+    if (enumNullable) normalized.nullable = true;
+    if (enumValues.length === 0) {
+      unsupportedPaths.push(pathLabel);
+    }
+  }
+
+  if (type === "object") {
+    const props = schema.properties ?? {};
+    const normalizedProps: Record<string, JsonSchema> = {};
+    for (const [key, child] of Object.entries(props)) {
+      const result = normalizeSchemaNode(child, [...path, key]);
+      if (result.schema) normalizedProps[key] = result.schema;
+      unsupportedPaths.push(...result.unsupportedPaths);
+    }
+    normalized.properties = normalizedProps;
+
+    if (schema.additionalProperties === true) {
+      unsupportedPaths.push(pathLabel);
+    } else if (schema.additionalProperties === false) {
+      normalized.additionalProperties = false;
+    } else if (schema.additionalProperties) {
+      const result = normalizeSchemaNode(
+        schema.additionalProperties,
+        [...path, "*"],
+      );
+      normalized.additionalProperties = result.schema ?? schema.additionalProperties;
+      if (result.unsupportedPaths.length > 0) {
+        unsupportedPaths.push(pathLabel);
+      }
+    }
+  } else if (type === "array") {
+    const itemSchema = Array.isArray(schema.items)
+      ? schema.items[0]
+      : schema.items;
+    if (!itemSchema) {
+      unsupportedPaths.push(pathLabel);
+    } else {
+      const result = normalizeSchemaNode(itemSchema, [...path, "*"]);
+      normalized.items = result.schema ?? itemSchema;
+      if (result.unsupportedPaths.length > 0) {
+        unsupportedPaths.push(pathLabel);
+      }
+    }
+  } else if (
+    type === "string" ||
+    type === "number" ||
+    type === "integer" ||
+    type === "boolean"
+  ) {
+    // ok
+  } else if (!normalized.enum) {
+    unsupportedPaths.push(pathLabel);
+  }
+
+  return {
+    schema: normalized,
+    unsupportedPaths: Array.from(new Set(unsupportedPaths)),
+  };
+}
+
+function normalizeUnion(
+  schema: JsonSchema,
+  path: Array<string | number>,
+): ConfigSchemaAnalysis | null {
+  const variants = schema.anyOf ?? schema.oneOf ?? schema.allOf;
+  if (!variants) return null;
+  const values: unknown[] = [];
+  const nonLiteral: JsonSchema[] = [];
+  let nullable = false;
+  for (const variant of variants) {
+    if (!variant || typeof variant !== "object") return null;
+    if (Array.isArray(variant.enum)) {
+      const { enumValues, nullable: enumNullable } = normalizeEnumValues(
+        variant.enum,
+      );
+      values.push(...enumValues);
+      if (enumNullable) nullable = true;
+      continue;
+    }
+    if ("const" in variant) {
+      if (variant.const === null || variant.const === undefined) {
+        nullable = true;
+        continue;
+      }
+      values.push(variant.const);
+      continue;
+    }
+    if (schemaType(variant) === "null") {
+      nullable = true;
+      continue;
+    }
+    nonLiteral.push(variant);
+  }
+
+  if (values.length > 0 && nonLiteral.length === 0) {
+    const unique: unknown[] = [];
+    for (const value of values) {
+      if (!unique.some((entry) => Object.is(entry, value))) unique.push(value);
+    }
+    return {
+      schema: {
+        ...schema,
+        enum: unique,
+        nullable,
+        anyOf: undefined,
+        oneOf: undefined,
+        allOf: undefined,
+      },
+      unsupportedPaths: [],
+    };
+  }
+
+  if (nonLiteral.length === 1) {
+    const result = normalizeSchemaNode(nonLiteral[0], path);
+    if (result.schema) {
+      result.schema.nullable = true;
+    }
+    return result;
+  }
+
+  return null;
+}
+
+function normalizeEnumValues(values: unknown[]) {
+  const filtered = values.filter((value) => value !== null && value !== undefined);
+  const nullable = filtered.length !== values.length;
+  const unique: unknown[] = [];
+  for (const value of filtered) {
+    if (!unique.some((entry) => Object.is(entry, value))) unique.push(value);
+  }
+  return { enumValues: unique, nullable };
 }

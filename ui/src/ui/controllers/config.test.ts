@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { applyConfigSnapshot, type ConfigState } from "./config";
+import {
+  applyConfigSnapshot,
+  updateConfigFormValue,
+  type ConfigState,
+} from "./config";
 import {
   defaultDiscordActions,
   defaultSlackActions,
@@ -135,5 +139,25 @@ describe("applyConfigSnapshot", () => {
 
     expect(state.slackForm.botToken).toBe("");
     expect(state.slackForm.actions).toEqual(defaultSlackActions);
+  });
+});
+
+describe("updateConfigFormValue", () => {
+  it("seeds from snapshot when form is null", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: { telegram: { botToken: "t" }, gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: "{}",
+    };
+
+    updateConfigFormValue(state, ["gateway", "port"], 18789);
+
+    expect(state.configFormDirty).toBe(true);
+    expect(state.configForm).toEqual({
+      telegram: { botToken: "t" },
+      gateway: { mode: "local", port: 18789 },
+    });
   });
 });

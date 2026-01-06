@@ -6,9 +6,15 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import { ensureAuthProfileStore, listProfilesForProvider } from "../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import { getCustomProviderApiKey, resolveEnvApiKey } from "../agents/model-auth.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import {
@@ -62,6 +68,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
+import type { AgentModelListConfig } from "../config/types.js";
 
 const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.2";
 
@@ -74,10 +81,22 @@ function shouldSetOpenAICodexModel(model?: string): boolean {
   return normalized === "gpt" || normalized === "gpt-mini";
 }
 
-function applyOpenAICodexModelDefault(
-  cfg: ClawdbotConfig,
-): { next: ClawdbotConfig; changed: boolean } {
-  if (!shouldSetOpenAICodexModel(cfg.agent?.model)) {
+function resolvePrimaryModel(
+  model?: AgentModelListConfig | string,
+): string | undefined {
+  if (typeof model === "string") return model;
+  if (model && typeof model === "object" && typeof model.primary === "string") {
+    return model.primary;
+  }
+  return undefined;
+}
+
+function applyOpenAICodexModelDefault(cfg: ClawdbotConfig): {
+  next: ClawdbotConfig;
+  changed: boolean;
+} {
+  const current = resolvePrimaryModel(cfg.agent?.model);
+  if (!shouldSetOpenAICodexModel(current)) {
     return { next: cfg, changed: false };
   }
   return {
@@ -85,7 +104,10 @@ function applyOpenAICodexModelDefault(
       ...cfg,
       agent: {
         ...cfg.agent,
-        model: OPENAI_CODEX_DEFAULT_MODEL,
+        model:
+          cfg.agent?.model && typeof cfg.agent.model === "object"
+            ? { ...cfg.agent.model, primary: OPENAI_CODEX_DEFAULT_MODEL }
+            : { primary: OPENAI_CODEX_DEFAULT_MODEL },
       },
     },
     changed: true,
@@ -125,8 +147,7 @@ async function warnIfModelConfigLooksOff(
   }
 
   if (ref.provider === "openai") {
-    const hasCodex =
-      listProfilesForProvider(store, "openai-codex").length > 0;
+    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       warnings.push(
         `Detected OpenAI Codex OAuth. Consider setting agent.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
