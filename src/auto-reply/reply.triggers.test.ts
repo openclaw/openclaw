@@ -15,6 +15,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 import {
+  abortEmbeddedPiRun,
   compactEmbeddedPiSession,
   runEmbeddedPiAgent,
 } from "../agents/pi-embedded.js";
@@ -39,6 +40,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   process.env.HOME = base;
   try {
     vi.mocked(runEmbeddedPiAgent).mockClear();
+    vi.mocked(abortEmbeddedPiRun).mockClear();
     return await fn(base);
   } finally {
     process.env.HOME = previousHome;
@@ -95,6 +97,52 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("⚙️ Agent was aborted.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("targets the active session for native /stop", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const targetSessionKey = "agent:main:telegram:group:123";
+      const targetSessionId = "session-target";
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify(
+          {
+            [targetSessionKey]: {
+              sessionId: targetSessionId,
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/stop",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "telegram:slash:111",
+          CommandSource: "native",
+          CommandTargetSessionKey: targetSessionKey,
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("⚙️ Agent was aborted.");
+      expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith(
+        targetSessionId,
+      );
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[targetSessionKey]?.abortedLastRun).toBe(true);
     });
   });
 
