@@ -660,6 +660,12 @@ export async function doctorCommand(runtime: RuntimeEnv = defaultRuntime) {
     if (!loaded) {
       note("Gateway daemon not installed.", "Gateway");
     } else {
+      if (process.platform === "darwin") {
+        note(
+          `LaunchAgent loaded; stopping requires "clawdbot gateway stop" or launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}.`,
+          "Gateway",
+        );
+      }
       const restart = guardCancel(
         await confirm({
           message: "Restart gateway daemon now?",

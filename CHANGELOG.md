@@ -13,6 +13,7 @@
 - Onboarding: resolve CLI entrypoint when running via `npx` so gateway daemon install works without a build step.
 - Onboarding: when OpenAI Codex OAuth is used, default to `openai-codex/gpt-5.2` and warn if the selected model lacks auth.
 - CLI: auto-migrate legacy config entries on command start (same behavior as gateway startup).
+- Gateway: add `gateway stop|restart` helpers and surface launchd/systemd/schtasks stop hints when the gateway is already running.
 - Auth: prioritize OAuth profiles but fall back to API keys when refresh fails; stored profiles now load without explicit auth order.
 - Control UI: harden config Form view with schema normalization, map editing, and guardrails to prevent data loss on save.
 - Cron: normalize cron.add/update inputs, align channel enums/status fields across gateway/CLI/UI/macOS, and add protocol conformance tests. Thanks @mneves75 for PR #256.

@@ -1,4 +1,8 @@
 import {
+  normalizeCronJobCreate,
+  normalizeCronJobPatch,
+} from "../../cron/normalize.js";
+import {
   readCronRunLogEntries,
   resolveCronRunLogPath,
 } from "../../cron/run-log.js";
@@ -17,10 +21,6 @@ import {
   validateWakeParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import {
-  normalizeCronJobCreate,
-  normalizeCronJobPatch,
-} from "../../cron/normalize.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -88,9 +88,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const job = await context.cron.add(
-      normalized as unknown as CronJobCreate,
-    );
+    const job = await context.cron.add(normalized as unknown as CronJobCreate);
     respond(true, job, undefined);
   },
   "cron.update": async ({ params, respond, context }) => {

@@ -60,6 +60,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import type { AgentModelListConfig } from "../config/types.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -68,7 +69,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
-import type { AgentModelListConfig } from "../config/types.js";
 
 const OPENAI_CODEX_DEFAULT_MODEL = "openai-codex/gpt-5.2";
 

@@ -60,7 +60,8 @@ export function normalizeCronJobInput(
   if (options.applyDefaults) {
     if (!next.wakeMode) next.wakeMode = "next-heartbeat";
     if (!next.sessionTarget && isRecord(next.payload)) {
-      const kind = typeof next.payload.kind === "string" ? next.payload.kind : "";
+      const kind =
+        typeof next.payload.kind === "string" ? next.payload.kind : "";
       if (kind === "systemEvent") next.sessionTarget = "main";
       if (kind === "agentTurn") next.sessionTarget = "isolated";
     }
@@ -73,16 +74,18 @@ export function normalizeCronJobCreate(
   raw: unknown,
   options?: NormalizeOptions,
 ): CronJobCreate | null {
-  return normalizeCronJobInput(raw, { applyDefaults: true, ...options }) as
-    | CronJobCreate
-    | null;
+  return normalizeCronJobInput(raw, {
+    applyDefaults: true,
+    ...options,
+  }) as CronJobCreate | null;
 }
 
 export function normalizeCronJobPatch(
   raw: unknown,
   options?: NormalizeOptions,
 ): CronJobPatch | null {
-  return normalizeCronJobInput(raw, { applyDefaults: false, ...options }) as
-    | CronJobPatch
-    | null;
+  return normalizeCronJobInput(raw, {
+    applyDefaults: false,
+    ...options,
+  }) as CronJobPatch | null;
 }

@@ -33,9 +33,7 @@ const UI_FILES = [
   "ui/src/ui/views/cron.ts",
 ];
 
-const SWIFT_FILES = [
-  "apps/macos/Sources/Clawdbot/GatewayConnection.swift",
-];
+const SWIFT_FILES = ["apps/macos/Sources/Clawdbot/GatewayConnection.swift"];
 
 describe("cron protocol conformance", () => {
   it("ui + swift include all cron channels from gateway schema", async () => {

@@ -160,6 +160,13 @@ lsof -nP -i :18789
 kill -9 <PID>
 ```
 
+If the gateway is supervised by launchd, killing the PID will just respawn it.
+Stop the supervisor instead:
+```bash
+clawdbot gateway stop
+# Or: launchctl bootout gui/$UID/com.clawdbot.gateway
+```
+
 **Fix 2: Check embedded gateway**
 Ensure the gateway relay was properly bundled. Run `./scripts/package-mac-app.sh` and ensure `bun` is installed.
 
