@@ -87,6 +87,8 @@ export const agentHandlers: GatewayRequestHandlers = {
         skillsSnapshot: entry?.skillsSnapshot,
         lastProvider: entry?.lastProvider,
         lastTo: entry?.lastTo,
+        modelOverride: entry?.modelOverride,
+        providerOverride: entry?.providerOverride,
       };
       sessionEntry = nextEntry;
       const sendPolicy = resolveSendPolicy({

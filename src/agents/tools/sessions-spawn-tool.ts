@@ -23,6 +23,7 @@ import { isAnnounceSkip } from "./sessions-send-helpers.js";
 const SessionsSpawnToolSchema = Type.Object({
   task: Type.String(),
   label: Type.Optional(Type.String()),
+  model: Type.Optional(Type.String()),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
   cleanup: Type.Optional(
     Type.Union([Type.Literal("delete"), Type.Literal("keep")]),
@@ -178,6 +179,7 @@ export function createSessionsSpawnTool(opts?: {
       const params = args as Record<string, unknown>;
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
+      const model = readStringParam(params, "model");
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete"
           ? (params.cleanup as "keep" | "delete")
@@ -218,11 +220,20 @@ export function createSessionsSpawnTool(opts?: {
         parseAgentSessionKey(requesterInternalKey)?.agentId,
       );
       const childSessionKey = `agent:${requesterAgentId}:subagent:${crypto.randomUUID()}`;
+      const patchParams: { key: string; spawnedBy?: string; model?: string } = {
+        key: childSessionKey,
+      };
       if (opts?.sandboxed === true) {
+        patchParams.spawnedBy = requesterInternalKey;
+      }
+      if (model) {
+        patchParams.model = model;
+      }
+      if (patchParams.spawnedBy || patchParams.model) {
         try {
           await callGateway({
             method: "sessions.patch",
-            params: { key: childSessionKey, spawnedBy: requesterInternalKey },
+            params: patchParams,
             timeoutMs: 10_000,
           });
         } catch {
