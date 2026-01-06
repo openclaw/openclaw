@@ -31,6 +31,21 @@ import { extractReplyToTag } from "./reply-tags.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 
+const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+
+const isBunFetchSocketError = (message?: string) =>
+  Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
+
+const formatBunFetchSocketError = (message: string) => {
+  const trimmed = message.trim();
+  return [
+    "⚠️ LLM connection failed. This could be due to server issues, network problems, or context length exceeded (e.g., with local LLMs like LM Studio). Original error:",
+    "```",
+    trimmed || "Unknown error",
+    "```",
+  ].join("\n");
+};
+
 export async function runReplyAgent(params: {
   commandBody: string;
   followupRun: FollowupRun;
@@ -401,8 +416,14 @@ export async function runReplyAgent(params: {
     const sanitizedPayloads = isHeartbeat
       ? payloadArray
       : payloadArray.flatMap((payload) => {
-          const text = payload.text;
-          if (!text || !text.includes("HEARTBEAT_OK")) return [payload];
+          let text = payload.text;
+
+          if (payload.isError && text && isBunFetchSocketError(text)) {
+            text = formatBunFetchSocketError(text);
+          }
+
+          if (!text || !text.includes("HEARTBEAT_OK"))
+            return [{ ...payload, text }];
           const stripped = stripHeartbeatToken(text, { mode: "message" });
           if (stripped.didStrip && !didLogHeartbeatStrip) {
             didLogHeartbeatStrip = true;

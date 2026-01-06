@@ -99,6 +99,7 @@ export type EmbeddedPiRunResult = {
     mediaUrl?: string;
     mediaUrls?: string[];
     replyToId?: string;
+    isError?: boolean;
   }>;
   meta: EmbeddedPiRunMeta;
 };
@@ -1009,12 +1010,17 @@ export async function runEmbeddedPiAgent(params: {
             usage,
           };
 
-          const replyItems: Array<{ text: string; media?: string[] }> = [];
+          const replyItems: Array<{
+            text: string;
+            media?: string[];
+            isError?: boolean;
+          }> = [];
 
           const errorText = lastAssistant
             ? formatAssistantErrorText(lastAssistant)
             : undefined;
-          if (errorText) replyItems.push({ text: errorText });
+
+          if (errorText) replyItems.push({ text: errorText, isError: true });
 
           const inlineToolResults =
             params.verboseLevel === "on" &&
@@ -1047,6 +1053,7 @@ export async function runEmbeddedPiAgent(params: {
               text: item.text?.trim() ? item.text.trim() : undefined,
               mediaUrls: item.media?.length ? item.media : undefined,
               mediaUrl: item.media?.[0],
+              isError: item.isError,
             }))
             .filter(
               (p) =>

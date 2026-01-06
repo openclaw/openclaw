@@ -209,4 +209,26 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(payloads[0]?.text).toContain("count 1");
     expect(sessionStore.main.compactionCount).toBe(1);
   });
+
+  it("rewrites Bun socket errors into friendly text", async () => {
+    runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [
+        {
+          text: "TypeError: The socket connection was closed unexpectedly. For more information, pass `verbose: true` in the second argument to fetch()",
+          isError: true,
+        },
+      ],
+      meta: {},
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payloads = Array.isArray(res) ? res : res ? [res] : [];
+    expect(payloads.length).toBe(1);
+    expect(payloads[0]?.text).toContain("LLM connection failed");
+    expect(payloads[0]?.text).toContain(
+      "socket connection was closed unexpectedly",
+    );
+    expect(payloads[0]?.text).toContain("```");
+  });
 });

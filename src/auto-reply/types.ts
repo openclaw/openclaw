@@ -14,4 +14,5 @@ export type ReplyPayload = {
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
+  isError?: boolean;
 };
