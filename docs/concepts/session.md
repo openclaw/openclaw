@@ -21,6 +21,10 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 - Group entries may include `displayName`, `provider`, `subject`, `room`, and `space` to label sessions in UIs.
 - Clawdbot does **not** read legacy Pi/Tau session folders.
 
+## Session pruning (optional)
+Clawdbot can trim **old tool results** from the in-memory context right before LLM calls (opt-in).
+This does **not** rewrite JSONL history. See [/concepts/session-pruning](/concepts/session-pruning).
+
 ## Mapping transports → session keys
 - Direct chats collapse to the per-agent primary key: `agent:<agentId>:<mainKey>`.
   - Multiple phone numbers and providers can map to the same agent main key; they act as transports into one conversation.
