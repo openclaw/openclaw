@@ -6,6 +6,7 @@ import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
+import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import { resolveDefaultWhatsAppAccountId } from "../../web/accounts.js";
 import { sendMessageWhatsApp, sendPollWhatsApp } from "../../web/outbound.js";
 import {
@@ -51,8 +52,7 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const message = request.message.trim();
-    const providerRaw = (request.provider ?? "whatsapp").toLowerCase();
-    const provider = providerRaw === "imsg" ? "imessage" : providerRaw;
+    const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
     try {
       if (provider === "telegram") {
         const cfg = loadConfig();
@@ -220,8 +220,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       return;
     }
     const to = request.to.trim();
-    const providerRaw = (request.provider ?? "whatsapp").toLowerCase();
-    const provider = providerRaw === "imsg" ? "imessage" : providerRaw;
+    const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
     if (provider !== "whatsapp" && provider !== "discord") {
       respond(
         false,

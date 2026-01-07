@@ -7,6 +7,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { agentCommand } from "./agent.js";
 
 type AgentGatewayResult = {
@@ -85,12 +86,6 @@ function parseTimeoutSeconds(opts: {
   return raw;
 }
 
-function normalizeProvider(raw?: string): string | undefined {
-  const normalized = raw?.trim().toLowerCase();
-  if (!normalized) return undefined;
-  return normalized === "imsg" ? "imessage" : normalized;
-}
-
 function formatPayloadForLog(payload: {
   text?: string;
   mediaUrls?: string[];
@@ -127,7 +122,7 @@ export async function agentViaGatewayCommand(
     sessionId: opts.sessionId,
   });
 
-  const provider = normalizeProvider(opts.provider) ?? "whatsapp";
+  const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
   const response = await callGateway<GatewayAgentResponse>({

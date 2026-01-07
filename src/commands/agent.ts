@@ -56,6 +56,10 @@ import {
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
+import {
+  normalizeMessageProvider,
+  resolveMessageProvider,
+} from "../utils/message-provider.js";
 import { normalizeE164 } from "../utils.js";
 
 type AgentCommandOpts = {
@@ -395,13 +399,10 @@ export async function agentCommand(
   let fallbackProvider = provider;
   let fallbackModel = model;
   try {
-    const messageProvider =
-      opts.messageProvider?.trim().toLowerCase() ||
-      (() => {
-        const raw = opts.provider?.trim().toLowerCase();
-        if (!raw) return undefined;
-        return raw === "imsg" ? "imessage" : raw;
-      })();
+    const messageProvider = resolveMessageProvider(
+      opts.messageProvider,
+      opts.provider,
+    );
     const fallbackResult = await runWithModelFallback({
       cfg,
       provider,
@@ -514,9 +515,8 @@ export async function agentCommand(
   const payloads = result.payloads ?? [];
   const deliver = opts.deliver === true;
   const bestEffortDeliver = opts.bestEffortDeliver === true;
-  const deliveryProviderRaw = (opts.provider ?? "whatsapp").toLowerCase();
   const deliveryProvider =
-    deliveryProviderRaw === "imsg" ? "imessage" : deliveryProviderRaw;
+    normalizeMessageProvider(opts.provider) ?? "whatsapp";
 
   const logDeliveryError = (err: unknown) => {
     const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;

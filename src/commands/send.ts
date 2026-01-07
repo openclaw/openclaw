@@ -11,6 +11,7 @@ import {
 } from "../infra/outbound/format.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
 
 export async function sendCommand(
   opts: {
@@ -26,8 +27,7 @@ export async function sendCommand(
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const providerRaw = (opts.provider ?? "whatsapp").toLowerCase();
-  const provider = providerRaw === "imsg" ? "imessage" : providerRaw;
+  const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
 
   if (opts.dryRun) {
     runtime.log(
