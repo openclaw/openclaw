@@ -5,7 +5,7 @@ read_when:
 ---
 # WhatsApp (web provider)
 
-Updated: 2025-12-23
+Updated: 2026-01-07
 
 Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
@@ -34,6 +34,13 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 **Tip:** The number only needs to receive one verification SMS. After that, WhatsApp Web sessions persist via `creds.json`.
 
 **WhatsApp Business:** You can use WhatsApp Business on the same phone with a different number. This is a great option if you want to keep your personal WhatsApp separate — just install WhatsApp Business and register it with Clawdbot's dedicated number.
+
+## Why Not Twilio?
+- Early Clawdbot builds supported Twilio’s WhatsApp Business integration.
+- WhatsApp Business numbers are a poor fit for a personal assistant.
+- Meta enforces a 24‑hour reply window; if you haven’t responded in the last 24 hours, the business number can’t initiate new messages.
+- High-volume or “chatty” usage triggers aggressive blocking, because business accounts aren’t meant to send dozens of personal assistant messages.
+- Result: unreliable delivery and frequent blocks, so support was removed.
 
 ## Login + credentials
 - Login command: `clawdbot login` (QR via Linked Devices).
