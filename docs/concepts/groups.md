@@ -9,6 +9,7 @@ Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Di
 
 ## Session keys
 - Group sessions use `agent:<agentId>:<provider>:group:<id>` session keys (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
+- Telegram forum topics add `:topic:<threadId>` to the group id so each topic has its own session.
 - Direct chats use the main session (or per-sender if configured).
 - Heartbeats are skipped for group sessions.
 
@@ -118,6 +119,7 @@ Group inbound payloads set:
 - `GroupSubject` (if known)
 - `GroupMembers` (if known)
 - `WasMentioned` (mention gating result)
+- Telegram forum topics also include `MessageThreadId` and `IsForum`.
 
 The agent system prompt includes a group intro on the first turn of a new group session.
 

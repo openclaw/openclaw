@@ -25,6 +25,7 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 - Direct chats collapse to the per-agent primary key: `agent:<agentId>:<mainKey>`.
   - Multiple phone numbers and providers can map to the same agent main key; they act as transports into one conversation.
 - Group chats isolate state: `agent:<agentId>:<provider>:group:<id>` (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
+  - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
   - Legacy `group:<id>` keys are still recognized for migration.
 - Other sources:
   - Cron jobs: `cron:<job.id>`

@@ -38,6 +38,12 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 - Group replies require a mention by default (native @mention or `routing.groupChat.mentionPatterns`).
 - Replies always route back to the same Telegram chat.
 
+## Topics (forum supergroups)
+Telegram forum topics include a `message_thread_id` per message. Clawdbot:
+- Appends `:topic:<threadId>` to the Telegram group session key so each topic is isolated.
+- Sends typing indicators and replies with `message_thread_id` so responses stay in the topic.
+- Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
+
 ## Access control (DMs + groups)
 - Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved.
 - Approve via:
