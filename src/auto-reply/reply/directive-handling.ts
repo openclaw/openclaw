@@ -181,7 +181,10 @@ export type InlineDirectives = {
   hasQueueOptions: boolean;
 };
 
-export function parseInlineDirectives(body: string): InlineDirectives {
+export function parseInlineDirectives(
+  body: string,
+  options?: { modelAliases?: string[] },
+): InlineDirectives {
   const {
     cleaned: thinkCleaned,
     thinkLevel,
@@ -213,7 +216,9 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     rawModel,
     rawProfile,
     hasDirective: hasModelDirective,
-  } = extractModelDirective(statusCleaned);
+  } = extractModelDirective(statusCleaned, {
+    aliases: options?.modelAliases,
+  });
   const {
     cleaned: queueCleaned,
     queueMode,
