@@ -66,7 +66,8 @@ export function normalizeOutboundPayloads(
   return payloads
     .map((payload) => ({
       text: payload.text ?? "",
-      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+      mediaUrls:
+        payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
     }))
     .filter((payload) => payload.text || payload.mediaUrls.length > 0);
 }
