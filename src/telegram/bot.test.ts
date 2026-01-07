@@ -39,6 +39,7 @@ vi.mock("./pairing-store.js", () => ({
 const useSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
+const commandSpy = vi.fn();
 const sendChatActionSpy = vi.fn();
 const setMessageReactionSpy = vi.fn(async () => undefined);
 const setMyCommandsSpy = vi.fn(async () => undefined);
@@ -69,6 +70,7 @@ vi.mock("grammy", () => ({
     api = apiStub;
     on = onSpy;
     stop = stopSpy;
+    command = commandSpy;
     constructor(public token: string) {}
   },
   InputFile: class {},
@@ -1367,6 +1369,7 @@ describe("createTelegramBot", () => {
   it("passes message_thread_id to topic replies", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();
+    commandSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<
       typeof vi.fn
     >;
@@ -1398,6 +1401,55 @@ describe("createTelegramBot", () => {
       },
       me: { username: "clawdbot_bot" },
       getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(sendMessageSpy).toHaveBeenCalledWith(
+      "-1001234567890",
+      expect.any(String),
+      expect.objectContaining({ message_thread_id: 99 }),
+    );
+  });
+
+  it("threads native command replies inside topics", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    commandSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    replySpy.mockResolvedValue({ text: "response" });
+
+    loadConfig.mockReturnValue({
+      commands: { native: true },
+      telegram: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groups: { "*": { requireMention: false } },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    expect(commandSpy).toHaveBeenCalled();
+    const handler = commandSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 12345, username: "testuser" },
+        text: "/status",
+        date: 1736380800,
+        message_id: 42,
+        message_thread_id: 99,
+      },
+      match: "",
     });
 
     expect(sendMessageSpy).toHaveBeenCalledWith(

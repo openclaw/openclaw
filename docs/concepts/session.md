@@ -27,6 +27,7 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 - Group chats isolate state: `agent:<agentId>:<provider>:group:<id>` (rooms/channels use `agent:<agentId>:<provider>:channel:<id>`).
   - Telegram forum topics append `:topic:<threadId>` to the group id for isolation.
   - Legacy `group:<id>` keys are still recognized for migration.
+  - Inbound contexts may still use `group:<id>`; the provider is inferred from `Provider` and normalized to the canonical `agent:<agentId>:<provider>:group:<id>` form.
 - Other sources:
   - Cron jobs: `cron:<job.id>`
   - Webhooks: `hook:<uuid>` (unless explicitly set by the hook)

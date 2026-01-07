@@ -212,9 +212,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         await bot.api.sendChatAction(
           chatId,
           "typing",
-          messageThreadId != null
-            ? { message_thread_id: messageThreadId }
-            : undefined,
+          buildTelegramThreadParams(messageThreadId),
         );
       } catch (err) {
         logVerbose(
@@ -396,18 +394,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       peer: {
         kind: isGroup ? "group" : "dm",
         id: isGroup
-          ? messageThreadId != null
-            ? `${chatId}:topic:${messageThreadId}`
-            : String(chatId)
+          ? buildTelegramGroupPeerId(chatId, messageThreadId)
           : String(chatId),
       },
     });
     const ctxPayload = {
       Body: body,
       From: isGroup
-        ? messageThreadId != null
-          ? `group:${chatId}:topic:${messageThreadId}`
-          : `group:${chatId}`
+        ? buildTelegramGroupFrom(chatId, messageThreadId)
         : `telegram:${chatId}`,
       To: `telegram:${chatId}`,
       SessionKey: route.sessionKey,
@@ -601,18 +595,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           peer: {
             kind: isGroup ? "group" : "dm",
             id: isGroup
-              ? messageThreadId != null
-                ? `${chatId}:topic:${messageThreadId}`
-                : String(chatId)
+              ? buildTelegramGroupPeerId(chatId, messageThreadId)
               : String(chatId),
           },
         });
         const ctxPayload = {
           Body: prompt,
           From: isGroup
-            ? messageThreadId != null
-              ? `group:${chatId}:topic:${messageThreadId}`
-              : `group:${chatId}`
+            ? buildTelegramGroupFrom(chatId, messageThreadId)
             : `telegram:${chatId}`,
           To: `slash:${senderId || chatId}`,
           ChatType: isGroup ? "group" : "direct",
@@ -840,6 +830,7 @@ async function deliverReplies(params: {
     textLimit,
     messageThreadId,
   } = params;
+  const threadParams = buildTelegramThreadParams(messageThreadId);
   let hasReplied = false;
   for (const reply of replies) {
     if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
@@ -887,37 +878,32 @@ async function deliverReplies(params: {
         replyToId && (replyToMode === "all" || !hasReplied)
           ? replyToId
           : undefined;
-      const threadParams =
-        messageThreadId != null ? { message_thread_id: messageThreadId } : {};
+      const mediaParams: Record<string, unknown> = {
+        caption,
+        reply_to_message_id: replyToMessageId,
+      };
+      if (threadParams) {
+        mediaParams.message_thread_id = threadParams.message_thread_id;
+      }
       if (isGif) {
         await bot.api.sendAnimation(chatId, file, {
-          caption,
-          reply_to_message_id: replyToMessageId,
-          ...threadParams,
+          ...mediaParams,
         });
       } else if (kind === "image") {
         await bot.api.sendPhoto(chatId, file, {
-          caption,
-          reply_to_message_id: replyToMessageId,
-          ...threadParams,
+          ...mediaParams,
         });
       } else if (kind === "video") {
         await bot.api.sendVideo(chatId, file, {
-          caption,
-          reply_to_message_id: replyToMessageId,
-          ...threadParams,
+          ...mediaParams,
         });
       } else if (kind === "audio") {
         await bot.api.sendAudio(chatId, file, {
-          caption,
-          reply_to_message_id: replyToMessageId,
-          ...threadParams,
+          ...mediaParams,
         });
       } else {
         await bot.api.sendDocument(chatId, file, {
-          caption,
-          reply_to_message_id: replyToMessageId,
-          ...threadParams,
+          ...mediaParams,
         });
       }
       if (replyToId && !hasReplied) {
@@ -925,6 +911,30 @@ async function deliverReplies(params: {
       }
     }
   }
+}
+
+function buildTelegramThreadParams(messageThreadId?: number) {
+  return messageThreadId != null
+    ? { message_thread_id: messageThreadId }
+    : undefined;
+}
+
+function buildTelegramGroupPeerId(
+  chatId: number | string,
+  messageThreadId?: number,
+) {
+  return messageThreadId != null
+    ? `${chatId}:topic:${messageThreadId}`
+    : String(chatId);
+}
+
+function buildTelegramGroupFrom(
+  chatId: number | string,
+  messageThreadId?: number,
+) {
+  return messageThreadId != null
+    ? `group:${chatId}:topic:${messageThreadId}`
+    : `group:${chatId}`;
 }
 
 function buildSenderName(msg: TelegramMessage) {
@@ -1051,11 +1061,17 @@ async function sendTelegramText(
   runtime: RuntimeEnv,
   opts?: { replyToMessageId?: number; messageThreadId?: number },
 ): Promise<number | undefined> {
+  const threadParams = buildTelegramThreadParams(opts?.messageThreadId);
+  const baseParams: Record<string, unknown> = {
+    reply_to_message_id: opts?.replyToMessageId,
+  };
+  if (threadParams) {
+    baseParams.message_thread_id = threadParams.message_thread_id;
+  }
   try {
     const res = await bot.api.sendMessage(chatId, text, {
       parse_mode: "Markdown",
-      reply_to_message_id: opts?.replyToMessageId,
-      message_thread_id: opts?.messageThreadId,
+      ...baseParams,
     });
     return res.message_id;
   } catch (err) {
@@ -1065,8 +1081,7 @@ async function sendTelegramText(
         `telegram markdown parse failed; retrying without formatting: ${errText}`,
       );
       const res = await bot.api.sendMessage(chatId, text, {
-        reply_to_message_id: opts?.replyToMessageId,
-        message_thread_id: opts?.messageThreadId,
+        ...baseParams,
       });
       return res.message_id;
     }
