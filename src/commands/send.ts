@@ -65,20 +65,20 @@ export async function sendCommand(
     if (opts.json) {
       runtime.log(
         JSON.stringify(
-            {
-              provider,
-              via: "direct",
-              to: opts.to,
-              messageId: last?.messageId ?? "unknown",
-              ...(last && "chatId" in last ? { chatId: last.chatId } : {}),
-              ...(last && "channelId" in last
-                ? { channelId: last.channelId }
-                : {}),
-              ...(last && "timestamp" in last
-                ? { timestamp: last.timestamp }
-                : {}),
-              mediaUrl: opts.media ?? null,
-            },
+          {
+            provider,
+            via: "direct",
+            to: opts.to,
+            messageId: last?.messageId ?? "unknown",
+            ...(last && "chatId" in last ? { chatId: last.chatId } : {}),
+            ...(last && "channelId" in last
+              ? { channelId: last.channelId }
+              : {}),
+            ...(last && "timestamp" in last
+              ? { timestamp: last.timestamp }
+              : {}),
+            mediaUrl: opts.media ?? null,
+          },
           null,
           2,
         ),
