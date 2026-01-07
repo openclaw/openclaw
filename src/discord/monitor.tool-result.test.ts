@@ -168,13 +168,8 @@ describe("discord tool result dispatch", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   }, 10000);
 
-  });
-
   it("forks thread sessions and injects starter context", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
-    const { resolveSessionKey } = await import("../config/sessions.js");
-    vi.mocked(resolveSessionKey).mockReturnValue("discord:parent:p1");
-
     let capturedCtx:
       | {
           SessionKey?: string;
@@ -239,6 +234,13 @@ describe("discord tool result dispatch", () => {
         type: ChannelType.GuildText,
         name: "thread-name",
       }),
+      rest: {
+        get: vi.fn().mockResolvedValue({
+          content: "starter message",
+          author: { id: "u1", username: "Alice", discriminator: "0001" },
+          timestamp: new Date().toISOString(),
+        }),
+      },
     } as unknown as Client;
 
     await handler(
@@ -265,8 +267,8 @@ describe("discord tool result dispatch", () => {
       client,
     );
 
-    expect(capturedCtx?.SessionKey).toBe("discord:thread:t1");
-    expect(capturedCtx?.ParentSessionKey).toBe("discord:parent:p1");
+    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
+    expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:p1");
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #general");
   });

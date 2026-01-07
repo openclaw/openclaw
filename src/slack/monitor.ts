@@ -928,10 +928,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const threadTs = message.thread_ts;
     const hasThreadTs = typeof threadTs === "string" && threadTs.length > 0;
     const isThreadReply =
-      hasThreadTs && (threadTs !== message.ts || Boolean(message.parent_user_id));
-    const threadSessionKey = isThreadReply && threadTs
-      ? `slack:thread:${message.channel}:${threadTs}`
-      : undefined;
+      hasThreadTs &&
+      (threadTs !== message.ts || Boolean(message.parent_user_id));
+    const threadSessionKey =
+      isThreadReply && threadTs
+        ? `${baseSessionKey}:thread:${threadTs}`
+        : undefined;
     const parentSessionKey = isThreadReply ? baseSessionKey : undefined;
     const sessionKey = threadSessionKey ?? baseSessionKey;
     enqueueSystemEvent(`${inboundLabel}: ${preview}`, {

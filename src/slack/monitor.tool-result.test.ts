@@ -285,8 +285,6 @@ describe("monitorSlackProvider tool results", () => {
   });
 
   it("treats parent_user_id as a thread reply even when thread_ts matches ts", async () => {
-    const { resolveSessionKey } = await import("../config/sessions.js");
-    vi.mocked(resolveSessionKey).mockReturnValue("main");
     replyMock.mockResolvedValue({ text: "thread reply" });
 
     const controller = new AbortController();
@@ -322,13 +320,11 @@ describe("monitorSlackProvider tool results", () => {
       SessionKey?: string;
       ParentSessionKey?: string;
     };
-    expect(ctx.SessionKey).toBe("slack:thread:C1:123");
-    expect(ctx.ParentSessionKey).toBe("main");
+    expect(ctx.SessionKey).toBe("agent:main:main:thread:123");
+    expect(ctx.ParentSessionKey).toBe("agent:main:main");
   });
 
   it("forks thread sessions and injects starter context", async () => {
-    const { resolveSessionKey } = await import("../config/sessions.js");
-    vi.mocked(resolveSessionKey).mockReturnValue("slack:channel:C1");
     replyMock.mockResolvedValue({ text: "ok" });
 
     const client = getSlackClient();
@@ -386,8 +382,8 @@ describe("monitorSlackProvider tool results", () => {
       ThreadStarterBody?: string;
       ThreadLabel?: string;
     };
-    expect(ctx.SessionKey).toBe("slack:thread:C1:111.222");
-    expect(ctx.ParentSessionKey).toBe("slack:channel:C1");
+    expect(ctx.SessionKey).toBe("agent:main:slack:channel:C1:thread:111.222");
+    expect(ctx.ParentSessionKey).toBe("agent:main:slack:channel:C1");
     expect(ctx.ThreadStarterBody).toContain("starter message");
     expect(ctx.ThreadLabel).toContain("Slack thread #general");
   });
