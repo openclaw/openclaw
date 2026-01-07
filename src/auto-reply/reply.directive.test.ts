@@ -144,6 +144,36 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("please now");
   });
 
+  it("keeps reserved command aliases from matching after trimming", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/help",
+          From: "+1222",
+          To: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            models: {
+              "anthropic/claude-opus-4-5": { alias: " help " },
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Help");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("errors on invalid queue options", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();

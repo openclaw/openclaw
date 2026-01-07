@@ -74,6 +74,7 @@
 - Auto-reply: add per-channel/topic skill filters + system prompts for Discord/Slack/Telegram. Thanks @kitze for PR #286.
 - Auto-reply: refresh `/status` output with build info, compact context, and queue depth.
 - Commands: add `/stop` to the registry and route native aborts to the active chat session. Thanks @nachoiacovino for PR #295.
+- Commands: allow `/<alias>` shorthand for `/model` using `agent.models.*.alias`, without shadowing built-ins. Thanks @azade-c for PR #393.
 - Commands: unify native + text chat commands behind `commands.*` config (Discord/Slack/Telegram). Thanks @thewilloftheshadow for PR #275.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
