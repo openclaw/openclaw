@@ -3,7 +3,9 @@ import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
 export type OnboardMode = "local" | "remote";
 export type AuthChoice =
   | "oauth"
+  | "claude-cli"
   | "openai-codex"
+  | "codex-cli"
   | "antigravity"
   | "apiKey"
   | "minimax"

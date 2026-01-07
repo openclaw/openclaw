@@ -57,6 +57,7 @@
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
 - Auth/Doctor: migrate Anthropic OAuth configs from `anthropic:default` → `anthropic:<email>` and surface a doctor hint on refresh failures. Thanks @RandyVentures for PR #361. (#363)
 - Auth: delete legacy `auth.json` after migration to prevent stale OAuth token overwrites. Thanks @reeltimeapps for PR #368.
+- Auth: auto-sync OAuth creds from Claude CLI/Codex CLI into `anthropic:claude-cli`/`openai-codex:codex-cli` and offer them as onboarding/config choices (avoids `refresh_token_reused`). Thanks @pepicrft for PR #374.
 - Gateway/CLI: stop forcing localhost URL in remote mode so remote gateway config works. Thanks @oswalpalash for PR #293.
 - Onboarding: prompt immediately for OpenAI Codex redirect URL on remote/headless logins.
 - Configure: add OpenAI Codex (ChatGPT OAuth) auth choice (align with onboarding).

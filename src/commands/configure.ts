@@ -16,6 +16,11 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
+import {
+  CLAUDE_CLI_PROFILE_ID,
+  CODEX_CLI_PROFILE_ID,
+  ensureAuthProfileStore,
+} from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -35,6 +40,7 @@ import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
+import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -254,20 +260,21 @@ async function promptAuthConfig(
   const authChoice = guardCancel(
     await select({
       message: "Model/auth choice",
-      options: [
-        { value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" },
-        { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
-        {
-          value: "antigravity",
-          label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
-        },
-        { value: "apiKey", label: "Anthropic API key" },
-        { value: "minimax", label: "Minimax M2.1 (LM Studio)" },
-        { value: "skip", label: "Skip for now" },
-      ],
+      options: buildAuthChoiceOptions({
+        store: ensureAuthProfileStore(),
+        includeSkip: true,
+      }),
     }),
     runtime,
-  ) as "oauth" | "openai-codex" | "antigravity" | "apiKey" | "minimax" | "skip";
+  ) as
+    | "oauth"
+    | "claude-cli"
+    | "openai-codex"
+    | "codex-cli"
+    | "antigravity"
+    | "apiKey"
+    | "minimax"
+    | "skip";
 
   let next = cfg;
 
@@ -312,6 +319,12 @@ async function promptAuthConfig(
       runtime.error(String(err));
       note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
     }
+  } else if (authChoice === "claude-cli") {
+    next = applyAuthProfileConfig(next, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "oauth",
+    });
   } else if (authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     note(
@@ -385,6 +398,20 @@ async function promptAuthConfig(
       spin.stop("OpenAI OAuth failed");
       runtime.error(String(err));
       note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
+    }
+  } else if (authChoice === "codex-cli") {
+    next = applyAuthProfileConfig(next, {
+      profileId: CODEX_CLI_PROFILE_ID,
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    const applied = applyOpenAICodexModelDefault(next);
+    next = applied.next;
+    if (applied.changed) {
+      note(
+        `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+        "Model configured",
+      );
     }
   } else if (authChoice === "antigravity") {
     const isRemote = isRemoteEnvironment();

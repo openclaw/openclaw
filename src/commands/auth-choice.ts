@@ -6,6 +6,8 @@ import {
 } from "@mariozechner/pi-ai";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import {
+  CLAUDE_CLI_PROFILE_ID,
+  CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "../agents/auth-profiles.js";
@@ -165,6 +167,20 @@ export async function applyAuthChoice(params: {
         "OAuth help",
       );
     }
+  } else if (params.authChoice === "claude-cli") {
+    const store = ensureAuthProfileStore(params.agentDir);
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      await params.prompter.note(
+        "No Claude CLI credentials found at ~/.claude/.credentials.json.",
+        "Claude CLI OAuth",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "oauth",
+    });
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(
@@ -249,6 +265,33 @@ export async function applyAuthChoice(params: {
         "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
         "OAuth help",
       );
+    }
+  } else if (params.authChoice === "codex-cli") {
+    const store = ensureAuthProfileStore(params.agentDir);
+    if (!store.profiles[CODEX_CLI_PROFILE_ID]) {
+      await params.prompter.note(
+        "No Codex CLI credentials found at ~/.codex/auth.json.",
+        "Codex CLI OAuth",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: CODEX_CLI_PROFILE_ID,
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    if (params.setDefaultModel) {
+      const applied = applyOpenAICodexModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
+          "Model configured",
+        );
+      }
+    } else {
+      agentModelOverride = OPENAI_CODEX_DEFAULT_MODEL;
+      await noteAgentModel(OPENAI_CODEX_DEFAULT_MODEL);
     }
   } else if (params.authChoice === "antigravity") {
     const isRemote = isRemoteEnvironment();

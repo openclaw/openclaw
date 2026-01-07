@@ -2,6 +2,7 @@ import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -21,6 +22,7 @@ import { resolveDefaultWhatsAppAccountId } from "../web/accounts.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
+import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 import { ensureWorkspaceAndSessions, moveToTrash } from "./onboard-helpers.js";
 import { setupProviders } from "./onboard-providers.js";
 import type { AuthChoice, ProviderChoice } from "./onboard-types.js";
@@ -458,19 +460,13 @@ export async function agentsAddCommand(
       initialValue: false,
     });
     if (wantsAuth) {
+      const authStore = ensureAuthProfileStore(agentDir);
       const authChoice = (await prompter.select({
         message: "Model/auth choice",
-        options: [
-          { value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" },
-          { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
-          {
-            value: "antigravity",
-            label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
-          },
-          { value: "apiKey", label: "Anthropic API key" },
-          { value: "minimax", label: "Minimax M2.1 (LM Studio)" },
-          { value: "skip", label: "Skip for now" },
-        ],
+        options: buildAuthChoiceOptions({
+          store: authStore,
+          includeSkip: true,
+        }),
       })) as AuthChoice;
 
       const authResult = await applyAuthChoice({

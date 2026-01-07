@@ -1,9 +1,10 @@
 import path from "node:path";
-
+import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import {
   applyAuthChoice,
   warnIfModelConfigLooksOff,
 } from "../commands/auth-choice.js";
+import { buildAuthChoiceOptions } from "../commands/auth-choice-options.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -183,19 +184,10 @@ export async function runOnboardingWizard(
     },
   };
 
+  const authStore = ensureAuthProfileStore();
   const authChoice = (await prompter.select({
     message: "Model/auth choice",
-    options: [
-      { value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" },
-      { value: "openai-codex", label: "OpenAI Codex (ChatGPT OAuth)" },
-      {
-        value: "antigravity",
-        label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
-      },
-      { value: "apiKey", label: "Anthropic API key" },
-      { value: "minimax", label: "Minimax M2.1 (LM Studio)" },
-      { value: "skip", label: "Skip for now" },
-    ],
+    options: buildAuthChoiceOptions({ store: authStore, includeSkip: true }),
   })) as AuthChoice;
 
   const authResult = await applyAuthChoice({

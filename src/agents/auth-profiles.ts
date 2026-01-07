@@ -19,6 +19,14 @@ import { normalizeProviderId } from "./model-selection.js";
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = "auth-profiles.json";
 const LEGACY_AUTH_FILENAME = "auth.json";
+
+// External CLI credential file locations
+const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
+const CODEX_CLI_AUTH_RELATIVE_PATH = ".codex/auth.json";
+
+export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
+export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
+
 const AUTH_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -267,11 +275,177 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
   return mutated;
 }
 
+/**
+ * Read Anthropic OAuth credentials from Claude CLI's credential file.
+ * Claude CLI stores credentials at ~/.claude/.credentials.json
+ */
+function readClaudeCliCredentials(): OAuthCredential | null {
+  const credPath = path.join(
+    resolveUserPath("~"),
+    CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
+  );
+  const raw = loadJsonFile(credPath);
+  if (!raw || typeof raw !== "object") return null;
+
+  const data = raw as Record<string, unknown>;
+  const claudeOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
+  if (!claudeOauth || typeof claudeOauth !== "object") return null;
+
+  const accessToken = claudeOauth.accessToken;
+  const refreshToken = claudeOauth.refreshToken;
+  const expiresAt = claudeOauth.expiresAt;
+
+  if (typeof accessToken !== "string" || !accessToken) return null;
+  if (typeof refreshToken !== "string" || !refreshToken) return null;
+  if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+
+  return {
+    type: "oauth",
+    provider: "anthropic",
+    access: accessToken,
+    refresh: refreshToken,
+    expires: expiresAt,
+  };
+}
+
+/**
+ * Read OpenAI Codex OAuth credentials from Codex CLI's auth file.
+ * Codex CLI stores credentials at ~/.codex/auth.json
+ */
+function readCodexCliCredentials(): OAuthCredential | null {
+  const authPath = path.join(
+    resolveUserPath("~"),
+    CODEX_CLI_AUTH_RELATIVE_PATH,
+  );
+  const raw = loadJsonFile(authPath);
+  if (!raw || typeof raw !== "object") return null;
+
+  const data = raw as Record<string, unknown>;
+  const tokens = data.tokens as Record<string, unknown> | undefined;
+  if (!tokens || typeof tokens !== "object") return null;
+
+  const accessToken = tokens.access_token;
+  const refreshToken = tokens.refresh_token;
+
+  if (typeof accessToken !== "string" || !accessToken) return null;
+  if (typeof refreshToken !== "string" || !refreshToken) return null;
+
+  // Codex CLI doesn't store expiry, estimate 1 hour from file mtime or now
+  let expires: number;
+  try {
+    const stat = fs.statSync(authPath);
+    // Assume token is valid for ~1 hour from when the file was last modified
+    expires = stat.mtimeMs + 60 * 60 * 1000;
+  } catch {
+    expires = Date.now() + 60 * 60 * 1000;
+  }
+
+  return {
+    type: "oauth",
+    provider: "openai-codex" as unknown as OAuthProvider,
+    access: accessToken,
+    refresh: refreshToken,
+    expires,
+  };
+}
+
+function shallowEqualOAuthCredentials(
+  a: OAuthCredential | undefined,
+  b: OAuthCredential,
+): boolean {
+  if (!a) return false;
+  if (a.type !== "oauth") return false;
+  return (
+    a.provider === b.provider &&
+    a.access === b.access &&
+    a.refresh === b.refresh &&
+    a.expires === b.expires &&
+    a.email === b.email &&
+    a.enterpriseUrl === b.enterpriseUrl &&
+    a.projectId === b.projectId &&
+    a.accountId === b.accountId
+  );
+}
+
+/**
+ * Sync OAuth credentials from external CLI tools (Claude CLI, Codex CLI) into the store.
+ * This allows clawdbot to use the same credentials as these tools without requiring
+ * separate authentication, and keeps credentials in sync when CLI tools refresh tokens.
+ *
+ * Returns true if any credentials were updated.
+ */
+function syncExternalCliCredentials(store: AuthProfileStore): boolean {
+  let mutated = false;
+  const now = Date.now();
+
+  // Sync from Claude CLI
+  const claudeCreds = readClaudeCliCredentials();
+  if (claudeCreds) {
+    const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
+    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+
+    // Update if: no existing profile, existing is not oauth, or CLI has newer/valid token
+    const shouldUpdate =
+      !existingOAuth ||
+      existingOAuth.provider !== "anthropic" ||
+      existingOAuth.expires <= now ||
+      (claudeCreds.expires > now &&
+        claudeCreds.expires > existingOAuth.expires);
+
+    if (
+      shouldUpdate &&
+      !shallowEqualOAuthCredentials(existingOAuth, claudeCreds)
+    ) {
+      store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
+      mutated = true;
+      log.info("synced anthropic credentials from claude cli", {
+        profileId: CLAUDE_CLI_PROFILE_ID,
+        expires: new Date(claudeCreds.expires).toISOString(),
+      });
+    }
+  }
+
+  // Sync from Codex CLI
+  const codexCreds = readCodexCliCredentials();
+  if (codexCreds) {
+    const existing = store.profiles[CODEX_CLI_PROFILE_ID];
+    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+
+    // Codex creds don't carry expiry; use file mtime heuristic for freshness.
+    const shouldUpdate =
+      !existingOAuth ||
+      existingOAuth.provider !== ("openai-codex" as unknown as OAuthProvider) ||
+      existingOAuth.expires <= now ||
+      codexCreds.expires > existingOAuth.expires;
+
+    if (
+      shouldUpdate &&
+      !shallowEqualOAuthCredentials(existingOAuth, codexCreds)
+    ) {
+      store.profiles[CODEX_CLI_PROFILE_ID] = codexCreds;
+      mutated = true;
+      log.info("synced openai-codex credentials from codex cli", {
+        profileId: CODEX_CLI_PROFILE_ID,
+        expires: new Date(codexCreds.expires).toISOString(),
+      });
+    }
+  }
+
+  return mutated;
+}
+
 export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
-  if (asStore) return asStore;
+  if (asStore) {
+    // Sync from external CLI tools on every load
+    const synced = syncExternalCliCredentials(asStore);
+    if (synced) {
+      saveJsonFile(authPath, asStore);
+    }
+    return asStore;
+  }
 
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
   const legacy = coerceLegacyStore(legacyRaw);
@@ -303,17 +477,27 @@ export function loadAuthProfileStore(): AuthProfileStore {
         };
       }
     }
+    syncExternalCliCredentials(store);
     return store;
   }
 
-  return { version: AUTH_STORE_VERSION, profiles: {} };
+  const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
+  syncExternalCliCredentials(store);
+  return store;
 }
 
 export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
-  if (asStore) return asStore;
+  if (asStore) {
+    // Sync from external CLI tools on every load
+    const synced = syncExternalCliCredentials(asStore);
+    if (synced) {
+      saveJsonFile(authPath, asStore);
+    }
+    return asStore;
+  }
 
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath(agentDir));
   const legacy = coerceLegacyStore(legacyRaw);
@@ -348,7 +532,8 @@ export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const shouldWrite = legacy !== null || mergedOAuth;
+  const syncedCli = syncExternalCliCredentials(store);
+  const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
   if (shouldWrite) {
     saveJsonFile(authPath, store);
   }

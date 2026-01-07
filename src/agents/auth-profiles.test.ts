@@ -6,6 +6,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   type AuthProfileStore,
+  CLAUDE_CLI_PROFILE_ID,
+  CODEX_CLI_PROFILE_ID,
   calculateAuthProfileCooldownMs,
   ensureAuthProfileStore,
   resolveAuthProfileOrder,
@@ -337,5 +339,265 @@ describe("auth profile cooldowns", () => {
     expect(calculateAuthProfileCooldownMs(3)).toBe(25 * 60_000);
     expect(calculateAuthProfileCooldownMs(4)).toBe(60 * 60_000);
     expect(calculateAuthProfileCooldownMs(5)).toBe(60 * 60_000);
+  });
+});
+
+describe("external CLI credential sync", () => {
+  it("syncs Claude CLI credentials into anthropic:claude-cli", () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-sync-"),
+    );
+    const originalHome = process.env.HOME;
+
+    try {
+      // Create a temp home with Claude CLI credentials
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
+      process.env.HOME = tempHome;
+
+      // Create Claude CLI credentials
+      const claudeDir = path.join(tempHome, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const claudeCreds = {
+        claudeAiOauth: {
+          accessToken: "fresh-access-token",
+          refreshToken: "fresh-refresh-token",
+          expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour from now
+        },
+      };
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify(claudeCreds),
+      );
+
+      // Create empty auth-profiles.json
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-default",
+            },
+          },
+        }),
+      );
+
+      // Load the store - should sync from CLI
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles["anthropic:default"]).toBeDefined();
+      expect((store.profiles["anthropic:default"] as { key: string }).key).toBe(
+        "sk-default",
+      );
+      expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
+      expect(
+        (store.profiles[CLAUDE_CLI_PROFILE_ID] as { access: string }).access,
+      ).toBe("fresh-access-token");
+      expect(
+        (store.profiles[CLAUDE_CLI_PROFILE_ID] as { expires: number }).expires,
+      ).toBeGreaterThan(Date.now());
+    } finally {
+      process.env.HOME = originalHome;
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("syncs Codex CLI credentials into openai-codex:codex-cli", () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-codex-sync-"),
+    );
+    const originalHome = process.env.HOME;
+
+    try {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
+      process.env.HOME = tempHome;
+
+      // Create Codex CLI credentials
+      const codexDir = path.join(tempHome, ".codex");
+      fs.mkdirSync(codexDir, { recursive: true });
+      const codexCreds = {
+        tokens: {
+          access_token: "codex-access-token",
+          refresh_token: "codex-refresh-token",
+        },
+      };
+      const codexAuthPath = path.join(codexDir, "auth.json");
+      fs.writeFileSync(codexAuthPath, JSON.stringify(codexCreds));
+
+      // Create empty auth-profiles.json
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {},
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeDefined();
+      expect(
+        (store.profiles[CODEX_CLI_PROFILE_ID] as { access: string }).access,
+      ).toBe("codex-access-token");
+    } finally {
+      process.env.HOME = originalHome;
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite API keys when syncing external CLI creds", () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-no-overwrite-"),
+    );
+    const originalHome = process.env.HOME;
+
+    try {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
+      process.env.HOME = tempHome;
+
+      // Create Claude CLI credentials
+      const claudeDir = path.join(tempHome, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      const claudeCreds = {
+        claudeAiOauth: {
+          accessToken: "cli-access",
+          refreshToken: "cli-refresh",
+          expiresAt: Date.now() + 30 * 60 * 1000,
+        },
+      };
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify(claudeCreds),
+      );
+
+      // Create auth-profiles.json with an API key
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "anthropic:default": {
+              type: "api_key",
+              provider: "anthropic",
+              key: "sk-store",
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+
+      // Should keep the store's API key and still add the CLI profile.
+      expect((store.profiles["anthropic:default"] as { key: string }).key).toBe(
+        "sk-store",
+      );
+      expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
+    } finally {
+      process.env.HOME = originalHome;
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not overwrite fresher store OAuth with older Claude CLI credentials", () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-"),
+    );
+    const originalHome = process.env.HOME;
+
+    try {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
+      process.env.HOME = tempHome;
+
+      const claudeDir = path.join(tempHome, ".claude");
+      fs.mkdirSync(claudeDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(claudeDir, ".credentials.json"),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: "cli-access",
+            refreshToken: "cli-refresh",
+            expiresAt: Date.now() + 30 * 60 * 1000,
+          },
+        }),
+      );
+
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            [CLAUDE_CLI_PROFILE_ID]: {
+              type: "oauth",
+              provider: "anthropic",
+              access: "store-access",
+              refresh: "store-refresh",
+              expires: Date.now() + 60 * 60 * 1000,
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(
+        (store.profiles[CLAUDE_CLI_PROFILE_ID] as { access: string }).access,
+      ).toBe("store-access");
+    } finally {
+      process.env.HOME = originalHome;
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("updates codex-cli profile when Codex CLI refresh token changes", () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-codex-refresh-sync-"),
+    );
+    const originalHome = process.env.HOME;
+
+    try {
+      const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-home-"));
+      process.env.HOME = tempHome;
+
+      const codexDir = path.join(tempHome, ".codex");
+      fs.mkdirSync(codexDir, { recursive: true });
+      const codexAuthPath = path.join(codexDir, "auth.json");
+      fs.writeFileSync(
+        codexAuthPath,
+        JSON.stringify({
+          tokens: { access_token: "same-access", refresh_token: "new-refresh" },
+        }),
+      );
+      fs.utimesSync(codexAuthPath, new Date(), new Date());
+
+      const authPath = path.join(agentDir, "auth-profiles.json");
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            [CODEX_CLI_PROFILE_ID]: {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "same-access",
+              refresh: "old-refresh",
+              expires: Date.now() - 1000,
+            },
+          },
+        }),
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      expect(
+        (store.profiles[CODEX_CLI_PROFILE_ID] as { refresh: string }).refresh,
+      ).toBe("new-refresh");
+    } finally {
+      process.env.HOME = originalHome;
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
   });
 });
