@@ -786,6 +786,7 @@ export const ClawdbotSchema = z.object({
       token: z.string().optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
+      maxLinesPerMessage: z.number().int().positive().optional(),
       slashCommand: z
         .object({
           enabled: z.boolean().optional(),

@@ -12,7 +12,6 @@ import type {
   RESTPostAPIGuildScheduledEventJSONBody,
 } from "discord-api-types/v10";
 
-import { chunkText } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import {
   normalizePollDurationHours,
@@ -20,6 +19,7 @@ import {
   type PollInput,
 } from "../polls.js";
 import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
+import { chunkDiscordText } from "./chunk.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
@@ -354,13 +354,18 @@ async function sendDiscordText(
   const messageReference = replyTo
     ? { message_id: replyTo, fail_if_not_exists: false }
     : undefined;
-  if (text.length <= DISCORD_TEXT_LIMIT) {
+  const maxLines = loadConfig().discord?.maxLinesPerMessage;
+  const chunks = chunkDiscordText(text, {
+    maxChars: DISCORD_TEXT_LIMIT,
+    maxLines,
+  });
+  if (chunks.length === 1) {
     const res = (await rest.post(Routes.channelMessages(channelId), {
-      body: { content: text, message_reference: messageReference },
+      body: { content: chunks[0], message_reference: messageReference },
     })) as { id: string; channel_id: string };
     return res;
   }
-  const chunks = chunkText(text, DISCORD_TEXT_LIMIT);
+
   let last: { id: string; channel_id: string } | null = null;
   let isFirst = true;
   for (const chunk of chunks) {
