@@ -9,6 +9,8 @@ export type GetReplyOptions = {
   onBlockReply?: (payload: ReplyPayload) => Promise<void> | void;
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   disableBlockStreaming?: boolean;
+  /** If provided, only load these skills for this session (empty = no skills). */
+  skillFilter?: string[];
 };
 
 export type ReplyPayload = {

@@ -49,6 +49,8 @@ export async function ensureSkillSnapshot(params: {
   isFirstTurnInSession: boolean;
   workspaceDir: string;
   cfg: ClawdbotConfig;
+  /** If provided, only load skills with these names (for per-channel skill filtering) */
+  skillFilter?: string[];
 }): Promise<{
   sessionEntry?: SessionEntry;
   skillsSnapshot?: SessionEntry["skillsSnapshot"];
@@ -63,6 +65,7 @@ export async function ensureSkillSnapshot(params: {
     isFirstTurnInSession,
     workspaceDir,
     cfg,
+    skillFilter,
   } = params;
 
   let nextEntry = sessionEntry;
@@ -76,7 +79,10 @@ export async function ensureSkillSnapshot(params: {
       };
     const skillSnapshot =
       isFirstTurnInSession || !current.skillsSnapshot
-        ? buildWorkspaceSkillSnapshot(workspaceDir, { config: cfg })
+        ? buildWorkspaceSkillSnapshot(workspaceDir, {
+            config: cfg,
+            skillFilter,
+          })
         : current.skillsSnapshot;
     nextEntry = {
       ...current,
@@ -96,7 +102,10 @@ export async function ensureSkillSnapshot(params: {
     nextEntry?.skillsSnapshot ??
     (isFirstTurnInSession
       ? undefined
-      : buildWorkspaceSkillSnapshot(workspaceDir, { config: cfg }));
+      : buildWorkspaceSkillSnapshot(workspaceDir, {
+          config: cfg,
+          skillFilter,
+        }));
   if (
     skillsSnapshot &&
     sessionStore &&

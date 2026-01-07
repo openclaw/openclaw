@@ -382,8 +382,27 @@ function shouldIncludeSkill(params: {
 function filterSkillEntries(
   entries: SkillEntry[],
   config?: ClawdbotConfig,
+  skillFilter?: string[],
 ): SkillEntry[] {
-  return entries.filter((entry) => shouldIncludeSkill({ entry, config }));
+  let filtered = entries.filter((entry) =>
+    shouldIncludeSkill({ entry, config }),
+  );
+  // If skillFilter is provided, only include skills in the filter list.
+  if (skillFilter !== undefined) {
+    const normalized = skillFilter
+      .map((entry) => String(entry).trim())
+      .filter(Boolean);
+    const label = normalized.length > 0 ? normalized.join(", ") : "(none)";
+    console.log(`[skills] Applying skill filter: ${label}`);
+    filtered =
+      normalized.length > 0
+        ? filtered.filter((entry) => normalized.includes(entry.skill.name))
+        : [];
+    console.log(
+      `[skills] After filter: ${filtered.map((entry) => entry.skill.name).join(", ")}`,
+    );
+  }
+  return filtered;
 }
 
 export function applySkillEnvOverrides(params: {
@@ -548,10 +567,16 @@ export function buildWorkspaceSkillSnapshot(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
+    /** If provided, only include skills with these names */
+    skillFilter?: string[];
   },
 ): SkillSnapshot {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(skillEntries, opts?.config);
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    opts?.skillFilter,
+  );
   const resolvedSkills = eligible.map((entry) => entry.skill);
   return {
     prompt: formatSkillsForPrompt(resolvedSkills),
@@ -570,10 +595,16 @@ export function buildWorkspaceSkillsPrompt(
     managedSkillsDir?: string;
     bundledSkillsDir?: string;
     entries?: SkillEntry[];
+    /** If provided, only include skills with these names */
+    skillFilter?: string[];
   },
 ): string {
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
-  const eligible = filterSkillEntries(skillEntries, opts?.config);
+  const eligible = filterSkillEntries(
+    skillEntries,
+    opts?.config,
+    opts?.skillFilter,
+  );
   return formatSkillsForPrompt(eligible.map((entry) => entry.skill));
 }
 
