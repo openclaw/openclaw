@@ -1,6 +1,10 @@
 import type { CliDeps } from "../cli/deps.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
+import {
+  buildOutboundDeliveryJson,
+  formatGatewaySummary,
+} from "../infra/outbound/format.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -74,19 +78,24 @@ export async function pollCommand(
 
   runtime.log(
     success(
-      `✅ Poll sent via gateway (${provider}). Message ID: ${result.messageId ?? "unknown"}`,
+      formatGatewaySummary({
+        action: "Poll sent",
+        provider,
+        messageId: result.messageId ?? null,
+      }),
     ),
   );
   if (opts.json) {
     runtime.log(
       JSON.stringify(
         {
-          provider,
-          via: "gateway",
-          to: opts.to,
-          toJid: result.toJid ?? null,
-          channelId: result.channelId ?? null,
-          messageId: result.messageId,
+          ...buildOutboundDeliveryJson({
+            provider,
+            via: "gateway",
+            to: opts.to,
+            result,
+            mediaUrl: null,
+          }),
           question: normalized.question,
           options: normalized.options,
           maxSelections: normalized.maxSelections,

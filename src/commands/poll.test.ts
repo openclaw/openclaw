@@ -36,6 +36,9 @@ const deps: CliDeps = {
 describe("pollCommand", () => {
   beforeEach(() => {
     callGatewayMock.mockReset();
+    runtime.log.mockReset();
+    runtime.error.mockReset();
+    runtime.exit.mockReset();
     testConfig = {};
   });
 
@@ -73,5 +76,35 @@ describe("pollCommand", () => {
       | Record<string, unknown>
       | undefined;
     expect(args?.url).toBeUndefined();
+  });
+
+  it("emits json output with gateway metadata", async () => {
+    callGatewayMock.mockResolvedValueOnce({ messageId: "p1", channelId: "C1" });
+    await pollCommand(
+      {
+        to: "channel:C1",
+        question: "hi?",
+        option: ["y", "n"],
+        provider: "discord",
+        json: true,
+      },
+      deps,
+      runtime,
+    );
+    const lastLog = runtime.log.mock.calls.at(-1)?.[0] as string | undefined;
+    expect(lastLog).toBeDefined();
+    const payload = JSON.parse(lastLog ?? "{}") as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      provider: "discord",
+      via: "gateway",
+      to: "channel:C1",
+      messageId: "p1",
+      channelId: "C1",
+      mediaUrl: null,
+      question: "hi?",
+      options: ["y", "n"],
+      maxSelections: 1,
+      durationHours: null,
+    });
   });
 });
