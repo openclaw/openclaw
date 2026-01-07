@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Clawdbot
 
-@Suite(.serialized) struct GatewayEnvironmentTests {
+@Suite struct GatewayEnvironmentTests {
     @Test func semverParsesCommonForms() {
         #expect(Semver.parse("1.2.3") == Semver(major: 1, minor: 2, patch: 3))
         #expect(Semver.parse("v2.0.0") == Semver(major: 2, minor: 0, patch: 0))
@@ -19,29 +19,19 @@ import Testing
         #expect(Semver(major: 1, minor: 9, patch: 9).compatible(with: required) == false)
     }
 
-    @Test func gatewayPortDefaultsAndRespectsOverride() {
-        let envKey = "CLAWDBOT_CONFIG_PATH"
-        let previousEnv = getenv(envKey).map { String(cString: $0) }
-        let configPath = FileManager.default.temporaryDirectory
-            .appendingPathComponent("clawdbot-test-config-\(UUID().uuidString).json")
-            .path
-        setenv(envKey, configPath, 1)
-        defer {
-            if let previousEnv {
-                setenv(envKey, previousEnv, 1)
-            } else {
-                unsetenv(envKey)
-            }
+    @Test func gatewayPortDefaultsAndRespectsOverride() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(
+            env: ["CLAWDBOT_CONFIG_PATH": configPath],
+            defaults: ["gatewayPort": nil])
+        {
+            let defaultPort = GatewayEnvironment.gatewayPort()
+            #expect(defaultPort == 18789)
+
+            UserDefaults.standard.set(19999, forKey: "gatewayPort")
+            defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
+            #expect(GatewayEnvironment.gatewayPort() == 19999)
         }
-
-        UserDefaults.standard.removeObject(forKey: "gatewayPort")
-        defer { UserDefaults.standard.removeObject(forKey: "gatewayPort") }
-
-        let defaultPort = GatewayEnvironment.gatewayPort()
-        #expect(defaultPort == 18789)
-
-        UserDefaults.standard.set(19999, forKey: "gatewayPort")
-        #expect(GatewayEnvironment.gatewayPort() == 19999)
     }
 
     @Test func expectedGatewayVersionFromStringUsesParser() {
