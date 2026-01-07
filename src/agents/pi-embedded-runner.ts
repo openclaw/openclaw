@@ -65,6 +65,7 @@ import {
   pickFallbackThinkingLevel,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
   type BlockReplyChunking,
@@ -845,8 +846,9 @@ export async function compactEmbeddedPiSession(params: {
             sessionManager,
             sessionId: params.sessionId,
           });
-          if (prior.length > 0) {
-            session.agent.replaceMessages(prior);
+          const validated = validateGeminiTurns(prior);
+          if (validated.length > 0) {
+            session.agent.replaceMessages(validated);
           }
           const result = await session.compact(params.customInstructions);
           return {
@@ -1173,8 +1175,9 @@ export async function runEmbeddedPiAgent(params: {
               sessionManager,
               sessionId: params.sessionId,
             });
-            if (prior.length > 0) {
-              session.agent.replaceMessages(prior);
+            const validated = validateGeminiTurns(prior);
+            if (validated.length > 0) {
+              session.agent.replaceMessages(validated);
             }
           } catch (err) {
             session.dispose();
