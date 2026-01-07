@@ -237,12 +237,11 @@ export type TelegramActionConfig = {
 };
 
 export type TelegramTopicConfig = {
+  requireMention?: boolean;
   /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
   skills?: string[];
   /** If false, disable the bot for this topic. */
   enabled?: boolean;
-  /** If true, reply to every message (no mention required). */
-  autoReply?: boolean;
   /** Optional allowlist for topic senders (ids or usernames). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this topic. */
@@ -257,8 +256,6 @@ export type TelegramGroupConfig = {
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
   enabled?: boolean;
-  /** If true, reply to every message (no mention required). */
-  autoReply?: boolean;
   /** Optional allowlist for group senders (ids or usernames). */
   allowFrom?: Array<string | number>;
   /** Optional system prompt snippet for this group. */
@@ -325,8 +322,6 @@ export type DiscordGuildChannelConfig = {
   skills?: string[];
   /** If false, disable the bot for this channel. */
   enabled?: boolean;
-  /** If true, reply to every message (no mention required). */
-  autoReply?: boolean;
   /** Optional allowlist for channel senders (ids or names). */
   users?: Array<string | number>;
   /** Optional system prompt snippet for this channel. */
@@ -412,8 +407,6 @@ export type SlackChannelConfig = {
   allow?: boolean;
   /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
-  /** Reply to all messages without needing a mention. */
-  autoReply?: boolean;
   /** Allowlist of users that can invoke the bot in this channel. */
   users?: Array<string | number>;
   /** Optional skill filter for this channel. */

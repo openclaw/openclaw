@@ -101,7 +101,6 @@ export type DiscordGuildEntryResolved = {
       requireMention?: boolean;
       skills?: string[];
       enabled?: boolean;
-      autoReply?: boolean;
       users?: Array<string | number>;
       systemPrompt?: string;
     }
@@ -113,7 +112,6 @@ export type DiscordChannelConfigResolved = {
   requireMention?: boolean;
   skills?: string[];
   enabled?: boolean;
-  autoReply?: boolean;
   users?: Array<string | number>;
   systemPrompt?: string;
 };
@@ -601,14 +599,8 @@ export function createDiscordMessageHandler(params: {
         guildHistories.set(message.channelId, history);
       }
 
-      const baseRequireMention =
-        channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
       const shouldRequireMention =
-        channelConfig?.autoReply === true
-          ? false
-          : channelConfig?.autoReply === false
-            ? true
-            : baseRequireMention;
+        channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
       const hasAnyMention = Boolean(
         !isDirectMessage &&
           (message.mentionedEveryone ||
@@ -1810,7 +1802,6 @@ export function resolveDiscordChannelConfig(params: {
       requireMention: byId.requireMention,
       skills: byId.skills,
       enabled: byId.enabled,
-      autoReply: byId.autoReply,
       users: byId.users,
       systemPrompt: byId.systemPrompt,
     };
@@ -1821,7 +1812,6 @@ export function resolveDiscordChannelConfig(params: {
       requireMention: entry.requireMention,
       skills: entry.skills,
       enabled: entry.enabled,
-      autoReply: entry.autoReply,
       users: entry.users,
       systemPrompt: entry.systemPrompt,
     };
@@ -1833,7 +1823,6 @@ export function resolveDiscordChannelConfig(params: {
       requireMention: entry.requireMention,
       skills: entry.skills,
       enabled: entry.enabled,
-      autoReply: entry.autoReply,
       users: entry.users,
       systemPrompt: entry.systemPrompt,
     };

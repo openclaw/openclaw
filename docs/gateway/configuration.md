@@ -468,12 +468,16 @@ Set `telegram.enabled: false` to disable automatic startup.
     dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
     allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
     groups: {
-      "*": { requireMention: true, autoReply: false },
+      "*": { requireMention: true },
       "-1001234567890": {
         allowFrom: ["@admin"],
         systemPrompt: "Keep answers brief.",
         topics: {
-          "99": { skills: ["search"], systemPrompt: "Stay on topic." }
+          "99": {
+            requireMention: false,
+            skills: ["search"],
+            systemPrompt: "Stay on topic."
+          }
         }
       }
     },
@@ -580,7 +584,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       C123: { allow: true, requireMention: true },
       "#general": {
         allow: true,
-        autoReply: false,
+        requireMention: true,
         users: ["U123"],
         skills: ["docs"],
         systemPrompt: "Short answers only."

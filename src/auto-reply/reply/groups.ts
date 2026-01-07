@@ -44,11 +44,7 @@ function parseTelegramGroupId(value?: string | null) {
   return { chatId: raw, topicId: undefined };
 }
 
-function hasOwn(obj: unknown, key: string): boolean {
-  return Boolean(obj && typeof obj === "object" && Object.hasOwn(obj, key));
-}
-
-function resolveTelegramAutoReply(params: {
+function resolveTelegramRequireMention(params: {
   cfg: ClawdbotConfig;
   chatId?: string;
   topicId?: string;
@@ -61,17 +57,17 @@ function resolveTelegramAutoReply(params: {
     topicId && groupConfig?.topics ? groupConfig.topics[topicId] : undefined;
   const defaultTopicConfig =
     topicId && groupDefault?.topics ? groupDefault.topics[topicId] : undefined;
-  if (hasOwn(topicConfig, "autoReply")) {
-    return (topicConfig as { autoReply?: boolean }).autoReply;
+  if (typeof topicConfig?.requireMention === "boolean") {
+    return topicConfig.requireMention;
   }
-  if (hasOwn(defaultTopicConfig, "autoReply")) {
-    return (defaultTopicConfig as { autoReply?: boolean }).autoReply;
+  if (typeof defaultTopicConfig?.requireMention === "boolean") {
+    return defaultTopicConfig.requireMention;
   }
-  if (hasOwn(groupConfig, "autoReply")) {
-    return (groupConfig as { autoReply?: boolean }).autoReply;
+  if (typeof groupConfig?.requireMention === "boolean") {
+    return groupConfig.requireMention;
   }
-  if (hasOwn(groupDefault, "autoReply")) {
-    return (groupDefault as { autoReply?: boolean }).autoReply;
+  if (typeof groupDefault?.requireMention === "boolean") {
+    return groupDefault.requireMention;
   }
   return undefined;
 }
@@ -107,8 +103,12 @@ export function resolveGroupRequireMention(params: {
   const groupSpace = ctx.GroupSpace?.trim();
   if (provider === "telegram") {
     const { chatId, topicId } = parseTelegramGroupId(groupId);
-    const autoReply = resolveTelegramAutoReply({ cfg, chatId, topicId });
-    if (typeof autoReply === "boolean") return !autoReply;
+    const requireMention = resolveTelegramRequireMention({
+      cfg,
+      chatId,
+      topicId,
+    });
+    if (typeof requireMention === "boolean") return requireMention;
     return resolveProviderGroupRequireMention({
       cfg,
       provider,
@@ -138,9 +138,6 @@ export function resolveGroupRequireMention(params: {
         (groupRoom
           ? channelEntries[normalizeDiscordSlug(groupRoom)]
           : undefined);
-      if (entry && typeof entry.autoReply === "boolean") {
-        return !entry.autoReply;
-      }
       if (entry && typeof entry.requireMention === "boolean") {
         return entry.requireMention;
       }
@@ -163,7 +160,7 @@ export function resolveGroupRequireMention(params: {
       channelName ?? "",
       normalizedName,
     ].filter(Boolean);
-    let matched: { requireMention?: boolean; autoReply?: boolean } | undefined;
+    let matched: { requireMention?: boolean } | undefined;
     for (const candidate of candidates) {
       if (candidate && channels[candidate]) {
         matched = channels[candidate];
@@ -172,9 +169,6 @@ export function resolveGroupRequireMention(params: {
     }
     const fallback = channels["*"];
     const resolved = matched ?? fallback;
-    if (typeof resolved?.autoReply === "boolean") {
-      return !resolved.autoReply;
-    }
     if (typeof resolved?.requireMention === "boolean") {
       return resolved.requireMention;
     }

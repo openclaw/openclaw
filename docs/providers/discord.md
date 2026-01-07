@@ -202,8 +202,7 @@ Notes:
             requireMention: true,
             users: ["987654321098765432"],
             skills: ["search", "docs"],
-            systemPrompt: "Keep answers short.",
-            autoReply: false
+            systemPrompt: "Keep answers short."
           }
         }
       }
@@ -227,7 +226,6 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
 - `guilds.<id>.channels.<channel>.allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `guilds.<id>.channels.<channel>.requireMention`: mention gating for the channel.
-- `guilds.<id>.channels.<channel>.autoReply`: if `true`, reply to all messages (overrides `requireMention`).
 - `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
 - `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
 - `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel (combined with channel topic).

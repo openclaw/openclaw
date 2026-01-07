@@ -117,12 +117,12 @@ Provider options:
 - `telegram.groupAllowFrom`: group sender allowlist (ids/usernames).
 - `telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `telegram.groups.<id>.requireMention`: mention gating default.
-  - `telegram.groups.<id>.autoReply`: reply to every message (overrides `requireMention`).
   - `telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
   - `telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
   - `telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
   - `telegram.groups.<id>.enabled`: disable the group when `false`.
   - `telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
+  - `telegram.groups.<id>.topics.<threadId>.requireMention`: per-topic mention gating override.
 - `telegram.replyToMode`: `off | first | all`.
 - `telegram.textChunkLimit`: outbound chunk size (chars).
 - `telegram.streamMode`: `off | partial | block` (draft streaming).
