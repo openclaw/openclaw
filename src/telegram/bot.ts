@@ -153,6 +153,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       hasEntries: entries.length > 0,
     };
   };
+  const firstDefined = <T>(...values: Array<T | undefined>) => {
+    for (const value of values) {
+      if (typeof value !== "undefined") return value;
+    }
+    return undefined;
+  };
   const isSenderAllowed = (params: {
     allow: ReturnType<typeof normalizeAllowFrom>;
     senderId?: string;
@@ -210,6 +216,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       requireMentionOverride: opts.requireMention,
       overrideOrder: "after-config",
     });
+  const resolveTelegramGroupConfig = (
+    chatId: string | number,
+    messageThreadId?: number,
+  ) => {
+    const groups = cfg.telegram?.groups;
+    if (!groups) return { groupConfig: undefined, topicConfig: undefined };
+    const groupKey = String(chatId);
+    const groupConfig = groups[groupKey] ?? groups["*"];
+    const topicConfig =
+      messageThreadId != null
+        ? groupConfig?.topics?.[String(messageThreadId)]
+        : undefined;
+    return { groupConfig, topicConfig };
+  };
 
   const processMessage = async (
     primaryCtx: TelegramContext,
@@ -222,14 +242,34 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const messageThreadId = (msg as { message_thread_id?: number })
       .message_thread_id;
     const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+    const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+      chatId,
+      messageThreadId,
+    );
     const effectiveDmAllow = normalizeAllowFrom([
       ...(allowFrom ?? []),
       ...storeAllowFrom,
     ]);
+    const groupAllowOverride = firstDefined(
+      topicConfig?.allowFrom,
+      groupConfig?.allowFrom,
+    );
     const effectiveGroupAllow = normalizeAllowFrom([
-      ...(groupAllowFrom ?? []),
+      ...(groupAllowOverride ?? groupAllowFrom ?? []),
       ...storeAllowFrom,
     ]);
+    const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+
+    if (isGroup && groupConfig?.enabled === false) {
+      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+      return;
+    }
+    if (isGroup && topicConfig?.enabled === false) {
+      logVerbose(
+        `Blocked telegram topic ${chatId} (${messageThreadId ?? "unknown"}) (topic disabled)`,
+      );
+      return;
+    }
 
     const sendTyping = async () => {
       try {
@@ -316,6 +356,19 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const botUsername = primaryCtx.me?.username?.toLowerCase();
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const senderUsername = msg.from?.username ?? "";
+    if (isGroup && hasGroupAllowOverride) {
+      const allowed = isSenderAllowed({
+        allow: effectiveGroupAllow,
+        senderId,
+        senderUsername,
+      });
+      if (!allowed) {
+        logVerbose(
+          `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
+        );
+        return;
+      }
+    }
     const commandAuthorized = isSenderAllowed({
       allow: isGroup ? effectiveGroupAllow : effectiveDmAllow,
       senderId,
@@ -327,7 +380,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
       (ent) => ent.type === "mention",
     );
-    const requireMention = resolveGroupRequireMention(chatId);
+    const baseRequireMention = resolveGroupRequireMention(chatId);
+    const autoReplySetting = firstDefined(
+      topicConfig?.autoReply,
+      groupConfig?.autoReply,
+    );
+    const requireMention =
+      autoReplySetting === true
+        ? false
+        : autoReplySetting === false
+          ? true
+          : baseRequireMention;
     const shouldBypassMention =
       isGroup &&
       requireMention &&
@@ -423,6 +486,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           : buildTelegramDmPeerId(chatId, messageThreadId),
       },
     });
+    const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
+    const systemPromptParts = [
+      groupConfig?.systemPrompt?.trim() || null,
+      topicConfig?.systemPrompt?.trim() || null,
+    ].filter((entry): entry is string => Boolean(entry));
+    const groupSystemPrompt =
+      systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
     const ctxPayload = {
       Body: body,
       From: isGroup
@@ -433,6 +503,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       AccountId: route.accountId,
       ChatType: isGroup ? "group" : "direct",
       GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+      GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
       SenderName: buildSenderName(msg),
       SenderId: senderId || undefined,
       SenderUsername: senderUsername || undefined,
@@ -601,6 +672,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       dispatcher,
       replyOptions: {
         ...replyOptions,
+        skillFilter,
         onPartialReply: draftStream
           ? (payload) => updateDraftFromPartial(payload.text)
           : undefined,
@@ -642,6 +714,49 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         const messageThreadId = (msg as { message_thread_id?: number })
           .message_thread_id;
         const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+        const storeAllowFrom = await readTelegramAllowFromStore().catch(
+          () => [],
+        );
+        const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+          chatId,
+          messageThreadId,
+        );
+        const groupAllowOverride = firstDefined(
+          topicConfig?.allowFrom,
+          groupConfig?.allowFrom,
+        );
+        const effectiveGroupAllow = normalizeAllowFrom([
+          ...(groupAllowOverride ?? groupAllowFrom ?? []),
+          ...storeAllowFrom,
+        ]);
+        const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+
+        if (isGroup && groupConfig?.enabled === false) {
+          await bot.api.sendMessage(chatId, "This group is disabled.");
+          return;
+        }
+        if (isGroup && topicConfig?.enabled === false) {
+          await bot.api.sendMessage(chatId, "This topic is disabled.");
+          return;
+        }
+        if (isGroup && hasGroupAllowOverride) {
+          const senderId = msg.from?.id;
+          const senderUsername = msg.from?.username ?? "";
+          if (
+            senderId == null ||
+            !isSenderAllowed({
+              allow: effectiveGroupAllow,
+              senderId: String(senderId),
+              senderUsername,
+            })
+          ) {
+            await bot.api.sendMessage(
+              chatId,
+              "You are not authorized to use this command.",
+            );
+            return;
+          }
+        }
 
         if (isGroup && useAccessGroups) {
           const groupPolicy = cfg.telegram?.groupPolicy ?? "open";
@@ -664,7 +779,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             const senderUsername = msg.from?.username ?? "";
             if (
               !isSenderAllowed({
-                allow: groupAllow,
+                allow: effectiveGroupAllow,
                 senderId: String(senderId),
                 senderUsername,
               })
@@ -718,6 +833,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               : buildTelegramDmPeerId(chatId, messageThreadId),
           },
         });
+        const skillFilter = firstDefined(
+          topicConfig?.skills,
+          groupConfig?.skills,
+        );
+        const systemPromptParts = [
+          groupConfig?.systemPrompt?.trim() || null,
+          topicConfig?.systemPrompt?.trim() || null,
+        ].filter((entry): entry is string => Boolean(entry));
+        const groupSystemPrompt =
+          systemPromptParts.length > 0
+            ? systemPromptParts.join("\n\n")
+            : undefined;
         const ctxPayload = {
           Body: prompt,
           From: isGroup
@@ -726,6 +853,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           To: `slash:${senderId || chatId}`,
           ChatType: isGroup ? "group" : "direct",
           GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+          GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
           SenderName: buildSenderName(msg),
           SenderId: senderId || undefined,
           SenderUsername: senderUsername || undefined,
@@ -743,7 +871,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
         const replyResult = await getReplyFromConfig(
           ctxPayload,
-          undefined,
+          { skillFilter },
           cfg,
         );
         const replies = replyResult
@@ -777,9 +905,51 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const chatId = msg.chat.id;
       const isGroup =
         msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const messageThreadId = (msg as { message_thread_id?: number })
+        .message_thread_id;
       const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
+      const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+        chatId,
+        messageThreadId,
+      );
+      const groupAllowOverride = firstDefined(
+        topicConfig?.allowFrom,
+        groupConfig?.allowFrom,
+      );
+      const effectiveGroupAllow = normalizeAllowFrom([
+        ...(groupAllowOverride ?? groupAllowFrom ?? []),
+        ...storeAllowFrom,
+      ]);
+      const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
 
       if (isGroup) {
+        if (groupConfig?.enabled === false) {
+          logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+          return;
+        }
+        if (topicConfig?.enabled === false) {
+          logVerbose(
+            `Blocked telegram topic ${chatId} (${messageThreadId ?? "unknown"}) (topic disabled)`,
+          );
+          return;
+        }
+        if (hasGroupAllowOverride) {
+          const senderId = msg.from?.id;
+          const senderUsername = msg.from?.username ?? "";
+          const allowed =
+            senderId != null &&
+            isSenderAllowed({
+              allow: effectiveGroupAllow,
+              senderId: String(senderId),
+              senderUsername,
+            });
+          if (!allowed) {
+            logVerbose(
+              `Blocked telegram group sender ${senderId ?? "unknown"} (group allowFrom override)`,
+            );
+            return;
+          }
+        }
         // Group policy filtering: controls how group messages are handled
         // - "open" (default): groups bypass allowFrom, only mention-gating applies
         // - "disabled": block all group messages entirely
@@ -790,10 +960,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           return;
         }
         if (groupPolicy === "allowlist") {
-          const effectiveGroupAllow = normalizeAllowFrom([
-            ...(groupAllowFrom ?? []),
-            ...storeAllowFrom,
-          ]);
           // For allowlist mode, the sender (msg.from.id) must be in allowFrom
           const senderId = msg.from?.id;
           if (senderId == null) {
@@ -804,7 +970,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           }
           if (!effectiveGroupAllow.hasEntries) {
             logVerbose(
-              "Blocked telegram group message (groupPolicy: allowlist, no groupAllowFrom)",
+              "Blocked telegram group message (groupPolicy: allowlist, no group allowlist entries)",
             );
             return;
           }

@@ -236,6 +236,35 @@ export type TelegramActionConfig = {
   reactions?: boolean;
 };
 
+export type TelegramTopicConfig = {
+  /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** If false, disable the bot for this topic. */
+  enabled?: boolean;
+  /** If true, reply to every message (no mention required). */
+  autoReply?: boolean;
+  /** Optional allowlist for topic senders (ids or usernames). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this topic. */
+  systemPrompt?: string;
+};
+
+export type TelegramGroupConfig = {
+  requireMention?: boolean;
+  /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** Per-topic configuration (key is message_thread_id as string) */
+  topics?: Record<string, TelegramTopicConfig>;
+  /** If false, disable the bot for this group (and its topics). */
+  enabled?: boolean;
+  /** If true, reply to every message (no mention required). */
+  autoReply?: boolean;
+  /** Optional allowlist for group senders (ids or usernames). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this group. */
+  systemPrompt?: string;
+};
+
 export type TelegramConfig = {
   /**
    * Controls how Telegram direct chats (DMs) are handled:
@@ -252,12 +281,7 @@ export type TelegramConfig = {
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
-  groups?: Record<
-    string,
-    {
-      requireMention?: boolean;
-    }
-  >;
+  groups?: Record<string, TelegramGroupConfig>;
   allowFrom?: Array<string | number>;
   /** Optional allowlist for Telegram group senders (user ids or usernames). */
   groupAllowFrom?: Array<string | number>;
@@ -297,6 +321,16 @@ export type DiscordDmConfig = {
 export type DiscordGuildChannelConfig = {
   allow?: boolean;
   requireMention?: boolean;
+  /** If specified, only load these skills for this channel. Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** If false, disable the bot for this channel. */
+  enabled?: boolean;
+  /** If true, reply to every message (no mention required). */
+  autoReply?: boolean;
+  /** Optional allowlist for channel senders (ids or names). */
+  users?: Array<string | number>;
+  /** Optional system prompt snippet for this channel. */
+  systemPrompt?: string;
 };
 
 export type DiscordReactionNotificationMode =
@@ -372,8 +406,20 @@ export type SlackDmConfig = {
 };
 
 export type SlackChannelConfig = {
+  /** If false, disable the bot in this channel. (Alias for allow: false.) */
+  enabled?: boolean;
+  /** Legacy channel allow toggle; prefer enabled. */
   allow?: boolean;
+  /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
+  /** Reply to all messages without needing a mention. */
+  autoReply?: boolean;
+  /** Allowlist of users that can invoke the bot in this channel. */
+  users?: Array<string | number>;
+  /** Optional skill filter for this channel. */
+  skills?: string[];
+  /** Optional system prompt for this channel. */
+  systemPrompt?: string;
 };
 
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
