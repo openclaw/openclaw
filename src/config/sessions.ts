@@ -16,6 +16,50 @@ import {
 import { normalizeE164 } from "../utils.js";
 import { resolveStateDir } from "./paths.js";
 
+// ============================================================================
+// Session Store Cache with TTL Support
+// ============================================================================
+
+type SessionStoreCacheEntry = {
+  store: Record<string, SessionEntry>;
+  loadedAt: number;
+  storePath: string;
+};
+
+const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
+const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
+
+function getSessionStoreTtl(): number {
+  // Allow runtime override via environment variable
+  const envTtl = process.env.CLAWDBOT_SESSION_CACHE_TTL_MS;
+  if (envTtl) {
+    const parsed = Number.parseInt(envTtl, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_SESSION_STORE_TTL_MS;
+}
+
+function isSessionStoreCacheEnabled(): boolean {
+  const ttl = getSessionStoreTtl();
+  return ttl > 0;
+}
+
+function isSessionStoreCacheValid(entry: SessionStoreCacheEntry): boolean {
+  const now = Date.now();
+  const ttl = getSessionStoreTtl();
+  return now - entry.loadedAt <= ttl;
+}
+
+function invalidateSessionStoreCache(storePath: string): void {
+  SESSION_STORE_CACHE.delete(storePath);
+}
+
+export function clearSessionStoreCacheForTest(): void {
+  SESSION_STORE_CACHE.clear();
+}
+
 export type SessionScope = "per-sender" | "global";
 
 const GROUP_SURFACES = new Set([
@@ -340,22 +384,46 @@ export function resolveGroupSessionKey(
 export function loadSessionStore(
   storePath: string,
 ): Record<string, SessionEntry> {
+  // Check cache first if enabled
+  if (isSessionStoreCacheEnabled()) {
+    const cached = SESSION_STORE_CACHE.get(storePath);
+    if (cached && isSessionStoreCacheValid(cached)) {
+      // Return a shallow copy to prevent external mutations affecting cache
+      return { ...cached.store };
+    }
+  }
+
+  // Cache miss or disabled - load from disk
+  let store: Record<string, SessionEntry> = {};
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object") {
-      return parsed as Record<string, SessionEntry>;
+      store = parsed as Record<string, SessionEntry>;
     }
   } catch {
     // ignore missing/invalid store; we'll recreate it
   }
-  return {};
+
+  // Cache the result if caching is enabled
+  if (isSessionStoreCacheEnabled()) {
+    SESSION_STORE_CACHE.set(storePath, {
+      store: { ...store }, // Store a copy to prevent external mutations
+      loadedAt: Date.now(),
+      storePath,
+    });
+  }
+
+  return store;
 }
 
 export async function saveSessionStore(
   storePath: string,
   store: Record<string, SessionEntry>,
 ) {
+  // Invalidate cache on write to ensure consistency
+  invalidateSessionStoreCache(storePath);
+
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
   const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;

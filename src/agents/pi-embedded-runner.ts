@@ -326,6 +326,68 @@ type EmbeddedRunWaiter = {
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
+// ============================================================================
+// SessionManager Pre-warming Cache
+// ============================================================================
+
+type SessionManagerCacheEntry = {
+  sessionFile: string;
+  loadedAt: number;
+  lastAccessAt: number;
+};
+
+const SESSION_MANAGER_CACHE = new Map<string, SessionManagerCacheEntry>();
+const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
+
+function getSessionManagerTtl(): number {
+  const envTtl = process.env.CLAWDBOT_SESSION_MANAGER_CACHE_TTL_MS;
+  if (envTtl) {
+    const parsed = Number.parseInt(envTtl, 10);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return parsed;
+    }
+  }
+  return DEFAULT_SESSION_MANAGER_TTL_MS;
+}
+
+function isSessionManagerCacheEnabled(): boolean {
+  const ttl = getSessionManagerTtl();
+  return ttl > 0;
+}
+
+function trackSessionManagerAccess(sessionFile: string): void {
+  if (!isSessionManagerCacheEnabled()) return;
+  const now = Date.now();
+  SESSION_MANAGER_CACHE.set(sessionFile, {
+    sessionFile,
+    loadedAt: now,
+    lastAccessAt: now,
+  });
+}
+
+function isSessionManagerCached(sessionFile: string): boolean {
+  if (!isSessionManagerCacheEnabled()) return false;
+  const entry = SESSION_MANAGER_CACHE.get(sessionFile);
+  if (!entry) return false;
+  const now = Date.now();
+  const ttl = getSessionManagerTtl();
+  return now - entry.loadedAt <= ttl;
+}
+
+async function prewarmSessionFile(sessionFile: string): Promise<void> {
+  if (!isSessionManagerCacheEnabled()) return;
+  if (isSessionManagerCached(sessionFile)) return;
+
+  try {
+    // Touch the file to bring it into OS page cache
+    // This is much faster than letting SessionManager.open() do it cold
+    await fs.stat(sessionFile);
+    trackSessionManagerAccess(sessionFile);
+  } catch {
+    // File doesn't exist yet, SessionManager will create it
+  }
+}
+
 const isAbortError = (err: unknown): boolean => {
   if (!err || typeof err !== "object") return false;
   const name = "name" in err ? String(err.name) : "";
@@ -736,7 +798,10 @@ export async function compactEmbeddedPiSession(params: {
           tools,
         });
 
+        // Pre-warm session file to bring it into OS page cache
+        await prewarmSessionFile(params.sessionFile);
         const sessionManager = SessionManager.open(params.sessionFile);
+        trackSessionManagerAccess(params.sessionFile);
         const settingsManager = SettingsManager.create(
           effectiveWorkspace,
           agentDir,
@@ -1057,7 +1122,10 @@ export async function runEmbeddedPiAgent(params: {
             tools,
           });
 
+          // Pre-warm session file to bring it into OS page cache
+          await prewarmSessionFile(params.sessionFile);
           const sessionManager = SessionManager.open(params.sessionFile);
+          trackSessionManagerAccess(params.sessionFile);
           const settingsManager = SettingsManager.create(
             effectiveWorkspace,
             agentDir,

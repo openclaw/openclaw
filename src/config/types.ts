@@ -31,6 +31,15 @@ export type SessionSendPolicyConfig = {
   rules?: SessionSendPolicyRule[];
 };
 
+export type SessionCacheConfig = {
+  /** Enable session store caching (default: true). Set to false to disable. */
+  enabled?: boolean;
+  /** Session store cache TTL in milliseconds (default: 45000 = 45s). Set to 0 to disable. */
+  storeTtlMs?: number;
+  /** SessionManager cache TTL in milliseconds (default: 45000 = 45s). Set to 0 to disable. */
+  managerTtlMs?: number;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   resetTriggers?: string[];
@@ -41,6 +50,8 @@ export type SessionConfig = {
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
+  /** Session caching configuration. */
+  cache?: SessionCacheConfig;
   agentToAgent?: {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
