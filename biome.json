@@ -1,20 +1,17 @@
 {
-	"$schema": "https://biomejs.dev/schemas/biome.json",
-	"formatter": {
-		"enabled": true,
-		"indentWidth": 2,
-		"indentStyle": "space"
-	},
-	"files": {
-		"includes": [
-			"src/**/*.ts",
-			"test/**/*.ts"
-		]
-	},
-	"linter": {
-		"enabled": true,
-		"rules": {
-			"recommended": true
-		}
-	}
+  "$schema": "https://biomejs.dev/schemas/biome.json",
+  "formatter": {
+    "enabled": true,
+    "indentWidth": 2,
+    "indentStyle": "space"
+  },
+  "files": {
+    "includes": ["src/**/*.ts", "test/**/*.ts"]
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  }
 }
