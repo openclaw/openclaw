@@ -493,6 +493,12 @@ Set `telegram.enabled: false` to disable automatic startup.
     streamMode: "partial",               // off | partial | block (draft streaming)
     actions: { reactions: true },        // tool action gates (false disables)
     mediaMaxMb: 5,
+    retry: {                             // outbound retry policy
+      attempts: 3,
+      minDelayMs: 400,
+      maxDelayMs: 30000,
+      jitter: 0.1
+    },
     proxy: "socks5://localhost:9050",
     webhookUrl: "https://example.com/telegram-webhook",
     webhookSecret: "secret",
@@ -505,6 +511,7 @@ Draft streaming notes:
 - Uses Telegram `sendMessageDraft` (draft bubble, not a real message).
 - Requires **private chat topics** (message_thread_id in DMs; bot has topics enabled).
 - `/reasoning stream` streams reasoning into the draft, then sends the final answer.
+Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `discord` (bot transport)
 
@@ -559,7 +566,13 @@ Configure the Discord bot by setting the bot token and optional gating:
         }
       }
     },
-    historyLimit: 20                        // include last N guild messages as context
+    historyLimit: 20,                       // include last N guild messages as context
+    retry: {                                // outbound retry policy
+      attempts: 3,
+      minDelayMs: 500,
+      maxDelayMs: 30000,
+      jitter: 0.1
+    }
   }
 }
 ```
@@ -571,6 +584,7 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `slack` (socket mode)
 

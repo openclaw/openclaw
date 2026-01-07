@@ -18,6 +18,7 @@
 - Auto-reply: removed `autoReply` from Discord/Slack/Telegram channel configs; use `requireMention` instead (Telegram topics now support `requireMention` overrides).
 
 ### Fixes
+- Discord/Telegram: add per-request retry policy with configurable delays and docs.
 - Pairing: generate DM pairing codes with CSPRNG, expire pending codes after 1 hour, and avoid re-sending codes for already pending requests.
 - Pairing: lock + atomically write pairing stores with 0600 perms and stop logging pairing codes in provider logs.
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).

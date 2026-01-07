@@ -19,6 +19,11 @@ import {
 
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
+import type { RetryConfig } from "../infra/retry.js";
+import {
+  createDiscordRetryRunner,
+  type RetryRunner,
+} from "../infra/retry-policy.js";
 import {
   normalizePollDurationHours,
   normalizePollInput,
@@ -35,6 +40,7 @@ const DISCORD_POLL_MAX_ANSWERS = 10;
 const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
 const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
+type DiscordRequest = RetryRunner;
 
 export class DiscordSendError extends Error {
   kind?: "missing-permissions" | "dm-blocked";
@@ -72,6 +78,7 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  retry?: RetryConfig;
 };
 
 export type DiscordSendResult = {
@@ -82,6 +89,8 @@ export type DiscordSendResult = {
 export type DiscordReactOpts = {
   token?: string;
   rest?: RequestClient;
+  verbose?: boolean;
+  retry?: RetryConfig;
 };
 
 export type DiscordReactionUser = {
@@ -185,6 +194,24 @@ function resolveToken(explicit?: string) {
 
 function resolveRest(token: string, rest?: RequestClient) {
   return rest ?? new RequestClient(token);
+}
+
+type DiscordClientOpts = {
+  token?: string;
+  rest?: RequestClient;
+  retry?: RetryConfig;
+  verbose?: boolean;
+};
+
+function createDiscordClient(opts: DiscordClientOpts, cfg = loadConfig()) {
+  const token = resolveToken(opts.token);
+  const rest = resolveRest(token, opts.rest);
+  const request = createDiscordRetryRunner({
+    retry: opts.retry,
+    configRetry: cfg.discord?.retry,
+    verbose: opts.verbose,
+  });
+  return { token, rest, request };
 }
 
 function normalizeReactionEmoji(raw: string) {
@@ -358,13 +385,18 @@ async function buildDiscordSendError(
 async function resolveChannelId(
   rest: RequestClient,
   recipient: DiscordRecipient,
+  request: DiscordRequest,
 ): Promise<{ channelId: string; dm?: boolean }> {
   if (recipient.kind === "channel") {
     return { channelId: recipient.id };
   }
-  const dmChannel = (await rest.post(Routes.userChannels(), {
-    body: { recipient_id: recipient.id },
-  })) as { id: string };
+  const dmChannel = (await request(
+    () =>
+      rest.post(Routes.userChannels(), {
+        body: { recipient_id: recipient.id },
+      }) as Promise<{ id: string }>,
+    "dm-channel",
+  )) as { id: string };
   if (!dmChannel?.id) {
     throw new Error("Failed to create Discord DM channel");
   }
@@ -375,7 +407,8 @@ async function sendDiscordText(
   rest: RequestClient,
   channelId: string,
   text: string,
-  replyTo?: string,
+  replyTo: string | undefined,
+  request: DiscordRequest,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -384,21 +417,29 @@ async function sendDiscordText(
     ? { message_id: replyTo, fail_if_not_exists: false }
     : undefined;
   if (text.length <= DISCORD_TEXT_LIMIT) {
-    const res = (await rest.post(Routes.channelMessages(channelId), {
-      body: { content: text, message_reference: messageReference },
-    })) as { id: string; channel_id: string };
+    const res = (await request(
+      () =>
+        rest.post(Routes.channelMessages(channelId), {
+          body: { content: text, message_reference: messageReference },
+        }) as Promise<{ id: string; channel_id: string }>,
+      "text",
+    )) as { id: string; channel_id: string };
     return res;
   }
   const chunks = chunkMarkdownText(text, DISCORD_TEXT_LIMIT);
   let last: { id: string; channel_id: string } | null = null;
   let isFirst = true;
   for (const chunk of chunks) {
-    last = (await rest.post(Routes.channelMessages(channelId), {
-      body: {
-        content: chunk,
-        message_reference: isFirst ? messageReference : undefined,
-      },
-    })) as { id: string; channel_id: string };
+    last = (await request(
+      () =>
+        rest.post(Routes.channelMessages(channelId), {
+          body: {
+            content: chunk,
+            message_reference: isFirst ? messageReference : undefined,
+          },
+        }) as Promise<{ id: string; channel_id: string }>,
+      "text",
+    )) as { id: string; channel_id: string };
     isFirst = false;
   }
   if (!last) {
@@ -412,7 +453,8 @@ async function sendDiscordMedia(
   channelId: string,
   text: string,
   mediaUrl: string,
-  replyTo?: string,
+  replyTo: string | undefined,
+  request: DiscordRequest,
 ) {
   const media = await loadWebMedia(mediaUrl);
   const caption =
@@ -420,22 +462,26 @@ async function sendDiscordMedia(
   const messageReference = replyTo
     ? { message_id: replyTo, fail_if_not_exists: false }
     : undefined;
-  const res = (await rest.post(Routes.channelMessages(channelId), {
-    body: {
-      content: caption || undefined,
-      message_reference: messageReference,
-      files: [
-        {
-          data: media.buffer,
-          name: media.fileName ?? "upload",
+  const res = (await request(
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: {
+          content: caption || undefined,
+          message_reference: messageReference,
+          files: [
+            {
+              data: media.buffer,
+              name: media.fileName ?? "upload",
+            },
+          ],
         },
-      ],
-    },
-  })) as { id: string; channel_id: string };
+      }) as Promise<{ id: string; channel_id: string }>,
+    "media",
+  )) as { id: string; channel_id: string };
   if (text.length > DISCORD_TEXT_LIMIT) {
     const remaining = text.slice(DISCORD_TEXT_LIMIT).trim();
     if (remaining) {
-      await sendDiscordText(rest, channelId, remaining);
+      await sendDiscordText(rest, channelId, remaining, undefined, request);
     }
   }
   return res;
@@ -471,10 +517,10 @@ export async function sendMessageDiscord(
   text: string,
   opts: DiscordSendOpts = {},
 ): Promise<DiscordSendResult> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const cfg = loadConfig();
+  const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(rest, recipient);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
   let result:
     | { id: string; channel_id: string }
     | { id: string | null; channel_id: string };
@@ -486,9 +532,16 @@ export async function sendMessageDiscord(
         text,
         opts.mediaUrl,
         opts.replyTo,
+        request,
       );
     } else {
-      result = await sendDiscordText(rest, channelId, text, opts.replyTo);
+      result = await sendDiscordText(
+        rest,
+        channelId,
+        text,
+        opts.replyTo,
+        request,
+      );
     }
   } catch (err) {
     throw await buildDiscordSendError(err, {
@@ -510,18 +563,22 @@ export async function sendStickerDiscord(
   stickerIds: string[],
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const cfg = loadConfig();
+  const { rest, request } = createDiscordClient(opts, cfg);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(rest, recipient);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
   const content = opts.content?.trim();
   const stickers = normalizeStickerIds(stickerIds);
-  const res = (await rest.post(Routes.channelMessages(channelId), {
-    body: {
-      content: content || undefined,
-      sticker_ids: stickers,
-    },
-  })) as { id: string; channel_id: string };
+  const res = (await request(
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: {
+          content: content || undefined,
+          sticker_ids: stickers,
+        },
+      }) as Promise<{ id: string; channel_id: string }>,
+    "sticker",
+  )) as { id: string; channel_id: string };
   return {
     messageId: res.id ? String(res.id) : "unknown",
     channelId: String(res.channel_id ?? channelId),
@@ -533,18 +590,22 @@ export async function sendPollDiscord(
   poll: PollInput,
   opts: DiscordSendOpts & { content?: string } = {},
 ): Promise<DiscordSendResult> {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const cfg = loadConfig();
+  const { rest, request } = createDiscordClient(opts, cfg);
   const recipient = parseRecipient(to);
-  const { channelId } = await resolveChannelId(rest, recipient);
+  const { channelId } = await resolveChannelId(rest, recipient, request);
   const content = opts.content?.trim();
   const payload = normalizeDiscordPollInput(poll);
-  const res = (await rest.post(Routes.channelMessages(channelId), {
-    body: {
-      content: content || undefined,
-      poll: payload,
-    },
-  })) as { id: string; channel_id: string };
+  const res = (await request(
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: {
+          content: content || undefined,
+          poll: payload,
+        },
+      }) as Promise<{ id: string; channel_id: string }>,
+    "poll",
+  )) as { id: string; channel_id: string };
   return {
     messageId: res.id ? String(res.id) : "unknown",
     channelId: String(res.channel_id ?? channelId),
@@ -557,11 +618,13 @@ export async function reactMessageDiscord(
   emoji: string,
   opts: DiscordReactOpts = {},
 ) {
-  const token = resolveToken(opts.token);
-  const rest = resolveRest(token, opts.rest);
+  const cfg = loadConfig();
+  const { rest, request } = createDiscordClient(opts, cfg);
   const encoded = normalizeReactionEmoji(emoji);
-  await rest.put(
-    Routes.channelMessageOwnReaction(channelId, messageId, encoded),
+  await request(
+    () =>
+      rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encoded)),
+    "react",
   );
   return { ok: true };
 }

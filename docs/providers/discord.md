@@ -5,7 +5,7 @@ read_when:
 ---
 # Discord (Bot API)
 
-Updated: 2025-12-07
+Updated: 2026-01-07
 
 Status: ready for DM and guild text channels via the official Discord bot gateway.
 
@@ -122,6 +122,12 @@ Example “single server, only allow me, only allow #help”:
           help: { allow: true, requireMention: true }
         }
       }
+    },
+    retry: {
+      attempts: 3,
+      minDelayMs: 500,
+      maxDelayMs: 30000,
+      jitter: 0.1
     }
   }
 }
@@ -153,6 +159,9 @@ Notes:
 - Mention-gated guild replies by default to avoid noisy bots.
 - Reply context is injected when a message references another message (quoted content + ids).
 - Native reply threading is **off by default**; enable with `discord.replyToMode` and reply tags.
+
+## Retry policy
+Outbound Discord API calls retry on rate limits (429) using Discord `retry_after` when available, with exponential backoff and jitter. Configure via `discord.retry`. See [Retry policy](/concepts/retry).
 
 ## Config
 
@@ -235,6 +244,7 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
 - `mediaMaxMb`: clamp inbound media saved to disk.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
+- `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `actions`: per-action tool gates; omit to allow all (set `false` to disable).
   - `reactions` (covers react + read reactions)
   - `stickers`, `polls`, `permissions`, `messages`, `threads`, `pins`, `search`
