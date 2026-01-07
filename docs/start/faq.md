@@ -3,7 +3,7 @@ summary: "Frequently asked questions about Clawdbot setup, configuration, and us
 ---
 # FAQ 🦞
 
-Common questions from the community. For detailed configuration, see [Configuration](/configuration).
+Common questions from the community. For detailed configuration, see [Configuration](/gateway/configuration).
 
 ## Installation & Setup
 
@@ -62,7 +62,7 @@ wsl --install
 
 Then open Ubuntu and run the normal Getting Started steps.
 
-Full guide: [Windows (WSL2)](/windows)
+Full guide: [Windows (WSL2)](/platforms/windows)
 
 ### How do I install on Linux without Homebrew?
 
@@ -110,6 +110,16 @@ pnpm clawdbot doctor
 ```
 
 It checks your config, skills status, and gateway health. It can also restart the gateway daemon if needed.
+
+### How do I search the docs quickly?
+
+Use the CLI docs search (live docs):
+
+```bash
+clawdbot docs "gateway lock"
+```
+
+The first run will fetch the helper CLIs if they are missing.
 
 ### Terminal onboarding vs macOS app?
 
@@ -319,7 +329,7 @@ Per-group activation can be changed by the owner:
 - `/activation mention` — respond only when mentioned (default)
 - `/activation always` — respond to all messages
 
-See [Groups](/groups) for details.
+See [Groups](/concepts/groups) for details.
 
 ---
 
@@ -356,7 +366,7 @@ cat ~/.clawdbot/clawdbot.json | grep workspace
 - **Telegram** — Via Bot API (grammY).
 - **Discord** — Bot integration.
 - **iMessage** — Via `imsg` CLI (macOS only).
-- **Signal** — Via `signal-cli` (see [Signal](/signal)).
+- **Signal** — Via `signal-cli` (see [Signal](/providers/signal)).
 - **WebChat** — Browser-based chat UI.
 
 ### Discord: Bot works in channels but not DMs?
@@ -599,7 +609,7 @@ Quick reference (send these in chat):
 
 Slash commands are owner-only (gated by `whatsapp.allowFrom` and command authorization on other surfaces).
 Commands are only recognized when the entire message is the command (slash required; no plain-text aliases).
-Full list + config: [Slash commands](/slash-commands)
+Full list + config: [Slash commands](/tools/slash-commands)
 
 ### How do I switch models on the fly?
 
