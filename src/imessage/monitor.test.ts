@@ -412,4 +412,40 @@ describe("monitorIMessageProvider", () => {
       }),
     );
   });
+
+  it("does not trigger unhandledRejection when aborting during shutdown", async () => {
+    requestMock.mockImplementation((method: string) => {
+      if (method === "watch.subscribe")
+        return Promise.resolve({ subscription: 1 });
+      if (method === "watch.unsubscribe")
+        return Promise.reject(new Error("imsg rpc closed"));
+      return Promise.resolve({});
+    });
+
+    const abortController = new AbortController();
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+
+    try {
+      const run = monitorIMessageProvider({
+        abortSignal: abortController.signal,
+      });
+      await waitForSubscribe();
+      await flush();
+
+      abortController.abort();
+      await flush();
+
+      closeResolve?.();
+      await run;
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
+
+    expect(unhandled).toHaveLength(0);
+    expect(stopMock).toHaveBeenCalled();
+  });
 });

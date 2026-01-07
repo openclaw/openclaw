@@ -452,7 +452,9 @@ export async function monitorIMessageProvider(
           // Ignore disconnect errors during shutdown.
         });
     }
-    void client.stop();
+    void client.stop().catch(() => {
+      // Ignore disconnect errors during shutdown.
+    });
   };
   abort?.addEventListener("abort", onAbort, { once: true });
 
