@@ -267,11 +267,12 @@ export async function startGatewayBonjourAdvertiser(
           /* ignore */
         }
       }
-      ciaoCancellationRejectionHandler?.();
       try {
         await responder.shutdown();
       } catch {
         /* ignore */
+      } finally {
+        ciaoCancellationRejectionHandler?.();
       }
     },
   };
