@@ -11,6 +11,8 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -79,9 +81,9 @@ function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig) {
 function resolveHeartbeatSession(cfg: ClawdbotConfig) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
-  const sessionKey = scope === "global" ? "global" : mainKey;
-  const storePath = resolveStorePath(sessionCfg?.store);
+  const sessionKey = scope === "global" ? "global" : resolveMainSessionKey(cfg);
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
   const entry = store[sessionKey];
   return { sessionKey, storePath, store, entry };
