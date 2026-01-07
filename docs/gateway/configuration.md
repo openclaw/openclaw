@@ -1194,6 +1194,12 @@ Control UI base path:
 - Examples: `"/ui"`, `"/clawdbot"`, `"/apps/clawdbot"`.
 - Default: root (`/`) (unchanged).
 
+Related docs:
+- [Control UI](/web/control-ui)
+- [Web overview](/web)
+- [Tailscale](/gateway/tailscale)
+- [Remote access](/gateway/remote)
+
 Notes:
 - `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).

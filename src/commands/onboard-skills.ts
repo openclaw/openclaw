@@ -168,6 +168,7 @@ export async function setupSkills(
         runtime.log(
           "Tip: run `clawdbot doctor` to review skills + requirements.",
         );
+        runtime.log("Docs: https://docs.clawd.bot/skills");
       }
     }
   }

@@ -39,6 +39,7 @@ async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
       "DM security: default is pairing; unknown DMs get a pairing code.",
       "Approve with: clawdbot pairing approve --provider <provider> <code>",
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
+      "Docs: https://docs.clawd.bot/start/pairing",
       "",
       "WhatsApp: links via WhatsApp Web (scan QR), stores creds for future sends.",
       "WhatsApp: dedicated second number recommended; primary number OK (self-chat).",
@@ -59,6 +60,7 @@ async function noteTelegramTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Run /newbot (or /mybots)",
       "3) Copy the token (looks like 123456:ABC...)",
       "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
+      "Docs: https://docs.clawd.bot/telegram",
     ].join("\n"),
     "Telegram bot token",
   );
@@ -71,6 +73,7 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Bot → Add Bot → Reset Token → copy token",
       "3) OAuth2 → URL Generator → scope 'bot' → invite to your server",
       "Tip: enable Message Content Intent if you need message text.",
+      "Docs: https://docs.clawd.bot/discord",
     ].join("\n"),
     "Discord bot token",
   );
@@ -158,6 +161,7 @@ async function noteSlackTokenHelp(
       "4) Enable Event Subscriptions (socket) for message events",
       "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
+      "Docs: https://docs.clawd.bot/slack",
       "",
       "Manifest (JSON):",
       manifest,
@@ -298,6 +302,7 @@ async function maybeConfigureDmPolicies(params: {
         "Default: pairing (unknown DMs get a pairing code).",
         `Approve: clawdbot pairing approve --provider ${params.provider} <code>`,
         `Public DMs: ${params.policyKey}="open" + ${params.allowFromKey} includes "*".`,
+        "Docs: https://docs.clawd.bot/start/pairing",
       ].join("\n"),
       `${params.label} DM access`,
     );
@@ -383,6 +388,7 @@ async function promptWhatsAppAllowFrom(
       "- disabled: ignore WhatsApp DMs",
       "",
       `Current: dmPolicy=${existingPolicy}, allowFrom=${existingLabel}`,
+      "Docs: https://docs.clawd.bot/whatsapp",
     ].join("\n"),
     "WhatsApp DM access",
   );
@@ -551,6 +557,7 @@ export async function setupProviders(
         [
           "Scan the QR with WhatsApp on your phone.",
           `Credentials are stored under ${WA_WEB_AUTH_DIR}/ for future runs.`,
+          "Docs: https://docs.clawd.bot/whatsapp",
         ].join("\n"),
         "WhatsApp linking",
       );
@@ -566,6 +573,10 @@ export async function setupProviders(
         await loginWeb(false, "web");
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
+        await prompter.note(
+          "Docs: https://docs.clawd.bot/whatsapp",
+          "WhatsApp help",
+        );
       }
     } else if (!whatsappLinked) {
       await prompter.note(
@@ -864,6 +875,7 @@ export async function setupProviders(
         'Link device with: signal-cli link -n "Clawdbot"',
         "Scan QR in Signal → Linked Devices",
         "Then run: clawdbot gateway call providers.status --params '{\"probe\":true}'",
+        "Docs: https://docs.clawd.bot/signal",
       ].join("\n"),
       "Signal next steps",
     );
@@ -902,6 +914,7 @@ export async function setupProviders(
         "Ensure Clawdbot has Full Disk Access to Messages DB.",
         "Grant Automation permission for Messages when prompted.",
         "List chats with: imsg chats --limit 20",
+        "Docs: https://docs.clawd.bot/imessage",
       ].join("\n"),
       "iMessage next steps",
     );

@@ -142,9 +142,11 @@ export async function runOnboardingWizard(
     await prompter.note(summarizeExistingConfig(baseConfig), title);
     if (!snapshot.valid && snapshot.issues.length > 0) {
       await prompter.note(
-        snapshot.issues
-          .map((iss) => `- ${iss.path}: ${iss.message}`)
-          .join("\n"),
+        [
+          ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
+          "",
+          "Docs: https://docs.clawd.bot/gateway/configuration",
+        ].join("\n"),
         "Config issues",
       );
     }
@@ -302,6 +304,10 @@ export async function runOnboardingWizard(
     } catch (err) {
       spin.stop("OAuth failed");
       runtime.error(String(err));
+      await prompter.note(
+        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
+        "OAuth help",
+      );
     }
   } else if (authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
@@ -375,6 +381,10 @@ export async function runOnboardingWizard(
     } catch (err) {
       spin.stop("OpenAI OAuth failed");
       runtime.error(String(err));
+      await prompter.note(
+        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
+        "OAuth help",
+      );
     }
   } else if (authChoice === "antigravity") {
     const isRemote = isRemoteEnvironment();
@@ -448,6 +458,10 @@ export async function runOnboardingWizard(
     } catch (err) {
       spin.stop("Antigravity OAuth failed");
       runtime.error(String(err));
+      await prompter.note(
+        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
+        "OAuth help",
+      );
     }
   } else if (authChoice === "apiKey") {
     const key = await prompter.text({
@@ -520,6 +534,14 @@ export async function runOnboardingWizard(
 
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
+    await prompter.note(
+      [
+        "Docs:",
+        "https://docs.clawd.bot/gateway/tailscale",
+        "https://docs.clawd.bot/web",
+      ].join("\n"),
+      "Tailscale",
+    );
     tailscaleResetOnExit = Boolean(
       await prompter.confirm({
         message: "Reset Tailscale serve/funnel on exit?",
@@ -693,6 +715,14 @@ export async function runOnboardingWizard(
     await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
   } catch (err) {
     runtime.error(`Health check failed: ${String(err)}`);
+    await prompter.note(
+      [
+        "Docs:",
+        "https://docs.clawd.bot/gateway/health",
+        "https://docs.clawd.bot/gateway/troubleshooting",
+      ].join("\n"),
+      "Health check help",
+    );
   }
 
   const controlUiAssets = await ensureControlUiAssetsBuilt(runtime);
@@ -726,6 +756,7 @@ export async function runOnboardingWizard(
         `Web UI: ${links.httpUrl}`,
         tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
         `Gateway WS: ${links.wsUrl}`,
+        "Docs: https://docs.clawd.bot/web/control-ui",
       ]
         .filter(Boolean)
         .join("\n");
@@ -771,6 +802,14 @@ export async function runOnboardingWizard(
       }
     }
   }
+
+  await prompter.note(
+    [
+      "Back up your agent workspace.",
+      "Docs: https://docs.clawd.bot/concepts/agent-workspace",
+    ].join("\n"),
+    "Workspace backup",
+  );
 
   await prompter.outro("Onboarding complete.");
 }

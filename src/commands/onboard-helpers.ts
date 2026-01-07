@@ -195,6 +195,9 @@ export function formatControlUiSshHint(params: {
     "Then open:",
     localUrl,
     authedUrl,
+    "Docs:",
+    "https://docs.clawd.bot/gateway/remote",
+    "https://docs.clawd.bot/web/control-ui",
   ]
     .filter(Boolean)
     .join("\n");
