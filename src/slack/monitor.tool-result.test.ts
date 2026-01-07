@@ -388,6 +388,73 @@ describe("monitorSlackProvider tool results", () => {
     expect(ctx.ThreadLabel).toContain("Slack thread #general");
   });
 
+  it("scopes thread session keys to the routed agent", async () => {
+    replyMock.mockResolvedValue({ text: "ok" });
+    config = {
+      messages: { responsePrefix: "PFX" },
+      slack: {
+        dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        channels: { C1: { allow: true, requireMention: false } },
+      },
+      routing: {
+        allowFrom: [],
+        bindings: [
+          { agentId: "support", match: { provider: "slack", teamId: "T1" } },
+        ],
+      },
+    };
+
+    const client = getSlackClient();
+    if (client?.auth?.test) {
+      client.auth.test.mockResolvedValue({
+        user_id: "bot-user",
+        team_id: "T1",
+      });
+    }
+    if (client?.conversations?.info) {
+      client.conversations.info.mockResolvedValue({
+        channel: { name: "general", is_channel: true },
+      });
+    }
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "thread reply",
+        ts: "123.456",
+        thread_ts: "111.222",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    const ctx = replyMock.mock.calls[0]?.[0] as {
+      SessionKey?: string;
+      ParentSessionKey?: string;
+    };
+    expect(ctx.SessionKey).toBe(
+      "agent:support:slack:channel:C1:thread:111.222",
+    );
+    expect(ctx.ParentSessionKey).toBe("agent:support:slack:channel:C1");
+  });
+
   it("keeps replies in channel root when message is not threaded", async () => {
     replyMock.mockResolvedValue({ text: "root reply" });
 
