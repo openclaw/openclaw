@@ -14,7 +14,7 @@ read_when:
 - Detects deprecated config keys and offers to migrate them.
 - Migrates legacy `~/.clawdis/clawdis.json` when no Clawdbot config exists.
 - Checks sandbox Docker images when sandboxing is enabled (offers to build or switch to legacy names).
-- Detects legacy Clawdis services (launchd/systemd/schtasks) and offers to migrate them.
+- Detects legacy Clawdis services (launchd/systemd; legacy schtasks for native Windows) and offers to migrate them.
 - On Linux, checks if systemd user lingering is enabled and can enable it (required to keep the Gateway alive after logout).
 - Migrates legacy on-disk state layouts (sessions, agentDir, provider auth dirs) into the current per-agent/per-account structure.
 
@@ -63,6 +63,6 @@ cat ~/.clawdbot/clawdbot.json
 ```
 
 ## Legacy service migrations
-Doctor checks for older Clawdis gateway services (launchd/systemd/schtasks).
+Doctor checks for older Clawdis gateway services (launchd/systemd/schtasks). WSL2 installs use systemd.
 If found, it offers to remove them and install the Clawdbot service using the current gateway port.
 Remote mode skips the install step, and Nix mode only reports what it finds.

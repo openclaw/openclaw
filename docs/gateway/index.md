@@ -184,7 +184,7 @@ Enable lingering (required so the user service survives logout/idle):
 ```
 sudo loginctl enable-linger youruser
 ```
-Onboarding runs this on Linux (may prompt for sudo; writes `/var/lib/systemd/linger`).
+Onboarding runs this on Linux/WSL2 (may prompt for sudo; writes `/var/lib/systemd/linger`).
 Then enable the service:
 ```
 systemctl --user enable --now clawdbot-gateway.service
@@ -199,9 +199,9 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now clawdbot-gateway.service
 ```
 
-## Supervision (Windows scheduled task)
-- Onboarding installs a Scheduled Task named `Clawdbot Gateway` (runs on user logon).
-- Requires a logged-in user session; for headless setups use a system service or a task configured to run without a logged-in user (not shipped).
+## Windows (WSL2)
+
+Windows installs should use **WSL2** and follow the Linux systemd section above.
 
 ## Operational checks
 - Liveness: open WS and send `req:connect` → expect `res` with `payload.type="hello-ok"` (with snapshot).
@@ -219,7 +219,7 @@ sudo systemctl enable --now clawdbot-gateway.service
 - `clawdbot gateway send --to <num> --message "hi" [--media-url ...]` — send via Gateway (idempotent).
 - `clawdbot gateway agent --message "hi" [--to ...]` — run an agent turn (waits for final by default).
 - `clawdbot gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
-- `clawdbot gateway stop|restart` — stop/restart the supervised gateway service (launchd/systemd/schtasks).
+- `clawdbot gateway stop|restart` — stop/restart the supervised gateway service (launchd/systemd).
 - Gateway helper subcommands assume a running gateway on `--url`; they no longer auto-spawn one.
 
 ## Migration guidance

@@ -28,11 +28,11 @@ Your **workspace** (AGENTS.md, memory files, skills) is separate — configured 
 
 ### What platforms does Clawdbot run on?
 
-**macOS and Linux** are the primary targets. Anywhere Node.js 22+ runs should work in theory.
+**macOS and Linux** are the primary targets. On Windows, use **WSL2** (Ubuntu recommended).
 
 - **macOS** — Fully supported, most tested
 - **Linux** — Works great, common for VPS/server deployments
-- **Windows** — Should work but largely untested! You're in pioneer territory 🤠
+- **Windows (WSL2)** — WSL2 is strongly recommended; native Windows installs are untested and more problematic
 
 Some features are platform-specific:
 - **iMessage** — macOS only (uses `imsg` CLI)
@@ -51,6 +51,18 @@ The gateway is just shuffling messages around. A Raspberry Pi 4 can run it. For 
 ```bash
 clawdbot gateway
 ```
+
+### How do I install on Windows?
+
+Use **WSL2** (Ubuntu recommended) and follow the Linux flow inside WSL. Quick start:
+
+```powershell
+wsl --install
+```
+
+Then open Ubuntu and run the normal Getting Started steps.
+
+Full guide: [Windows (WSL2)](/windows)
 
 ### How do I install on Linux without Homebrew?
 
@@ -494,9 +506,10 @@ Onboarding attempts to enable lingering; if it’s still off, run:
 sudo loginctl enable-linger $USER
 ```
 
-**macOS/Windows**
+**macOS/WSL2**
 
-Gateway daemons run in the user session by default. Keep the user logged in.
+Gateway daemons run in the user session by default. Keep the user logged in
+(WSL2 services stop when the WSL VM shuts down).
 Headless/system services are not configured out of the box.
 
 ### Processes keep restarting after I kill them

@@ -22,7 +22,7 @@ If you want a personal, single-user assistant that feels local, fast, and always
 
 [Website](https://clawdbot.com) · [Docs](https://docs.clawd.bot) · Getting Started: [https://docs.clawd.bot/getting-started](https://docs.clawd.bot/getting-started) · Updating: [https://docs.clawd.bot/updating](https://docs.clawd.bot/updating) · Showcase: [https://docs.clawd.bot/showcase](https://docs.clawd.bot/showcase) · FAQ: [https://docs.clawd.bot/faq](https://docs.clawd.bot/faq) · Wizard: [https://docs.clawd.bot/wizard](https://docs.clawd.bot/wizard) · Nix: [https://github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [https://docs.clawd.bot/docker](https://docs.clawd.bot/docker) · Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
 
-Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Windows, and Linux**.
+Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
 New install? Start here: https://docs.clawd.bot/getting-started
 
@@ -369,7 +369,7 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 - [Wire external triggers via the webhook surface.](https://docs.clawd.bot/webhook)
 - [Set up Gmail Pub/Sub triggers.](https://docs.clawd.bot/gmail-pubsub)
 - [Learn the macOS menu bar companion details.](https://docs.clawd.bot/mac/menu-bar)
-- [Platform guides: Windows](https://docs.clawd.bot/windows), [Linux](https://docs.clawd.bot/linux), [macOS](https://docs.clawd.bot/macos), [iOS](https://docs.clawd.bot/ios), [Android](https://docs.clawd.bot/android)
+- [Platform guides: Windows (WSL2)](https://docs.clawd.bot/windows), [Linux](https://docs.clawd.bot/linux), [macOS](https://docs.clawd.bot/macos), [iOS](https://docs.clawd.bot/ios), [Android](https://docs.clawd.bot/android)
 - [Debug common failures with the troubleshooting guide.](https://docs.clawd.bot/troubleshooting)
 - [Review security guidance before exposing anything.](https://docs.clawd.bot/security)
 
@@ -416,7 +416,7 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 - [macOS voice wake](https://docs.clawd.bot/mac/voicewake)
 - [iOS node](https://docs.clawd.bot/ios)
 - [Android node](https://docs.clawd.bot/android)
-- [Windows app](https://docs.clawd.bot/windows)
+- [Windows (WSL2)](https://docs.clawd.bot/windows)
 - [Linux app](https://docs.clawd.bot/linux)
 
 ## Email hooks (Gmail)

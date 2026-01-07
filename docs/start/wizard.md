@@ -7,7 +7,8 @@ read_when:
 
 # Onboarding Wizard (CLI)
 
-The onboarding wizard is the **recommended** way to set up Clawdbot on any OS.
+The onboarding wizard is the **recommended** way to set up Clawdbot on macOS,
+Linux, or Windows (via WSL2; strongly recommended).
 It configures a local Gateway or a remote Gateway connection, plus providers, skills,
 and workspace defaults in one guided flow.
 
@@ -30,7 +31,7 @@ clawdbot configure
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
 - Providers (WhatsApp, Telegram, Discord, Signal)
-- Daemon install (LaunchAgent / systemd user unit / Scheduled Task)
+- Daemon install (LaunchAgent / systemd user unit)
 - Health check
 - Skills (recommended)
 
@@ -77,11 +78,9 @@ It does **not** install or change anything on the remote host.
 6) **Daemon install**
    - macOS: LaunchAgent
      - Requires a logged-in user session; for headless, use a custom LaunchDaemon (not shipped).
-   - Linux: systemd user unit
+   - Linux (and Windows via WSL2): systemd user unit
      - Wizard attempts to enable lingering via `loginctl enable-linger <user>` so the Gateway stays up after logout.
      - May prompt for sudo (writes `/var/lib/systemd/linger`); it tries without sudo first.
-   - Windows: Scheduled Task
-     - Runs on user logon; headless/system services are not configured by default.
    - **Runtime selection:** Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp).
 
 7) **Health check**
@@ -144,7 +143,7 @@ The wizard can install `signal-cli` from GitHub releases:
 Notes:
 - JVM builds require **Java 21**.
 - Native builds are used when available.
-- Windows auto‑install is not supported yet (manual install required).
+- Windows uses WSL2; signal-cli install follows the Linux flow inside WSL.
 
 ## What the wizard writes
 

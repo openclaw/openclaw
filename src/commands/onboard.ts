@@ -10,6 +10,15 @@ export async function onboardCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   assertSupportedRuntime(runtime);
+  if (process.platform === "win32") {
+    runtime.log(
+      [
+        "Windows detected.",
+        "WSL2 is strongly recommended; native Windows is untested and more problematic.",
+        "Guide: https://docs.clawd.bot/windows",
+      ].join("\n"),
+    );
+  }
 
   if (opts.nonInteractive) {
     await runNonInteractiveOnboarding(opts, runtime);

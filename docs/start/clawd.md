@@ -212,6 +212,6 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 - macOS menu bar companion: [Clawdbot macOS app](/macos)
 - iOS node app: [iOS app](/ios)
 - Android node app: [Android app](/android)
-- Windows status: [Windows app](/windows)
+- Windows status: [Windows (WSL2)](/windows)
 - Linux status: [Linux app](/linux)
 - Security: [Security](/security)

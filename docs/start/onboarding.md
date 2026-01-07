@@ -187,3 +187,11 @@ chmod 600 ~/.clawdbot/credentials/oauth.json
 | `accessToken` | `access` |
 | `refreshToken` | `refresh` |
 | `expiresAt` | `expires` |
+
+## Workspace backup (recommended)
+
+We suggest creating a **private GitHub repository** to back up the agent
+workspace. The agent is really good at keeping a git repo in shape, and GitHub
+is the perfect place for it. Keep it **private**.
+
+Setup steps: https://docs.clawd.bot/concepts/agent-workspace

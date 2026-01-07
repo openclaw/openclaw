@@ -131,7 +131,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS Peekaboo plan](https://docs.clawd.bot/platforms/mac/peekaboo)
 - [iOS node](https://docs.clawd.bot/platforms/ios)
 - [Android node](https://docs.clawd.bot/platforms/android)
-- [Windows app](https://docs.clawd.bot/platforms/windows)
+- [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
 - [Linux app](https://docs.clawd.bot/platforms/linux)
 - [Web surfaces](https://docs.clawd.bot/web)
 

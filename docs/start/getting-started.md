@@ -26,6 +26,7 @@ If you want the deeper reference pages, jump to: [Wizard](/wizard), [Setup](/set
 - Git
 
 macOS: if you plan to build the apps, install Xcode / CLT. For the CLI + gateway only, Node is enough.
+Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native Windows is untested and more problematic. Install WSL2 first, then run the Linux steps inside WSL. See [Windows (WSL2)](/windows).
 
 ## 1) Check out from source
 
@@ -63,7 +64,7 @@ What you’ll choose:
 - **Local vs Remote** gateway
 - **Auth**: Anthropic OAuth or OpenAI OAuth (recommended), API key (optional), or skip for now
 - **Providers**: WhatsApp QR login, bot tokens, etc.
-- **Daemon**: optional background install (launchd/systemd/Task Scheduler)
+- **Daemon**: optional background install (launchd/systemd; WSL2 uses systemd)
   - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
 
 Wizard doc: [Wizard](/wizard)

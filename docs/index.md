@@ -177,7 +177,7 @@ Example:
   - [macOS app](https://docs.clawd.bot/platforms/macos)
   - [iOS app](https://docs.clawd.bot/platforms/ios)
   - [Android app](https://docs.clawd.bot/platforms/android)
-  - [Windows app](https://docs.clawd.bot/platforms/windows)
+  - [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
   - [Linux app](https://docs.clawd.bot/platforms/linux)
 - Ops and safety:
   - [Sessions](https://docs.clawd.bot/concepts/session)

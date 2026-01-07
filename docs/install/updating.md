@@ -12,7 +12,7 @@ Clawdbot is moving fast (pre “1.0”). Treat updates like shipping infra: upda
 ## Before you update
 
 - Know how you installed: **npm** (global) vs **from source** (git clone).
-- Know how your Gateway is running: **foreground terminal** vs **supervised service** (launchd/systemd/Scheduled Task).
+- Know how your Gateway is running: **foreground terminal** vs **supervised service** (launchd/systemd).
 - Snapshot your tailoring:
   - Config: `~/.clawdbot/clawdbot.json`
   - Credentials: `~/.clawdbot/credentials/`
@@ -68,7 +68,7 @@ Typical things it does:
 - Migrate deprecated config keys / legacy config file locations.
 - Audit DM policies and warn on risky “open” settings.
 - Check Gateway health and can offer to restart.
-- Detect and migrate older gateway services (launchd/systemd/schtasks) to current Clawdbot services.
+- Detect and migrate older gateway services (launchd/systemd; legacy schtasks) to current Clawdbot services.
 - On Linux, ensure systemd user lingering (so the Gateway survives logout).
 
 Details: [Doctor](/doctor)
@@ -86,7 +86,7 @@ clawdbot gateway --port 18789
 If you’re supervised:
 - macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`
 - Linux systemd user service: `systemctl --user restart clawdbot-gateway.service`
-- Windows: restart the `Clawdbot Gateway` Scheduled Task (Task Scheduler)
+- Windows (WSL2): `systemctl --user restart clawdbot-gateway.service`
 
 Runbook + exact service labels: [Gateway runbook](/gateway)
 
