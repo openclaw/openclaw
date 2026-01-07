@@ -137,7 +137,125 @@ Practical implication for Clawdbot:
 ### 2.4 Deprecations / platform shifts to note
 
 - Creation of **new multi-tenant bots** has been announced as deprecated after **2025-07-31** (plan for **single-tenant** by default).
-- Office 365 connectors / incoming webhooks retirement has been extended to **2026-03-31** (don’t build a provider around incoming webhooks; use bots).
+- Office 365 connectors / incoming webhooks retirement has been extended to **2026-03-31** (don't build a provider around incoming webhooks; use bots).
+
+---
+
+## 2.5) Azure Bot Setup (Prerequisites)
+
+Before writing code, set up the Azure Bot resource. This gives you the credentials needed for config.
+
+### Step 1: Create Azure Bot
+
+1. Go to [Azure Portal](https://portal.azure.com) → Create a resource → Search "Azure Bot"
+2. Fill in basics:
+   - **Bot handle**: e.g., `clawdbot-msteams`
+   - **Subscription / Resource Group**: your choice
+   - **Pricing tier**: F0 (free) for dev, S1 for production
+   - **Type of App**: **Single Tenant** (recommended - multi-tenant deprecated after 2025-07-31)
+   - **Creation type**: "Create new Microsoft App ID"
+3. Click Create and wait for deployment
+
+### Step 2: Get Credentials
+
+After the bot is created:
+
+1. Go to your Azure Bot resource → **Configuration**
+2. Copy **Microsoft App ID** → this is your `appId`
+3. Click "Manage Password" → go to the App Registration
+4. Under **Certificates & secrets** → New client secret → copy the **Value** → this is your `appPassword`
+5. Go to **Overview** → copy **Directory (tenant) ID** → this is your `tenantId`
+
+### Step 3: Configure Messaging Endpoint
+
+1. In Azure Bot → **Configuration**
+2. Set **Messaging endpoint** to your webhook URL:
+   - Production: `https://your-domain.com/msteams/messages`
+   - Local dev: Use a tunnel (see below)
+
+### Step 4: Enable Teams Channel
+
+1. In Azure Bot → **Channels**
+2. Click **Microsoft Teams** → Configure → Save
+3. Accept the Terms of Service
+
+### Step 5: Local Development (Tunnel)
+
+Teams can't reach `localhost`. Options:
+
+**Option A: ngrok**
+```bash
+ngrok http 3978
+# Copy the https URL, e.g., https://abc123.ngrok.io
+# Set messaging endpoint to: https://abc123.ngrok.io/msteams/messages
+```
+
+**Option B: Tailscale Funnel**
+```bash
+tailscale funnel 3978
+# Use your Tailscale funnel URL as the messaging endpoint
+```
+
+### Step 6: Create Teams App (for installation)
+
+To install the bot in Teams, you need an app manifest:
+
+1. Create `manifest.json`:
+```json
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "<your-app-id-guid>",
+  "packageName": "com.clawdbot.msteams",
+  "developer": {
+    "name": "Your Name",
+    "websiteUrl": "https://clawd.bot",
+    "privacyUrl": "https://clawd.bot/privacy",
+    "termsOfUseUrl": "https://clawd.bot/terms"
+  },
+  "name": { "short": "Clawdbot", "full": "Clawdbot MS Teams" },
+  "description": { "short": "AI assistant", "full": "Clawdbot AI assistant for Teams" },
+  "icons": { "outline": "outline.png", "color": "color.png" },
+  "accentColor": "#FF4500",
+  "bots": [
+    {
+      "botId": "<your-microsoft-app-id>",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": true,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": []
+}
+```
+
+2. Add 32x32 `outline.png` and 192x192 `color.png` icons
+3. Zip all three files into `clawdbot-teams.zip`
+4. In Teams → Apps → Manage your apps → Upload a custom app → Upload `clawdbot-teams.zip`
+
+### Credentials Summary
+
+After setup, you'll have:
+
+| Config Field | Source |
+|--------------|--------|
+| `appId` | Azure Bot → Configuration → Microsoft App ID |
+| `appPassword` | App Registration → Certificates & secrets → Client secret value |
+| `tenantId` | App Registration → Overview → Directory (tenant) ID |
+
+Add these to your Clawdbot config:
+```yaml
+msteams:
+  enabled: true
+  appId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  appPassword: "your-client-secret"
+  tenantId: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  webhook:
+    port: 3978
+    path: /msteams/messages
+```
 
 ---
 
