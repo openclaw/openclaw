@@ -860,7 +860,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             kind: isGroup ? "group" : "dm",
             id: isGroup
               ? buildTelegramGroupPeerId(chatId, messageThreadId)
-              : buildTelegramDmPeerId(chatId, messageThreadId),
+              : String(chatId),
           },
         });
         const skillFilter = firstDefined(
@@ -1243,15 +1243,6 @@ function resolveTelegramStreamMode(
 }
 
 function buildTelegramGroupPeerId(
-  chatId: number | string,
-  messageThreadId?: number,
-) {
-  return messageThreadId != null
-    ? `${chatId}:topic:${messageThreadId}`
-    : String(chatId);
-}
-
-function buildTelegramDmPeerId(
   chatId: number | string,
   messageThreadId?: number,
 ) {
