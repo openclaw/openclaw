@@ -14,27 +14,35 @@ that prefers tool-call + image-capable models and maintains ordered fallbacks.
 
 ## Model recommendations
 
-Through testing, we’ve found Anthropic Opus 4.5 is the most useful general-purpose model for anything coding-related. We suggest GPT 5.2 Codex for coding and sub-agents. For personal assistant work, nothing comes close to Opus. If you’re going all-in on Claude, we recommend the Max $200 subscription: https://claude.com/pricing
+Through testing, we’ve found [Claude Opus 4.5](https://www.anthropic.com/claude/opus) is the most useful general-purpose model for anything coding-related. We suggest [GPT-5.2-Codex](https://developers.openai.com/codex/models) for coding and sub-agents. For personal assistant work, nothing comes close to Opus. If you’re going all-in on Claude, we recommend the [Claude Max $200 subscription](https://www.anthropic.com/pricing/).
 
-## Command tree (draft)
+## Model discussions (community notes)
 
-- `clawdbot models list`
-  - default: configured models only
-  - flags: `--all` (full catalog), `--local`, `--provider <name>`, `--json`, `--plain`
-- `clawdbot models status`
-  - show default model + aliases + fallbacks + configured models
-- `clawdbot models set <modelOrAlias>`
-  - writes `agent.model.primary` and ensures `agent.models` entry
-- `clawdbot models set-image <modelOrAlias>`
-  - writes `agent.imageModel.primary` and ensures `agent.models` entry
-- `clawdbot models aliases list|add|remove`
-  - writes `agent.models.*.alias`
-- `clawdbot models fallbacks list|add|remove|clear`
-  - writes `agent.model.fallbacks`
-- `clawdbot models image-fallbacks list|add|remove|clear`
-  - writes `agent.imageModel.fallbacks`
-- `clawdbot models scan`
-  - OpenRouter :free scan; probe tool-call + image; interactive selection
+Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “what people reported,” not guarantees.
+
+**Reported working well**
+- [Claude Opus 4.5](https://www.anthropic.com/claude/opus): best quality, but expensive and easy to hit limits.
+- [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): solid fallback when Opus caps out.
+- [GLM](https://www.zhipuai.cn/en/): used as a worker model under orchestration.
+- [MiniMax M2.1](https://platform.minimax.io/docs/guides/models-intro): “good enough” fallback for grunt tasks.
+- [Gemini 3 Pro](https://deepmind.google/en/models/gemini/pro/): some users said it maps Clawdbot structure well.
+
+**Mixed / unclear**
+- [Antigravity](https://blog.google/technology/ai/google-ai-updates-november-2025/) (Claude Opus access): some reported extra Opus quota, pricing/limits unclear.
+
+**Reported weak in Clawdbot**
+- [GPT-5.2-Codex](https://developers.openai.com/codex/models) inside Clawdbot: considered rough for conversation or assistant tasks.
+- [Grok](https://docs.x.ai/docs/models/grok-4): tried, abandoned.
+
+**Tooling note**
+- [Codex CLI](https://developers.openai.com/codex/cli) felt stronger than embedded use.
+
+**Theme**
+- Token burn feels higher than expected in long sessions; people suspect context buildup + tool outputs. Pruning/compaction helps. Check session logs before blaming providers. See [/concepts/session](/concepts/session) and [/concepts/model-failover](/concepts/model-failover).
+
+## Models CLI
+
+See [/cli](/cli) for the full command tree and CLI flags.
 
 ## Config changes
 

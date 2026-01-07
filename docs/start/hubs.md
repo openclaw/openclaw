@@ -86,6 +86,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 ## Tools + automation
 
 - [Tools surface](https://docs.clawd.bot/tools)
+- [CLI reference](https://docs.clawd.bot/cli)
 - [Bash tool](https://docs.clawd.bot/tools/bash)
 - [Elevated mode](https://docs.clawd.bot/tools/elevated)
 - [Cron jobs](https://docs.clawd.bot/automation/cron-jobs)
