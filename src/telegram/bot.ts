@@ -14,6 +14,7 @@ import {
   listNativeCommandSpecs,
 } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
