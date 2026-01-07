@@ -159,7 +159,6 @@ type SlackThreadBroadcastEvent = {
 type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
-  autoReply?: boolean;
   users?: Array<string | number>;
   skills?: string[];
   systemPrompt?: string;
@@ -284,7 +283,6 @@ function resolveSlackChannelConfig(params: {
       enabled?: boolean;
       allow?: boolean;
       requireMention?: boolean;
-      autoReply?: boolean;
       users?: Array<string | number>;
       skills?: string[];
       systemPrompt?: string;
@@ -308,7 +306,6 @@ function resolveSlackChannelConfig(params: {
         enabled?: boolean;
         allow?: boolean;
         requireMention?: boolean;
-        autoReply?: boolean;
         users?: Array<string | number>;
         skills?: string[];
         systemPrompt?: string;
@@ -341,14 +338,13 @@ function resolveSlackChannelConfig(params: {
   const requireMention =
     firstDefined(resolved.requireMention, fallback?.requireMention, true) ??
     true;
-  const autoReply = firstDefined(resolved.autoReply, fallback?.autoReply);
   const users = firstDefined(resolved.users, fallback?.users);
   const skills = firstDefined(resolved.skills, fallback?.skills);
   const systemPrompt = firstDefined(
     resolved.systemPrompt,
     fallback?.systemPrompt,
   );
-  return { allowed, requireMention, autoReply, users, skills, systemPrompt };
+  return { allowed, requireMention, users, skills, systemPrompt };
 }
 
 async function resolveSlackMedia(params: {
@@ -810,11 +806,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       surface: "slack",
     });
     const shouldRequireMention = isRoom
-      ? channelConfig?.autoReply === true
-        ? false
-        : channelConfig?.autoReply === false
-          ? true
-          : (channelConfig?.requireMention ?? true)
+      ? (channelConfig?.requireMention ?? true)
       : false;
     const shouldBypassMention =
       allowTextCommands &&

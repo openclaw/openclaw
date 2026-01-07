@@ -381,16 +381,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       (ent) => ent.type === "mention",
     );
     const baseRequireMention = resolveGroupRequireMention(chatId);
-    const autoReplySetting = firstDefined(
-      topicConfig?.autoReply,
-      groupConfig?.autoReply,
+    const requireMention = firstDefined(
+      topicConfig?.requireMention,
+      groupConfig?.requireMention,
+      baseRequireMention,
     );
-    const requireMention =
-      autoReplySetting === true
-        ? false
-        : autoReplySetting === false
-          ? true
-          : baseRequireMention;
     const shouldBypassMention =
       isGroup &&
       requireMention &&

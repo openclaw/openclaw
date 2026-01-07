@@ -159,7 +159,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
       "C123": { "allow": true, "requireMention": true },
       "#general": {
         "allow": true,
-        "autoReply": false,
+        "requireMention": true,
         "users": ["U123"],
         "skills": ["search", "docs"],
         "systemPrompt": "Keep answers short."
@@ -212,7 +212,6 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 Channel options (`slack.channels.<id>` or `slack.channels.<name>`):
 - `allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `requireMention`: mention gating for the channel.
-- `autoReply`: if `true`, reply to every message (overrides `requireMention`).
 - `users`: optional per-channel user allowlist.
 - `skills`: skill filter (omit = all skills, empty = none).
 - `systemPrompt`: extra system prompt for the channel (combined with topic/purpose).

@@ -787,7 +787,6 @@ export const ClawdbotSchema = z.object({
               requireMention: z.boolean().optional(),
               skills: z.array(z.string()).optional(),
               enabled: z.boolean().optional(),
-              autoReply: z.boolean().optional(),
               allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
               systemPrompt: z.string().optional(),
               topics: z
@@ -795,9 +794,9 @@ export const ClawdbotSchema = z.object({
                   z.string(),
                   z
                     .object({
+                      requireMention: z.boolean().optional(),
                       skills: z.array(z.string()).optional(),
                       enabled: z.boolean().optional(),
-                      autoReply: z.boolean().optional(),
                       allowFrom: z
                         .array(z.union([z.string(), z.number()]))
                         .optional(),
@@ -913,7 +912,6 @@ export const ClawdbotSchema = z.object({
                       requireMention: z.boolean().optional(),
                       skills: z.array(z.string()).optional(),
                       enabled: z.boolean().optional(),
-                      autoReply: z.boolean().optional(),
                       users: z
                         .array(z.union([z.string(), z.number()]))
                         .optional(),
@@ -990,7 +988,6 @@ export const ClawdbotSchema = z.object({
               enabled: z.boolean().optional(),
               allow: z.boolean().optional(),
               requireMention: z.boolean().optional(),
-              autoReply: z.boolean().optional(),
               users: z.array(z.union([z.string(), z.number()])).optional(),
               skills: z.array(z.string()).optional(),
               systemPrompt: z.string().optional(),
