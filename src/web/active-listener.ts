@@ -14,6 +14,13 @@ export type ActiveWebListener = {
     options?: ActiveWebSendOptions,
   ) => Promise<{ messageId: string }>;
   sendPoll: (to: string, poll: PollInput) => Promise<{ messageId: string }>;
+  sendReaction: (
+    chatJid: string,
+    messageId: string,
+    emoji: string,
+    fromMe: boolean,
+    participant?: string,
+  ) => Promise<void>;
   sendComposingTo: (to: string) => Promise<void>;
   close?: () => Promise<void>;
 };

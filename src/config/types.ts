@@ -77,6 +77,10 @@ export type AgentElevatedAllowFromConfig = {
   webchat?: Array<string | number>;
 };
 
+export type WhatsAppActionConfig = {
+  reactions?: boolean;
+};
+
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
@@ -95,6 +99,8 @@ export type WhatsAppConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Per-action tool gating (default: true for all). */
+  actions?: WhatsAppActionConfig;
   groups?: Record<
     string,
     {

@@ -231,6 +231,13 @@
         "memberInfo": { "label": "member", "detailKeys": ["userId"] },
         "emojiList": { "label": "emoji list" }
       }
+    },
+    "whatsapp": {
+      "emoji": "💬",
+      "title": "WhatsApp",
+      "actions": {
+        "react": { "label": "react", "detailKeys": ["chatJid", "messageId", "emoji"] }
+      }
     }
   }
 }

@@ -8,16 +8,26 @@ vi.mock("./media.js", () => ({
   loadWebMedia: (...args: unknown[]) => loadWebMediaMock(...args),
 }));
 
-import { sendMessageWhatsApp, sendPollWhatsApp } from "./outbound.js";
+import {
+  sendMessageWhatsApp,
+  sendPollWhatsApp,
+  sendReactionWhatsApp,
+} from "./outbound.js";
 
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => ({ messageId: "msg123" }));
   const sendPoll = vi.fn(async () => ({ messageId: "poll123" }));
+  const sendReaction = vi.fn(async () => {});
 
   beforeEach(() => {
     vi.clearAllMocks();
-    setActiveWebListener({ sendComposingTo, sendMessage, sendPoll });
+    setActiveWebListener({
+      sendComposingTo,
+      sendMessage,
+      sendPoll,
+      sendReaction,
+    });
   });
 
   afterEach(() => {
@@ -155,5 +165,19 @@ describe("web outbound", () => {
       maxSelections: 2,
       durationHours: undefined,
     });
+  });
+
+  it("sends reactions via active listener", async () => {
+    await sendReactionWhatsApp("1555@s.whatsapp.net", "msg123", "✅", {
+      verbose: false,
+      fromMe: false,
+    });
+    expect(sendReaction).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      "msg123",
+      "✅",
+      false,
+      undefined,
+    );
   });
 });
