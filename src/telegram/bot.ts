@@ -229,9 +229,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       if (entry?.groupActivation === "always") return false;
       if (entry?.groupActivation === "mention") return true;
     } catch (err) {
-      logVerbose(
-        `Failed to load session for activation check: ${String(err)}`,
-      );
+      logVerbose(`Failed to load session for activation check: ${String(err)}`);
     }
     return undefined;
   };
