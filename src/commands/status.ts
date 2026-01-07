@@ -11,6 +11,10 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import {
+  formatUsageReportLines,
+  loadProviderUsageSummary,
+} from "../infra/provider-usage.js";
 import { callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
@@ -218,10 +222,13 @@ const buildFlags = (entry: SessionEntry): string[] => {
 };
 
 export async function statusCommand(
-  opts: { json?: boolean; deep?: boolean; timeoutMs?: number },
+  opts: { json?: boolean; deep?: boolean; usage?: boolean; timeoutMs?: number },
   runtime: RuntimeEnv,
 ) {
   const summary = await getStatusSummary();
+  const usage = opts.usage
+    ? await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs })
+    : undefined;
   const health: HealthSummary | undefined = opts.deep
     ? await callGateway<HealthSummary>({
         method: "health",
@@ -231,7 +238,11 @@ export async function statusCommand(
 
   if (opts.json) {
     runtime.log(
-      JSON.stringify(health ? { ...summary, health } : summary, null, 2),
+      JSON.stringify(
+        health || usage ? { ...summary, health, usage } : summary,
+        null,
+        2,
+      ),
     );
     return;
   }
@@ -301,5 +312,11 @@ export async function statusCommand(
     }
   } else {
     runtime.log("No session activity yet.");
+  }
+
+  if (usage) {
+    for (const line of formatUsageReportLines(usage)) {
+      runtime.log(line);
+    }
   }
 }

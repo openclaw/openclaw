@@ -205,6 +205,7 @@ const METHODS = [
   "health",
   "providers.status",
   "status",
+  "usage.status",
   "config.get",
   "config.set",
   "config.schema",

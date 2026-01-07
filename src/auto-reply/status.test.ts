@@ -95,6 +95,22 @@ describe("buildStatusMessage", () => {
     );
   });
 
+  it("inserts usage summary beneath context line", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5", contextTokens: 32_000 },
+      sessionEntry: { sessionId: "u1", updatedAt: 0, totalTokens: 1000 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      usageLine: "📊 Usage: Claude 80% left (5h)",
+    });
+
+    const lines = text.split("\n");
+    const contextIndex = lines.findIndex((line) => line.startsWith("📚 "));
+    expect(contextIndex).toBeGreaterThan(-1);
+    expect(lines[contextIndex + 1]).toBe("📊 Usage: Claude 80% left (5h)");
+  });
+
   it("prefers cached prompt tokens from the session log", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-status-"));
     const previousHome = process.env.HOME;

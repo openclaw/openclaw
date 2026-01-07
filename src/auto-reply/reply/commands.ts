@@ -38,6 +38,10 @@ import {
   formatContextUsageShort,
   formatTokenCount,
 } from "../status.js";
+import {
+  formatUsageSummaryLine,
+  loadProviderUsageSummary,
+} from "../../infra/provider-usage.js";
 import type { MsgContext } from "../templating.js";
 import type {
   ElevatedLevel,
@@ -383,6 +387,15 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
+    let usageLine: string | null = null;
+    try {
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: 3500,
+      });
+      usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
+    } catch {
+      usageLine = null;
+    }
     const queueSettings = resolveQueueSettings({
       cfg,
       provider: command.provider,
@@ -421,6 +434,7 @@ export async function handleCommands(params: {
       resolvedReasoning: resolvedReasoningLevel,
       resolvedElevated: resolvedElevatedLevel,
       modelAuth: resolveModelAuthLabel(provider, cfg),
+      usageLine: usageLine ?? undefined,
       queue: {
         mode: queueSettings.mode,
         depth: queueDepth,
