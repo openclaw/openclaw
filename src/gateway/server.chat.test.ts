@@ -61,6 +61,26 @@ describe("gateway server chat", () => {
     await server.close();
   });
 
+  test("chat.send forwards sessionKey to agentCommand", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "agent:main:subagent:abc",
+      message: "hello",
+      idempotencyKey: "idem-session-key-1",
+    });
+    expect(res.ok).toBe(true);
+
+    const call = vi.mocked(agentCommand).mock.calls.at(-1)?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(call?.sessionKey).toBe("agent:main:subagent:abc");
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.send blocked by send policy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

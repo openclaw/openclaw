@@ -1053,6 +1053,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               {
                 message: messageWithAttachments,
                 sessionId,
+                sessionKey: p.sessionKey,
                 runId: clientRunId,
                 thinking: p.thinking,
                 deliver: p.deliver,
@@ -1169,6 +1170,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           {
             message: text,
             sessionId,
+            sessionKey,
             thinking: "low",
             deliver: false,
             messageProvider: "node",
@@ -1245,6 +1247,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           {
             message,
             sessionId,
+            sessionKey,
             thinking: link?.thinking ?? undefined,
             deliver,
             to,

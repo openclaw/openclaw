@@ -259,6 +259,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         {
           message: messageWithAttachments,
           sessionId,
+          sessionKey: p.sessionKey,
           runId: clientRunId,
           thinking: p.thinking,
           deliver: p.deliver,

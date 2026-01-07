@@ -66,6 +66,43 @@ describe("gateway server agent", () => {
     testState.allowFrom = undefined;
   });
 
+  test("agent forwards sessionKey to agentCommand", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          "agent:main:subagent:abc": {
+            sessionId: "sess-sub",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "agent:main:subagent:abc",
+      idempotencyKey: "idem-agent-subkey",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(call.sessionKey).toBe("agent:main:subagent:abc");
+    expect(call.sessionId).toBe("sess-sub");
+
+    ws.close();
+    await server.close();
+  });
+
   test("agent routes main last-channel whatsapp", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
