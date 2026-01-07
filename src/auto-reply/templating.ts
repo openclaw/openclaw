@@ -6,7 +6,8 @@ export type OriginatingChannelType =
   | "signal"
   | "imessage"
   | "whatsapp"
-  | "webchat";
+  | "webchat"
+  | "msteams";
 
 export type MsgContext = {
   Body?: string;

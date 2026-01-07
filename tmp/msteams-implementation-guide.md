@@ -831,14 +831,50 @@ Initial recommendation: support this type first; treat other attachment types as
 2. ✅ **Config plumbing**: `MSTeamsConfig` type + zod schema (`src/config/types.ts`, `src/config/zod-schema.ts`)
 3. ✅ **Provider skeleton**: `src/msteams/` with `index.ts`, `token.ts`, `probe.ts`, `send.ts`, `monitor.ts`
 4. ✅ **Gateway integration**: Provider manager start/stop wiring in `server-providers.ts` and `server.ts`
+5. ✅ **Echo bot tested**: Verified end-to-end flow (Azure Bot → Tailscale → Gateway → SDK → Response)
+
+### Debugging Notes
+
+- **SDK listens on all paths**: The `startServer()` function responds to POST on any path (not just `/api/messages`), but Azure Bot default is `/api/messages`
+- **SDK handles HTTP internally**: Custom logging in monitor.ts `log.debug()` doesn't show HTTP traffic - SDK processes requests before our handler
+- **Tailscale Funnel**: Must be running separately (`tailscale funnel 3978`) - doesn't work well as background task
+- **Auth errors (401)**: Expected when testing manually without Azure JWT - means endpoint is reachable
+
+### In Progress (2026-01-07 - Session 2)
+
+6. ✅ **Agent dispatch (sync)**: Wired inbound messages to `dispatchReplyFromConfig()` - replies sent via `context.sendActivity()` within turn
+7. ✅ **Typing indicator**: Added typing indicator support via `sendActivities([{ type: "typing" }])`
+8. ✅ **Type system updates**: Added `msteams` to `TextChunkProvider`, `OriginatingChannelType`, and route-reply switch
+
+### Implementation Notes
+
+**Current Approach (Synchronous):**
+The current implementation sends replies synchronously within the Teams turn context. This works for quick responses but may timeout for slow LLM responses.
+
+```typescript
+// Current: Reply within turn context (src/msteams/monitor.ts)
+const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
+  deliver: async (payload) => {
+    await deliverReplies({ replies: [payload], context });
+  },
+  onReplyStart: sendTypingIndicator,
+});
+await dispatchReplyFromConfig({ ctx: ctxPayload, cfg, dispatcher, replyOptions });
+```
+
+**Key Fields in ctxPayload:**
+- `Provider: "msteams"` / `Surface: "msteams"`
+- `From`: `msteams:<userId>` (DM) or `msteams:channel:<conversationId>` (channel)
+- `To`: `user:<userId>` (DM) or `conversation:<conversationId>` (group/channel)
+- `ChatType`: `"direct"` | `"group"` | `"room"` based on conversation type
 
 ### Remaining
 
-5. **Test echo bot**: Run gateway with msteams enabled, verify Teams can reach the webhook and receive echo replies.
-6. **Conversation store**: Persist `ConversationReference` by `conversation.id` for proactive messaging.
-7. **Agent dispatch (async)**: Wire inbound messages to `dispatchReplyFromConfig()` using proactive sends.
-8. **Access control**: Implement DM policy + pairing (reuse existing pairing store) + mention gating in channels.
-9. **Config reload**: Add msteams to `config-reload.ts` restart rules.
-10. **Outbound CLI/gateway sends**: Implement `sendMessageMSTeams` properly; wire `clawdbot send --provider msteams`.
-11. **Media**: Implement inbound attachment download and outbound strategy.
-12. **Docs + UI + Onboard**: Write `docs/providers/msteams.md`, add UI config form, update `clawdbot onboard`.
+9. **Test full agent flow**: Send message in Teams → verify agent responds (not just echo)
+10. **Conversation store**: Persist `ConversationReference` by `conversation.id` for proactive messaging
+11. **Proactive messaging**: For slow LLM responses, store reference and send replies asynchronously
+12. **Access control**: Implement DM policy + pairing (reuse existing pairing store) + mention gating in channels
+13. **Config reload**: Add msteams to `config-reload.ts` restart rules
+14. **Outbound CLI/gateway sends**: Implement `sendMessageMSTeams` properly; wire `clawdbot send --provider msteams`
+15. **Media**: Implement inbound attachment download and outbound strategy
+16. **Docs + UI + Onboard**: Write `docs/providers/msteams.md`, add UI config form, update `clawdbot onboard`
