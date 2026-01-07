@@ -190,6 +190,8 @@ export function createSessionsSpawnTool(opts?: {
           ? Math.max(0, Math.floor(params.timeoutSeconds))
           : 0;
       const timeoutMs = timeoutSeconds * 1000;
+      let modelWarning: string | undefined;
+      let modelApplied = false;
 
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
@@ -238,6 +240,7 @@ export function createSessionsSpawnTool(opts?: {
             params: { key: childSessionKey, model },
             timeoutMs: 10_000,
           });
+          modelApplied = true;
         } catch (err) {
           const messageText =
             err instanceof Error
@@ -245,11 +248,17 @@ export function createSessionsSpawnTool(opts?: {
               : typeof err === "string"
                 ? err
                 : "error";
-          return jsonResult({
-            status: "error",
-            error: messageText,
-            childSessionKey,
-          });
+          const recoverable =
+            messageText.includes("invalid model") ||
+            messageText.includes("model not allowed");
+          if (!recoverable) {
+            return jsonResult({
+              status: "error",
+              error: messageText,
+              childSessionKey,
+            });
+          }
+          modelWarning = messageText;
         }
       }
       const childSystemPrompt = buildSubagentSystemPrompt({
@@ -307,6 +316,8 @@ export function createSessionsSpawnTool(opts?: {
           status: "accepted",
           childSessionKey,
           runId: childRunId,
+          modelApplied: model ? modelApplied : undefined,
+          warning: modelWarning,
         });
       }
 
@@ -354,6 +365,8 @@ export function createSessionsSpawnTool(opts?: {
           error: waitError,
           childSessionKey,
           runId: childRunId,
+          modelApplied: model ? modelApplied : undefined,
+          warning: modelWarning,
         });
       }
       if (waitStatus === "error") {
@@ -372,6 +385,8 @@ export function createSessionsSpawnTool(opts?: {
           error: waitError ?? "agent error",
           childSessionKey,
           runId: childRunId,
+          modelApplied: model ? modelApplied : undefined,
+          warning: modelWarning,
         });
       }
 
@@ -395,6 +410,8 @@ export function createSessionsSpawnTool(opts?: {
         childSessionKey,
         runId: childRunId,
         reply: replyText,
+        modelApplied: model ? modelApplied : undefined,
+        warning: modelWarning,
       });
     },
   };

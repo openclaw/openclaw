@@ -25,6 +25,7 @@
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
+- Sub-agents: skip invalid model overrides with a warning and keep the run alive; tool exceptions now return tool errors instead of crashing the agent.
 - Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.
 - Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
