@@ -250,8 +250,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultModel: DEFAULT_MODEL,
   });
   const provider =
-    entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
-  let model = entry?.model ?? resolved.model ?? DEFAULT_MODEL;
+    entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
+  let model = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
   let contextTokens =
     entry?.contextTokens ??
     args.agent?.contextTokens ??
