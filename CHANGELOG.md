@@ -29,6 +29,7 @@
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
+- Agent: add opt-in session pruning for tool results to reduce context bloat. Thanks @maxsumrall for PR #381.
 - Agent: deliver final replies for non-streaming models when block chunking is enabled. Thank you @mneves75 for PR #369!
 - Agent: trim bootstrap context injections and keep group guidance concise (emoji reactions allowed). Thanks @tobiasbischoff for PR #370.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.

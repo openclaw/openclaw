@@ -38,6 +38,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Multi-agent routing](https://docs.clawd.bot/concepts/multi-agent)
 - [Sessions](https://docs.clawd.bot/concepts/session)
 - [Sessions (alias)](https://docs.clawd.bot/concepts/sessions)
+- [Session pruning](https://docs.clawd.bot/concepts/session-pruning)
 - [Session tools](https://docs.clawd.bot/concepts/session-tool)
 - [Queue](https://docs.clawd.bot/concepts/queue)
 - [Slash commands](https://docs.clawd.bot/tools/slash-commands)

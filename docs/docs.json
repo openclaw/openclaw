@@ -546,6 +546,7 @@
           "concepts/agent-workspace",
           "concepts/multi-agent",
           "concepts/session",
+          "concepts/session-pruning",
           "concepts/sessions",
           "concepts/session-tool",
           "concepts/presence",
