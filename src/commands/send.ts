@@ -114,13 +114,13 @@ export async function sendCommand(
   if (opts.json) {
     runtime.log(
       JSON.stringify(
-        {
-          provider: "web",
+        buildOutboundDeliveryJson({
+          provider,
           via: "gateway",
           to: opts.to,
-          messageId: result.messageId,
+          result,
           mediaUrl: opts.media ?? null,
-        },
+        }),
         null,
         2,
       ),

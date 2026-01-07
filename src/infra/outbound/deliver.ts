@@ -12,9 +12,14 @@ import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
 import { resolveTelegramToken } from "../../telegram/token.js";
 import { sendMessageWhatsApp } from "../../web/outbound.js";
+import type { NormalizedOutboundPayload } from "./payloads.js";
+import { normalizeOutboundPayloads } from "./payloads.js";
 import type { OutboundProvider } from "./targets.js";
 
 const MB = 1024 * 1024;
+
+export type { NormalizedOutboundPayload } from "./payloads.js";
+export { normalizeOutboundPayloads } from "./payloads.js";
 
 export type OutboundSendDeps = {
   sendWhatsApp?: typeof sendMessageWhatsApp;
@@ -33,43 +38,137 @@ export type OutboundDeliveryResult =
   | { provider: "signal"; messageId: string; timestamp?: number }
   | { provider: "imessage"; messageId: string };
 
-export type NormalizedOutboundPayload = {
-  text: string;
-  mediaUrls: string[];
-};
-
 type Chunker = (text: string, limit: number) => string[];
 
-function resolveChunker(provider: OutboundProvider): Chunker | null {
-  if (provider === "telegram") return chunkMarkdownText;
-  if (provider === "whatsapp") return chunkText;
-  if (provider === "signal") return chunkText;
-  if (provider === "imessage") return chunkText;
-  return null;
-}
+type ProviderHandler = {
+  chunker: Chunker | null;
+  sendText: (text: string) => Promise<OutboundDeliveryResult>;
+  sendMedia: (
+    caption: string,
+    mediaUrl: string,
+  ) => Promise<OutboundDeliveryResult>;
+};
 
-function resolveSignalMaxBytes(cfg: ClawdbotConfig): number | undefined {
-  if (cfg.signal?.mediaMaxMb) return cfg.signal.mediaMaxMb * MB;
+function resolveMediaMaxBytes(
+  cfg: ClawdbotConfig,
+  provider: "signal" | "imessage",
+): number | undefined {
+  const providerLimit =
+    provider === "signal" ? cfg.signal?.mediaMaxMb : cfg.imessage?.mediaMaxMb;
+  if (providerLimit) return providerLimit * MB;
   if (cfg.agent?.mediaMaxMb) return cfg.agent.mediaMaxMb * MB;
   return undefined;
 }
 
-function resolveIMessageMaxBytes(cfg: ClawdbotConfig): number | undefined {
-  if (cfg.imessage?.mediaMaxMb) return cfg.imessage.mediaMaxMb * MB;
-  if (cfg.agent?.mediaMaxMb) return cfg.agent.mediaMaxMb * MB;
-  return undefined;
-}
+function createProviderHandler(params: {
+  cfg: ClawdbotConfig;
+  provider: Exclude<OutboundProvider, "none">;
+  to: string;
+  deps: Required<OutboundSendDeps>;
+}): ProviderHandler {
+  const { cfg, to, deps } = params;
+  const telegramToken =
+    params.provider === "telegram"
+      ? resolveTelegramToken(cfg).token || undefined
+      : undefined;
+  const signalMaxBytes =
+    params.provider === "signal"
+      ? resolveMediaMaxBytes(cfg, "signal")
+      : undefined;
+  const imessageMaxBytes =
+    params.provider === "imessage"
+      ? resolveMediaMaxBytes(cfg, "imessage")
+      : undefined;
 
-export function normalizeOutboundPayloads(
-  payloads: ReplyPayload[],
-): NormalizedOutboundPayload[] {
-  return payloads
-    .map((payload) => ({
-      text: payload.text ?? "",
-      mediaUrls:
-        payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
-    }))
-    .filter((payload) => payload.text || payload.mediaUrls.length > 0);
+  const handlers: Record<Exclude<OutboundProvider, "none">, ProviderHandler> = {
+    whatsapp: {
+      chunker: chunkText,
+      sendText: async (text) => ({
+        provider: "whatsapp",
+        ...(await deps.sendWhatsApp(to, text, { verbose: false })),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "whatsapp",
+        ...(await deps.sendWhatsApp(to, caption, {
+          verbose: false,
+          mediaUrl,
+        })),
+      }),
+    },
+    telegram: {
+      chunker: chunkMarkdownText,
+      sendText: async (text) => ({
+        provider: "telegram",
+        ...(await deps.sendTelegram(to, text, {
+          verbose: false,
+          token: telegramToken,
+        })),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "telegram",
+        ...(await deps.sendTelegram(to, caption, {
+          verbose: false,
+          mediaUrl,
+          token: telegramToken,
+        })),
+      }),
+    },
+    discord: {
+      chunker: null,
+      sendText: async (text) => ({
+        provider: "discord",
+        ...(await deps.sendDiscord(to, text, { verbose: false })),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "discord",
+        ...(await deps.sendDiscord(to, caption, {
+          verbose: false,
+          mediaUrl,
+        })),
+      }),
+    },
+    slack: {
+      chunker: null,
+      sendText: async (text) => ({
+        provider: "slack",
+        ...(await deps.sendSlack(to, text)),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "slack",
+        ...(await deps.sendSlack(to, caption, { mediaUrl })),
+      }),
+    },
+    signal: {
+      chunker: chunkText,
+      sendText: async (text) => ({
+        provider: "signal",
+        ...(await deps.sendSignal(to, text, { maxBytes: signalMaxBytes })),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "signal",
+        ...(await deps.sendSignal(to, caption, {
+          mediaUrl,
+          maxBytes: signalMaxBytes,
+        })),
+      }),
+    },
+    imessage: {
+      chunker: chunkText,
+      sendText: async (text) => ({
+        provider: "imessage",
+        ...(await deps.sendIMessage(to, text, { maxBytes: imessageMaxBytes })),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "imessage",
+        ...(await deps.sendIMessage(to, caption, {
+          mediaUrl,
+          maxBytes: imessageMaxBytes,
+        })),
+      }),
+    },
+  };
+
+  return handlers[params.provider];
 }
 
 export async function deliverOutboundPayloads(params: {
@@ -92,107 +191,24 @@ export async function deliverOutboundPayloads(params: {
     sendIMessage: params.deps?.sendIMessage ?? sendMessageIMessage,
   };
   const results: OutboundDeliveryResult[] = [];
-
-  const chunker = resolveChunker(provider);
-  const textLimit = chunker ? resolveTextChunkLimit(cfg, provider) : undefined;
-  const telegramToken =
-    provider === "telegram"
-      ? resolveTelegramToken(cfg).token || undefined
-      : undefined;
-  const signalMaxBytes =
-    provider === "signal" ? resolveSignalMaxBytes(cfg) : undefined;
-  const imessageMaxBytes =
-    provider === "imessage" ? resolveIMessageMaxBytes(cfg) : undefined;
+  const handler = createProviderHandler({
+    cfg,
+    provider,
+    to,
+    deps,
+  });
+  const textLimit = handler.chunker
+    ? resolveTextChunkLimit(cfg, provider)
+    : undefined;
 
   const sendTextChunks = async (text: string) => {
-    if (!chunker || textLimit === undefined) {
-      await sendText(text);
+    if (!handler.chunker || textLimit === undefined) {
+      results.push(await handler.sendText(text));
       return;
     }
-    for (const chunk of chunker(text, textLimit)) {
-      await sendText(chunk);
+    for (const chunk of handler.chunker(text, textLimit)) {
+      results.push(await handler.sendText(chunk));
     }
-  };
-
-  const sendText = async (text: string) => {
-    if (provider === "whatsapp") {
-      const res = await deps.sendWhatsApp(to, text, { verbose: false });
-      results.push({ provider: "whatsapp", ...res });
-      return;
-    }
-    if (provider === "telegram") {
-      const res = await deps.sendTelegram(to, text, {
-        verbose: false,
-        token: telegramToken,
-      });
-      results.push({ provider: "telegram", ...res });
-      return;
-    }
-    if (provider === "signal") {
-      const res = await deps.sendSignal(to, text, { maxBytes: signalMaxBytes });
-      results.push({ provider: "signal", ...res });
-      return;
-    }
-    if (provider === "imessage") {
-      const res = await deps.sendIMessage(to, text, {
-        maxBytes: imessageMaxBytes,
-      });
-      results.push({ provider: "imessage", ...res });
-      return;
-    }
-    if (provider === "slack") {
-      const res = await deps.sendSlack(to, text);
-      results.push({ provider: "slack", ...res });
-      return;
-    }
-    const res = await deps.sendDiscord(to, text, { verbose: false });
-    results.push({ provider: "discord", ...res });
-  };
-
-  const sendMedia = async (caption: string, mediaUrl: string) => {
-    if (provider === "whatsapp") {
-      const res = await deps.sendWhatsApp(to, caption, {
-        verbose: false,
-        mediaUrl,
-      });
-      results.push({ provider: "whatsapp", ...res });
-      return;
-    }
-    if (provider === "telegram") {
-      const res = await deps.sendTelegram(to, caption, {
-        verbose: false,
-        mediaUrl,
-        token: telegramToken,
-      });
-      results.push({ provider: "telegram", ...res });
-      return;
-    }
-    if (provider === "signal") {
-      const res = await deps.sendSignal(to, caption, {
-        mediaUrl,
-        maxBytes: signalMaxBytes,
-      });
-      results.push({ provider: "signal", ...res });
-      return;
-    }
-    if (provider === "imessage") {
-      const res = await deps.sendIMessage(to, caption, {
-        mediaUrl,
-        maxBytes: imessageMaxBytes,
-      });
-      results.push({ provider: "imessage", ...res });
-      return;
-    }
-    if (provider === "slack") {
-      const res = await deps.sendSlack(to, caption, { mediaUrl });
-      results.push({ provider: "slack", ...res });
-      return;
-    }
-    const res = await deps.sendDiscord(to, caption, {
-      verbose: false,
-      mediaUrl,
-    });
-    results.push({ provider: "discord", ...res });
   };
 
   const normalizedPayloads = normalizeOutboundPayloads(payloads);
@@ -208,7 +224,7 @@ export async function deliverOutboundPayloads(params: {
       for (const url of payload.mediaUrls) {
         const caption = first ? payload.text : "";
         first = false;
-        await sendMedia(caption, url);
+        results.push(await handler.sendMedia(caption, url));
       }
     } catch (err) {
       if (!params.bestEffort) throw err;

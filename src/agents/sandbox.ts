@@ -681,7 +681,9 @@ async function ensureSandboxBrowser(params: {
   if (!isToolAllowed(params.cfg.tools, "browser")) return null;
 
   const slug =
-    params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
+    params.cfg.scope === "shared"
+      ? "shared"
+      : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);

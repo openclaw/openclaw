@@ -44,10 +44,13 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
+import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import {
-  deliverOutboundPayloads,
+  formatOutboundPayloadLog,
+  type NormalizedOutboundPayload,
   normalizeOutboundPayloads,
-} from "../infra/outbound/deliver.js";
+  normalizeOutboundPayloadsForJson,
+} from "../infra/outbound/payloads.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -541,12 +544,8 @@ export async function agentCommand(
     }
   }
 
+  const normalizedPayloads = normalizeOutboundPayloadsForJson(payloads);
   if (opts.json) {
-    const normalizedPayloads = payloads.map((p) => ({
-      text: p.text ?? "",
-      mediaUrl: p.mediaUrl ?? null,
-      mediaUrls: p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : undefined),
-    }));
     runtime.log(
       JSON.stringify(
         { payloads: normalizedPayloads, meta: result.meta },
@@ -565,12 +564,10 @@ export async function agentCommand(
   }
 
   const deliveryPayloads = normalizeOutboundPayloads(payloads);
-  const logPayload = (payload: { text: string; mediaUrls: string[] }) => {
+  const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) return;
-    const lines: string[] = [];
-    if (payload.text) lines.push(payload.text.trimEnd());
-    for (const url of payload.mediaUrls) lines.push(`MEDIA:${url}`);
-    runtime.log(lines.join("\n"));
+    const output = formatOutboundPayloadLog(payload);
+    if (output) runtime.log(output);
   };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
@@ -607,10 +604,5 @@ export async function agentCommand(
     }
   }
 
-  const normalizedPayloads = payloads.map((p) => ({
-    text: p.text ?? "",
-    mediaUrl: p.mediaUrl ?? null,
-    mediaUrls: p.mediaUrls ?? (p.mediaUrl ? [p.mediaUrl] : undefined),
-  }));
   return { payloads: normalizedPayloads, meta: result.meta };
 }
