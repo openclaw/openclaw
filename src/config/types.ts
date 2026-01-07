@@ -586,11 +586,18 @@ export type RoutingConfig = {
       model?: string;
       sandbox?: {
         mode?: "off" | "non-main" | "all";
+        /** Agent workspace access inside the sandbox. */
+        workspaceAccess?: "none" | "ro" | "rw";
         /** Container/workspace scope for sandbox isolation. */
         scope?: "session" | "agent" | "shared";
         /** Legacy alias for scope ("session" when true, "shared" when false). */
         perSession?: boolean;
         workspaceRoot?: string;
+        /** Tool allow/deny policy for sandboxed sessions (deny wins). */
+        tools?: {
+          allow?: string[];
+          deny?: string[];
+        };
       };
       tools?: {
         allow?: string[];

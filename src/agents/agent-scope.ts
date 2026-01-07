@@ -29,9 +29,14 @@ export function resolveAgentConfig(
       model?: string;
       sandbox?: {
         mode?: "off" | "non-main" | "all";
+        workspaceAccess?: "none" | "ro" | "rw";
         scope?: "session" | "agent" | "shared";
         perSession?: boolean;
         workspaceRoot?: string;
+        tools?: {
+          allow?: string[];
+          deny?: string[];
+        };
       };
       tools?: {
         allow?: string[];
