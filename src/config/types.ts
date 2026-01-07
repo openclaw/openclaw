@@ -895,6 +895,8 @@ export type ClawdbotConfig = {
     subagents?: {
       /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
       maxConcurrent?: number;
+      /** Auto-archive sub-agent sessions after N minutes (default: 60). */
+      archiveAfterMinutes?: number;
       /** Tool allow/deny policy for sub-agent sessions (deny wins). */
       tools?: {
         allow?: string[];

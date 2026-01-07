@@ -58,4 +58,18 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("User timezone: America/Chicago");
     expect(prompt).toContain("Current user time: 2026-01-05 15:26");
   });
+
+  it("includes model alias guidance when aliases are provided", () => {
+    const prompt = buildAgentSystemPromptAppend({
+      workspaceDir: "/tmp/clawd",
+      modelAliasLines: [
+        "- Opus: anthropic/claude-opus-4-5",
+        "- Sonnet: anthropic/claude-sonnet-4-5",
+      ],
+    });
+
+    expect(prompt).toContain("## Model Aliases");
+    expect(prompt).toContain("Prefer aliases when specifying model overrides");
+    expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
+  });
 });

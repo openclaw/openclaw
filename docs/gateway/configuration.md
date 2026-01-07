@@ -757,6 +757,10 @@ If you configure the same alias name (case-insensitive) yourself, your value win
       target: "last"
     },
     maxConcurrent: 3,
+    subagents: {
+      maxConcurrent: 1,
+      archiveAfterMinutes: 60
+    },
     bash: {
       backgroundMs: 10000,
       timeoutSec: 1800,
@@ -804,6 +808,11 @@ of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 - `backgroundMs`: time before auto-background (ms, default 10000)
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
+
+`agent.subagents` configures sub-agent defaults:
+- `maxConcurrent`: max concurrent sub-agent runs (default 1)
+- `archiveAfterMinutes`: auto-archive sub-agent sessions after N minutes (default 60; set `0` to disable)
+- `tools.allow` / `tools.deny`: per-subagent tool allow/deny policy (deny wins)
 
 `agent.tools` configures a global tool allow/deny policy (deny wins).
 This is applied even when the Docker sandbox is **off**.

@@ -7,7 +7,7 @@ read_when:
 
 # Sub-agents
 
-Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat provider.
+Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<id>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat provider.
 
 Primary goals:
 - Parallelize “research / long task / slow tool” work without blocking the main run.
@@ -25,8 +25,15 @@ Tool params:
 - `task` (required)
 - `label?` (optional)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
-- `timeoutSeconds?` (default `0`; `0` = fire-and-forget)
-- `cleanup?` (`delete|keep`, default `delete`)
+- `timeoutSeconds?` (optional; omit for long-running jobs; when set, Clawdbot waits up to N seconds and aborts the sub-agent if it is still running)
+- `cleanup?` (`delete|keep`, default `keep`)
+
+Auto-archive:
+- Sub-agent sessions are automatically archived after `agent.subagents.archiveAfterMinutes` (default: 60).
+- Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
+- `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
+- Auto-archive is best-effort; pending timers are lost if the gateway restarts.
+- Timeouts do **not** auto-archive; they only stop the run. The session remains until auto-archive.
 
 ## Announce
 
@@ -34,6 +41,12 @@ Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
 - Otherwise the announce reply is posted to the requester chat provider via the gateway `send` method.
+
+Announce payloads include a stats line at the end:
+- Runtime (e.g., `runtime 5m12s`)
+- Token usage (input/output/total)
+- Estimated cost when model pricing is configured (`models.providers.*.models[].cost`)
+- `sessionKey`, `sessionId`, and transcript path (so the main agent can fetch history via `sessions_history` or inspect the file on disk)
 
 ## Tool Policy (sub-agent tools)
 

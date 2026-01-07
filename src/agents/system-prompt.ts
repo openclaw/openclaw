@@ -7,6 +7,7 @@ export function buildAgentSystemPromptAppend(params: {
   ownerNumbers?: string[];
   reasoningTagHint?: boolean;
   toolNames?: string[];
+  modelAliasLines?: string[];
   userTimezone?: string;
   userTime?: string;
   heartbeatPrompt?: string;
@@ -162,6 +163,16 @@ export function buildAgentSystemPromptAppend(params: {
       : "",
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "",
+    params.modelAliasLines && params.modelAliasLines.length > 0
+      ? "## Model Aliases"
+      : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0
+      ? "Prefer aliases when specifying model overrides; full provider/model is also accepted."
+      : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0
+      ? params.modelAliasLines.join("\n")
+      : "",
+    params.modelAliasLines && params.modelAliasLines.length > 0 ? "" : "",
     "## Workspace",
     `Your working directory is: ${params.workspaceDir}`,
     "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.",

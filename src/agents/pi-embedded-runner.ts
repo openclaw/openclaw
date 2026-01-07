@@ -96,6 +96,23 @@ export type EmbeddedPiRunMeta = {
   aborted?: boolean;
 };
 
+function buildModelAliasLines(cfg?: ClawdbotConfig) {
+  const models = cfg?.agent?.models ?? {};
+  const entries: Array<{ alias: string; model: string }> = [];
+  for (const [keyRaw, entryRaw] of Object.entries(models)) {
+    const model = String(keyRaw ?? "").trim();
+    if (!model) continue;
+    const alias = String(
+      (entryRaw as { alias?: string } | undefined)?.alias ?? "",
+    ).trim();
+    if (!alias) continue;
+    entries.push({ alias, model });
+  }
+  return entries
+    .sort((a, b) => a.alias.localeCompare(b.alias))
+    .map((entry) => `- ${entry.alias}: ${entry.model}`);
+}
+
 type ApiKeyInfo = {
   apiKey: string;
   profileId?: string;
@@ -495,6 +512,7 @@ export async function compactEmbeddedPiSession(params: {
             runtimeInfo,
             sandboxInfo,
             toolNames: tools.map((tool) => tool.name),
+            modelAliasLines: buildModelAliasLines(params.config),
             userTimezone,
             userTime,
           }),
@@ -795,6 +813,7 @@ export async function runEmbeddedPiAgent(params: {
               runtimeInfo,
               sandboxInfo,
               toolNames: tools.map((tool) => tool.name),
+              modelAliasLines: buildModelAliasLines(params.config),
               userTimezone,
               userTime,
             }),

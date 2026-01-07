@@ -541,6 +541,7 @@ export const ClawdbotSchema = z.object({
       subagents: z
         .object({
           maxConcurrent: z.number().int().positive().optional(),
+          archiveAfterMinutes: z.number().int().positive().optional(),
           tools: z
             .object({
               allow: z.array(z.string()).optional(),

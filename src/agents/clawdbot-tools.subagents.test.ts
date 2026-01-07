@@ -90,6 +90,7 @@ describe("subagents", () => {
     const result = await tool.execute("call1", {
       task: "do thing",
       timeoutSeconds: 1,
+      cleanup: "delete",
     });
     expect(result.details).toMatchObject({ status: "ok", reply: "result" });
 
@@ -105,11 +106,10 @@ describe("subagents", () => {
     expect(first?.deliver).toBe(false);
     expect(first?.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
 
-    expect(sendParams).toMatchObject({
-      provider: "discord",
-      to: "channel:req",
-      message: "announce now",
-    });
+    expect(sendParams.provider).toBe("discord");
+    expect(sendParams.to).toBe("channel:req");
+    expect(sendParams.message ?? "").toContain("announce now");
+    expect(sendParams.message ?? "").toContain("Stats:");
     expect(deletedKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
@@ -195,11 +195,10 @@ describe("subagents", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(sendParams).toMatchObject({
-      provider: "whatsapp",
-      to: "+123",
-      message: "hello from sub",
-    });
+    expect(sendParams.provider).toBe("whatsapp");
+    expect(sendParams.to).toBe("+123");
+    expect(sendParams.message ?? "").toContain("hello from sub");
+    expect(sendParams.message ?? "").toContain("Stats:");
   });
 
   it("sessions_spawn applies a model to the child session", async () => {

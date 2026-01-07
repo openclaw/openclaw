@@ -127,15 +127,17 @@ Parameters:
 - `task` (required)
 - `label?` (optional; used for logs/UI)
 - `model?` (optional; overrides the sub-agent model; invalid values error)
-- `timeoutSeconds?` (default 0; 0 = fire-and-forget)
-- `cleanup?` (`delete|keep`, default `delete`)
+- `timeoutSeconds?` (optional; omit for long-running jobs; if set, Clawdbot aborts the sub-agent when the timeout elapses)
+- `cleanup?` (`delete|keep`, default `keep`)
 
 Behavior:
-- Starts a new `subagent:<uuid>` session with `deliver: false`.
+- Starts a new `agent:<id>:subagent:<uuid>` session with `deliver: false`.
 - Sub-agents default to the full tool set **minus session tools** (configurable via `agent.subagents.tools`).
 - Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
 - After completion (or best-effort wait), Clawdbot runs a sub-agent **announce step** and posts the result to the requester chat provider.
 - Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
+- Sub-agent sessions are auto-archived after `agent.subagents.archiveAfterMinutes` (default: 60).
+- Announce replies include a stats line (runtime, tokens, sessionKey/sessionId, transcript path, and optional cost).
 
 ## Sandbox Session Visibility
 
