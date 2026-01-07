@@ -1,6 +1,5 @@
-import { describe, expect, it } from "vitest";
-
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { describe, expect, it } from "vitest";
 
 import {
   buildBootstrapContextFiles,

@@ -28,6 +28,7 @@
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
+- Tools: keep tool failure logs concise (no stack traces); full stack only in debug logs.
 - Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
 - Android: fix APK output filename renaming after AGP updates. Thanks @Syhids for PR #410.
 - Android: rotate camera photos by EXIF orientation. Thanks @fcatuhe for PR #403.
