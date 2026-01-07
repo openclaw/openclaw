@@ -30,6 +30,7 @@
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
 - Browser: fix `browser snapshot`/`browser act` timeouts under Bun by patching Playwright’s CDP WebSocket selection. Thanks @azade-c for PR #307.
 - Browser: add `--browser-profile` flag and honor profile in tabs routes + browser tool. Thanks @jamesgroat for PR #324.
+- Gmail: include tailscale command exit codes/output when hook setup fails (easier debugging).
 - Telegram: stop typing after tool results. Thanks @AbhisekBasu1 for PR #322.
 - Telegram: include sender identity in group envelope headers. (#336)
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
