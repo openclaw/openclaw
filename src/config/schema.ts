@@ -107,6 +107,7 @@ const FIELD_LABELS: Record<string, string> = {
   "talk.apiKey": "Talk API Key",
   "telegram.botToken": "Telegram Bot Token",
   "telegram.dmPolicy": "Telegram DM Policy",
+  "telegram.streamMode": "Telegram Stream Mode",
   "whatsapp.dmPolicy": "WhatsApp DM Policy",
   "signal.dmPolicy": "Signal DM Policy",
   "imessage.dmPolicy": "iMessage DM Policy",
@@ -155,6 +156,8 @@ const FIELD_HELP: Record<string, string> = {
     'When to send ack reactions ("group-mentions", "group-all", "direct", "all").',
   "telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
+  "telegram.streamMode":
+    "Draft streaming mode for Telegram replies (off | partial | block). Requires private topics + sendMessageDraft.",
   "whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
   "signal.dmPolicy":

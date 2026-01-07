@@ -468,6 +468,7 @@ Set `telegram.enabled: false` to disable automatic startup.
     dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
     allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
     groups: { "*": { requireMention: true } },
+    streamMode: "partial",               // off | partial | block (draft streaming)
     actions: { reactions: true },        // tool action gates (false disables)
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
@@ -477,6 +478,11 @@ Set `telegram.enabled: false` to disable automatic startup.
   }
 }
 ```
+
+Draft streaming notes:
+- Uses Telegram `sendMessageDraft` (draft bubble, not a real message).
+- Requires **private chat topics** (message_thread_id in DMs; bot has topics enabled).
+- `/reasoning stream` streams reasoning into the draft, then sends the final answer.
 
 ### `discord` (bot transport)
 

@@ -4,6 +4,7 @@ import { Buffer } from "node:buffer";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
+import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
   chunkMarkdownText,
   resolveTextChunkLimit,
@@ -14,6 +15,7 @@ import {
   listNativeCommandSpecs,
 } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import { resolveBlockStreamingChunking } from "../auto-reply/reply/block-streaming.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
@@ -43,6 +45,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
+import { createTelegramDraftStream } from "./draft-stream.js";
 import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
@@ -56,6 +59,8 @@ const PARSE_ERR_RE =
 const MEDIA_GROUP_TIMEOUT_MS = 500;
 
 type TelegramMessage = Message.CommonMessage;
+
+type TelegramStreamMode = "off" | "partial" | "block";
 
 type MediaGroupEntry = {
   messages: Array<{
@@ -164,6 +169,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     );
   };
   const replyToMode = opts.replyToMode ?? cfg.telegram?.replyToMode ?? "off";
+  const streamMode = resolveTelegramStreamMode(cfg);
   const nativeEnabled = cfg.commands?.native === true;
   const nativeDisabledExplicit = cfg.commands?.native === false;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
@@ -173,6 +179,23 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     (opts.mediaMaxMb ?? cfg.telegram?.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
   const mentionRegexes = buildMentionRegexes(cfg);
+  let botHasTopicsEnabled: boolean | undefined;
+  const resolveBotTopicsEnabled = async (ctx?: TelegramContext) => {
+    const fromCtx = ctx?.me as { has_topics_enabled?: boolean } | undefined;
+    if (typeof fromCtx?.has_topics_enabled === "boolean") {
+      botHasTopicsEnabled = fromCtx.has_topics_enabled;
+      return botHasTopicsEnabled;
+    }
+    if (typeof botHasTopicsEnabled === "boolean") return botHasTopicsEnabled;
+    try {
+      const me = (await bot.api.getMe()) as { has_topics_enabled?: boolean };
+      botHasTopicsEnabled = Boolean(me?.has_topics_enabled);
+    } catch (err) {
+      logVerbose(`telegram getMe failed: ${String(err)}`);
+      botHasTopicsEnabled = false;
+    }
+    return botHasTopicsEnabled;
+  };
   const resolveGroupPolicy = (chatId: string | number) =>
     resolveProviderGroupPolicy({
       cfg,
@@ -397,7 +420,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         kind: isGroup ? "group" : "dm",
         id: isGroup
           ? buildTelegramGroupPeerId(chatId, messageThreadId)
-          : String(chatId),
+          : buildTelegramDmPeerId(chatId, messageThreadId),
       },
     });
     const ctxPayload = {
@@ -471,10 +494,88 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       );
     }
 
+    const isPrivateChat = msg.chat.type === "private";
+    const draftMaxChars = Math.min(textLimit, 4096);
+    const canStreamDraft =
+      streamMode !== "off" &&
+      isPrivateChat &&
+      typeof messageThreadId === "number" &&
+      (await resolveBotTopicsEnabled(primaryCtx));
+    const draftStream = canStreamDraft
+      ? createTelegramDraftStream({
+          api: bot.api,
+          chatId,
+          draftId: msg.message_id || Date.now(),
+          maxChars: draftMaxChars,
+          messageThreadId,
+          log: logVerbose,
+          warn: logVerbose,
+        })
+      : undefined;
+    const draftChunking =
+      draftStream && streamMode === "block"
+        ? resolveBlockStreamingChunking(cfg, "telegram")
+        : undefined;
+    const draftChunker = draftChunking
+      ? new EmbeddedBlockChunker(draftChunking)
+      : undefined;
+    let lastPartialText = "";
+    let draftText = "";
+    const updateDraftFromPartial = (text?: string) => {
+      if (!draftStream || !text) return;
+      if (text === lastPartialText) return;
+      if (streamMode === "partial") {
+        lastPartialText = text;
+        draftStream.update(text);
+        return;
+      }
+      let delta = text;
+      if (text.startsWith(lastPartialText)) {
+        delta = text.slice(lastPartialText.length);
+      } else {
+        // Streaming buffer reset (or non-monotonic stream). Start fresh.
+        draftChunker?.reset();
+        draftText = "";
+      }
+      lastPartialText = text;
+      if (!delta) return;
+      if (!draftChunker) {
+        draftText = text;
+        draftStream.update(draftText);
+        return;
+      }
+      draftChunker.append(delta);
+      draftChunker.drain({
+        force: false,
+        emit: (chunk) => {
+          draftText += chunk;
+          draftStream.update(draftText);
+        },
+      });
+    };
+    const flushDraft = async () => {
+      if (!draftStream) return;
+      if (draftChunker?.hasBuffered()) {
+        draftChunker.drain({
+          force: true,
+          emit: (chunk) => {
+            draftText += chunk;
+          },
+        });
+        draftChunker.reset();
+        if (draftText) draftStream.update(draftText);
+      }
+      await draftStream.flush();
+    };
+
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
         responsePrefix: cfg.messages?.responsePrefix,
-        deliver: async (payload) => {
+        deliver: async (payload, info) => {
+          if (info.kind === "final") {
+            await flushDraft();
+            draftStream?.stop();
+          }
           await deliverReplies({
             replies: [payload],
             chatId: String(chatId),
@@ -498,9 +599,21 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ctx: ctxPayload,
       cfg,
       dispatcher,
-      replyOptions,
+      replyOptions: {
+        ...replyOptions,
+        onPartialReply: draftStream
+          ? (payload) => updateDraftFromPartial(payload.text)
+          : undefined,
+        onReasoningStream: draftStream
+          ? (payload) => {
+              if (payload.text) draftStream.update(payload.text);
+            }
+          : undefined,
+        disableBlockStreaming: Boolean(draftStream),
+      },
     });
     markDispatchIdle();
+    draftStream?.stop();
     if (!queuedFinal) return;
   };
 
@@ -602,7 +715,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             kind: isGroup ? "group" : "dm",
             id: isGroup
               ? buildTelegramGroupPeerId(chatId, messageThreadId)
-              : String(chatId),
+              : buildTelegramDmPeerId(chatId, messageThreadId),
           },
         });
         const ctxPayload = {
@@ -925,7 +1038,24 @@ function buildTelegramThreadParams(messageThreadId?: number) {
     : undefined;
 }
 
+function resolveTelegramStreamMode(
+  cfg: ReturnType<typeof loadConfig>,
+): TelegramStreamMode {
+  const raw = cfg.telegram?.streamMode?.trim().toLowerCase();
+  if (raw === "off" || raw === "partial" || raw === "block") return raw;
+  return "partial";
+}
+
 function buildTelegramGroupPeerId(
+  chatId: number | string,
+  messageThreadId?: number,
+) {
+  return messageThreadId != null
+    ? `${chatId}:topic:${messageThreadId}`
+    : String(chatId);
+}
+
+function buildTelegramDmPeerId(
   chatId: number | string,
   messageThreadId?: number,
 ) {

@@ -106,6 +106,12 @@ describe("directive parsing", () => {
     expect(res.reasoningLevel).toBe("on");
   });
 
+  it("matches reasoning stream directive", () => {
+    const res = extractReasoningDirective("/reasoning stream please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.reasoningLevel).toBe("stream");
+  });
+
   it("matches elevated with leading space", () => {
     const res = extractElevatedDirective(" please /elevated on now");
     expect(res.hasDirective).toBe(true);

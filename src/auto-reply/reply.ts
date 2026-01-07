@@ -401,7 +401,8 @@ export async function getReplyFromConfig(
     agentCfg?.blockStreamingBreak === "message_end"
       ? "message_end"
       : "text_end";
-  const blockStreamingEnabled = resolvedBlockStreaming === "on";
+  const blockStreamingEnabled =
+    resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider)
     : undefined;

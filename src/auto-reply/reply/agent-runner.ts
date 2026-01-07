@@ -197,6 +197,9 @@ export async function runReplyAgent(params: {
     let fallbackProvider = followupRun.run.provider;
     let fallbackModel = followupRun.run.model;
     try {
+      const allowPartialStream = !(
+        followupRun.run.reasoningLevel === "stream" && opts?.onReasoningStream
+      );
       const fallbackResult = await runWithModelFallback({
         cfg: followupRun.run.config,
         provider: followupRun.run.provider,
@@ -227,32 +230,41 @@ export async function runReplyAgent(params: {
             runId,
             blockReplyBreak: resolvedBlockStreamingBreak,
             blockReplyChunking,
-            onPartialReply: opts?.onPartialReply
-              ? async (payload) => {
-                  let text = payload.text;
-                  if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
-                    const stripped = stripHeartbeatToken(text, {
-                      mode: "message",
+            onPartialReply:
+              opts?.onPartialReply && allowPartialStream
+                ? async (payload) => {
+                    let text = payload.text;
+                    if (!isHeartbeat && text?.includes("HEARTBEAT_OK")) {
+                      const stripped = stripHeartbeatToken(text, {
+                        mode: "message",
+                      });
+                      if (stripped.didStrip && !didLogHeartbeatStrip) {
+                        didLogHeartbeatStrip = true;
+                        logVerbose(
+                          "Stripped stray HEARTBEAT_OK token from reply",
+                        );
+                      }
+                      if (
+                        stripped.shouldSkip &&
+                        (payload.mediaUrls?.length ?? 0) === 0
+                      ) {
+                        return;
+                      }
+                      text = stripped.text;
+                    }
+                    if (!isHeartbeat) {
+                      await typing.startTypingOnText(text);
+                    }
+                    await opts.onPartialReply?.({
+                      text,
+                      mediaUrls: payload.mediaUrls,
                     });
-                    if (stripped.didStrip && !didLogHeartbeatStrip) {
-                      didLogHeartbeatStrip = true;
-                      logVerbose(
-                        "Stripped stray HEARTBEAT_OK token from reply",
-                      );
-                    }
-                    if (
-                      stripped.shouldSkip &&
-                      (payload.mediaUrls?.length ?? 0) === 0
-                    ) {
-                      return;
-                    }
-                    text = stripped.text;
                   }
-                  if (!isHeartbeat) {
-                    await typing.startTypingOnText(text);
-                  }
-                  await opts.onPartialReply?.({
-                    text,
+                : undefined,
+            onReasoningStream: opts?.onReasoningStream
+              ? async (payload) => {
+                  await opts.onReasoningStream?.({
+                    text: payload.text,
                     mediaUrls: payload.mediaUrls,
                   });
                 }

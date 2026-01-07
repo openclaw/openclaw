@@ -6,7 +6,7 @@ read_when:
 ---
 # TUI (Gateway chat client)
 
-Updated: 2026-01-03
+Updated: 2026-01-07
 
 ## What it is
 - A terminal UI that connects to the Gateway WebSocket and speaks the same chat APIs as WebChat.
@@ -51,7 +51,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/model <provider/model>` (or `/model list`, `/models`)
 - `/think <off|minimal|low|medium|high>`
 - `/verbose <on|off>`
-- `/reasoning <on|off>`
+- `/reasoning <on|off|stream>` (stream = Telegram draft only)
 - `/elevated <on|off>`
 - `/elev <on|off>`
 - `/activation <mention|always>`

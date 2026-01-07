@@ -5,7 +5,7 @@ read_when:
 ---
 # Telegram (Bot API)
 
-Updated: 2026-01-06
+Updated: 2026-01-07
 
 Status: production-ready for bot DMs + groups via grammY. Long-polling by default; webhook optional.
 
@@ -44,6 +44,10 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - Sends typing indicators and replies with `message_thread_id` so responses stay in the topic.
 - Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
 
+Private topics (DM forum mode) also include `message_thread_id`. Clawdbot:
+- Appends `:topic:<threadId>` to **DM** session keys for isolation.
+- Uses the thread id for draft streaming + replies.
+
 ## Access control (DMs + groups)
 - Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
@@ -69,6 +73,27 @@ Telegram supports optional threaded replies via tags:
 Controlled by `telegram.replyToMode`:
 - `off` (default), `first`, `all`.
 
+## Streaming (drafts)
+Telegram can stream **draft bubbles** while the agent is generating a response.
+Clawdbot uses Bot API `sendMessageDraft` (not real messages) and then sends the
+final reply as a normal message.
+
+Requirements (Telegram Bot API 9.3+):
+- **Private chats with topics enabled** (forum topic mode for the bot).
+- Incoming messages must include `message_thread_id` (private topic thread).
+- Streaming is ignored for groups/supergroups/channels.
+
+Config:
+- `telegram.streamMode: "off" | "partial" | "block"` (default: `partial`)
+  - `partial`: update the draft bubble with the latest streaming text.
+  - `block`: update the draft bubble in larger blocks (chunked).
+  - `off`: disable draft streaming.
+
+Reasoning stream (Telegram only):
+- `/reasoning stream` streams reasoning into the draft bubble while the reply is
+  generating, then sends the final answer without reasoning.
+- If `telegram.streamMode` is `off`, reasoning stream is disabled.
+
 ## Agent tool (reactions)
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
@@ -92,6 +117,7 @@ Provider options:
 - `telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
 - `telegram.replyToMode`: `off | first | all`.
 - `telegram.textChunkLimit`: outbound chunk size (chars).
+- `telegram.streamMode`: `off | partial | block` (draft streaming).
 - `telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `telegram.webhookUrl`: enable webhook mode.

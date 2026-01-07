@@ -5,7 +5,7 @@ read_when:
 ---
 # grammY Integration (Telegram Bot API)
 
-Updated: 2025-12-07
+Updated: 2026-01-07
 
 # Why grammY
 - TS-first Bot API client with built-in long-poll + webhook helpers, middleware, error handling, rate limiter.
@@ -19,6 +19,7 @@ Updated: 2025-12-07
 - **Webhook support:** `webhook-set.ts` wraps `setWebhook/deleteWebhook`; `webhook.ts` hosts the callback with health + graceful shutdown. Gateway enables webhook mode when `telegram.webhookUrl` is set (otherwise it long-polls).
 - **Sessions:** direct chats collapse into the agent main session (`agent:<agentId>:<mainKey>`); groups use `agent:<agentId>:telegram:group:<chatId>`; replies route back to the same provider.
 - **Config knobs:** `telegram.botToken`, `telegram.dmPolicy`, `telegram.groups` (allowlist + mention defaults), `telegram.allowFrom`, `telegram.groupAllowFrom`, `telegram.groupPolicy`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`.
+- **Draft streaming:** optional `telegram.streamMode` uses `sendMessageDraft` in private topic chats (Bot API 9.3+).
 - **Tests:** grammy mocks cover DM + group mention gating and outbound send; more media/webhook fixtures still welcome.
 
 Open questions

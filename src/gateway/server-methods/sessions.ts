@@ -224,7 +224,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
             undefined,
             errorShape(
               ErrorCodes.INVALID_REQUEST,
-              'invalid reasoningLevel (use "on"|"off")',
+              'invalid reasoningLevel (use "on"|"off"|"stream")',
             ),
           );
           return;

@@ -446,7 +446,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                   ok: false,
                   error: {
                     code: ErrorCodes.INVALID_REQUEST,
-                    message: `invalid reasoningLevel: ${String(raw)}`,
+                    message: `invalid reasoningLevel: ${String(raw)} (use on|off|stream)`,
                   },
                 };
               }

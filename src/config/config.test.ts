@@ -713,6 +713,16 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("defaults telegram.streamMode to partial when telegram section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ telegram: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.telegram?.streamMode).toBe("partial");
+    }
+  });
+
   it('rejects whatsapp.dmPolicy="open" without allowFrom "*"', async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");

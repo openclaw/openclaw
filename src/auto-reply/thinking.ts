@@ -1,7 +1,7 @@
 export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
 export type VerboseLevel = "off" | "on";
 export type ElevatedLevel = "off" | "on";
-export type ReasoningLevel = "off" | "on";
+export type ReasoningLevel = "off" | "on" | "stream";
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(
@@ -82,5 +82,6 @@ export function normalizeReasoningLevel(
     )
   )
     return "on";
+  if (["stream", "streaming", "draft", "live"].includes(key)) return "stream";
   return undefined;
 }

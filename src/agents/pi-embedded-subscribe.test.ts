@@ -147,7 +147,7 @@ describe("subscribeEmbeddedPiSession", () => {
       runId: "run",
       onBlockReply,
       blockReplyBreak: "message_end",
-      includeReasoning: true,
+      reasoningMode: "on",
     });
 
     const assistantMessage = {

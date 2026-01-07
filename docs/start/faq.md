@@ -603,7 +603,7 @@ Quick reference (send these in chat):
 | `/activation mention\|always` | Group activation (owner-only) |
 | `/think <level>` | Set thinking level (off\|minimal\|low\|medium\|high) |
 | `/verbose on\|off` | Toggle verbose mode |
-| `/reasoning on\|off` | Toggle reasoning visibility |
+| `/reasoning on\|off\|stream` | Toggle reasoning visibility (stream = Telegram draft only) |
 | `/elevated on\|off` | Toggle elevated bash mode (approved senders only) |
 | `/model <name>` | Switch AI model (see below) |
 | `/queue <mode>` | Queue mode (see below) |

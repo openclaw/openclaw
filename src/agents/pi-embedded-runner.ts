@@ -659,6 +659,10 @@ export async function runEmbeddedPiAgent(params: {
   }) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
+  onReasoningStream?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => void | Promise<void>;
   onToolResult?: (payload: {
     text?: string;
     mediaUrls?: string[];
@@ -917,9 +921,10 @@ export async function runEmbeddedPiAgent(params: {
             session,
             runId: params.runId,
             verboseLevel: params.verboseLevel,
-            includeReasoning: params.reasoningLevel === "on",
+            reasoningMode: params.reasoningLevel ?? "off",
             shouldEmitToolResult: params.shouldEmitToolResult,
             onToolResult: params.onToolResult,
+            onReasoningStream: params.onReasoningStream,
             onBlockReply: params.onBlockReply,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,

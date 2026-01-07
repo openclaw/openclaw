@@ -385,7 +385,7 @@ export async function handleDirectiveOnly(params: {
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
     return {
-      text: `Unrecognized reasoning level "${directives.rawReasoningLevel ?? ""}". Valid levels: on, off.`,
+      text: `Unrecognized reasoning level "${directives.rawReasoningLevel ?? ""}". Valid levels: on, off, stream.`,
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
@@ -563,7 +563,9 @@ export async function handleDirectiveOnly(params: {
     parts.push(
       directives.reasoningLevel === "off"
         ? `${SYSTEM_MARK} Reasoning visibility disabled.`
-        : `${SYSTEM_MARK} Reasoning visibility enabled.`,
+        : directives.reasoningLevel === "stream"
+          ? `${SYSTEM_MARK} Reasoning stream enabled (Telegram only).`
+          : `${SYSTEM_MARK} Reasoning visibility enabled.`,
     );
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
