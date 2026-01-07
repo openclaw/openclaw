@@ -106,6 +106,10 @@ export async function sanitizeSessionMessagesImages(
 
 const GOOGLE_TURN_ORDER_BOOTSTRAP_TEXT = "(session bootstrap)";
 
+export function isGoogleModelApi(api?: string | null): boolean {
+  return api === "google-gemini-cli" || api === "google-generative-ai";
+}
+
 export function sanitizeGoogleTurnOrdering(
   messages: AgentMessage[],
 ): AgentMessage[] {
