@@ -28,6 +28,7 @@
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
+- Tools: keep tool failure logs concise (no stack traces); full stack only in debug logs.
 - Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
 - Android: fix APK output filename renaming after AGP updates. Thanks @Syhids for PR #410.
 - Android: rotate camera photos by EXIF orientation. Thanks @fcatuhe for PR #403.
@@ -40,6 +41,7 @@
 - Agent: protect bootstrap prefix from context pruning. Thanks @maxsumrall for PR #381.
 - Agent: deliver final replies for non-streaming models when block chunking is enabled. Thank you @mneves75 for PR #369!
 - Agent: trim bootstrap context injections and keep group guidance concise (emoji reactions allowed). Thanks @tobiasbischoff for PR #370.
+- Agent: return a friendly context overflow response (413/request_too_large). Thanks @alejandroOPI for PR #395.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
 - Sub-agents: skip invalid model overrides with a warning and keep the run alive; tool exceptions now return tool errors instead of crashing the agent.
 - Sessions: forward explicit sessionKey through gateway/chat/node bridge to avoid sub-agent sessionId mixups.
