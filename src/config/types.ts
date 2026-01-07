@@ -87,6 +87,7 @@ export type AgentElevatedAllowFromConfig = {
   slack?: Array<string | number>;
   signal?: Array<string | number>;
   imessage?: Array<string | number>;
+  msteams?: Array<string | number>;
   webchat?: Array<string | number>;
 };
 
@@ -214,7 +215,8 @@ export type HookMappingConfig = {
     | "discord"
     | "slack"
     | "signal"
-    | "imessage";
+    | "imessage"
+    | "msteams";
   to?: string;
   /** Override model for this hook (provider/model or alias). */
   model?: string;
@@ -569,6 +571,64 @@ export type SignalConfig = {
   accounts?: Record<string, SignalAccountConfig>;
 } & SignalAccountConfig;
 
+export type MSTeamsWebhookConfig = {
+  /** Port for the webhook server. Default: 3978. */
+  port?: number;
+  /** Path for the messages endpoint. Default: /api/messages. */
+  path?: string;
+};
+
+/** Reply style for MS Teams messages. */
+export type MSTeamsReplyStyle = "thread" | "top-level";
+
+/** Channel-level config for MS Teams. */
+export type MSTeamsChannelConfig = {
+  /** Require @mention to respond. Default: true. */
+  requireMention?: boolean;
+  /** Reply style: "thread" replies to the message, "top-level" posts a new message. */
+  replyStyle?: MSTeamsReplyStyle;
+};
+
+/** Team-level config for MS Teams. */
+export type MSTeamsTeamConfig = {
+  /** Default requireMention for channels in this team. */
+  requireMention?: boolean;
+  /** Default reply style for channels in this team. */
+  replyStyle?: MSTeamsReplyStyle;
+  /** Per-channel overrides. Key is conversation ID (e.g., "19:...@thread.tacv2"). */
+  channels?: Record<string, MSTeamsChannelConfig>;
+};
+
+export type MSTeamsConfig = {
+  /** If false, do not start the MS Teams provider. Default: true. */
+  enabled?: boolean;
+  /** Azure Bot App ID (from Azure Bot registration). */
+  appId?: string;
+  /** Azure Bot App Password / Client Secret. */
+  appPassword?: string;
+  /** Azure AD Tenant ID (for single-tenant bots). */
+  tenantId?: string;
+  /** Webhook server configuration. */
+  webhook?: MSTeamsWebhookConfig;
+  /** Direct message access policy (default: pairing). */
+  dmPolicy?: DmPolicy;
+  /** Allowlist for DM senders (AAD object IDs or UPNs). */
+  allowFrom?: Array<string>;
+  /** Outbound text chunk size (chars). Default: 4000. */
+  textChunkLimit?: number;
+  /**
+   * Allowed host suffixes for inbound attachment downloads.
+   * Use ["*"] to allow any host (not recommended).
+   */
+  mediaAllowHosts?: Array<string>;
+  /** Default: require @mention to respond in channels/groups. */
+  requireMention?: boolean;
+  /** Default reply style: "thread" replies to the message, "top-level" posts a new message. */
+  replyStyle?: MSTeamsReplyStyle;
+  /** Per-team config. Key is team ID (from the /team/ URL path segment). */
+  teams?: Record<string, MSTeamsTeamConfig>;
+};
+
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -631,6 +691,7 @@ export type QueueModeByProvider = {
   slack?: QueueMode;
   signal?: QueueMode;
   imessage?: QueueMode;
+  msteams?: QueueMode;
   webchat?: QueueMode;
 };
 
@@ -875,13 +936,6 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
-  /**
-   * Remote gateway over SSH, forwarding the gateway port to localhost.
-   * Format: "user@host" or "user@host:port" (port defaults to 22).
-   */
-  sshTarget?: string;
-  /** Optional SSH identity file path. */
-  sshIdentity?: string;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: string;
   /** Password for remote auth (when the gateway requires password auth). */
@@ -1126,7 +1180,7 @@ export type ClawdbotConfig = {
       every?: string;
       /** Heartbeat model override (provider/model). */
       model?: string;
-      /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|none). */
+      /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|msteams|none). */
       target?:
         | "last"
         | "whatsapp"
@@ -1135,6 +1189,7 @@ export type ClawdbotConfig = {
         | "slack"
         | "signal"
         | "imessage"
+        | "msteams"
         | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
@@ -1225,6 +1280,7 @@ export type ClawdbotConfig = {
   slack?: SlackConfig;
   signal?: SignalConfig;
   imessage?: IMessageConfig;
+  msteams?: MSTeamsConfig;
   cron?: CronConfig;
   hooks?: HooksConfig;
   bridge?: BridgeConfig;
