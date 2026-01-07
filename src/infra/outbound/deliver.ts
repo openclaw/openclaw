@@ -40,6 +40,18 @@ export type OutboundDeliveryResult =
 
 type Chunker = (text: string, limit: number) => string[];
 
+const providerCaps: Record<
+  Exclude<OutboundProvider, "none">,
+  { chunker: Chunker | null }
+> = {
+  whatsapp: { chunker: chunkText },
+  telegram: { chunker: chunkMarkdownText },
+  discord: { chunker: null },
+  slack: { chunker: null },
+  signal: { chunker: chunkText },
+  imessage: { chunker: chunkText },
+};
+
 type ProviderHandler = {
   chunker: Chunker | null;
   sendText: (text: string) => Promise<OutboundDeliveryResult>;
@@ -82,7 +94,7 @@ function createProviderHandler(params: {
 
   const handlers: Record<Exclude<OutboundProvider, "none">, ProviderHandler> = {
     whatsapp: {
-      chunker: chunkText,
+      chunker: providerCaps.whatsapp.chunker,
       sendText: async (text) => ({
         provider: "whatsapp",
         ...(await deps.sendWhatsApp(to, text, { verbose: false })),
@@ -96,7 +108,7 @@ function createProviderHandler(params: {
       }),
     },
     telegram: {
-      chunker: chunkMarkdownText,
+      chunker: providerCaps.telegram.chunker,
       sendText: async (text) => ({
         provider: "telegram",
         ...(await deps.sendTelegram(to, text, {
@@ -114,7 +126,7 @@ function createProviderHandler(params: {
       }),
     },
     discord: {
-      chunker: null,
+      chunker: providerCaps.discord.chunker,
       sendText: async (text) => ({
         provider: "discord",
         ...(await deps.sendDiscord(to, text, { verbose: false })),
@@ -128,7 +140,7 @@ function createProviderHandler(params: {
       }),
     },
     slack: {
-      chunker: null,
+      chunker: providerCaps.slack.chunker,
       sendText: async (text) => ({
         provider: "slack",
         ...(await deps.sendSlack(to, text)),
@@ -139,7 +151,7 @@ function createProviderHandler(params: {
       }),
     },
     signal: {
-      chunker: chunkText,
+      chunker: providerCaps.signal.chunker,
       sendText: async (text) => ({
         provider: "signal",
         ...(await deps.sendSignal(to, text, { maxBytes: signalMaxBytes })),
@@ -153,7 +165,7 @@ function createProviderHandler(params: {
       }),
     },
     imessage: {
-      chunker: chunkText,
+      chunker: providerCaps.imessage.chunker,
       sendText: async (text) => ({
         provider: "imessage",
         ...(await deps.sendIMessage(to, text, { maxBytes: imessageMaxBytes })),
