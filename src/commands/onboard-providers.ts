@@ -182,7 +182,10 @@ async function noteSlackTokenHelp(
   );
 }
 
-function setWhatsAppDmPolicy(cfg: ClawdbotConfig, dmPolicy?: DmPolicy) {
+function setWhatsAppDmPolicy(
+  cfg: ClawdbotConfig,
+  dmPolicy?: DmPolicy,
+): ClawdbotConfig {
   return {
     ...cfg,
     whatsapp: {
@@ -192,7 +195,10 @@ function setWhatsAppDmPolicy(cfg: ClawdbotConfig, dmPolicy?: DmPolicy) {
   };
 }
 
-function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]) {
+function setWhatsAppAllowFrom(
+  cfg: ClawdbotConfig,
+  allowFrom?: string[],
+): ClawdbotConfig {
   return {
     ...cfg,
     whatsapp: {
@@ -218,7 +224,7 @@ function setMessagesResponsePrefix(
 function setWhatsAppSelfChatMode(
   cfg: ClawdbotConfig,
   selfChatMode?: boolean,
-) {
+): ClawdbotConfig {
   return {
     ...cfg,
     whatsapp: {
