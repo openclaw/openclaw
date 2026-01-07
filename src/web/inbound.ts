@@ -590,30 +590,6 @@ export async function monitorWebInbox(options: {
       const jid = toWhatsappJid(to);
       await sock.sendPresenceUpdate("composing", jid);
     },
-    /**
-     * Send a reaction (emoji) to a specific message.
-     * Pass an empty string for emoji to remove the reaction.
-     */
-    sendReaction: async (
-      chatJid: string,
-      messageId: string,
-      emoji: string,
-      fromMe: boolean,
-      participant?: string,
-    ): Promise<void> => {
-      const jid = toWhatsappJid(chatJid);
-      await sock.sendMessage(jid, {
-        react: {
-          text: emoji,
-          key: {
-            remoteJid: jid,
-            id: messageId,
-            fromMe,
-            participant,
-          },
-        },
-      });
-    },
   } as const;
 }
 
