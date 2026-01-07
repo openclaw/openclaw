@@ -28,7 +28,7 @@ Real projects from the community. Highlights from #showcase (Jan 2–5, 2026).
 ## Infrastructure & deployment
 - **Home Assistant OS gateway add‑on** — Clawdbot gateway running on HA OS (Raspberry Pi), with SSH tunnel support + persistent state in /config. https://github.com/ngutman/clawdbot-ha-addon
 - **Home Assistant skill** — Control/automate HA via ClawdHub. https://clawdhub.com/skills/homeassistant
-- **Nix packaging** — Batteries‑included nixified clawdbot config. https://github.com/joshp123/nix-clawdbot
+- **Nix packaging** — Batteries‑included nixified clawdbot config. https://github.com/clawdbot/nix-clawdbot
 - **CalDAV skill** — khal/vdirsyncer based calendar skill. ClawdHub: caldav-calendar → https://clawdhub.com/skills/caldav-calendar
 
 ## Home + hardware
