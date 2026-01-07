@@ -24,6 +24,7 @@
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.
+- Cron: clamp timer delay to avoid TimeoutOverflowWarning. Thanks @emanuelst for PR #412.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
 - Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
