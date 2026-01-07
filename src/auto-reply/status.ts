@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 
 import { lookupContextTokens } from "../agents/context.js";
 import {
@@ -19,7 +20,7 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { shortenHomePath } from "../utils.js";
+import { VERSION } from "../version.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -29,23 +30,29 @@ import type {
 
 type AgentConfig = NonNullable<ClawdbotConfig["agent"]>;
 
+type QueueStatus = {
+  mode?: string;
+  depth?: number;
+  debounceMs?: number;
+  cap?: number;
+  dropPolicy?: string;
+  showDetails?: boolean;
+};
+
 type StatusArgs = {
   agent: AgentConfig;
-  workspaceDir?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   sessionScope?: SessionScope;
-  storePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
+  queue?: QueueStatus;
+  includeTranscriptUsage?: boolean;
   now?: number;
-  webLinked?: boolean;
-  webAuthAgeMs?: number | null;
-  heartbeatSeconds?: number;
 };
 
 const formatAge = (ms?: number | null) => {
@@ -83,6 +90,97 @@ export const formatContextUsageShort = (
   total: number | null | undefined,
   contextTokens: number | null | undefined,
 ) => `Context ${formatTokens(total, contextTokens ?? null)}`;
+
+const formatCommit = (value?: string | null) => {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
+};
+
+const resolveGitHead = (startDir: string) => {
+  let current = startDir;
+  for (let i = 0; i < 12; i += 1) {
+    const gitPath = path.join(current, ".git");
+    try {
+      const stat = fs.statSync(gitPath);
+      if (stat.isDirectory()) {
+        return path.join(gitPath, "HEAD");
+      }
+      if (stat.isFile()) {
+        const raw = fs.readFileSync(gitPath, "utf-8");
+        const match = raw.match(/gitdir:\s*(.+)/i);
+        if (match?.[1]) {
+          const resolved = path.resolve(current, match[1].trim());
+          return path.join(resolved, "HEAD");
+        }
+      }
+    } catch {
+      // ignore missing .git at this level
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return null;
+};
+
+let cachedCommit: string | null | undefined;
+const resolveCommitHash = () => {
+  if (cachedCommit !== undefined) return cachedCommit;
+  const envCommit =
+    process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim();
+  const normalized = formatCommit(envCommit);
+  if (normalized) {
+    cachedCommit = normalized;
+    return cachedCommit;
+  }
+  try {
+    const headPath = resolveGitHead(process.cwd());
+    if (!headPath) {
+      cachedCommit = null;
+      return cachedCommit;
+    }
+    const head = fs.readFileSync(headPath, "utf-8").trim();
+    if (!head) {
+      cachedCommit = null;
+      return cachedCommit;
+    }
+    if (head.startsWith("ref:")) {
+      const ref = head.replace(/^ref:\s*/i, "").trim();
+      const refPath = path.resolve(path.dirname(headPath), ref);
+      const refHash = fs.readFileSync(refPath, "utf-8").trim();
+      cachedCommit = formatCommit(refHash);
+      return cachedCommit;
+    }
+    cachedCommit = formatCommit(head);
+    return cachedCommit;
+  } catch {
+    cachedCommit = null;
+    return cachedCommit;
+  }
+};
+
+const formatQueueDetails = (queue?: QueueStatus) => {
+  if (!queue) return "";
+  const depth = typeof queue.depth === "number" ? `depth ${queue.depth}` : null;
+  if (!queue.showDetails) {
+    return depth ? ` (${depth})` : "";
+  }
+  const detailParts: string[] = [];
+  if (depth) detailParts.push(depth);
+  if (typeof queue.debounceMs === "number") {
+    const ms = Math.max(0, Math.round(queue.debounceMs));
+    const label =
+      ms >= 1000
+        ? `${ms % 1000 === 0 ? ms / 1000 : (ms / 1000).toFixed(1)}s`
+        : `${ms}ms`;
+    detailParts.push(`debounce ${label}`);
+  }
+  if (typeof queue.cap === "number") detailParts.push(`cap ${queue.cap}`);
+  if (queue.dropPolicy) detailParts.push(`drop ${queue.dropPolicy}`);
+  return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
+};
 
 const readUsageFromSessionLog = (
   sessionId?: string,
@@ -164,15 +262,17 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
-  const logUsage = readUsageFromSessionLog(entry?.sessionId);
-  if (logUsage) {
-    const candidate = logUsage.promptTokens || logUsage.total;
-    if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
-      totalTokens = candidate;
-    }
-    if (!model) model = logUsage.model ?? model;
-    if (!contextTokens && logUsage.model) {
-      contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
+  if (args.includeTranscriptUsage) {
+    const logUsage = readUsageFromSessionLog(entry?.sessionId);
+    if (logUsage) {
+      const candidate = logUsage.promptTokens || logUsage.total;
+      if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
+        totalTokens = candidate;
+      }
+      if (!model) model = logUsage.model ?? model;
+      if (!contextTokens && logUsage.model) {
+        contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
+      }
     }
   }
 
@@ -188,8 +288,7 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const runtime = (() => {
     const sandboxMode = args.agent?.sandbox?.mode ?? "off";
-    if (sandboxMode === "off")
-      return { line: "Runtime: direct", sandboxed: false };
+    if (sandboxMode === "off") return { label: "direct" };
     const sessionScope = args.sessionScope ?? "per-sender";
     const mainKey = resolveMainSessionKey({
       session: { scope: sessionScope },
@@ -199,35 +298,17 @@ export function buildStatusMessage(args: StatusArgs): string {
       ? sandboxMode === "all" || sessionKey !== mainKey.trim()
       : false;
     const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-    const suffix = sandboxed ? ` • elevated ${elevatedLevel}` : "";
     return {
-      line: `Runtime: ${runtime} (sandbox ${sandboxMode})${suffix}`,
-      sandboxed,
+      label: `${runtime}/${sandboxMode}`,
     };
   })();
 
-  const webLine = (() => {
-    if (args.webLinked === false) {
-      return "Web: not linked — run `clawdbot login` to scan the QR.";
-    }
-    const authAge = formatAge(args.webAuthAgeMs);
-    const heartbeat =
-      typeof args.heartbeatSeconds === "number"
-        ? ` • heartbeat ${args.heartbeatSeconds}s`
-        : "";
-    return `Web: linked • auth refreshed ${authAge}${heartbeat}`;
-  })();
-
+  const updatedAt = entry?.updatedAt;
   const sessionLine = [
     `Session: ${args.sessionKey ?? "unknown"}`,
-    `scope ${args.sessionScope ?? "per-sender"}`,
-    entry?.updatedAt
-      ? `updated ${formatAge(now - entry.updatedAt)}`
+    typeof updatedAt === "number"
+      ? `updated ${formatAge(now - updatedAt)}`
       : "no activity",
-    typeof entry?.compactionCount === "number"
-      ? `compactions ${entry.compactionCount}`
-      : undefined,
-    args.storePath ? `store ${shortenHomePath(args.storePath)}` : undefined,
   ]
     .filter(Boolean)
     .join(" • ");
@@ -238,39 +319,42 @@ export function buildStatusMessage(args: StatusArgs): string {
     Boolean(args.sessionKey?.includes(":group:")) ||
     Boolean(args.sessionKey?.includes(":channel:")) ||
     Boolean(args.sessionKey?.startsWith("group:"));
-  const groupActivationLine = isGroupSession
-    ? `Group activation: ${args.groupActivation ?? entry?.groupActivation ?? "mention"}`
+  const groupActivationValue = isGroupSession
+    ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
-  const contextLine = `Context: ${formatTokens(
-    totalTokens,
-    contextTokens ?? null,
-  )}${entry?.abortedLastRun ? " • last run aborted" : ""}`;
+  const contextLine = [
+    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
+    `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 
-  const optionsLine = runtime.sandboxed
-    ? `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | reasoning=${reasoningLevel} | elevated=${elevatedLevel}`
-    : `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | reasoning=${reasoningLevel}`;
+  const queueMode = args.queue?.mode ?? "unknown";
+  const queueDetails = formatQueueDetails(args.queue);
+  const optionParts = [
+    `Runtime: ${runtime.label}`,
+    `Think: ${thinkLevel}`,
+    `Verbose: ${verboseLevel}`,
+    reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
+    `Elevated: ${elevatedLevel}`,
+    groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
+    `🪢 Queue: ${queueMode}${queueDetails}`,
+  ];
+  const optionsLine = optionParts.filter(Boolean).join(" · ");
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
-
-  const agentLine = `Agent: embedded pi • ${modelLabel}`;
-  const authLine = args.modelAuth ? `Model auth: ${args.modelAuth}` : undefined;
-
-  const workspaceLine = args.workspaceDir
-    ? `Workspace: ${shortenHomePath(args.workspaceDir)}`
-    : undefined;
+  const authLabel = args.modelAuth ? ` · 🔑 ${args.modelAuth}` : "";
+  const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
+  const commit = resolveCommitHash();
+  const versionLine = `🦞 ClawdBot ${VERSION}${commit ? ` (${commit})` : ""}`;
 
   return [
-    "⚙️ Status",
-    webLine,
-    agentLine,
-    authLine,
-    runtime.line,
-    workspaceLine,
-    contextLine,
-    sessionLine,
-    groupActivationLine,
-    optionsLine,
+    versionLine,
+    modelLine,
+    `📚 ${contextLine}`,
+    `🧵 ${sessionLine}`,
+    `⚙️ ${optionsLine}`,
   ]
     .filter(Boolean)
     .join("\n");

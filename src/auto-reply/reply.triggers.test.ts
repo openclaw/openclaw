@@ -175,7 +175,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Status");
+      expect(text).toContain("ClawdBot");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

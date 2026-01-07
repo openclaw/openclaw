@@ -586,3 +586,11 @@ export function resolveQueueSettings(params: {
     dropPolicy: dropRaw,
   };
 }
+
+export function getFollowupQueueDepth(key: string): number {
+  const cleaned = key.trim();
+  if (!cleaned) return 0;
+  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  if (!queue) return 0;
+  return queue.items.length;
+}

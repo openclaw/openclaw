@@ -25,8 +25,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
-import { resolveHeartbeatSeconds } from "../../web/reconnect.js";
-import { getWebAuthAgeMs, webAuthExists } from "../../web/session.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import { shouldHandleTextCommands } from "../commands-registry.js";
 import {
@@ -51,6 +49,7 @@ import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 function resolveSessionEntryForKey(
@@ -384,9 +383,18 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
-    const webLinked = await webAuthExists();
-    const webAuthAgeMs = getWebAuthAgeMs();
-    const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
+    const queueSettings = resolveQueueSettings({
+      cfg,
+      provider: command.provider,
+      sessionEntry,
+    });
+    const queueKey = sessionKey ?? sessionEntry?.sessionId;
+    const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
+    const queueOverrides = Boolean(
+      sessionEntry?.queueDebounceMs ??
+        sessionEntry?.queueCap ??
+        sessionEntry?.queueDrop,
+    );
     const groupActivation = isGroup
       ? (normalizeGroupActivation(sessionEntry?.groupActivation) ??
         defaultGroupActivation())
@@ -403,11 +411,9 @@ export async function handleCommands(params: {
         verboseDefault: cfg.agent?.verboseDefault,
         elevatedDefault: cfg.agent?.elevatedDefault,
       },
-      workspaceDir,
       sessionEntry,
       sessionKey,
       sessionScope,
-      storePath,
       groupActivation,
       resolvedThink:
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
@@ -415,9 +421,15 @@ export async function handleCommands(params: {
       resolvedReasoning: resolvedReasoningLevel,
       resolvedElevated: resolvedElevatedLevel,
       modelAuth: resolveModelAuthLabel(provider, cfg),
-      webLinked,
-      webAuthAgeMs,
-      heartbeatSeconds,
+      queue: {
+        mode: queueSettings.mode,
+        depth: queueDepth,
+        debounceMs: queueSettings.debounceMs,
+        cap: queueSettings.cap,
+        dropPolicy: queueSettings.dropPolicy,
+        showDetails: queueOverrides,
+      },
+      includeTranscriptUsage: false,
     });
     return { shouldContinue: false, reply: { text: statusText } };
   }

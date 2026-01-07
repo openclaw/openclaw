@@ -46,6 +46,7 @@
 - Auto-reply: add `/reasoning on|off` to expose model reasoning blocks (italic).
 - Auto-reply: place reasoning blocks before the final reply text when appended.
 - Auto-reply: flag error payloads and improve Bun socket error messaging. Thanks @emanuelst for PR #331.
+- Auto-reply: refresh `/status` output with build info, compact context, and queue depth.
 - Commands: add `/stop` to the registry and route native aborts to the active chat session. Thanks @nachoiacovino for PR #295.
 - Commands: unify native + text chat commands behind `commands.*` config (Discord/Slack/Telegram). Thanks @thewilloftheshadow for PR #275.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
