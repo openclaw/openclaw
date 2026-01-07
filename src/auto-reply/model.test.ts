@@ -32,14 +32,18 @@ describe("extractModelDirective", () => {
 
   describe("alias shortcuts", () => {
     it("recognizes /gpt as model directive when alias is configured", () => {
-      const result = extractModelDirective("/gpt", { aliases: ["gpt", "sonnet", "opus"] });
+      const result = extractModelDirective("/gpt", {
+        aliases: ["gpt", "sonnet", "opus"],
+      });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("gpt");
       expect(result.cleaned).toBe("");
     });
 
     it("recognizes /sonnet as model directive", () => {
-      const result = extractModelDirective("/sonnet", { aliases: ["gpt", "sonnet", "opus"] });
+      const result = extractModelDirective("/sonnet", {
+        aliases: ["gpt", "sonnet", "opus"],
+      });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("sonnet");
     });
@@ -60,18 +64,24 @@ describe("extractModelDirective", () => {
     });
 
     it("does not match alias without leading slash", () => {
-      const result = extractModelDirective("gpt is great", { aliases: ["gpt"] });
+      const result = extractModelDirective("gpt is great", {
+        aliases: ["gpt"],
+      });
       expect(result.hasDirective).toBe(false);
     });
 
     it("does not match unknown aliases", () => {
-      const result = extractModelDirective("/unknown", { aliases: ["gpt", "sonnet"] });
+      const result = extractModelDirective("/unknown", {
+        aliases: ["gpt", "sonnet"],
+      });
       expect(result.hasDirective).toBe(false);
       expect(result.cleaned).toBe("/unknown");
     });
 
     it("prefers /model over alias when both present", () => {
-      const result = extractModelDirective("/model haiku", { aliases: ["gpt"] });
+      const result = extractModelDirective("/model haiku", {
+        aliases: ["gpt"],
+      });
       expect(result.hasDirective).toBe(true);
       expect(result.rawModel).toBe("haiku");
     });

@@ -321,7 +321,7 @@ export async function getReplyFromConfig(
     ),
   );
   const configuredAliases = Object.values(cfg.agent?.models ?? {})
-    .map((entry) => entry.alias)
+    .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
   let parsedDirectives = parseInlineDirectives(rawBody, {
