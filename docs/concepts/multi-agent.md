@@ -152,6 +152,10 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
         sandbox: {
           mode: "all",     // Always sandboxed
           scope: "agent",  // One container per agent
+          docker: {
+            // Optional one-time setup after container creation
+            setupCommand: "apt-get update && apt-get install -y git curl",
+          },
         },
         tools: {
           allow: ["read"],                    // Only read tool

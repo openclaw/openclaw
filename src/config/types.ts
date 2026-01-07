@@ -617,6 +617,11 @@ export type RoutingConfig = {
         /** Legacy alias for scope ("session" when true, "shared" when false). */
         perSession?: boolean;
         workspaceRoot?: string;
+        /** Docker-specific sandbox overrides for this agent. */
+        docker?: {
+          /** Optional setup command run once after container creation. */
+          setupCommand?: string;
+        };
         /** Tool allow/deny policy for sandboxed sessions (deny wins). */
         tools?: {
           allow?: string[];

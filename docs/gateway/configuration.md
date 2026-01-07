@@ -339,6 +339,7 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
     - `workspaceAccess`: `"none"` | `"ro"` | `"rw"`
     - `scope`: `"session"` | `"agent"` | `"shared"`
     - `workspaceRoot`: custom sandbox workspace root
+    - `docker.setupCommand`: optional one-time setup command (runs once after container creation; ignored when `scope: "shared"`)
     - `tools`: per-agent sandbox tool policy (deny wins; overrides `agent.sandbox.tools`)
   - `tools`: per-agent tool restrictions (overrides `agent.tools`; applied before sandbox tool policy).
     - `allow`: array of allowed tool names
@@ -1115,6 +1116,7 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
         capDrop: ["ALL"],
         env: { LANG: "C.UTF-8" },
         setupCommand: "apt-get update && apt-get install -y git curl jq",
+        // Per-agent override (multi-agent): routing.agents.<agentId>.sandbox.docker.setupCommand
         pidsLimit: 256,
         memory: "1g",
         memorySwap: "2g",

@@ -54,6 +54,85 @@ describe("Agent-specific sandbox config", () => {
     expect(context?.enabled).toBe(true);
   });
 
+  it("should allow agent-specific docker setupCommand overrides", async () => {
+    const { resolveSandboxContext } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agent: {
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          docker: {
+            setupCommand: "echo global",
+          },
+        },
+      },
+      routing: {
+        agents: {
+          work: {
+            workspace: "~/clawd-work",
+            sandbox: {
+              mode: "all",
+              scope: "agent",
+              docker: {
+                setupCommand: "echo work",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const context = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:work:main",
+      workspaceDir: "/tmp/test-work",
+    });
+
+    expect(context).toBeDefined();
+    expect(context?.docker.setupCommand).toBe("echo work");
+  });
+
+  it("should ignore agent-specific docker overrides when scope is shared", async () => {
+    const { resolveSandboxContext } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agent: {
+        sandbox: {
+          mode: "all",
+          scope: "shared",
+          docker: {
+            setupCommand: "echo global",
+          },
+        },
+      },
+      routing: {
+        agents: {
+          work: {
+            workspace: "~/clawd-work",
+            sandbox: {
+              mode: "all",
+              scope: "shared",
+              docker: {
+                setupCommand: "echo work",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const context = await resolveSandboxContext({
+      config: cfg,
+      sessionKey: "agent:work:main",
+      workspaceDir: "/tmp/test-work",
+    });
+
+    expect(context).toBeDefined();
+    expect(context?.docker.setupCommand).toBe("echo global");
+    expect(context?.containerName).toContain("shared");
+  });
+
   it("should override with agent-specific sandbox mode 'off'", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 

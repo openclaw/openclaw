@@ -241,12 +241,14 @@ function defaultSandboxConfig(
     }
   }
 
+  const scope = resolveSandboxScope({
+    scope: agentSandbox?.scope ?? agent?.scope,
+    perSession: agentSandbox?.perSession ?? agent?.perSession,
+  });
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
-    scope: resolveSandboxScope({
-      scope: agentSandbox?.scope ?? agent?.scope,
-      perSession: agentSandbox?.perSession ?? agent?.perSession,
-    }),
+    scope,
     workspaceAccess:
       agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
@@ -264,7 +266,10 @@ function defaultSandboxConfig(
       user: agent?.docker?.user,
       capDrop: agent?.docker?.capDrop ?? ["ALL"],
       env: agent?.docker?.env ?? { LANG: "C.UTF-8" },
-      setupCommand: agent?.docker?.setupCommand,
+      setupCommand:
+        scope === "shared"
+          ? agent?.docker?.setupCommand
+          : (agentSandbox?.docker?.setupCommand ?? agent?.docker?.setupCommand),
       pidsLimit: agent?.docker?.pidsLimit,
       memory: agent?.docker?.memory,
       memorySwap: agent?.docker?.memorySwap,

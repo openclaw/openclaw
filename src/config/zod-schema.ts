@@ -265,6 +265,11 @@ const RoutingSchema = z
                   .optional(),
                 perSession: z.boolean().optional(),
                 workspaceRoot: z.string().optional(),
+                docker: z
+                  .object({
+                    setupCommand: z.string().optional(),
+                  })
+                  .optional(),
                 tools: z
                   .object({
                     allow: z.array(z.string()).optional(),
