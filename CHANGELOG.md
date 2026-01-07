@@ -171,6 +171,11 @@
 - Refactor: centralize group allowlist/mention policy across providers.
 - Deps: update to latest across the repo.
 
+## 2026.1.7
+
+### Fixes
+- Android: bump version to 2026.1.7, add version code, and name APK outputs. Thanks @fcatuhe for PR #402.
+
 ## 2026.1.5-3
 
 ### Fixes
