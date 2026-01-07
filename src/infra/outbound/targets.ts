@@ -19,6 +19,99 @@ export type OutboundTarget = {
   reason?: string;
 };
 
+export type OutboundTargetResolution =
+  | { ok: true; to: string }
+  | { ok: false; error: Error };
+
+export function resolveOutboundTarget(params: {
+  provider:
+    | "whatsapp"
+    | "telegram"
+    | "discord"
+    | "slack"
+    | "signal"
+    | "imessage"
+    | "webchat";
+  to?: string;
+  allowFrom?: string[];
+}): OutboundTargetResolution {
+  const trimmed = params.to?.trim() || "";
+  if (params.provider === "whatsapp") {
+    if (trimmed) {
+      return { ok: true, to: normalizeE164(trimmed) };
+    }
+    const fallback = params.allowFrom?.[0]?.trim();
+    if (fallback) {
+      return { ok: true, to: fallback };
+    }
+    return {
+      ok: false,
+      error: new Error(
+        "Delivering to WhatsApp requires --to <E.164> or whatsapp.allowFrom[0]",
+      ),
+    };
+  }
+  if (params.provider === "telegram") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error("Delivering to Telegram requires --to <chatId>"),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
+  if (params.provider === "discord") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to Discord requires --to <channelId|user:ID|channel:ID>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
+  if (params.provider === "slack") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to Slack requires --to <channelId|user:ID|channel:ID>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
+  if (params.provider === "signal") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to Signal requires --to <E.164|group:ID|signal:group:ID|signal:+E.164>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
+  if (params.provider === "imessage") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to iMessage requires --to <handle|chat_id:ID>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
+  return {
+    ok: false,
+    error: new Error(
+      "Delivering to WebChat is not supported via `clawdbot agent`; use WhatsApp/Telegram or run with --deliver=false.",
+    ),
+  };
+}
+
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: ClawdbotConfig;
   entry?: SessionEntry;

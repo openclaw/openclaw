@@ -45,6 +45,7 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
 import { normalizeE164 } from "../utils.js";
@@ -501,93 +502,39 @@ export async function agentCommand(
   const deliveryProvider =
     deliveryProviderRaw === "imsg" ? "imessage" : deliveryProviderRaw;
 
-  const whatsappTarget = opts.to ? normalizeE164(opts.to) : allowFrom[0];
-  const telegramTarget = opts.to?.trim() || undefined;
-  const discordTarget = opts.to?.trim() || undefined;
-  const slackTarget = opts.to?.trim() || undefined;
-  const signalTarget = opts.to?.trim() || undefined;
-  const imessageTarget = opts.to?.trim() || undefined;
-
   const logDeliveryError = (err: unknown) => {
-    const deliveryTarget =
-      deliveryProvider === "telegram"
-        ? telegramTarget
-        : deliveryProvider === "whatsapp"
-          ? whatsappTarget
-          : deliveryProvider === "discord"
-            ? discordTarget
-            : deliveryProvider === "slack"
-              ? slackTarget
-              : deliveryProvider === "signal"
-                ? signalTarget
-                : deliveryProvider === "imessage"
-                  ? imessageTarget
-                  : undefined;
     const message = `Delivery failed (${deliveryProvider}${deliveryTarget ? ` to ${deliveryTarget}` : ""}): ${String(err)}`;
     runtime.error?.(message);
     if (!runtime.error) runtime.log(message);
   };
 
+  const isDeliveryProviderKnown =
+    deliveryProvider === "whatsapp" ||
+    deliveryProvider === "telegram" ||
+    deliveryProvider === "discord" ||
+    deliveryProvider === "slack" ||
+    deliveryProvider === "signal" ||
+    deliveryProvider === "imessage" ||
+    deliveryProvider === "webchat";
+
+  const resolvedTarget =
+    deliver && isDeliveryProviderKnown
+      ? resolveOutboundTarget({
+          provider: deliveryProvider,
+          to: opts.to,
+          allowFrom,
+        })
+      : null;
+  const deliveryTarget = resolvedTarget?.ok ? resolvedTarget.to : undefined;
+
   if (deliver) {
-    if (deliveryProvider === "whatsapp" && !whatsappTarget) {
-      const err = new Error(
-        "Delivering to WhatsApp requires --to <E.164> or whatsapp.allowFrom[0]",
-      );
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (deliveryProvider === "telegram" && !telegramTarget) {
-      const err = new Error("Delivering to Telegram requires --to <chatId>");
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (deliveryProvider === "discord" && !discordTarget) {
-      const err = new Error(
-        "Delivering to Discord requires --to <channelId|user:ID|channel:ID>",
-      );
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (deliveryProvider === "slack" && !slackTarget) {
-      const err = new Error(
-        "Delivering to Slack requires --to <channelId|user:ID|channel:ID>",
-      );
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (deliveryProvider === "signal" && !signalTarget) {
-      const err = new Error(
-        "Delivering to Signal requires --to <E.164|group:ID|signal:group:ID|signal:+E.164>",
-      );
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (deliveryProvider === "imessage" && !imessageTarget) {
-      const err = new Error(
-        "Delivering to iMessage requires --to <handle|chat_id:ID>",
-      );
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (deliveryProvider === "webchat") {
-      const err = new Error(
-        "Delivering to WebChat is not supported via `clawdbot agent`; use WhatsApp/Telegram or run with --deliver=false.",
-      );
-      if (!bestEffortDeliver) throw err;
-      logDeliveryError(err);
-    }
-    if (
-      deliveryProvider !== "whatsapp" &&
-      deliveryProvider !== "telegram" &&
-      deliveryProvider !== "discord" &&
-      deliveryProvider !== "slack" &&
-      deliveryProvider !== "signal" &&
-      deliveryProvider !== "imessage" &&
-      deliveryProvider !== "webchat"
-    ) {
+    if (!isDeliveryProviderKnown) {
       const err = new Error(`Unknown provider: ${deliveryProvider}`);
       if (!bestEffortDeliver) throw err;
       logDeliveryError(err);
+    } else if (resolvedTarget && !resolvedTarget.ok) {
+      if (!bestEffortDeliver) throw resolvedTarget.error;
+      logDeliveryError(resolvedTarget.error);
     }
   }
 
@@ -639,24 +586,12 @@ export async function agentCommand(
       deliveryProvider === "signal" ||
       deliveryProvider === "imessage"
     ) {
-      const target =
-        deliveryProvider === "whatsapp"
-          ? whatsappTarget
-          : deliveryProvider === "telegram"
-            ? telegramTarget
-            : deliveryProvider === "discord"
-              ? discordTarget
-              : deliveryProvider === "slack"
-                ? slackTarget
-                : deliveryProvider === "signal"
-                  ? signalTarget
-                  : imessageTarget;
-      if (!target) continue;
+      if (!deliveryTarget) continue;
       try {
         await deliverOutboundPayloads({
           cfg,
           provider: deliveryProvider,
-          to: target,
+          to: deliveryTarget,
           payloads: [payload],
           deps: {
             sendWhatsApp: deps.sendMessageWhatsApp,
