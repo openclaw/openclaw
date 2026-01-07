@@ -56,7 +56,7 @@
     "ui:build": "node scripts/ui.js build",
     "start": "tsx src/entry.ts",
     "clawdbot": "tsx src/entry.ts",
-    "gateway:watch": "tsx watch src/entry.ts -- gateway --force",
+    "gateway:watch": "tsx watch src/entry.ts gateway --force",
     "clawdbot:rpc": "tsx src/entry.ts agent --mode rpc --json",
     "lint": "biome check src test && oxlint --type-aware src test --ignore-pattern src/canvas-host/a2ui/a2ui.bundle.js",
     "lint:swift": "swiftlint lint --config .swiftlint.yml && (cd apps/ios && swiftlint lint --config .swiftlint.yml)",
