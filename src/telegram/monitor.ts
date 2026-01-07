@@ -1,3 +1,4 @@
+import { run } from "@grammyjs/runner";
 import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTelegramBot } from "./bot.js";
@@ -53,13 +54,26 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     return;
   }
 
-  // Long polling
+  // Use grammyjs/runner for concurrent update processing
+  const runner = run(bot, {
+    runner: {
+      fetch: {
+        // Match grammY defaults
+        timeout: 30,
+      },
+    },
+  });
+
   const stopOnAbort = () => {
-    if (opts.abortSignal?.aborted) void bot.stop();
+    if (opts.abortSignal?.aborted) {
+      runner.stop();
+    }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+
   try {
-    await bot.start();
+    // runner.task() returns a promise that resolves when the runner stops
+    await runner.task();
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
   }
