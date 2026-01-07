@@ -178,8 +178,10 @@ export const DEFAULT_IDLE_MINUTES = 60;
 export function resolveSessionTranscriptPath(
   sessionId: string,
   agentId?: string,
+  topicId?: number,
 ): string {
-  return path.join(resolveAgentSessionsDir(agentId), `${sessionId}.jsonl`);
+  const fileName = topicId !== undefined ? `${sessionId}-topic-${topicId}.jsonl` : `${sessionId}.jsonl`;
+  return path.join(resolveAgentSessionsDir(agentId), fileName);
 }
 
 export function resolveSessionFilePath(
