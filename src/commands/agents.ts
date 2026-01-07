@@ -218,7 +218,7 @@ export function pruneAgentConfig(
   removedAllow: number;
 } {
   const id = normalizeAgentId(agentId);
-  const agents = { ...(cfg.routing?.agents ?? {}) };
+  const agents = { ...cfg.routing?.agents };
   delete agents[id];
   const nextAgents = Object.keys(agents).length > 0 ? agents : undefined;
 

@@ -618,7 +618,7 @@ export async function setupProviders(
           accounts: {
             ...next.whatsapp?.accounts,
             [whatsappAccountId]: {
-              ...(next.whatsapp?.accounts?.[whatsappAccountId] ?? {}),
+              ...next.whatsapp?.accounts?.[whatsappAccountId],
               enabled:
                 next.whatsapp?.accounts?.[whatsappAccountId]?.enabled ?? true,
             },
