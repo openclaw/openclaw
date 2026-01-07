@@ -2,8 +2,11 @@ import type { CliDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import {
+  buildOutboundDeliveryJson,
+  formatOutboundDeliverySummary,
+} from "../infra/outbound/format.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -60,25 +63,18 @@ export async function sendCommand(
       },
     });
     const last = results.at(-1);
-    const summary = formatDirectSendSummary(provider, last);
+    const summary = formatOutboundDeliverySummary(provider, last);
     runtime.log(success(summary));
     if (opts.json) {
       runtime.log(
         JSON.stringify(
-          {
+          buildOutboundDeliveryJson({
             provider,
             via: "direct",
             to: opts.to,
-            messageId: last?.messageId ?? "unknown",
-            ...(last && "chatId" in last ? { chatId: last.chatId } : {}),
-            ...(last && "channelId" in last
-              ? { channelId: last.channelId }
-              : {}),
-            ...(last && "timestamp" in last
-              ? { timestamp: last.timestamp }
-              : {}),
-            mediaUrl: opts.media ?? null,
-          },
+            result: last,
+            mediaUrl: opts.media,
+          }),
           null,
           2,
         ),
@@ -129,29 +125,4 @@ export async function sendCommand(
       ),
     );
   }
-}
-
-function formatDirectSendSummary(
-  provider: string,
-  result: OutboundDeliveryResult | undefined,
-): string {
-  if (!result) {
-    return `✅ Sent via ${provider}. Message ID: unknown`;
-  }
-  if (result.provider === "telegram") {
-    return `✅ Sent via telegram. Message ID: ${result.messageId} (chat ${result.chatId})`;
-  }
-  if (result.provider === "discord") {
-    return `✅ Sent via discord. Message ID: ${result.messageId} (channel ${result.channelId})`;
-  }
-  if (result.provider === "slack") {
-    return `✅ Sent via slack. Message ID: ${result.messageId} (channel ${result.channelId})`;
-  }
-  if (result.provider === "signal") {
-    return `✅ Sent via signal. Message ID: ${result.messageId}`;
-  }
-  if (result.provider === "imessage") {
-    return `✅ Sent via iMessage. Message ID: ${result.messageId}`;
-  }
-  return `✅ Sent via ${provider}. Message ID: ${result.messageId}`;
 }
