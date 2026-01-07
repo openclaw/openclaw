@@ -11,11 +11,6 @@ import {
   MessageReactionRemoveListener,
   MessageType,
   type RequestClient,
-  type PartialMessage,
-  type PartialMessageReaction,
-  Partials,
-  type ThreadChannel,
-  type PartialUser,
   type User,
 } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
@@ -906,7 +901,6 @@ export function createDiscordMessageHandler(params: {
           ? `discord:${author.id}`
           : `group:${message.channelId}`,
         To: discordTo,
-        SessionKey: threadKeys.sessionKey,
         SessionKey: threadKeys.sessionKey,
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
