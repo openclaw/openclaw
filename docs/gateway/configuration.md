@@ -359,6 +359,75 @@ Deterministic match order:
 
 Within each match tier, the first matching entry in `routing.bindings` wins.
 
+#### Per-agent access profiles (multi-agent)
+
+Each agent can carry its own sandbox + tool policy. Use this to mix access
+levels in one gateway:
+- **Full access** (personal agent)
+- **Read-only** tools + workspace
+- **No filesystem access** (messaging/session tools only)
+
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence and
+additional examples.
+
+Full access (no sandbox):
+```json5
+{
+  routing: {
+    agents: {
+      personal: {
+        workspace: "~/clawd-personal",
+        sandbox: { mode: "off" }
+      }
+    }
+  }
+}
+```
+
+Read-only tools + read-only workspace:
+```json5
+{
+  routing: {
+    agents: {
+      family: {
+        workspace: "~/clawd-family",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceAccess: "ro"
+        },
+        tools: {
+          allow: ["read", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn"],
+          deny: ["write", "edit", "bash", "process", "browser"]
+        }
+      }
+    }
+  }
+}
+```
+
+No filesystem access (messaging/session tools enabled):
+```json5
+{
+  routing: {
+    agents: {
+      public: {
+        workspace: "~/clawd-public",
+        sandbox: {
+          mode: "all",
+          scope: "agent",
+          workspaceAccess: "none"
+        },
+        tools: {
+          allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "whatsapp", "telegram", "slack", "discord", "gateway"],
+          deny: ["read", "write", "edit", "bash", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
+        }
+      }
+    }
+  }
+}
+```
+
 Example: two WhatsApp accounts → two agents:
 
 ```json5
