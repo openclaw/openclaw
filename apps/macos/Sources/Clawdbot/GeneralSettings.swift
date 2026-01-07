@@ -694,6 +694,7 @@ extension GeneralSettings {
             host: host,
             port: gateway.sshPort)
         self.state.remoteCliPath = gateway.cliPath ?? ""
+        ClawdbotConfigFile.setRemoteGatewayUrl(host: host, port: gateway.gatewayPort)
     }
 }
 

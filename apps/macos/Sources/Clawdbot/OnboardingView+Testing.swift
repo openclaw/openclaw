@@ -12,6 +12,7 @@ extension OnboardingView {
             lanHost: "bridge.local",
             tailnetDns: "bridge.ts.net",
             sshPort: 2222,
+            gatewayPort: 18789,
             cliPath: "/usr/local/bin/clawdbot",
             stableID: "bridge-1",
             debugID: "bridge-1",

@@ -38,7 +38,11 @@ final class RemotePortTunnel {
         Task { await PortGuardian.shared.removeRecord(pid: pid) }
     }
 
-    static func create(remotePort: Int, preferredLocalPort: UInt16? = nil) async throws -> RemotePortTunnel {
+    static func create(
+        remotePort: Int,
+        preferredLocalPort: UInt16? = nil,
+        allowRemoteUrlOverride: Bool = true
+    ) async throws -> RemotePortTunnel {
         let settings = CommandResolver.connectionSettings()
         guard settings.mode == .remote, let parsed = CommandResolver.parseSSHTarget(settings.target) else {
             throw NSError(
@@ -49,7 +53,7 @@ final class RemotePortTunnel {
 
         let localPort = try await Self.findPort(preferred: preferredLocalPort)
         let sshHost = parsed.host.trimmingCharacters(in: .whitespacesAndNewlines)
-        let remotePortOverride = Self.resolveRemotePortOverride(for: sshHost)
+        let remotePortOverride = allowRemoteUrlOverride ? Self.resolveRemotePortOverride(for: sshHost) : nil
         let resolvedRemotePort = remotePortOverride ?? remotePort
         if let override = remotePortOverride {
             Self.logger.info(
