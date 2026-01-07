@@ -532,6 +532,9 @@ export type RoutingConfig = {
       model?: string;
       sandbox?: {
         mode?: "off" | "non-main" | "all";
+        /** Container/workspace scope for sandbox isolation. */
+        scope?: "session" | "agent" | "shared";
+        /** Legacy alias for scope ("session" when true, "shared" when false). */
         perSession?: boolean;
         workspaceRoot?: string;
       };
@@ -912,7 +915,9 @@ export type ClawdbotConfig = {
        * - "all": allow session tools to target any session
        */
       sessionToolsVisibility?: "spawned" | "all";
-      /** Use one container per session (recommended for hard isolation). */
+      /** Container/workspace scope for sandbox isolation. */
+      scope?: "session" | "agent" | "shared";
+      /** Legacy alias for scope ("session" when true, "shared" when false). */
       perSession?: boolean;
       /** Root directory for sandbox workspaces. */
       workspaceRoot?: string;
