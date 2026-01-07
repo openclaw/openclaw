@@ -334,7 +334,6 @@ const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 type SessionManagerCacheEntry = {
   sessionFile: string;
   loadedAt: number;
-  lastAccessAt: number;
 };
 
 const SESSION_MANAGER_CACHE = new Map<string, SessionManagerCacheEntry>();
@@ -362,7 +361,6 @@ function trackSessionManagerAccess(sessionFile: string): void {
   SESSION_MANAGER_CACHE.set(sessionFile, {
     sessionFile,
     loadedAt: now,
-    lastAccessAt: now,
   });
 }
 
@@ -380,9 +378,14 @@ async function prewarmSessionFile(sessionFile: string): Promise<void> {
   if (isSessionManagerCached(sessionFile)) return;
 
   try {
-    // Touch the file to bring it into OS page cache
-    // This is much faster than letting SessionManager.open() do it cold
-    await fs.stat(sessionFile);
+    // Read a small chunk to encourage OS page cache warmup.
+    const handle = await fs.open(sessionFile, "r");
+    try {
+      const buffer = Buffer.alloc(4096);
+      await handle.read(buffer, 0, buffer.length, 0);
+    } finally {
+      await handle.close();
+    }
     trackSessionManagerAccess(sessionFile);
   } catch {
     // File doesn't exist yet, SessionManager will create it

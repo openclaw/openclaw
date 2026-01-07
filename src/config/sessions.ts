@@ -24,6 +24,7 @@ type SessionStoreCacheEntry = {
   store: Record<string, SessionEntry>;
   loadedAt: number;
   storePath: string;
+  mtimeMs?: number;
 };
 
 const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
@@ -50,6 +51,14 @@ function isSessionStoreCacheValid(entry: SessionStoreCacheEntry): boolean {
   const now = Date.now();
   const ttl = getSessionStoreTtl();
   return now - entry.loadedAt <= ttl;
+}
+
+function getSessionStoreMtimeMs(storePath: string): number | undefined {
+  try {
+    return fs.statSync(storePath).mtimeMs;
+  } catch {
+    return undefined;
+  }
 }
 
 function invalidateSessionStoreCache(storePath: string): void {
@@ -180,19 +189,22 @@ export function resolveSessionTranscriptPath(
   agentId?: string,
   topicId?: number,
 ): string {
-  const fileName = topicId !== undefined ? `${sessionId}-topic-${topicId}.jsonl` : `${sessionId}.jsonl`;
+  const fileName =
+    topicId !== undefined
+      ? `${sessionId}-topic-${topicId}.jsonl`
+      : `${sessionId}.jsonl`;
   return path.join(resolveAgentSessionsDir(agentId), fileName);
 }
 
 export function resolveSessionFilePath(
   sessionId: string,
   entry?: SessionEntry,
-  opts?: { agentId?: string },
+  opts?: { agentId?: string; topicId?: number },
 ): string {
   const candidate = entry?.sessionFile?.trim();
   return candidate
     ? candidate
-    : resolveSessionTranscriptPath(sessionId, opts?.agentId);
+    : resolveSessionTranscriptPath(sessionId, opts?.agentId, opts?.topicId);
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
@@ -390,19 +402,25 @@ export function loadSessionStore(
   if (isSessionStoreCacheEnabled()) {
     const cached = SESSION_STORE_CACHE.get(storePath);
     if (cached && isSessionStoreCacheValid(cached)) {
-      // Return a shallow copy to prevent external mutations affecting cache
-      return { ...cached.store };
+      const currentMtimeMs = getSessionStoreMtimeMs(storePath);
+      if (currentMtimeMs === cached.mtimeMs) {
+        // Return a shallow copy to prevent external mutations affecting cache
+        return { ...cached.store };
+      }
+      invalidateSessionStoreCache(storePath);
     }
   }
 
   // Cache miss or disabled - load from disk
   let store: Record<string, SessionEntry> = {};
+  let mtimeMs = getSessionStoreMtimeMs(storePath);
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object") {
       store = parsed as Record<string, SessionEntry>;
     }
+    mtimeMs = getSessionStoreMtimeMs(storePath) ?? mtimeMs;
   } catch {
     // ignore missing/invalid store; we'll recreate it
   }
@@ -413,6 +431,7 @@ export function loadSessionStore(
       store: { ...store }, // Store a copy to prevent external mutations
       loadedAt: Date.now(),
       storePath,
+      mtimeMs,
     });
   }
 

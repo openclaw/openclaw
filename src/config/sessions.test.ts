@@ -8,6 +8,7 @@ import {
   deriveSessionKey,
   loadSessionStore,
   resolveSessionKey,
+  resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
   updateLastRoute,
 } from "./sessions.js";
@@ -146,5 +147,22 @@ describe("sessions", () => {
       () => "/home/ignored",
     );
     expect(dir).toBe("/legacy/state/agents/main/sessions");
+  });
+
+  it("includes topic ids in session transcript filenames", () => {
+    const prev = process.env.CLAWDBOT_STATE_DIR;
+    process.env.CLAWDBOT_STATE_DIR = "/custom/state";
+    try {
+      const sessionFile = resolveSessionTranscriptPath("sess-1", "main", 123);
+      expect(sessionFile).toBe(
+        "/custom/state/agents/main/sessions/sess-1-topic-123.jsonl",
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      } else {
+        process.env.CLAWDBOT_STATE_DIR = prev;
+      }
+    }
   });
 });
