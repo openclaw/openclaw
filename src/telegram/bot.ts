@@ -195,6 +195,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const msg = primaryCtx.message;
     const chatId = msg.chat.id;
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+    const messageThreadId = (msg as { message_thread_id?: number })
+      .message_thread_id;
+    const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
     const effectiveDmAllow = normalizeAllowFrom([
       ...(allowFrom ?? []),
       ...storeAllowFrom,
@@ -206,7 +209,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     const sendTyping = async () => {
       try {
-        await bot.api.sendChatAction(chatId, "typing");
+        await bot.api.sendChatAction(
+          chatId,
+          "typing",
+          messageThreadId != null
+            ? { message_thread_id: messageThreadId }
+            : undefined,
+        );
       } catch (err) {
         logVerbose(
           `telegram typing cue failed for chat ${chatId}: ${String(err)}`,
@@ -375,7 +384,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const body = formatAgentEnvelope({
       provider: "Telegram",
       from: isGroup
-        ? buildGroupFromLabel(msg, chatId, senderId)
+        ? buildGroupFromLabel(msg, chatId, senderId, messageThreadId)
         : buildSenderLabel(msg, senderId || chatId),
       timestamp: msg.date ? msg.date * 1000 : undefined,
       body: `${bodyText}${replySuffix}`,
@@ -386,12 +395,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       provider: "telegram",
       peer: {
         kind: isGroup ? "group" : "dm",
-        id: String(chatId),
+        id: isGroup
+          ? messageThreadId != null
+            ? `${chatId}:topic:${messageThreadId}`
+            : String(chatId)
+          : String(chatId),
       },
     });
     const ctxPayload = {
       Body: body,
-      From: isGroup ? `group:${chatId}` : `telegram:${chatId}`,
+      From: isGroup
+        ? messageThreadId != null
+          ? `group:${chatId}:topic:${messageThreadId}`
+          : `group:${chatId}`
+        : `telegram:${chatId}`,
       To: `telegram:${chatId}`,
       SessionKey: route.sessionKey,
       AccountId: route.accountId,
@@ -418,6 +435,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           : undefined,
       ...(locationData ? toLocationContext(locationData) : undefined),
       CommandAuthorized: commandAuthorized,
+      MessageThreadId: messageThreadId,
+      IsForum: isForum,
     };
 
     if (replyTarget && shouldLogVerbose()) {
@@ -445,8 +464,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       const preview = body.slice(0, 200).replace(/\n/g, "\\n");
       const mediaInfo =
         allMedia.length > 1 ? ` mediaCount=${allMedia.length}` : "";
+      const topicInfo =
+        messageThreadId != null ? ` topic=${messageThreadId}` : "";
       logVerbose(
-        `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo} preview="${preview}"`,
+        `telegram inbound: chatId=${chatId} from=${ctxPayload.From} len=${body.length}${mediaInfo}${topicInfo} preview="${preview}"`,
       );
     }
 
@@ -462,6 +483,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             bot,
             replyToMode,
             textLimit,
+            messageThreadId,
           });
         },
         onError: (err, info) => {
@@ -504,6 +526,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         const chatId = msg.chat.id;
         const isGroup =
           msg.chat.type === "group" || msg.chat.type === "supergroup";
+        const messageThreadId = (msg as { message_thread_id?: number })
+          .message_thread_id;
+        const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
 
         if (isGroup && useAccessGroups) {
           const groupPolicy = cfg.telegram?.groupPolicy ?? "open";
@@ -575,12 +600,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           provider: "telegram",
           peer: {
             kind: isGroup ? "group" : "dm",
-            id: String(chatId),
+            id: isGroup
+              ? messageThreadId != null
+                ? `${chatId}:topic:${messageThreadId}`
+                : String(chatId)
+              : String(chatId),
           },
         });
         const ctxPayload = {
           Body: prompt,
-          From: isGroup ? `group:${chatId}` : `telegram:${chatId}`,
+          From: isGroup
+            ? messageThreadId != null
+              ? `group:${chatId}:topic:${messageThreadId}`
+              : `group:${chatId}`
+            : `telegram:${chatId}`,
           To: `slash:${senderId || chatId}`,
           ChatType: isGroup ? "group" : "direct",
           GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
@@ -595,6 +628,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           CommandSource: "native" as const,
           SessionKey: `telegram:slash:${senderId || chatId}`,
           CommandTargetSessionKey: route.sessionKey,
+          MessageThreadId: messageThreadId,
+          IsForum: isForum,
         };
 
         const replyResult = await getReplyFromConfig(
@@ -615,6 +650,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           bot,
           replyToMode,
           textLimit,
+          messageThreadId,
         });
       });
     }
@@ -793,8 +829,17 @@ async function deliverReplies(params: {
   bot: Bot;
   replyToMode: ReplyToMode;
   textLimit: number;
+  messageThreadId?: number;
 }) {
-  const { replies, chatId, runtime, bot, replyToMode, textLimit } = params;
+  const {
+    replies,
+    chatId,
+    runtime,
+    bot,
+    replyToMode,
+    textLimit,
+    messageThreadId,
+  } = params;
   let hasReplied = false;
   for (const reply of replies) {
     if (!reply?.text && !reply?.mediaUrl && !(reply?.mediaUrls?.length ?? 0)) {
@@ -817,6 +862,7 @@ async function deliverReplies(params: {
             replyToId && (replyToMode === "all" || !hasReplied)
               ? replyToId
               : undefined,
+          messageThreadId,
         });
         if (replyToId && !hasReplied) {
           hasReplied = true;
@@ -841,30 +887,37 @@ async function deliverReplies(params: {
         replyToId && (replyToMode === "all" || !hasReplied)
           ? replyToId
           : undefined;
+      const threadParams =
+        messageThreadId != null ? { message_thread_id: messageThreadId } : {};
       if (isGif) {
         await bot.api.sendAnimation(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          ...threadParams,
         });
       } else if (kind === "image") {
         await bot.api.sendPhoto(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          ...threadParams,
         });
       } else if (kind === "video") {
         await bot.api.sendVideo(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          ...threadParams,
         });
       } else if (kind === "audio") {
         await bot.api.sendAudio(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          ...threadParams,
         });
       } else {
         await bot.api.sendDocument(chatId, file, {
           caption,
           reply_to_message_id: replyToMessageId,
+          ...threadParams,
         });
       }
       if (replyToId && !hasReplied) {
@@ -903,18 +956,25 @@ function buildSenderLabel(msg: TelegramMessage, senderId?: number | string) {
   return idPart ?? "id:unknown";
 }
 
-function buildGroupLabel(msg: TelegramMessage, chatId: number | string) {
+function buildGroupLabel(
+  msg: TelegramMessage,
+  chatId: number | string,
+  messageThreadId?: number,
+) {
   const title = msg.chat?.title;
-  if (title) return `${title} id:${chatId}`;
-  return `group:${chatId}`;
+  const topicSuffix =
+    messageThreadId != null ? ` topic:${messageThreadId}` : "";
+  if (title) return `${title} id:${chatId}${topicSuffix}`;
+  return `group:${chatId}${topicSuffix}`;
 }
 
 function buildGroupFromLabel(
   msg: TelegramMessage,
   chatId: number | string,
   senderId?: number | string,
+  messageThreadId?: number,
 ) {
-  const groupLabel = buildGroupLabel(msg, chatId);
+  const groupLabel = buildGroupLabel(msg, chatId, messageThreadId);
   const senderLabel = buildSenderLabel(msg, senderId);
   return `${groupLabel} from ${senderLabel}`;
 }
@@ -989,12 +1049,13 @@ async function sendTelegramText(
   chatId: string,
   text: string,
   runtime: RuntimeEnv,
-  opts?: { replyToMessageId?: number },
+  opts?: { replyToMessageId?: number; messageThreadId?: number },
 ): Promise<number | undefined> {
   try {
     const res = await bot.api.sendMessage(chatId, text, {
       parse_mode: "Markdown",
       reply_to_message_id: opts?.replyToMessageId,
+      message_thread_id: opts?.messageThreadId,
     });
     return res.message_id;
   } catch (err) {
@@ -1005,6 +1066,7 @@ async function sendTelegramText(
       );
       const res = await bot.api.sendMessage(chatId, text, {
         reply_to_message_id: opts?.replyToMessageId,
+        message_thread_id: opts?.messageThreadId,
       });
       return res.message_id;
     }

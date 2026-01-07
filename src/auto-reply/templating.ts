@@ -34,6 +34,10 @@ export type MsgContext = {
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
+  /** Telegram forum topic thread ID. */
+  MessageThreadId?: number;
+  /** Telegram forum supergroup marker. */
+  IsForum?: boolean;
 };
 
 export type TemplateContext = MsgContext & {
