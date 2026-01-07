@@ -1006,7 +1006,7 @@ describe("trigger handling", () => {
 
 describe("group intro prompts", () => {
   const groupParticipationNote =
-    "In groups, respond only when helpful; reactions are ok when available.";
+    "Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available.";
   it("labels Discord groups using the surface metadata", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({

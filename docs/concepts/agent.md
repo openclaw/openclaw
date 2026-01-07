@@ -31,6 +31,8 @@ Inside `agent.workspace`, CLAWDBOT expects these user-editable files:
 
 On the first turn of a new session, CLAWDBOT injects the contents of these files directly into the agent context.
 
+Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
+
 If a file is missing, CLAWDBOT injects a single “missing file” marker line (and `clawdbot setup` will create a safe default template).
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.

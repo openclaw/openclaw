@@ -66,7 +66,10 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   const linked = await webAuthExists(account.authDir);
   const authAgeMs = getWebAuthAgeMs(account.authDir);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, undefined);
-  const providerSummary = await buildProviderSummary(cfg);
+  const providerSummary = await buildProviderSummary(cfg, {
+    colorize: true,
+    includeAllowFrom: true,
+  });
   const queuedSystemEvents = peekSystemEvents();
 
   const resolved = resolveConfiguredModelRef({

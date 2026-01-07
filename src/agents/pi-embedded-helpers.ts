@@ -109,13 +109,18 @@ export function buildBootstrapContextFiles(
 ): EmbeddedContextFile[] {
   const result: EmbeddedContextFile[] = [];
   for (const file of files) {
-    if (file.missing) continue;
-    const content = file.content ?? "";
-    const trimmed = content.trimEnd();
+    if (file.missing) {
+      result.push({
+        path: file.name,
+        content: `[MISSING] Expected at: ${file.path}`,
+      });
+      continue;
+    }
+    const trimmed = trimBootstrapContent(file.content ?? "", file.name);
     if (!trimmed) continue;
     result.push({
       path: file.name,
-      content: trimBootstrapContent(trimmed, file.name),
+      content: trimmed,
     });
   }
   return result;
