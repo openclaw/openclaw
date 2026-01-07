@@ -62,6 +62,33 @@ Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “what
 
 See [/cli](/cli) for the full command tree and CLI flags.
 
+### CLI output (list + status)
+
+`clawdbot models list` (default) prints a table with these columns:
+- `Model`: `provider/model` key (truncated in TTY).
+- `Input`: `text` or `text+image`.
+- `Ctx`: context window in K tokens (from the model registry).
+- `Local`: `yes/no` when the provider base URL is local.
+- `Auth`: `yes/no` when the provider has usable auth.
+- `Tags`: origin + role hints.
+
+Common tags:
+- `default` — resolved default model.
+- `fallback#N` — `agent.model.fallbacks` order.
+- `image` — `agent.imageModel.primary`.
+- `img-fallback#N` — `agent.imageModel.fallbacks` order.
+- `configured` — present in `agent.models`.
+- `alias:<name>` — alias from `agent.models.*.alias`.
+- `missing` — referenced in config but not found in the registry.
+
+Output formats:
+- `--plain`: prints only `provider/model` keys (one per line).
+- `--json`: `{ count, models: [{ key, name, input, contextWindow, local, available, tags, missing }] }`.
+
+`clawdbot models status` prints the resolved defaults, fallbacks, image model, aliases,
+and an **Auth overview** section showing which providers have profiles/env/models.json keys.
+`--plain` prints the resolved default model only; `--json` returns a structured object for tooling.
+
 ## Config changes
 
 - `agent.models` (configured model catalog + aliases).
