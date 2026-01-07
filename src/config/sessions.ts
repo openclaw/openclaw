@@ -33,6 +33,7 @@ export type SessionChatType = "direct" | "group" | "room";
 export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
+  sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;
   systemSent?: boolean;
@@ -135,6 +136,17 @@ export function resolveSessionTranscriptPath(
   agentId?: string,
 ): string {
   return path.join(resolveAgentSessionsDir(agentId), `${sessionId}.jsonl`);
+}
+
+export function resolveSessionFilePath(
+  sessionId: string,
+  entry?: SessionEntry,
+  opts?: { agentId?: string },
+): string {
+  const candidate = entry?.sessionFile?.trim();
+  return candidate
+    ? candidate
+    : resolveSessionTranscriptPath(sessionId, opts?.agentId);
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
@@ -393,6 +405,7 @@ export async function updateLastRoute(params: {
   const next: SessionEntry = {
     sessionId: existing?.sessionId ?? crypto.randomUUID(),
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+    sessionFile: existing?.sessionFile,
     systemSent: existing?.systemSent,
     abortedLastRun: existing?.abortedLastRun,
     thinkingLevel: existing?.thinkingLevel,

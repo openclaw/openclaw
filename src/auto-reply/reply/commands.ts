@@ -14,7 +14,7 @@ import {
 } from "../../agents/pi-embedded.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
-  resolveSessionTranscriptPath,
+  resolveSessionFilePath,
   type SessionEntry,
   type SessionScope,
   saveSessionStore,
@@ -509,7 +509,7 @@ export async function handleCommands(params: {
       sessionId,
       sessionKey,
       messageProvider: command.provider,
-      sessionFile: resolveSessionTranscriptPath(sessionId),
+      sessionFile: resolveSessionFilePath(sessionId, sessionEntry),
       workspaceDir,
       config: cfg,
       skillsSnapshot: sessionEntry.skillsSnapshot,
