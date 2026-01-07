@@ -25,7 +25,7 @@ import {
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
-import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
@@ -646,6 +646,11 @@ export async function getReplyFromConfig(
     isNewSession,
     prefixedBodyBase,
   });
+  const threadStarterBody = ctx.ThreadStarterBody?.trim();
+  const threadStarterNote =
+    isNewSession && threadStarterBody
+      ? `[Thread starter - for context]\n${threadStarterBody}`
+      : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -661,10 +666,10 @@ export async function getReplyFromConfig(
   systemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = transcribedText
-    ? [prefixedBodyBase, `Transcript:\n${transcribedText}`]
+    ? [threadStarterNote, prefixedBodyBase, `Transcript:\n${transcribedText}`]
         .filter(Boolean)
         .join("\n\n")
-    : prefixedBodyBase;
+    : [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = ctx.MediaPath?.length
     ? `[media attached: ${ctx.MediaPath}${ctx.MediaType ? ` (${ctx.MediaType})` : ""}${ctx.MediaUrl ? ` | ${ctx.MediaUrl}` : ""}]`
     : undefined;
@@ -689,12 +694,12 @@ export async function getReplyFromConfig(
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionTranscriptPath(sessionIdFinal);
+  const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = transcribedText
-    ? [baseBodyFinal, `Transcript:\n${transcribedText}`]
+    ? [threadStarterNote, baseBodyFinal, `Transcript:\n${transcribedText}`]
         .filter(Boolean)
         .join("\n\n")
-    : baseBodyFinal;
+    : [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase]
         .filter(Boolean)
