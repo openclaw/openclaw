@@ -236,6 +236,9 @@ const RoutingSchema = z
                     z.literal("all"),
                   ])
                   .optional(),
+                workspaceAccess: z
+                  .union([z.literal("none"), z.literal("ro"), z.literal("rw")])
+                  .optional(),
                 scope: z
                   .union([
                     z.literal("session"),
@@ -245,6 +248,12 @@ const RoutingSchema = z
                   .optional(),
                 perSession: z.boolean().optional(),
                 workspaceRoot: z.string().optional(),
+                tools: z
+                  .object({
+                    allow: z.array(z.string()).optional(),
+                    deny: z.array(z.string()).optional(),
+                  })
+                  .optional(),
               })
               .optional(),
             tools: z

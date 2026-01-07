@@ -55,7 +55,12 @@ describe("resolveAgentConfig", () => {
               mode: "all",
               scope: "agent",
               perSession: false,
+              workspaceAccess: "ro",
               workspaceRoot: "~/sandboxes",
+              tools: {
+                allow: ["read"],
+                deny: ["bash"],
+              },
             },
           },
         },
@@ -66,7 +71,12 @@ describe("resolveAgentConfig", () => {
       mode: "all",
       scope: "agent",
       perSession: false,
+      workspaceAccess: "ro",
       workspaceRoot: "~/sandboxes",
+      tools: {
+        allow: ["read"],
+        deny: ["bash"],
+      },
     });
   });
 

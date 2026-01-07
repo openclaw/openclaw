@@ -226,9 +226,12 @@ function resolveSandboxScopeKey(scope: SandboxScope, sessionKey: string) {
   return `agent:${agentId}`;
 }
 
-function defaultSandboxConfig(cfg?: ClawdbotConfig, agentId?: string): SandboxConfig {
+function defaultSandboxConfig(
+  cfg?: ClawdbotConfig,
+  agentId?: string,
+): SandboxConfig {
   const agent = cfg?.agent?.sandbox;
-  
+
   // Agent-specific sandbox config overrides global
   let agentSandbox: typeof agent | undefined;
   if (agentId && cfg?.routing?.agents) {
@@ -237,15 +240,19 @@ function defaultSandboxConfig(cfg?: ClawdbotConfig, agentId?: string): SandboxCo
       agentSandbox = agentConfig.sandbox;
     }
   }
-  
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
     scope: resolveSandboxScope({
       scope: agentSandbox?.scope ?? agent?.scope,
       perSession: agentSandbox?.perSession ?? agent?.perSession,
     }),
-    workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
-    workspaceRoot: agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
+    workspaceAccess:
+      agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
+    workspaceRoot:
+      agentSandbox?.workspaceRoot ??
+      agent?.workspaceRoot ??
+      DEFAULT_SANDBOX_WORKSPACE_ROOT,
     docker: {
       image: agent?.docker?.image ?? DEFAULT_SANDBOX_IMAGE,
       containerPrefix:
@@ -281,8 +288,10 @@ function defaultSandboxConfig(cfg?: ClawdbotConfig, agentId?: string): SandboxCo
       enableNoVnc: agent?.browser?.enableNoVnc ?? true,
     },
     tools: {
-      allow: agent?.tools?.allow ?? DEFAULT_TOOL_ALLOW,
-      deny: agent?.tools?.deny ?? DEFAULT_TOOL_DENY,
+      allow:
+        agentSandbox?.tools?.allow ?? agent?.tools?.allow ?? DEFAULT_TOOL_ALLOW,
+      deny:
+        agentSandbox?.tools?.deny ?? agent?.tools?.deny ?? DEFAULT_TOOL_DENY,
     },
     prune: {
       idleHours: agent?.prune?.idleHours ?? DEFAULT_SANDBOX_IDLE_HOURS,
