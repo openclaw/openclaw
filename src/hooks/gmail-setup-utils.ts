@@ -2,11 +2,59 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { hasBinary } from "../agents/skills.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizeServePath } from "./gmail.js";
 
 let cachedPythonPath: string | null | undefined;
+const MAX_OUTPUT_CHARS = 800;
+
+function trimOutput(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.length <= MAX_OUTPUT_CHARS) return trimmed;
+  return `${trimmed.slice(0, MAX_OUTPUT_CHARS)}…`;
+}
+
+function formatCommandFailure(command: string, result: SpawnResult): string {
+  const code = result.code ?? "null";
+  const signal = result.signal ? `, signal=${result.signal}` : "";
+  const killed = result.killed ? ", killed=true" : "";
+  const stderr = trimOutput(result.stderr);
+  const stdout = trimOutput(result.stdout);
+  const lines = [`${command} failed (code=${code}${signal}${killed})`];
+  if (stderr) lines.push(`stderr: ${stderr}`);
+  if (stdout) lines.push(`stdout: ${stdout}`);
+  return lines.join("\n");
+}
+
+function formatCommandResult(command: string, result: SpawnResult): string {
+  const code = result.code ?? "null";
+  const signal = result.signal ? `, signal=${result.signal}` : "";
+  const killed = result.killed ? ", killed=true" : "";
+  const stderr = trimOutput(result.stderr);
+  const stdout = trimOutput(result.stdout);
+  const lines = [`${command} exited (code=${code}${signal}${killed})`];
+  if (stderr) lines.push(`stderr: ${stderr}`);
+  if (stdout) lines.push(`stdout: ${stdout}`);
+  return lines.join("\n");
+}
+
+function formatJsonParseFailure(
+  command: string,
+  result: SpawnResult,
+  err: unknown,
+): string {
+  const reason = err instanceof Error ? err.message : String(err);
+  return `${command} returned invalid JSON: ${reason}\n${formatCommandResult(
+    command,
+    result,
+  )}`;
+}
+
+function formatCommand(command: string, args: string[]): string {
+  return [command, ...args].join(" ");
+}
 
 function findExecutablesOnPath(bins: string[]): string[] {
   const pathEnv = process.env.PATH ?? "";
@@ -218,18 +266,20 @@ export async function ensureTailscaleEndpoint(params: {
 }): Promise<string> {
   if (params.mode === "off") return "";
 
-  const status = await runCommandWithTimeout(
-    ["tailscale", "status", "--json"],
-    {
-      timeoutMs: 30_000,
-    },
-  );
+  const statusArgs = ["status", "--json"];
+  const statusCommand = formatCommand("tailscale", statusArgs);
+  const status = await runCommandWithTimeout(["tailscale", ...statusArgs], {
+    timeoutMs: 30_000,
+  });
   if (status.code !== 0) {
-    throw new Error(status.stderr || "tailscale status failed");
+    throw new Error(formatCommandFailure(statusCommand, status));
   }
-  const parsed = JSON.parse(status.stdout) as {
-    Self?: { DNSName?: string };
-  };
+  let parsed: { Self?: { DNSName?: string } };
+  try {
+    parsed = JSON.parse(status.stdout) as { Self?: { DNSName?: string } };
+  } catch (err) {
+    throw new Error(formatJsonParseFailure(statusCommand, status, err));
+  }
   const dnsName = parsed.Self?.DNSName?.replace(/\.$/, "");
   if (!dnsName) {
     throw new Error("tailscale DNS name missing; run tailscale up");
@@ -238,7 +288,6 @@ export async function ensureTailscaleEndpoint(params: {
   const target = String(params.port);
   const pathArg = normalizeServePath(params.path);
   const funnelArgs = [
-    "tailscale",
     params.mode,
     "--bg",
     "--set-path",
@@ -246,11 +295,15 @@ export async function ensureTailscaleEndpoint(params: {
     "--yes",
     target,
   ];
-  const funnelResult = await runCommandWithTimeout(funnelArgs, {
-    timeoutMs: 30_000,
-  });
+  const funnelCommand = formatCommand("tailscale", funnelArgs);
+  const funnelResult = await runCommandWithTimeout(
+    ["tailscale", ...funnelArgs],
+    {
+      timeoutMs: 30_000,
+    },
+  );
   if (funnelResult.code !== 0) {
-    throw new Error(funnelResult.stderr || "tailscale funnel failed");
+    throw new Error(formatCommandFailure(funnelCommand, funnelResult));
   }
 
   const baseUrl = `https://${dnsName}${pathArg}`;
