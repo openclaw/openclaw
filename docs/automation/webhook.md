@@ -92,6 +92,8 @@ Mapping options (summary):
 - `hooks.transformsDir` + `transform.module` loads a JS/TS module for custom logic.
 - Use `match.source` to keep a generic ingest endpoint (payload-driven routing).
 - TS transforms require a TS loader (e.g. `bun` or `tsx`) or precompiled `.js` at runtime.
+- Set `deliver: true` + `provider`/`to` on mappings to route replies to a chat surface
+  (`provider` defaults to `last` and falls back to WhatsApp).
 - `clawdbot hooks gmail setup` writes `hooks.gmail` config for `clawdbot hooks gmail run`.
 See [`docs/gmail-pubsub.md`](https://docs.clawd.bot/automation/gmail-pubsub) for the full Gmail watch flow.
 

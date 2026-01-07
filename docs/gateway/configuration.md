@@ -1589,6 +1589,8 @@ Defaults:
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate:
           "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
+        deliver: true,
+        provider: "last",
       },
     ],
   }
@@ -1612,6 +1614,8 @@ Mapping notes:
 - `match.source` matches a payload field (e.g. `{ source: "gmail" }`) so you can use a generic `/hooks/ingest` path.
 - Templates like `{{messages[0].subject}}` read from the payload.
 - `transform` can point to a JS/TS module that returns a hook action.
+- `deliver: true` sends the final reply to a provider; `provider` defaults to `last` (falls back to WhatsApp).
+- If there is no prior delivery route, set `provider` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage).
 
 Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
 
