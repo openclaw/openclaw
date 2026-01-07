@@ -27,7 +27,10 @@ import {
   listNativeCommandSpecs,
   shouldHandleTextCommands,
 } from "../auto-reply/commands-registry.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  formatAgentEnvelope,
+  formatThreadStarterEnvelope,
+} from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
@@ -55,6 +58,7 @@ import {
   buildAgentSessionKey,
   resolveAgentRoute,
 } from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { fetchDiscordApplicationId } from "./probe.js";
@@ -863,9 +867,9 @@ export function createDiscordMessageHandler(params: {
           parentId: threadParentId,
         });
         if (starter?.text) {
-          const starterEnvelope = formatAgentEnvelope({
+          const starterEnvelope = formatThreadStarterEnvelope({
             provider: "Discord",
-            from: starter.author,
+            author: starter.author,
             timestamp: starter.timestamp,
             body: starter.text,
           });
@@ -885,13 +889,19 @@ export function createDiscordMessageHandler(params: {
       }
       const mediaPayload = buildDiscordMediaPayload(mediaList);
       const discordTo = `channel:${message.channelId}`;
+      const threadKeys = resolveThreadSessionKeys({
+        baseSessionKey,
+        threadId: threadChannel ? message.channelId : undefined,
+        parentSessionKey,
+        useSuffix: false,
+      });
       const ctxPayload = {
         Body: combinedBody,
         From: isDirectMessage
           ? `discord:${author.id}`
           : `group:${message.channelId}`,
         To: discordTo,
-        SessionKey: baseSessionKey,
+        SessionKey: threadKeys.sessionKey,
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName:
@@ -909,7 +919,7 @@ export function createDiscordMessageHandler(params: {
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
-        ParentSessionKey: parentSessionKey,
+        ParentSessionKey: threadKeys.parentSessionKey,
         ThreadStarterBody: threadStarterBody,
         ThreadLabel: threadLabel,
         Timestamp: resolveTimestampMs(message.timestamp),

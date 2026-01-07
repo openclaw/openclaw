@@ -14,7 +14,10 @@ import {
   listNativeCommandSpecs,
   shouldHandleTextCommands,
 } from "../auto-reply/commands-registry.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  formatAgentEnvelope,
+  formatThreadStarterEnvelope,
+} from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
@@ -34,6 +37,7 @@ import {
   resolveStorePath,
   updateLastRoute,
 } from "../config/sessions.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
@@ -930,12 +934,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const isThreadReply =
       hasThreadTs &&
       (threadTs !== message.ts || Boolean(message.parent_user_id));
-    const threadSessionKey =
-      isThreadReply && threadTs
-        ? `${baseSessionKey}:thread:${threadTs}`
-        : undefined;
-    const parentSessionKey = isThreadReply ? baseSessionKey : undefined;
-    const sessionKey = threadSessionKey ?? baseSessionKey;
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey,
+      threadId: isThreadReply ? threadTs : undefined,
+      parentSessionKey: isThreadReply ? baseSessionKey : undefined,
+    });
+    const sessionKey = threadKeys.sessionKey;
     enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
       sessionKey,
       contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
@@ -978,9 +982,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           : null;
         const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
         const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
-        threadStarterBody = formatAgentEnvelope({
+        threadStarterBody = formatThreadStarterEnvelope({
           provider: "Slack",
-          from: starterName,
+          author: starterName,
           timestamp: starter.ts
             ? Math.round(Number(starter.ts) * 1000)
             : undefined,
@@ -1007,7 +1011,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       Surface: "slack" as const,
       MessageSid: message.ts,
       ReplyToId: message.thread_ts ?? message.ts,
-      ParentSessionKey: parentSessionKey,
+      ParentSessionKey: threadKeys.parentSessionKey,
       ThreadStarterBody: threadStarterBody,
       ThreadLabel: threadLabel,
       Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
