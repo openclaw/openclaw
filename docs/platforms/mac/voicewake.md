@@ -41,7 +41,7 @@ Hardening:
 ## User-facing settings
 - **Voice Wake** toggle: enables wake-word runtime.
 - **Hold Cmd+Fn to talk**: enables the push-to-talk monitor. Disabled on macOS < 26.
-- Language & mic pickers, live level meter, trigger-word table, tester.
+- Language & mic pickers, live level meter, trigger-word table, tester (local-only; does not forward).
 - **Sounds**: chimes on trigger detect and on send; defaults to the macOS “Glass” system sound. You can pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) for each event or choose **No Sound**.
 
 ## Forwarding behavior

@@ -208,11 +208,8 @@ final class VoiceWakeTester {
         if let match, !match.command.isEmpty {
             self.holdingAfterDetect = true
             self.detectedText = match.command
-            self.logger.info("voice wake detected; forwarding (len=\(match.command.count))")
+            self.logger.info("voice wake detected (test) (len=\(match.command.count))")
             await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
-            Task.detached {
-                await VoiceWakeForwarder.forward(transcript: match.command)
-            }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
@@ -424,11 +421,8 @@ final class VoiceWakeTester {
             ) else { return }
             self.holdingAfterDetect = true
             self.detectedText = match.command
-            self.logger.info("voice wake detected (silence); forwarding (len=\(match.command.count))")
+            self.logger.info("voice wake detected (test, silence) (len=\(match.command.count))")
             await MainActor.run { AppStateStore.shared.triggerVoiceEars(ttl: nil) }
-            Task.detached {
-                await VoiceWakeForwarder.forward(transcript: match.command)
-            }
             self.stop()
             await MainActor.run {
                 AppStateStore.shared.stopVoiceEars()
