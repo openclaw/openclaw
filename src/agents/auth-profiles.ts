@@ -11,6 +11,7 @@ import lockfile from "proper-lockfile";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.js";
+import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -28,6 +29,8 @@ const AUTH_STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
+
+const log = createSubsystemLogger("agents/auth-profiles");
 
 export type ApiKeyCredential = {
   type: "api_key";
@@ -350,14 +353,20 @@ export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
     saveJsonFile(authPath, store);
   }
 
-  // Delete legacy auth.json after successful migration to prevent stale tokens
-  // from being re-migrated and overwriting fresh credentials (fixes #363)
-  if (legacy !== null) {
+  // PR #368: legacy auth.json could get re-migrated from other agent dirs,
+  // overwriting fresh OAuth creds with stale tokens (fixes #363). Delete only
+  // after we've successfully written auth-profiles.json.
+  if (shouldWrite && legacy !== null) {
     const legacyPath = resolveLegacyAuthStorePath(agentDir);
     try {
       fs.unlinkSync(legacyPath);
-    } catch {
-      // Ignore if already deleted or permission issues
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        log.warn("failed to delete legacy auth.json after migration", {
+          err,
+          legacyPath,
+        });
+      }
     }
   }
 
