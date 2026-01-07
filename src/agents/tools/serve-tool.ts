@@ -57,7 +57,7 @@ export function createServeTool(opts?: { baseUrl?: string }): AnyAgentTool {
 
       const baseUrl = await resolveServeBaseUrl(opts?.baseUrl);
       const result = serveCreate(
-        { path: filePath, slug, title, description, ttl, ogImage },
+        { path: filePath, slug: slug || "file", title: title || "", description: description || "", ttl, ogImage },
         baseUrl,
       );
       return jsonResult(result);

@@ -758,6 +758,7 @@ export async function compactEmbeddedPiSession(params: {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  serveBaseUrl?: string;
 }): Promise<EmbeddedPiCompactResult> {
   const sessionLane = resolveSessionLane(
     params.sessionKey?.trim() || params.sessionId,
