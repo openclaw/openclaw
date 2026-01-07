@@ -319,7 +319,8 @@ export async function runReplyAgent(params: {
                       text: cleaned,
                       mediaUrls: payload.mediaUrls,
                       mediaUrl: payload.mediaUrls?.[0],
-                      replyToId: tagResult.replyToId,
+                      // Default to incoming message ID for threading support (replyToMode: "first"|"all")
+                      replyToId: tagResult.replyToId ?? sessionCtx.MessageSid,
                     };
                     const payloadKey = buildPayloadKey(blockPayload);
                     if (
@@ -501,7 +502,8 @@ export async function runReplyAgent(params: {
         return {
           ...payload,
           text: cleaned ? cleaned : undefined,
-          replyToId: replyToId ?? payload.replyToId,
+          // Default to incoming message ID for threading support (replyToMode: "first"|"all")
+          replyToId: replyToId ?? payload.replyToId ?? sessionCtx.MessageSid,
         };
       })
       .filter(
@@ -511,8 +513,14 @@ export async function runReplyAgent(params: {
           (payload.mediaUrls && payload.mediaUrls.length > 0),
       );
 
+    // Drop final payloads if:
+    // 1. Block streaming is enabled and we already streamed block replies, OR
+    // 2. A messaging tool (telegram, whatsapp, etc.) successfully sent the response.
+    //    The agent often generates confirmation text (e.g., "Respondi no Telegram!")
+    //    AFTER using the messaging tool - we must suppress this confirmation text.
     const shouldDropFinalPayloads =
-      blockStreamingEnabled && didStreamBlockReply;
+      (blockStreamingEnabled && didStreamBlockReply) ||
+      runResult.didSendViaMessagingTool === true;
     const filteredPayloads = shouldDropFinalPayloads
       ? []
       : blockStreamingEnabled

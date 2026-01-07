@@ -31,6 +31,8 @@
 - WhatsApp: add self-phone mode (no pairing replies for outbound DMs) and onboarding prompt for personal vs separate numbers (auto allowlist + response prefix for personal).
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
+- Telegram: default `replyToMode` to `"first"`, add forum topic reply threading for tool sends, and update Telegram docs. Thanks @mneves75 for PR #326.
+- Agent: suppress duplicate messaging tool confirmations and honor per-provider reply threading in auto-replies. Thanks @mneves75 for PR #326.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.
 - Sandbox: allow per-agent `routing.agents.<agentId>.sandbox.{docker,browser,prune}.*` overrides for multi-agent gateways (ignored when `scope: "shared"`).
 - Tools: make per-agent tool policies override global defaults and run bash synchronously when `process` is disallowed.

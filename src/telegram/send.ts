@@ -1,4 +1,4 @@
-// @ts-nocheck
+import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
 import { Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import type { ClawdbotConfig } from "../config/types.js";
@@ -15,9 +15,12 @@ type TelegramSendOpts = {
   verbose?: boolean;
   mediaUrl?: string;
   maxBytes?: number;
-  messageThreadId?: number;
   api?: Bot["api"];
   retry?: RetryConfig;
+  /** Message ID to reply to (for threading) */
+  replyToMessageId?: number;
+  /** Forum topic thread ID (for forum supergroups) */
+  messageThreadId?: number;
 };
 
 type TelegramSendResult = {
@@ -96,13 +99,21 @@ export async function sendMessageTelegram(
   const cfg = loadConfig();
   const token = resolveToken(opts.token, cfg);
   const chatId = normalizeChatId(to);
-  const bot = opts.api ? null : new Bot(token);
-  const api = opts.api ?? bot?.api;
+  // Use provided api or create a new Bot instance. The nullish coalescing
+  // operator ensures api is always defined (Bot.api is always non-null).
+  const api = opts.api ?? new Bot(token).api;
   const mediaUrl = opts.mediaUrl?.trim();
-  const threadParams =
-    typeof opts.messageThreadId === "number"
-      ? { message_thread_id: Math.trunc(opts.messageThreadId) }
-      : undefined;
+
+  // Build optional params for forum topics and reply threading.
+  // Only include these if actually provided to keep API calls clean.
+  const threadParams: Record<string, number> = {};
+  if (opts.messageThreadId != null) {
+    threadParams.message_thread_id = Math.trunc(opts.messageThreadId);
+  }
+  if (opts.replyToMessageId != null) {
+    threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);
+  }
+  const hasThreadParams = Object.keys(threadParams).length > 0;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
     configRetry: cfg.telegram?.retry,
@@ -134,6 +145,9 @@ export async function sendMessageTelegram(
       "file";
     const file = new InputFile(media.buffer, fileName);
     const caption = text?.trim() || undefined;
+    const mediaParams = hasThreadParams
+      ? { caption, ...threadParams }
+      : { caption };
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>
       | Awaited<ReturnType<typeof api.sendVideo>>
@@ -142,35 +156,35 @@ export async function sendMessageTelegram(
       | Awaited<ReturnType<typeof api.sendDocument>>;
     if (isGif) {
       result = await request(
-        () => api.sendAnimation(chatId, file, { caption, ...threadParams }),
+        () => api.sendAnimation(chatId, file, mediaParams),
         "animation",
       ).catch((err) => {
         throw wrapChatNotFound(err);
       });
     } else if (kind === "image") {
       result = await request(
-        () => api.sendPhoto(chatId, file, { caption, ...threadParams }),
+        () => api.sendPhoto(chatId, file, mediaParams),
         "photo",
       ).catch((err) => {
         throw wrapChatNotFound(err);
       });
     } else if (kind === "video") {
       result = await request(
-        () => api.sendVideo(chatId, file, { caption, ...threadParams }),
+        () => api.sendVideo(chatId, file, mediaParams),
         "video",
       ).catch((err) => {
         throw wrapChatNotFound(err);
       });
     } else if (kind === "audio") {
       result = await request(
-        () => api.sendAudio(chatId, file, { caption, ...threadParams }),
+        () => api.sendAudio(chatId, file, mediaParams),
         "audio",
       ).catch((err) => {
         throw wrapChatNotFound(err);
       });
     } else {
       result = await request(
-        () => api.sendDocument(chatId, file, { caption, ...threadParams }),
+        () => api.sendDocument(chatId, file, mediaParams),
         "document",
       ).catch((err) => {
         throw wrapChatNotFound(err);
@@ -183,12 +197,11 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
+  const textParams = hasThreadParams
+    ? { parse_mode: "Markdown" as const, ...threadParams }
+    : { parse_mode: "Markdown" as const };
   const res = await request(
-    () =>
-      api.sendMessage(chatId, text, {
-        parse_mode: "Markdown",
-        ...threadParams,
-      }),
+    () => api.sendMessage(chatId, text, textParams),
     "message",
   ).catch(async (err) => {
     // Telegram rejects malformed Markdown (e.g., unbalanced '_' or '*').
@@ -202,7 +215,7 @@ export async function sendMessageTelegram(
       }
       return await request(
         () =>
-          threadParams
+          hasThreadParams
             ? api.sendMessage(chatId, text, threadParams)
             : api.sendMessage(chatId, text),
         "message-plain",
@@ -226,8 +239,7 @@ export async function reactMessageTelegram(
   const token = resolveToken(opts.token, cfg);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
-  const bot = opts.api ? null : new Bot(token);
-  const api = opts.api ?? bot?.api;
+  const api = opts.api ?? new Bot(token).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
     configRetry: cfg.telegram?.retry,
@@ -235,8 +247,12 @@ export async function reactMessageTelegram(
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
-  const reactions =
-    remove || !trimmedEmoji ? [] : [{ type: "emoji", emoji: trimmedEmoji }];
+  // Build the reaction array. We cast emoji to the grammY union type since
+  // Telegram validates emoji server-side; invalid emojis fail gracefully.
+  const reactions: ReactionType[] =
+    remove || !trimmedEmoji
+      ? []
+      : [{ type: "emoji", emoji: trimmedEmoji as ReactionTypeEmoji["emoji"] }];
   if (typeof api.setMessageReaction !== "function") {
     throw new Error("Telegram reactions are unavailable in this bot API.");
   }
@@ -259,4 +275,3 @@ function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {
       return "file.bin";
   }
 }
-// @ts-nocheck
