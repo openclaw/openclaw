@@ -12,6 +12,10 @@ import { detectMime } from "../media/mime.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { startWebLoginWithQr, waitForWebLogin } from "../web/login-qr.js";
 import {
+  resolveAgentConfig,
+  resolveAgentIdFromSessionKey,
+} from "./agent-scope.js";
+import {
   type BashToolDefaults,
   createBashTool,
   createProcessTool,
@@ -592,9 +596,20 @@ export function createClawdbotCodingTools(options?: {
       options.config.agent.tools.deny?.length)
       ? filterToolsByPolicy(filtered, options.config.agent.tools)
       : filtered;
+  
+  // Agent-specific tool policy
+  let agentFiltered = globallyFiltered;
+  if (options?.sessionKey && options?.config) {
+    const agentId = resolveAgentIdFromSessionKey(options.sessionKey);
+    const agentConfig = resolveAgentConfig(options.config, agentId);
+    if (agentConfig?.tools) {
+      agentFiltered = filterToolsByPolicy(globallyFiltered, agentConfig.tools);
+    }
+  }
+  
   const sandboxed = sandbox
-    ? filterToolsByPolicy(globallyFiltered, sandbox.tools)
-    : globallyFiltered;
+    ? filterToolsByPolicy(agentFiltered, sandbox.tools)
+    : agentFiltered;
   const subagentFiltered =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? filterToolsByPolicy(
