@@ -97,7 +97,7 @@ Runbook + exact service labels: [Gateway runbook](/gateway)
 Install a known-good version:
 
 ```bash
-npm i -g clawdbot@2026.1.5-3
+npm i -g clawdbot@2026.1.7
 ```
 
 Then restart + re-run doctor:
