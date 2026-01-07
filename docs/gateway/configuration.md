@@ -826,6 +826,7 @@ Block streaming:
     }
   }
   ```
+See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 
 `agent.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
 Aliases come from `agent.models.*.alias` (e.g. `Opus`).

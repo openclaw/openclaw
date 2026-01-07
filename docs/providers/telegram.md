@@ -94,6 +94,7 @@ Reasoning stream (Telegram only):
 - `/reasoning stream` streams reasoning into the draft bubble while the reply is
   generating, then sends the final answer without reasoning.
 - If `telegram.streamMode` is `off`, reasoning stream is disabled.
+More context: [Streaming + chunking](/concepts/streaming).
 
 ## Agent tool (reactions)
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
