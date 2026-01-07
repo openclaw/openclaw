@@ -27,6 +27,16 @@ export function resolveAgentConfig(
       workspace?: string;
       agentDir?: string;
       model?: string;
+      sandbox?: {
+        mode?: "off" | "non-main" | "all";
+        scope?: "session" | "agent" | "shared";
+        perSession?: boolean;
+        workspaceRoot?: string;
+      };
+      tools?: {
+        allow?: string[];
+        deny?: string[];
+      };
     }
   | undefined {
   const id = normalizeAgentId(agentId);
@@ -40,6 +50,8 @@ export function resolveAgentConfig(
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model: typeof entry.model === "string" ? entry.model : undefined,
+    sandbox: entry.sandbox,
+    tools: entry.tools,
   };
 }
 
