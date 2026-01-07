@@ -11,8 +11,16 @@ import type { ClawdbotConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
+import {
+  readProviderAllowFromStore,
+  upsertProviderPairingRequest,
+} from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  saveConversationReference,
+  type StoredConversationReference,
+} from "./conversation-store.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 const log = getChildLogger({ name: "msteams" });
@@ -44,6 +52,11 @@ type TeamsActivity = {
   channelId?: string;
   serviceUrl?: string;
   membersAdded?: Array<{ id?: string; name?: string }>;
+  /** Entities including mentions */
+  entities?: Array<{
+    type?: string;
+    mentioned?: { id?: string; name?: string };
+  }>;
 };
 
 type TeamsTurnContext = {
@@ -93,9 +106,10 @@ export async function monitorMSTeamsProvider(
 
   // Dynamic import to avoid loading SDK when provider is disabled
   const agentsHosting = await import("@microsoft/agents-hosting");
-  const { startServer } = await import("@microsoft/agents-hosting-express");
+  const express = await import("express");
 
-  const { ActivityHandler } = agentsHosting;
+  const { ActivityHandler, CloudAdapter, authorizeJWT, getAuthConfigWithDefaults } =
+    agentsHosting;
 
   // Helper to deliver replies via Teams SDK
   async function deliverReplies(params: {
@@ -136,6 +150,16 @@ export async function monitorMSTeamsProvider(
     return text.replace(/<at>.*?<\/at>/gi, "").trim();
   }
 
+  // Check if the bot was mentioned in the activity
+  function wasBotMentioned(activity: TeamsActivity): boolean {
+    const botId = activity.recipient?.id;
+    if (!botId) return false;
+    const entities = activity.entities ?? [];
+    return entities.some(
+      (e) => e.type === "mention" && e.mentioned?.id === botId,
+    );
+  }
+
   // Handler for incoming messages
   async function handleTeamsMessage(context: TeamsTurnContext) {
     const activity = context.activity;
@@ -172,6 +196,25 @@ export async function monitorMSTeamsProvider(
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
 
+    // Save conversation reference for proactive messaging
+    const conversationRef: StoredConversationReference = {
+      activityId: activity.id,
+      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+      bot: activity.recipient
+        ? { id: activity.recipient.id, name: activity.recipient.name }
+        : undefined,
+      conversation: {
+        id: conversationId,
+        conversationType,
+        tenantId: conversation?.tenantId,
+      },
+      channelId: activity.channelId,
+      serviceUrl: activity.serviceUrl,
+    };
+    saveConversationReference(conversationId, conversationRef).catch((err) => {
+      log.debug("failed to save conversation reference", { error: String(err) });
+    });
+
     // Build Teams-specific identifiers
     const teamsFrom = isDirectMessage
       ? `msteams:${senderId}`
@@ -202,6 +245,49 @@ export async function monitorMSTeamsProvider(
       contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
     });
 
+    // Check DM policy for direct messages
+    if (isDirectMessage && msteamsCfg) {
+      const dmPolicy = msteamsCfg.dmPolicy ?? "pairing";
+      const allowFrom = msteamsCfg.allowFrom ?? [];
+
+      if (dmPolicy === "disabled") {
+        log.debug("dropping dm (dms disabled)");
+        return;
+      }
+
+      if (dmPolicy !== "open") {
+        // Check allowlist - look up from config and pairing store
+        const storedAllowFrom = await readProviderAllowFromStore("msteams");
+        const effectiveAllowFrom = [
+          ...allowFrom.map((v) => String(v).toLowerCase()),
+          ...storedAllowFrom.map((v) => v.toLowerCase()),
+        ];
+
+        const senderLower = senderId.toLowerCase();
+        const permitted = effectiveAllowFrom.some(
+          (entry) => entry === senderLower || entry === "*",
+        );
+
+        if (!permitted) {
+          if (dmPolicy === "pairing") {
+            const { code, created } = await upsertProviderPairingRequest({
+              provider: "msteams",
+              id: senderId,
+              meta: { name: senderName },
+            });
+            const msg = created
+              ? `👋 Hi ${senderName}! To chat with me, please share this pairing code with my owner: **${code}**`
+              : `🔑 Your pairing code is: **${code}** — please share it with my owner to get access.`;
+            await context.sendActivity(msg);
+            log.info("sent pairing code", { senderId, code });
+          } else {
+            log.debug("dropping unauthorized dm", { senderId, dmPolicy });
+          }
+          return;
+        }
+      }
+    }
+
     // Format the message body with envelope
     const timestamp = parseTimestamp(activity.timestamp);
     const body = formatAgentEnvelope({
@@ -226,7 +312,7 @@ export async function monitorMSTeamsProvider(
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: !isDirectMessage,
+      WasMentioned: isDirectMessage || wasBotMentioned(activity),
       CommandAuthorized: true,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
@@ -260,9 +346,16 @@ export async function monitorMSTeamsProvider(
           });
         },
         onError: (err, info) => {
+          const errMsg =
+            err instanceof Error
+              ? err.message
+              : typeof err === "object"
+                ? JSON.stringify(err)
+                : String(err);
           runtime.error?.(
-            danger(`msteams ${info.kind} reply failed: ${String(err)}`),
+            danger(`msteams ${info.kind} reply failed: ${errMsg}`),
           );
+          log.error("reply failed", { kind: info.kind, error: err });
         },
         onReplyStart: sendTypingIndicator,
       });
@@ -323,28 +416,57 @@ export async function monitorMSTeamsProvider(
       await next();
     });
 
-  // Auth configuration using the new SDK format
-  const authConfig = {
+  // Auth configuration - use SDK's defaults merger
+  const authConfig = getAuthConfigWithDefaults({
     clientId: creds.appId,
     clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
+  });
+
+  // Create our own Express server (instead of using startServer) so we can control shutdown
+  // Pass authConfig to CloudAdapter so it can authenticate outbound calls
+  const adapter = new CloudAdapter(authConfig);
+  const expressApp = express.default();
+  expressApp.use(express.json());
+  expressApp.use(authorizeJWT(authConfig));
+
+  // Set up the messages endpoint - use configured path and /api/messages as fallback
+  const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const messageHandler = (req: any, res: any) => {
+    adapter.process(req, res, (context) => handler.run(context));
   };
 
-  // Set env vars that startServer reads (it uses loadAuthConfigFromEnv internally)
-  process.env.clientId = creds.appId;
-  process.env.clientSecret = creds.appPassword;
-  process.env.tenantId = creds.tenantId;
-  process.env.PORT = String(port);
+  // Listen on configured path and /api/messages (standard Bot Framework path)
+  expressApp.post(configuredPath, messageHandler);
+  if (configuredPath !== "/api/messages") {
+    expressApp.post("/api/messages", messageHandler);
+  }
 
-  // Start the server
-  const expressApp = startServer(handler, authConfig);
+  log.debug("listening on paths", {
+    primary: configuredPath,
+    fallback: "/api/messages",
+  });
 
-  log.info(`msteams provider started on port ${port}`);
+  // Start listening and capture the HTTP server handle
+  const httpServer = expressApp.listen(port, () => {
+    log.info(`msteams provider started on port ${port}`);
+  });
+
+  httpServer.on("error", (err) => {
+    log.error("msteams server error", { error: String(err) });
+  });
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
-    // Express app doesn't have a direct close method
-    // The server is managed by startServer internally
+    return new Promise<void>((resolve) => {
+      httpServer.close((err) => {
+        if (err) {
+          log.debug("msteams server close error", { error: String(err) });
+        }
+        resolve();
+      });
+    });
   };
 
   // Handle abort signal
