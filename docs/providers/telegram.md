@@ -162,6 +162,9 @@ Reasoning stream (Telegram only):
 - If `telegram.streamMode` is `off`, reasoning stream is disabled.
 More context: [Streaming + chunking](/concepts/streaming).
 
+## Retry policy
+Outbound Telegram API calls retry on transient network/429 errors with exponential backoff and jitter. Configure via `telegram.retry`. See [Retry policy](/concepts/retry).
+
 ## Agent tool (reactions)
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
@@ -215,6 +218,7 @@ Provider options:
 - `telegram.textChunkLimit`: outbound chunk size (chars).
 - `telegram.streamMode`: `off | partial | block` (draft streaming).
 - `telegram.mediaMaxMb`: inbound/outbound media cap (MB).
+- `telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `telegram.proxy`: proxy URL for Bot API calls (SOCKS/HTTP).
 - `telegram.webhookUrl`: enable webhook mode.
 - `telegram.webhookSecret`: webhook secret (optional).

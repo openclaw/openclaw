@@ -4,6 +4,17 @@ export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 
+export type OutboundRetryConfig = {
+  /** Max retry attempts for outbound requests (default: 3). */
+  attempts?: number;
+  /** Minimum retry delay in ms (default: 300-500ms depending on provider). */
+  minDelayMs?: number;
+  /** Maximum retry delay cap in ms (default: 30000). */
+  maxDelayMs?: number;
+  /** Jitter factor (0-1) applied to delays (default: 0.1). */
+  jitter?: number;
+};
+
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   provider?: string;
@@ -294,6 +305,8 @@ export type TelegramConfig = {
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Retry policy for outbound Telegram API calls. */
+  retry?: OutboundRetryConfig;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;
@@ -378,6 +391,8 @@ export type DiscordConfig = {
   textChunkLimit?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
+  /** Retry policy for outbound Discord API calls. */
+  retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */

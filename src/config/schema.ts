@@ -108,10 +108,18 @@ const FIELD_LABELS: Record<string, string> = {
   "telegram.botToken": "Telegram Bot Token",
   "telegram.dmPolicy": "Telegram DM Policy",
   "telegram.streamMode": "Telegram Stream Mode",
+  "telegram.retry.attempts": "Telegram Retry Attempts",
+  "telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
+  "telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
+  "telegram.retry.jitter": "Telegram Retry Jitter",
   "whatsapp.dmPolicy": "WhatsApp DM Policy",
   "signal.dmPolicy": "Signal DM Policy",
   "imessage.dmPolicy": "iMessage DM Policy",
   "discord.dm.policy": "Discord DM Policy",
+  "discord.retry.attempts": "Discord Retry Attempts",
+  "discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
+  "discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
+  "discord.retry.jitter": "Discord Retry Jitter",
   "slack.dm.policy": "Slack DM Policy",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
@@ -158,6 +166,14 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
   "telegram.streamMode":
     "Draft streaming mode for Telegram replies (off | partial | block). Requires private topics + sendMessageDraft.",
+  "telegram.retry.attempts":
+    "Max retry attempts for outbound Telegram API calls (default: 3).",
+  "telegram.retry.minDelayMs":
+    "Minimum retry delay in ms for Telegram outbound calls.",
+  "telegram.retry.maxDelayMs":
+    "Maximum retry delay cap in ms for Telegram outbound calls.",
+  "telegram.retry.jitter":
+    "Jitter factor (0-1) applied to Telegram retry delays.",
   "whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
   "signal.dmPolicy":
@@ -166,6 +182,14 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires imessage.allowFrom=["*"].',
   "discord.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires discord.dm.allowFrom=["*"].',
+  "discord.retry.attempts":
+    "Max retry attempts for outbound Discord API calls (default: 3).",
+  "discord.retry.minDelayMs":
+    "Minimum retry delay in ms for Discord outbound calls.",
+  "discord.retry.maxDelayMs":
+    "Maximum retry delay cap in ms for Discord outbound calls.",
+  "discord.retry.jitter":
+    "Jitter factor (0-1) applied to Discord retry delays.",
   "slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
 };
