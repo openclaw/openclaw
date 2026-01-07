@@ -33,6 +33,7 @@ import {
 import { extractReplyToTag } from "./reply-tags.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
@@ -107,26 +108,11 @@ export async function runReplyAgent(params: {
   } = params;
 
   const isHeartbeat = opts?.isHeartbeat === true;
-  const shouldStartTypingOnText =
-    typingMode === "message" || typingMode === "instant";
-  const shouldStartTypingOnReasoning = typingMode === "thinking";
-
-  const signalTypingFromText = async (text?: string) => {
-    if (isHeartbeat || typingMode === "never") return;
-    if (shouldStartTypingOnText) {
-      await typing.startTypingOnText(text);
-      return;
-    }
-    if (shouldStartTypingOnReasoning) {
-      typing.refreshTypingTtl();
-    }
-  };
-
-  const signalTypingFromReasoning = async () => {
-    if (isHeartbeat || !shouldStartTypingOnReasoning) return;
-    await typing.startTypingLoop();
-    typing.refreshTypingTtl();
-  };
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat,
+  });
 
   const shouldEmitToolResult = () => {
     if (!sessionKey || !storePath) {
@@ -276,7 +262,7 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    await signalTypingFromText(text);
+                    await typingSignals.signalTextDelta(text);
                     await opts.onPartialReply?.({
                       text,
                       mediaUrls: payload.mediaUrls,
@@ -284,9 +270,9 @@ export async function runReplyAgent(params: {
                   }
                 : undefined,
             onReasoningStream:
-              shouldStartTypingOnReasoning || opts?.onReasoningStream
+              typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
                 ? async (payload) => {
-                    await signalTypingFromReasoning();
+                    await typingSignals.signalReasoningDelta();
                     await opts?.onReasoningStream?.({
                       text: payload.text,
                       mediaUrls: payload.mediaUrls,
@@ -344,7 +330,7 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      await signalTypingFromText(cleaned);
+                      await typingSignals.signalTextDelta(cleaned);
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -389,7 +375,7 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    await signalTypingFromText(text);
+                    await typingSignals.signalTextDelta(text);
                     await opts.onToolResult?.({
                       text,
                       mediaUrls: payload.mediaUrls,
@@ -544,8 +530,8 @@ export async function runReplyAgent(params: {
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
     });
-    if (shouldSignalTyping && typingMode === "instant" && !isHeartbeat) {
-      await typing.startTypingLoop();
+    if (shouldSignalTyping) {
+      await typingSignals.signalRunStart();
     }
 
     if (sessionStore && sessionKey) {

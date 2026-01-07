@@ -996,6 +996,7 @@ See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 Typing indicators:
 - `agent.typingMode`: `"never" | "instant" | "thinking" | "message"`. Defaults to
   `instant` for direct chats / mentions and `message` for unmentioned group chats.
+- `session.typingMode`: per-session override for the mode.
 - `agent.typingIntervalSeconds`: how often the typing signal is refreshed (default: 6s).
 - `session.typingIntervalSeconds`: per-session override for the refresh interval.
 See [/concepts/typing-indicators](/concepts/typing-indicators) for behavior details.

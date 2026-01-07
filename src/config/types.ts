@@ -38,6 +38,7 @@ export type SessionConfig = {
   heartbeatIdleMinutes?: number;
   store?: string;
   typingIntervalSeconds?: number;
+  typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {

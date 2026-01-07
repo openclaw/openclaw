@@ -39,10 +39,11 @@ Order of “how early it fires”:
 }
 ```
 
-You can override the refresh cadence per session:
+You can override mode or cadence per session:
 ```json5
 {
   session: {
+    typingMode: "message",
     typingIntervalSeconds: 4
   }
 }
@@ -51,8 +52,8 @@ You can override the refresh cadence per session:
 ## Notes
 - `message` mode won’t show typing for silent-only replies (e.g. the `NO_REPLY`
   token used to suppress output).
-- `thinking` only fires if the run streams reasoning; if the model doesn’t emit
-  reasoning deltas, typing won’t start.
+- `thinking` only fires if the run streams reasoning (`reasoningLevel: "stream"`).
+  If the model doesn’t emit reasoning deltas, typing won’t start.
 - Heartbeats never show typing, regardless of mode.
 - `typingIntervalSeconds` controls the **refresh cadence**, not the start time.
   The default is 6 seconds.
