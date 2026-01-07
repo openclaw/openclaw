@@ -32,7 +32,11 @@ import {
   deriveDefaultBridgePort,
   deriveDefaultCanvasHostPort,
 } from "../config/port-defaults.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveMainSessionKey,
+  resolveStorePath,
+} from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
 import { appendCronRunLog, resolveCronRunLogPath } from "../cron/run-log.js";
 import { CronService } from "../cron/service.js";
@@ -689,7 +693,9 @@ export async function startGatewayServer(
     const cron = new CronService({
       storePath,
       cronEnabled,
-      enqueueSystemEvent,
+      enqueueSystemEvent: (text) => {
+        enqueueSystemEvent(text, { sessionKey: resolveMainSessionKey(cfg) });
+      },
       requestHeartbeatNow,
       runIsolatedAgentJob: async ({ job, message }) => {
         const runtimeConfig = loadConfig();
