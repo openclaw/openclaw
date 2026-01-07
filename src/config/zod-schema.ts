@@ -247,6 +247,12 @@ const RoutingSchema = z
                 workspaceRoot: z.string().optional(),
               })
               .optional(),
+            tools: z
+              .object({
+                allow: z.array(z.string()).optional(),
+                deny: z.array(z.string()).optional(),
+              })
+              .optional(),
           })
           .optional(),
       )
