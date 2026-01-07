@@ -1,3 +1,4 @@
+import { RateLimitError } from "@buape/carbon";
 import { PermissionFlagsBits, Routes } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -660,5 +661,106 @@ describe("sendPollDiscord", () => {
         }),
       }),
     );
+  });
+});
+
+// Helper to create a mock RateLimitError
+function createMockRateLimitError(retryAfter = 0.5): RateLimitError {
+  const mockResponse = {
+    status: 429,
+    headers: new Headers({
+      "X-RateLimit-Scope": "user",
+      "X-RateLimit-Bucket": "test-bucket",
+    }),
+  } as Response;
+  const mockBody = {
+    message: "You are being rate limited.",
+    retry_after: retryAfter,
+    global: false,
+  };
+  return new RateLimitError(mockResponse, mockBody);
+}
+
+describe("rate limit retry", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("retries on RateLimitError and succeeds on second attempt", async () => {
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0.001); // 1ms delay
+
+    postMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce({ id: "msg1", channel_id: "789" });
+
+    const res = await sendMessageDiscord("channel:789", "hello", {
+      rest,
+      token: "t",
+    });
+
+    expect(res.messageId).toBe("msg1");
+    expect(postMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("throws after max retries exceeded", async () => {
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0.001);
+
+    postMock.mockRejectedValue(rateLimitError);
+
+    await expect(
+      sendMessageDiscord("channel:789", "hello", {
+        rest,
+        token: "t",
+        retryAttempts: 2,
+        retryMaxDelayMs: 10,
+      }),
+    ).rejects.toThrow("rate limited");
+    expect(postMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-rate-limit errors", async () => {
+    const { rest, postMock } = makeRest();
+    postMock.mockRejectedValueOnce(new Error("network error"));
+
+    await expect(
+      sendMessageDiscord("channel:789", "hello", { rest, token: "t" }),
+    ).rejects.toThrow("network error");
+    expect(postMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("respects custom retry options", async () => {
+    const { rest, postMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0.001);
+
+    postMock.mockRejectedValue(rateLimitError);
+
+    await expect(
+      sendMessageDiscord("channel:789", "hello", {
+        rest,
+        token: "t",
+        retryAttempts: 3,
+        retryMaxDelayMs: 10,
+      }),
+    ).rejects.toThrow("rate limited");
+    expect(postMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("retries reactMessageDiscord on rate limit", async () => {
+    const { rest, putMock } = makeRest();
+    const rateLimitError = createMockRateLimitError(0.001);
+
+    putMock
+      .mockRejectedValueOnce(rateLimitError)
+      .mockResolvedValueOnce(undefined);
+
+    const res = await reactMessageDiscord("chan1", "msg1", "👍", {
+      rest,
+      token: "t",
+    });
+
+    expect(res.ok).toBe(true);
+    expect(putMock).toHaveBeenCalledTimes(2);
   });
 });

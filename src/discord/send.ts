@@ -1,4 +1,4 @@
-import { RequestClient } from "@buape/carbon";
+import { RateLimitError, RequestClient } from "@buape/carbon";
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type {
@@ -36,6 +36,55 @@ const DISCORD_POLL_MAX_DURATION_HOURS = 32 * 24;
 const DISCORD_MISSING_PERMISSIONS = 50013;
 const DISCORD_CANNOT_DM = 50007;
 
+// Rate limit retry defaults
+const DEFAULT_RETRY_ATTEMPTS = 3;
+const DEFAULT_RETRY_MIN_MS = 500;
+const DEFAULT_RETRY_MAX_MS = 30_000;
+
+type DiscordRetryOpts = {
+  label?: string;
+  verbose?: boolean;
+  maxAttempts?: number;
+  maxDelayMs?: number;
+};
+
+/**
+ * Retry wrapper for Discord API calls that handles rate limit (429) errors.
+ * Uses Discord's retry-after header when available, otherwise exponential backoff.
+ */
+async function withDiscordRetry<T>(
+  fn: () => Promise<T>,
+  opts?: DiscordRetryOpts,
+): Promise<T> {
+  const maxAttempts = opts?.maxAttempts ?? DEFAULT_RETRY_ATTEMPTS;
+  const maxDelayMs = opts?.maxDelayMs ?? DEFAULT_RETRY_MAX_MS;
+  let lastErr: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      // Only retry on rate limit errors
+      if (!(err instanceof RateLimitError)) throw err;
+      if (attempt >= maxAttempts) break;
+
+      // Use retry-after from Discord, fallback to exponential backoff
+      const retryAfterMs = err.retryAfter * 1000;
+      const exponentialMs = DEFAULT_RETRY_MIN_MS * 2 ** (attempt - 1);
+      const delay = Math.min(Math.max(retryAfterMs, exponentialMs), maxDelayMs);
+
+      if (opts?.verbose) {
+        console.warn(
+          `discord ${opts.label ?? "send"} rate limited, retry ${attempt}/${maxAttempts - 1} in ${delay}ms`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+  throw lastErr;
+}
+
 export class DiscordSendError extends Error {
   kind?: "missing-permissions" | "dm-blocked";
   channelId?: string;
@@ -72,6 +121,10 @@ type DiscordSendOpts = {
   verbose?: boolean;
   rest?: RequestClient;
   replyTo?: string;
+  /** Max retry attempts for rate limit errors (default: 3) */
+  retryAttempts?: number;
+  /** Max delay cap in ms for retries (default: 30000) */
+  retryMaxDelayMs?: number;
 };
 
 export type DiscordSendResult = {
@@ -82,6 +135,11 @@ export type DiscordSendResult = {
 export type DiscordReactOpts = {
   token?: string;
   rest?: RequestClient;
+  verbose?: boolean;
+  /** Max retry attempts for rate limit errors (default: 3) */
+  retryAttempts?: number;
+  /** Max delay cap in ms for retries (default: 30000) */
+  retryMaxDelayMs?: number;
 };
 
 export type DiscordReactionUser = {
@@ -478,17 +536,25 @@ export async function sendMessageDiscord(
   let result:
     | { id: string; channel_id: string }
     | { id: string | null; channel_id: string };
+
+  const retryOpts: DiscordRetryOpts = {
+    verbose: opts.verbose,
+    maxAttempts: opts.retryAttempts,
+    maxDelayMs: opts.retryMaxDelayMs,
+  };
+
   try {
-    if (opts.mediaUrl) {
-      result = await sendDiscordMedia(
-        rest,
-        channelId,
-        text,
-        opts.mediaUrl,
-        opts.replyTo,
+    const { mediaUrl } = opts;
+    if (mediaUrl) {
+      result = await withDiscordRetry(
+        () => sendDiscordMedia(rest, channelId, text, mediaUrl, opts.replyTo),
+        { ...retryOpts, label: "media" },
       );
     } else {
-      result = await sendDiscordText(rest, channelId, text, opts.replyTo);
+      result = await withDiscordRetry(
+        () => sendDiscordText(rest, channelId, text, opts.replyTo),
+        { ...retryOpts, label: "text" },
+      );
     }
   } catch (err) {
     throw await buildDiscordSendError(err, {
@@ -516,12 +582,24 @@ export async function sendStickerDiscord(
   const { channelId } = await resolveChannelId(rest, recipient);
   const content = opts.content?.trim();
   const stickers = normalizeStickerIds(stickerIds);
-  const res = (await rest.post(Routes.channelMessages(channelId), {
-    body: {
-      content: content || undefined,
-      sticker_ids: stickers,
-    },
-  })) as { id: string; channel_id: string };
+
+  const retryOpts: DiscordRetryOpts = {
+    label: "sticker",
+    verbose: opts.verbose,
+    maxAttempts: opts.retryAttempts,
+    maxDelayMs: opts.retryMaxDelayMs,
+  };
+
+  const res = await withDiscordRetry(
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: {
+          content: content || undefined,
+          sticker_ids: stickers,
+        },
+      }) as Promise<{ id: string; channel_id: string }>,
+    retryOpts,
+  );
   return {
     messageId: res.id ? String(res.id) : "unknown",
     channelId: String(res.channel_id ?? channelId),
@@ -539,12 +617,24 @@ export async function sendPollDiscord(
   const { channelId } = await resolveChannelId(rest, recipient);
   const content = opts.content?.trim();
   const payload = normalizeDiscordPollInput(poll);
-  const res = (await rest.post(Routes.channelMessages(channelId), {
-    body: {
-      content: content || undefined,
-      poll: payload,
-    },
-  })) as { id: string; channel_id: string };
+
+  const retryOpts: DiscordRetryOpts = {
+    label: "poll",
+    verbose: opts.verbose,
+    maxAttempts: opts.retryAttempts,
+    maxDelayMs: opts.retryMaxDelayMs,
+  };
+
+  const res = await withDiscordRetry(
+    () =>
+      rest.post(Routes.channelMessages(channelId), {
+        body: {
+          content: content || undefined,
+          poll: payload,
+        },
+      }) as Promise<{ id: string; channel_id: string }>,
+    retryOpts,
+  );
   return {
     messageId: res.id ? String(res.id) : "unknown",
     channelId: String(res.channel_id ?? channelId),
@@ -560,8 +650,18 @@ export async function reactMessageDiscord(
   const token = resolveToken(opts.token);
   const rest = resolveRest(token, opts.rest);
   const encoded = normalizeReactionEmoji(emoji);
-  await rest.put(
-    Routes.channelMessageOwnReaction(channelId, messageId, encoded),
+
+  const retryOpts: DiscordRetryOpts = {
+    label: "react",
+    verbose: opts.verbose,
+    maxAttempts: opts.retryAttempts,
+    maxDelayMs: opts.retryMaxDelayMs,
+  };
+
+  await withDiscordRetry(
+    () =>
+      rest.put(Routes.channelMessageOwnReaction(channelId, messageId, encoded)),
+    retryOpts,
   );
   return { ok: true };
 }
