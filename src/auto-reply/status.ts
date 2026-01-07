@@ -338,10 +338,13 @@ export function buildStatusMessage(args: StatusArgs): string {
     `Verbose: ${verboseLevel}`,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
     `Elevated: ${elevatedLevel}`,
+  ];
+  const optionsLine = optionParts.filter(Boolean).join(" · ");
+  const activationParts = [
     groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
     `🪢 Queue: ${queueMode}${queueDetails}`,
   ];
-  const optionsLine = optionParts.filter(Boolean).join(" · ");
+  const activationLine = activationParts.filter(Boolean).join(" · ");
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
   const authLabel = args.modelAuth ? ` · 🔑 ${args.modelAuth}` : "";
@@ -355,6 +358,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `📚 ${contextLine}`,
     `🧵 ${sessionLine}`,
     `⚙️ ${optionsLine}`,
+    activationLine,
   ]
     .filter(Boolean)
     .join("\n");
