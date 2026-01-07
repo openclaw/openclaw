@@ -25,6 +25,8 @@ export async function dispatchReplyFromConfig(params: {
   // This handles cross-provider routing (e.g., message from Telegram being processed
   // by a shared session that's currently on Slack) while preserving normal dispatcher
   // flow when the provider handles its own messages.
+  //
+  // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
   const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();

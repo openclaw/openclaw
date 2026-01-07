@@ -54,6 +54,7 @@ export async function routeReply(
 ): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId } = params;
 
+  // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const text = payload.text ?? "";
   const mediaUrls = (payload.mediaUrls?.filter(Boolean) ?? []).length
     ? (payload.mediaUrls?.filter(Boolean) as string[])

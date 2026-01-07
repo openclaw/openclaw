@@ -442,6 +442,10 @@ export function scheduleFollowupDrain(
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
+          // Once the batch is mixed, never collect again within this drain.
+          // Prevents “collect after shift” collapsing different targets.
+          //
+          // Debug: `pnpm test src/auto-reply/reply/queue.collect-routing.test.ts`
           if (forceIndividualCollect) {
             const next = queue.items.shift();
             if (!next) break;
