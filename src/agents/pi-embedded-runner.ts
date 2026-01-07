@@ -25,6 +25,7 @@ import type {
   VerboseLevel,
 } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { isCacheEnabled, resolveCacheTtlMs } from "../config/cache-utils.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -340,19 +341,14 @@ const SESSION_MANAGER_CACHE = new Map<string, SessionManagerCacheEntry>();
 const DEFAULT_SESSION_MANAGER_TTL_MS = 45_000; // 45 seconds
 
 function getSessionManagerTtl(): number {
-  const envTtl = process.env.CLAWDBOT_SESSION_MANAGER_CACHE_TTL_MS;
-  if (envTtl) {
-    const parsed = Number.parseInt(envTtl, 10);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      return parsed;
-    }
-  }
-  return DEFAULT_SESSION_MANAGER_TTL_MS;
+  return resolveCacheTtlMs({
+    envValue: process.env.CLAWDBOT_SESSION_MANAGER_CACHE_TTL_MS,
+    defaultTtlMs: DEFAULT_SESSION_MANAGER_TTL_MS,
+  });
 }
 
 function isSessionManagerCacheEnabled(): boolean {
-  const ttl = getSessionManagerTtl();
-  return ttl > 0;
+  return isCacheEnabled(getSessionManagerTtl());
 }
 
 function trackSessionManagerAccess(sessionFile: string): void {

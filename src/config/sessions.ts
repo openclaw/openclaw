@@ -14,6 +14,11 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { normalizeE164 } from "../utils.js";
+import {
+  getFileMtimeMs,
+  isCacheEnabled,
+  resolveCacheTtlMs,
+} from "./cache-utils.js";
 import { resolveStateDir } from "./paths.js";
 
 // ============================================================================
@@ -31,34 +36,20 @@ const SESSION_STORE_CACHE = new Map<string, SessionStoreCacheEntry>();
 const DEFAULT_SESSION_STORE_TTL_MS = 45_000; // 45 seconds (between 30-60s)
 
 function getSessionStoreTtl(): number {
-  // Allow runtime override via environment variable
-  const envTtl = process.env.CLAWDBOT_SESSION_CACHE_TTL_MS;
-  if (envTtl) {
-    const parsed = Number.parseInt(envTtl, 10);
-    if (Number.isFinite(parsed) && parsed >= 0) {
-      return parsed;
-    }
-  }
-  return DEFAULT_SESSION_STORE_TTL_MS;
+  return resolveCacheTtlMs({
+    envValue: process.env.CLAWDBOT_SESSION_CACHE_TTL_MS,
+    defaultTtlMs: DEFAULT_SESSION_STORE_TTL_MS,
+  });
 }
 
 function isSessionStoreCacheEnabled(): boolean {
-  const ttl = getSessionStoreTtl();
-  return ttl > 0;
+  return isCacheEnabled(getSessionStoreTtl());
 }
 
 function isSessionStoreCacheValid(entry: SessionStoreCacheEntry): boolean {
   const now = Date.now();
   const ttl = getSessionStoreTtl();
   return now - entry.loadedAt <= ttl;
-}
-
-function getSessionStoreMtimeMs(storePath: string): number | undefined {
-  try {
-    return fs.statSync(storePath).mtimeMs;
-  } catch {
-    return undefined;
-  }
 }
 
 function invalidateSessionStoreCache(storePath: string): void {
@@ -199,12 +190,12 @@ export function resolveSessionTranscriptPath(
 export function resolveSessionFilePath(
   sessionId: string,
   entry?: SessionEntry,
-  opts?: { agentId?: string; topicId?: number },
+  opts?: { agentId?: string },
 ): string {
   const candidate = entry?.sessionFile?.trim();
   return candidate
     ? candidate
-    : resolveSessionTranscriptPath(sessionId, opts?.agentId, opts?.topicId);
+    : resolveSessionTranscriptPath(sessionId, opts?.agentId);
 }
 
 export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
@@ -402,7 +393,7 @@ export function loadSessionStore(
   if (isSessionStoreCacheEnabled()) {
     const cached = SESSION_STORE_CACHE.get(storePath);
     if (cached && isSessionStoreCacheValid(cached)) {
-      const currentMtimeMs = getSessionStoreMtimeMs(storePath);
+      const currentMtimeMs = getFileMtimeMs(storePath);
       if (currentMtimeMs === cached.mtimeMs) {
         // Return a shallow copy to prevent external mutations affecting cache
         return { ...cached.store };
@@ -413,14 +404,14 @@ export function loadSessionStore(
 
   // Cache miss or disabled - load from disk
   let store: Record<string, SessionEntry> = {};
-  let mtimeMs = getSessionStoreMtimeMs(storePath);
+  let mtimeMs = getFileMtimeMs(storePath);
   try {
     const raw = fs.readFileSync(storePath, "utf-8");
     const parsed = JSON5.parse(raw);
     if (parsed && typeof parsed === "object") {
       store = parsed as Record<string, SessionEntry>;
     }
-    mtimeMs = getSessionStoreMtimeMs(storePath) ?? mtimeMs;
+    mtimeMs = getFileMtimeMs(storePath) ?? mtimeMs;
   } catch {
     // ignore missing/invalid store; we'll recreate it
   }

@@ -82,4 +82,31 @@ describe("initSessionState thread forking", () => {
     };
     expect(parsedHeader.parentSession).toBe(parentSessionFile);
   });
+
+  it("records topic-specific session files when MessageThreadId is present", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-topic-session-"),
+    );
+    const storePath = path.join(root, "sessions.json");
+
+    const cfg = {
+      session: { store: storePath },
+    } as ClawdbotConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: "Hello topic",
+        SessionKey: "agent:main:telegram:group:123:topic:456",
+        MessageThreadId: 456,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    const sessionFile = result.sessionEntry.sessionFile;
+    expect(sessionFile).toBeTruthy();
+    expect(path.basename(sessionFile ?? "")).toBe(
+      `${result.sessionEntry.sessionId}-topic-456.jsonl`,
+    );
+  });
 });

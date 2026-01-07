@@ -17,6 +17,7 @@ import {
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionKey,
+  resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
   type SessionScope,
@@ -254,6 +255,13 @@ export async function initSessionState(params: {
       sessionEntry.sessionId = forked.sessionId;
       sessionEntry.sessionFile = forked.sessionFile;
     }
+  }
+  if (!sessionEntry.sessionFile) {
+    sessionEntry.sessionFile = resolveSessionTranscriptPath(
+      sessionEntry.sessionId,
+      agentId,
+      ctx.MessageThreadId,
+    );
   }
   sessionStore[sessionKey] = sessionEntry;
   await saveSessionStore(storePath, sessionStore);
