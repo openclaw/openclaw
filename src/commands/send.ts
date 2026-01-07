@@ -5,6 +5,7 @@ import { success } from "../globals.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import {
   buildOutboundDeliveryJson,
+  formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -107,7 +108,7 @@ export async function sendCommand(
 
   runtime.log(
     success(
-      `✅ Sent via gateway. Message ID: ${result.messageId ?? "unknown"}`,
+      formatGatewaySummary({ provider, messageId: result.messageId ?? null }),
     ),
   );
   if (opts.json) {

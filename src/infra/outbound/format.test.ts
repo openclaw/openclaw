@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildOutboundDeliveryJson,
+  formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "./format.js";
 
@@ -85,5 +86,23 @@ describe("buildOutboundDeliveryJson", () => {
       mediaUrl: null,
       timestamp: 123,
     });
+  });
+});
+
+describe("formatGatewaySummary", () => {
+  it("formats gateway summaries with provider", () => {
+    expect(
+      formatGatewaySummary({ provider: "whatsapp", messageId: "m1" }),
+    ).toBe("✅ Sent via gateway (whatsapp). Message ID: m1");
+  });
+
+  it("supports custom actions", () => {
+    expect(
+      formatGatewaySummary({
+        action: "Poll sent",
+        provider: "discord",
+        messageId: "p1",
+      }),
+    ).toBe("✅ Poll sent via gateway (discord). Message ID: p1");
   });
 });

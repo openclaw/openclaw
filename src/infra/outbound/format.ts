@@ -12,6 +12,14 @@ export type OutboundDeliveryJson = {
   toJid?: string;
 };
 
+type OutboundDeliveryMeta = {
+  messageId?: string;
+  chatId?: string;
+  channelId?: string;
+  timestamp?: number;
+  toJid?: string;
+};
+
 const resolveProviderLabel = (provider: string) =>
   provider === "imessage" ? "iMessage" : provider;
 
@@ -34,7 +42,7 @@ export function formatOutboundDeliverySummary(
 export function buildOutboundDeliveryJson(params: {
   provider: string;
   to: string;
-  result?: OutboundDeliveryResult;
+  result?: OutboundDeliveryMeta | OutboundDeliveryResult;
   via?: "direct" | "gateway";
   mediaUrl?: string | null;
 }): OutboundDeliveryJson {
@@ -48,12 +56,21 @@ export function buildOutboundDeliveryJson(params: {
     mediaUrl: params.mediaUrl ?? null,
   };
 
-  if (result && "chatId" in result) payload.chatId = result.chatId;
-  if (result && "channelId" in result) payload.channelId = result.channelId;
-  if (result && "timestamp" in result && result.timestamp !== undefined) {
-    payload.timestamp = result.timestamp;
-  }
-  if (result && "toJid" in result) payload.toJid = result.toJid;
+  if (result?.chatId !== undefined) payload.chatId = result.chatId;
+  if (result?.channelId !== undefined) payload.channelId = result.channelId;
+  if (result?.timestamp !== undefined) payload.timestamp = result.timestamp;
+  if (result?.toJid !== undefined) payload.toJid = result.toJid;
 
   return payload;
+}
+
+export function formatGatewaySummary(params: {
+  action?: string;
+  provider?: string;
+  messageId?: string | null;
+}): string {
+  const action = params.action ?? "Sent";
+  const providerSuffix = params.provider ? ` (${params.provider})` : "";
+  const messageId = params.messageId ?? "unknown";
+  return `✅ ${action} via gateway${providerSuffix}. Message ID: ${messageId}`;
 }
