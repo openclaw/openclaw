@@ -38,6 +38,58 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 - Group replies require a mention by default (native @mention or `routing.groupChat.mentionPatterns`).
 - Replies always route back to the same Telegram chat.
 
+## Group activation modes
+
+By default, the bot only responds to mentions in groups (`@botname` or patterns in `routing.groupChat.mentionPatterns`). To change this behavior:
+
+### Via config (recommended)
+
+```json5
+{
+  telegram: {
+    groups: {
+      "-1001234567890": { requireMention: false }  // always respond in this group
+    }
+  }
+}
+```
+
+**Important:** Setting `telegram.groups` creates an **allowlist** - only listed groups (or `"*"`) will be accepted.
+
+To allow all groups with always-respond:
+```json5
+{
+  telegram: {
+    groups: {
+      "*": { requireMention: false }  // all groups, always respond
+    }
+  }
+}
+```
+
+To keep mention-only for all groups (default behavior):
+```json5
+{
+  telegram: {
+    groups: {
+      "*": { requireMention: true }  // or omit groups entirely
+    }
+  }
+}
+```
+
+### Via command (session-level)
+
+Send in the group:
+- `/activation always` - respond to all messages
+- `/activation mention` - require mentions (default)
+
+**Note:** Commands update session state only. For persistent behavior across restarts, use config.
+
+### Getting the group chat ID
+
+Forward any message from the group to `@userinfobot` or `@getidsbot` on Telegram to see the chat ID (negative number like `-1001234567890`).
+
 ## Topics (forum supergroups)
 Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - Appends `:topic:<threadId>` to the Telegram group session key so each topic is isolated.
@@ -50,15 +102,29 @@ Private topics (DM forum mode) also include `message_thread_id`. Clawdbot:
 - Uses the thread id for draft streaming + replies.
 
 ## Access control (DMs + groups)
+
+### DM access
 - Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
   - `clawdbot pairing list --provider telegram`
   - `clawdbot pairing approve --provider telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
 
-Group gating:
-- `telegram.groupPolicy = open | allowlist | disabled`.
-- `telegram.groups` doubles as a group allowlist when set (include `"*"` to allow all).
+### Group access
+
+Two independent controls:
+
+**1. Which groups are allowed** (group allowlist via `telegram.groups`):
+- No `groups` config = all groups allowed
+- With `groups` config = only listed groups or `"*"` are allowed
+- Example: `"groups": { "-1001234567890": {}, "*": {} }` allows all groups
+
+**2. Which senders are allowed** (sender filtering via `telegram.groupPolicy`):
+- `"open"` (default) = all senders in allowed groups can message
+- `"allowlist"` = only senders in `telegram.groupAllowFrom` can message
+- `"disabled"` = no group messages accepted at all
+
+Most users want: `groupPolicy: "open"` + specific groups listed in `telegram.groups`
 
 ## Long-polling vs webhook
 - Default: long-polling (no public URL required).
@@ -103,6 +169,27 @@ Reasoning stream (Telegram only):
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
 - Example: `clawdbot send --provider telegram --to 123456789 "hi"`.
+
+## Troubleshooting
+
+**Bot doesn't respond to non-mention messages in group:**
+- Check if group is in `telegram.groups` with `requireMention: false`
+- Or use `"*": { "requireMention": false }` to enable for all groups
+- Test with `/activation always` command (requires config change to persist)
+
+**Bot not seeing group messages at all:**
+- If `telegram.groups` is set, the group must be listed or use `"*"`
+- Check Privacy Settings in @BotFather → "Group Privacy" should be **OFF**
+- Verify bot is actually a member (not just an admin with no read access)
+- Check gateway logs: `journalctl --user -u clawdbot -f` (look for "skipping group message")
+
+**Bot responds to mentions but not `/activation always`:**
+- The `/activation` command updates session state but doesn't persist to config
+- For persistent behavior, add group to `telegram.groups` with `requireMention: false`
+
+**Commands like `/status` don't work:**
+- Make sure your Telegram user ID is authorized (via pairing or `telegram.allowFrom`)
+- Commands require authorization even in groups with `groupPolicy: "open"`
 
 ## Configuration reference (Telegram)
 Full configuration: [Configuration](/gateway/configuration)
