@@ -32,15 +32,16 @@ async function main() {
     process.exit(0);
   }
 
-  // Smoke test for QR modules in bun-compiled binaries.
-  // Verifies that QR code generation works in the bundled relay.
-  if (process.env.CLAWDBOT_SMOKE_QR === "1" && args.length === 0) {
+  const { parseRelaySmokeTest, runRelaySmokeTest } = await import(
+    "./relay-smoke.js"
+  );
+  const smokeTest = parseRelaySmokeTest(args, process.env);
+  if (smokeTest) {
     try {
-      const { renderQrPngBase64 } = await import("../web/qr-image.js");
-      await renderQrPngBase64("smoke-test");
+      await runRelaySmokeTest(smokeTest);
       process.exit(0);
     } catch (err) {
-      console.error("QR smoke test failed:", err);
+      console.error(`Relay smoke test failed (${smokeTest}):`, err);
       process.exit(1);
     }
   }
