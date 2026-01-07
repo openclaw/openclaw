@@ -71,7 +71,7 @@ Typical things it does:
 - Detect and migrate older gateway services (launchd/systemd; legacy schtasks) to current Clawdbot services.
 - On Linux, ensure systemd user lingering (so the Gateway survives logout).
 
-Details: [Doctor](/doctor)
+Details: [Doctor](/gateway/doctor)
 
 ## Start / stop / restart the Gateway
 
@@ -134,5 +134,5 @@ git pull
 ## If you’re stuck
 
 - Run `clawdbot doctor` again and read the output carefully (it often tells you the fix).
-- Check: [Troubleshooting](/troubleshooting)
+- Check: [Troubleshooting](/gateway/troubleshooting)
 - Ask in Discord: https://discord.gg/clawd

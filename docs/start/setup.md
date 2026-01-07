@@ -17,7 +17,7 @@ Last updated: 2026-01-01
 ## Prereqs (from source)
 - Node `>=22`
 - `pnpm`
-- Docker (optional; only for containerized setup/e2e — see [`docs/docker.md`](/docker))
+- Docker (optional; only for containerized setup/e2e — see [`docs/docker.md`](/install/docker))
 
 ## Tailoring strategy (so updates don’t hurt)
 
@@ -126,7 +126,7 @@ user service (no lingering needed). See [`docs/gateway.md`](/gateway) for the sy
 ## Related docs
 
 - [`docs/gateway.md`](/gateway) (Gateway runbook; flags, supervision, ports)
-- [`docs/configuration.md`](/configuration) (config schema + examples)
-- [`docs/discord.md`](/discord) and [`docs/telegram.md`](/telegram) (reply tags + replyToMode settings)
-- [`docs/clawd.md`](/clawd) (personal assistant setup)
-- [`docs/macos.md`](/macos) (macOS app behavior; gateway lifecycle + “Attach only”)
+- [`docs/configuration.md`](/gateway/configuration) (config schema + examples)
+- [`docs/discord.md`](/providers/discord) and [`docs/telegram.md`](/providers/telegram) (reply tags + replyToMode settings)
+- [`docs/clawd.md`](/start/clawd) (personal assistant setup)
+- [`docs/macos.md`](/platforms/macos) (macOS app behavior; gateway lifecycle + “Attach only”)

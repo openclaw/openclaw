@@ -142,10 +142,10 @@ copy). Workspace skills are user-owned and override both on name conflicts.
 
 ## Config reference
 
-See [`docs/skills-config.md`](/skills-config) for the full configuration schema.
+See [`docs/skills-config.md`](/tools/skills-config) for the full configuration schema.
 
 ## Looking for more skills?
 
-Browse [ClawdHub](/clawdhub).
+Browse [ClawdHub](/tools/clawdhub).
 
 ---

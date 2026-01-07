@@ -47,6 +47,7 @@
     "dev": "tsx src/entry.ts",
     "postinstall": "node scripts/postinstall.js",
     "docs:list": "tsx scripts/docs-list.ts",
+    "docs:bin": "bun build scripts/docs-list.ts --compile --outfile bin/docs-list",
     "docs:dev": "cd docs && mint dev",
     "docs:build": "cd docs && pnpm dlx mint broken-links",
     "build": "tsc -p tsconfig.json && tsx scripts/canvas-a2ui-copy.ts",

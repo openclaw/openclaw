@@ -65,7 +65,7 @@ pnpm build
 pnpm clawdbot onboard
 ```
 
-Full guide: [Getting Started](/getting-started)
+Full guide: [Getting Started](/start/getting-started)
 
 ## Windows companion app
 

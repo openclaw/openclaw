@@ -42,7 +42,7 @@ Target direction:
 - The **gateway** advertises its bridge via Bonjour.
 - Clients browse and show a “pick a gateway” list, then store the chosen endpoint.
 
-Troubleshooting and beacon details: [`docs/bonjour.md`](/bonjour).
+Troubleshooting and beacon details: [`docs/bonjour.md`](/gateway/bonjour).
 
 #### Current implementation
 
@@ -77,7 +77,7 @@ If the gateway can detect it is running under Tailscale, it publishes `tailnetDn
 
 When there is no direct route (or direct is disabled), clients can always connect via SSH by forwarding the loopback gateway port.
 
-See [`docs/remote.md`](/remote).
+See [`docs/remote.md`](/gateway/remote).
 
 ## Transport selection (client policy)
 

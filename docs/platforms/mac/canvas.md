@@ -10,7 +10,7 @@ read_when:
 
 Status: draft spec · Date: 2025-12-12
 
-Note: for iOS/Android nodes that should render agent-edited HTML/CSS/JS over the network, prefer the Gateway `canvasHost` (serves `~/clawd/canvas` over LAN/tailnet with live reload). A2UI is also **hosted by the Gateway** over HTTP. This doc focuses on the macOS in-app canvas panel. See [`docs/configuration.md`](/configuration).
+Note: for iOS/Android nodes that should render agent-edited HTML/CSS/JS over the network, prefer the Gateway `canvasHost` (serves `~/clawd/canvas` over LAN/tailnet with live reload). A2UI is also **hosted by the Gateway** over HTTP. This doc focuses on the macOS in-app canvas panel. See [`docs/configuration.md`](/gateway/configuration).
 
 Clawdbot can embed an agent-controlled “visual workspace” panel (“Canvas”) inside the macOS app using `WKWebView`, served via a **custom URL scheme** (no loopback HTTP port required).
 
@@ -81,7 +81,7 @@ Canvas is exposed via the Gateway **node bridge**, so the agent can:
 This should be modeled after `WebChatManager`/`WebChatSwiftUIWindowController` but targeting `clawdbot-canvas://…` URLs.
 
 Related:
-- For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdbot://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See [`docs/macos.md`](/macos).
+- For “invoke the agent again from UI” flows, prefer the macOS deep link scheme (`clawdbot://agent?...`) so *any* UI surface (Canvas, WebChat, native views) can trigger a new agent run. See [`docs/macos.md`](/platforms/macos).
 
 ## Agent commands (current)
 

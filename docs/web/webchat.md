@@ -24,7 +24,7 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - You do not need to run a separate WebChat server.
 
 ## Configuration reference (WebChat)
-Full configuration: [Configuration](/configuration)
+Full configuration: [Configuration](/gateway/configuration)
 
 Provider options:
 - No dedicated `webchat.*` block. WebChat uses the gateway endpoint + auth settings below.

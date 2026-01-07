@@ -192,7 +192,7 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - Channels map to `slack:channel:<channelId>` sessions.
 - Slash commands use `slack:slash:<userId>` sessions.
 - Native command registration is controlled by `commands.native`; text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
-- Full command list + config: [Slash commands](/slash-commands)
+- Full command list + config: [Slash commands](/tools/slash-commands)
 
 ## DM security (pairing)
 - Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.

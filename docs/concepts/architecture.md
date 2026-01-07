@@ -46,7 +46,7 @@ Last updated: 2026-01-05
 - **Clients (mac app / CLI / web admin)**  
   - One WS connection per client.  
   - Send requests (`health`, `status`, `send`, `agent`, `system-presence`, toggles) and subscribe to events (`tick`, `agent`, `presence`, `shutdown`).
-  - On macOS, the app can also be invoked via deep links (`clawdbot://agent?...`) which translate into the same Gateway `agent` request path (see [`docs/macos.md`](/macos)).
+  - On macOS, the app can also be invoked via deep links (`clawdbot://agent?...`) which translate into the same Gateway `agent` request path (see [`docs/macos.md`](/platforms/macos)).
 - **Agent process (Pi)**  
   - Spawned by the Gateway on demand for `agent` calls; streams events back over the same WS connection.
 - **WebChat**  

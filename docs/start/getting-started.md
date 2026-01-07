@@ -17,7 +17,7 @@ Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It set
 - workspace bootstrap + skills
 - optional background daemon
 
-If you want the deeper reference pages, jump to: [Wizard](/wizard), [Setup](/setup), [Pairing](/pairing), [Security](/security).
+If you want the deeper reference pages, jump to: [Wizard](/start/wizard), [Setup](/start/setup), [Pairing](/start/pairing), [Security](/gateway/security).
 
 ## 0) Prereqs
 
@@ -26,7 +26,7 @@ If you want the deeper reference pages, jump to: [Wizard](/wizard), [Setup](/set
 - Git
 
 macOS: if you plan to build the apps, install Xcode / CLT. For the CLI + gateway only, Node is enough.
-Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native Windows is untested and more problematic. Install WSL2 first, then run the Linux steps inside WSL. See [Windows (WSL2)](/windows).
+Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native Windows is untested and more problematic. Install WSL2 first, then run the Linux steps inside WSL. See [Windows (WSL2)](/platforms/windows).
 
 ## 1) Check out from source
 
@@ -67,7 +67,7 @@ What you’ll choose:
 - **Daemon**: optional background install (launchd/systemd; WSL2 uses systemd)
   - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
 
-Wizard doc: [Wizard](/wizard)
+Wizard doc: [Wizard](/start/wizard)
 
 ### Auth: where it lives (important)
 
@@ -104,13 +104,13 @@ pnpm clawdbot login
 
 Scan via WhatsApp → Settings → Linked Devices.
 
-WhatsApp doc: [WhatsApp](/whatsapp)
+WhatsApp doc: [WhatsApp](/providers/whatsapp)
 
 ### Telegram / Discord / others
 
 The wizard can write tokens/config for you. If you prefer manual config, start with:
-- Telegram: [Telegram](/telegram)
-- Discord: [Discord](/discord)
+- Telegram: [Telegram](/providers/telegram)
+- Discord: [Discord](/providers/discord)
 
 ## 6) DM safety (pairing approvals)
 
@@ -123,7 +123,7 @@ pnpm clawdbot pairing list --provider telegram
 pnpm clawdbot pairing approve --provider telegram <CODE>
 ```
 
-Pairing doc: [Pairing](/pairing)
+Pairing doc: [Pairing](/start/pairing)
 
 ## 7) Verify end-to-end
 
@@ -138,6 +138,6 @@ If `health` shows “no auth configured”, go back to the wizard and set OAuth/
 
 ## Next steps (optional, but great)
 
-- macOS menu bar app + voice wake: [macOS app](/macos)
+- macOS menu bar app + voice wake: [macOS app](/platforms/macos)
 - iOS/Android nodes (Canvas/camera/voice): [Nodes](/nodes)
-- Remote access (SSH tunnel / Tailscale Serve): [Remote access](/remote) and [Tailscale](/tailscale)
+- Remote access (SSH tunnel / Tailscale Serve): [Remote access](/gateway/remote) and [Tailscale](/gateway/tailscale)

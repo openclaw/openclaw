@@ -254,4 +254,4 @@ Then set in config:
 }
 ```
 
-**Full guide:** See [browser-linux-troubleshooting](/browser-linux-troubleshooting)
+**Full guide:** See [browser-linux-troubleshooting](/tools/browser-linux-troubleshooting)
