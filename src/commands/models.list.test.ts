@@ -3,8 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 const loadConfig = vi.fn();
 const ensureClawdbotModelsJson = vi.fn().mockResolvedValue(undefined);
 const resolveClawdbotAgentDir = vi.fn().mockReturnValue("/tmp/clawdbot-agent");
-const ensureAuthProfileStore = vi.fn().mockReturnValue({});
+const ensureAuthProfileStore = vi
+  .fn()
+  .mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
+const resolveAuthProfileDisplayLabel = vi.fn(
+  ({ profileId }: { profileId: string }) => profileId,
+);
+const resolveAuthStorePathForDisplay = vi
+  .fn()
+  .mockReturnValue("/tmp/clawdbot-agent/auth-profiles.json");
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const getCustomProviderApiKey = vi.fn().mockReturnValue(undefined);
 const discoverAuthStorage = vi.fn().mockReturnValue({});
@@ -26,6 +34,8 @@ vi.mock("../agents/agent-paths.js", () => ({
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore,
   listProfilesForProvider,
+  resolveAuthProfileDisplayLabel,
+  resolveAuthStorePathForDisplay,
 }));
 
 vi.mock("../agents/model-auth.js", () => ({

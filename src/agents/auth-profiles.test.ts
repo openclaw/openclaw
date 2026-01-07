@@ -120,6 +120,37 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["zai:work", "zai:default"]);
   });
 
+  it("normalizes provider casing in auth.order keys", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { OpenAI: ["openai:work", "openai:default"] },
+          profiles: {
+            "openai:default": { provider: "openai", mode: "api_key" },
+            "openai:work": { provider: "openai", mode: "api_key" },
+          },
+        },
+      },
+      store: {
+        version: 1,
+        profiles: {
+          "openai:default": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-default",
+          },
+          "openai:work": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-work",
+          },
+        },
+      },
+      provider: "openai",
+    });
+    expect(order).toEqual(["openai:work", "openai:default"]);
+  });
+
   it("normalizes z.ai aliases in auth.profiles", () => {
     const order = resolveAuthProfileOrder({
       cfg: {

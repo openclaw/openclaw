@@ -542,12 +542,14 @@ export function resolveAuthProfileOrder(params: {
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
-  const configuredOrder =
-    cfg?.auth?.order?.[providerKey] ??
-    cfg?.auth?.order?.[provider] ??
-    (providerKey === "zai"
-      ? (cfg?.auth?.order?.["z.ai"] ?? cfg?.auth?.order?.["z-ai"])
-      : undefined);
+  const configuredOrder = (() => {
+    const order = cfg?.auth?.order;
+    if (!order) return undefined;
+    for (const [key, value] of Object.entries(order)) {
+      if (normalizeProviderId(key) === providerKey) return value;
+    }
+    return undefined;
+  })();
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(
@@ -565,7 +567,7 @@ export function resolveAuthProfileOrder(params: {
 
   const filtered = baseOrder.filter((profileId) => {
     const cred = store.profiles[profileId];
-    return cred ? cred.provider === provider : true;
+    return cred ? normalizeProviderId(cred.provider) === providerKey : true;
   });
   const deduped: string[] = [];
   for (const entry of filtered) {
