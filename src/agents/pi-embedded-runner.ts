@@ -59,6 +59,7 @@ import {
   isAuthAssistantError,
   isAuthErrorMessage,
   isContextOverflowError,
+  isGoogleModelApi,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
   pickFallbackThinkingLevel,
@@ -243,6 +244,80 @@ type EmbeddedPiQueueHandle = {
 };
 
 const log = createSubsystemLogger("agent/embedded");
+const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
+
+type CustomEntryLike = { type?: unknown; customType?: unknown };
+
+function hasGoogleTurnOrderingMarker(sessionManager: SessionManager): boolean {
+  try {
+    return sessionManager
+      .getEntries()
+      .some(
+        (entry) =>
+          (entry as CustomEntryLike)?.type === "custom" &&
+          (entry as CustomEntryLike)?.customType ===
+            GOOGLE_TURN_ORDERING_CUSTOM_TYPE,
+      );
+  } catch {
+    return false;
+  }
+}
+
+function markGoogleTurnOrderingMarker(sessionManager: SessionManager): void {
+  try {
+    sessionManager.appendCustomEntry(GOOGLE_TURN_ORDERING_CUSTOM_TYPE, {
+      timestamp: Date.now(),
+    });
+  } catch {
+    // ignore marker persistence failures
+  }
+}
+
+export function applyGoogleTurnOrderingFix(params: {
+  messages: AgentMessage[];
+  modelApi?: string | null;
+  sessionManager: SessionManager;
+  sessionId: string;
+  warn?: (message: string) => void;
+}): { messages: AgentMessage[]; didPrepend: boolean } {
+  if (!isGoogleModelApi(params.modelApi)) {
+    return { messages: params.messages, didPrepend: false };
+  }
+  const first = params.messages[0] as
+    | { role?: unknown; content?: unknown }
+    | undefined;
+  if (first?.role !== "assistant") {
+    return { messages: params.messages, didPrepend: false };
+  }
+  const sanitized = sanitizeGoogleTurnOrdering(params.messages);
+  const didPrepend = sanitized !== params.messages;
+  if (didPrepend && !hasGoogleTurnOrderingMarker(params.sessionManager)) {
+    const warn = params.warn ?? ((message: string) => log.warn(message));
+    warn(
+      `google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`,
+    );
+    markGoogleTurnOrderingMarker(params.sessionManager);
+  }
+  return { messages: sanitized, didPrepend };
+}
+
+async function sanitizeSessionHistory(params: {
+  messages: AgentMessage[];
+  modelApi?: string | null;
+  sessionManager: SessionManager;
+  sessionId: string;
+}): Promise<AgentMessage[]> {
+  const sanitizedImages = await sanitizeSessionMessagesImages(
+    params.messages,
+    "session:history",
+  );
+  return applyGoogleTurnOrderingFix({
+    messages: sanitizedImages,
+    modelApi: params.modelApi,
+    sessionManager: params.sessionManager,
+    sessionId: params.sessionId,
+  }).messages;
+}
 
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 type EmbeddedRunWaiter = {
@@ -699,27 +774,12 @@ export async function compactEmbeddedPiSession(params: {
         }));
 
         try {
-          const sanitizedImages = await sanitizeSessionMessagesImages(
-            session.messages,
-            "session:history",
-          );
-          const needsGoogleBootstrap =
-            (model.api === "google-gemini-cli" ||
-              model.api === "google-generative-ai") &&
-            sanitizedImages[0] &&
-            typeof sanitizedImages[0] === "object" &&
-            "role" in sanitizedImages[0] &&
-            sanitizedImages[0].role === "assistant";
-          const prior =
-            model.api === "google-gemini-cli" ||
-            model.api === "google-generative-ai"
-              ? sanitizeGoogleTurnOrdering(sanitizedImages)
-              : sanitizedImages;
-          if (needsGoogleBootstrap) {
-            log.warn(
-              `google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`,
-            );
-          }
+          const prior = await sanitizeSessionHistory({
+            messages: session.messages,
+            modelApi: model.api,
+            sessionManager,
+            sessionId: params.sessionId,
+          });
           if (prior.length > 0) {
             session.agent.replaceMessages(prior);
           }
@@ -1039,29 +1099,14 @@ export async function runEmbeddedPiAgent(params: {
           }));
 
           try {
-            const prior = await sanitizeSessionMessagesImages(
-              session.messages,
-              "session:history",
-            );
-            const needsGoogleBootstrap =
-              (model.api === "google-gemini-cli" ||
-                model.api === "google-generative-ai") &&
-              prior[0] &&
-              typeof prior[0] === "object" &&
-              "role" in prior[0] &&
-              prior[0].role === "assistant";
-            const sanitizedPrior =
-              model.api === "google-gemini-cli" ||
-              model.api === "google-generative-ai"
-                ? sanitizeGoogleTurnOrdering(prior)
-                : prior;
-            if (needsGoogleBootstrap) {
-              log.warn(
-                `google turn ordering fixup: prepended user bootstrap (sessionId=${params.sessionId})`,
-              );
-            }
-            if (sanitizedPrior.length > 0) {
-              session.agent.replaceMessages(sanitizedPrior);
+            const prior = await sanitizeSessionHistory({
+              messages: session.messages,
+              modelApi: model.api,
+              sessionManager,
+              sessionId: params.sessionId,
+            });
+            if (prior.length > 0) {
+              session.agent.replaceMessages(prior);
             }
           } catch (err) {
             session.dispose();
