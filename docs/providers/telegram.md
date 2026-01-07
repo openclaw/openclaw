@@ -43,6 +43,7 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - Appends `:topic:<threadId>` to the Telegram group session key so each topic is isolated.
 - Sends typing indicators and replies with `message_thread_id` so responses stay in the topic.
 - Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
+- Topic-specific configuration is available under `telegram.groups.<chatId>.topics.<threadId>` (skills, allowlists, auto-reply, system prompts, disable).
 
 Private topics (DM forum mode) also include `message_thread_id`. Clawdbot:
 - Appends `:topic:<threadId>` to **DM** session keys for isolation.
@@ -115,6 +116,13 @@ Provider options:
 - `telegram.groupPolicy`: `open | allowlist | disabled` (default: open).
 - `telegram.groupAllowFrom`: group sender allowlist (ids/usernames).
 - `telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
+  - `telegram.groups.<id>.requireMention`: mention gating default.
+  - `telegram.groups.<id>.autoReply`: reply to every message (overrides `requireMention`).
+  - `telegram.groups.<id>.skills`: skill filter (omit = all skills, empty = none).
+  - `telegram.groups.<id>.allowFrom`: per-group sender allowlist override.
+  - `telegram.groups.<id>.systemPrompt`: extra system prompt for the group.
+  - `telegram.groups.<id>.enabled`: disable the group when `false`.
+  - `telegram.groups.<id>.topics.<threadId>.*`: per-topic overrides (same fields as group).
 - `telegram.replyToMode`: `off | first | all`.
 - `telegram.textChunkLimit`: outbound chunk size (chars).
 - `telegram.streamMode`: `off | partial | block` (draft streaming).

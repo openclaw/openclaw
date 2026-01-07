@@ -467,7 +467,16 @@ Set `telegram.enabled: false` to disable automatic startup.
     botToken: "your-bot-token",
     dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
     allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
-    groups: { "*": { requireMention: true } },
+    groups: {
+      "*": { requireMention: true, autoReply: false },
+      "-1001234567890": {
+        allowFrom: ["@admin"],
+        systemPrompt: "Keep answers brief.",
+        topics: {
+          "99": { skills: ["search"], systemPrompt: "Stay on topic." }
+        }
+      }
+    },
     streamMode: "partial",               // off | partial | block (draft streaming)
     actions: { reactions: true },        // tool action gates (false disables)
     mediaMaxMb: 5,
@@ -527,7 +536,13 @@ Configure the Discord bot by setting the bot token and optional gating:
         users: ["987654321098765432"],      // optional per-guild user allowlist
         channels: {
           general: { allow: true },
-          help: { allow: true, requireMention: true }
+          help: {
+            allow: true,
+            requireMention: true,
+            users: ["987654321098765432"],
+            skills: ["docs"],
+            systemPrompt: "Short answers only."
+          }
         }
       }
     },
@@ -563,7 +578,13 @@ Slack runs in Socket Mode and requires both a bot token and app token:
     },
     channels: {
       C123: { allow: true, requireMention: true },
-      "#general": { allow: true, requireMention: false }
+      "#general": {
+        allow: true,
+        autoReply: false,
+        users: ["U123"],
+        skills: ["docs"],
+        systemPrompt: "Short answers only."
+      }
     },
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
