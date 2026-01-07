@@ -334,6 +334,13 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
   - `workspace`: default `~/clawd-<agentId>` (for `main`, falls back to legacy `agent.workspace`).
   - `agentDir`: default `~/.clawdbot/agents/<agentId>/agent`.
   - `model`: per-agent default model (provider/model), overrides `agent.model` for that agent.
+  - `sandbox`: per-agent sandbox config (overrides `agent.sandbox`).
+    - `mode`: `"off"` | `"non-main"` | `"all"`
+    - `scope`: `"session"` | `"agent"` | `"shared"`
+    - `workspaceRoot`: custom sandbox workspace root
+  - `tools`: per-agent tool restrictions (applied before sandbox tool policy).
+    - `allow`: array of allowed tool names
+    - `deny`: array of denied tool names (deny wins)
 - `routing.bindings[]`: routes inbound messages to an `agentId`.
   - `match.provider` (required)
   - `match.accountId` (optional; `*` = any account; omitted = default account)
