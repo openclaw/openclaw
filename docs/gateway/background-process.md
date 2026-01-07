@@ -51,6 +51,7 @@ Notes:
 - Only backgrounded sessions are listed/persisted in memory.
 - Sessions are lost on process restart (no disk persistence).
 - Session logs are only saved to chat history if you run `process poll/log` and the tool result is recorded.
+- `process` is scoped per agent; it only sees sessions started by that agent.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
 - `process log` uses line-based `offset`/`limit` (omit `offset` to grab the last N lines).
 
