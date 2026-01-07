@@ -19,7 +19,8 @@ export type MonitorTelegramOpts = {
 };
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const { token } = resolveTelegramToken(loadConfig(), {
+  const cfg = loadConfig();
+  const { token } = resolveTelegramToken(cfg, {
     envToken: opts.token,
   });
   if (!token) {
@@ -30,8 +31,8 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   const proxyFetch =
     opts.proxyFetch ??
-    (loadConfig().telegram?.proxy
-      ? makeProxyFetch(loadConfig().telegram?.proxy as string)
+    (cfg.telegram?.proxy
+      ? makeProxyFetch(cfg.telegram?.proxy as string)
       : undefined);
 
   const bot = createTelegramBot({
@@ -56,6 +57,9 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   // Use grammyjs/runner for concurrent update processing
   const runner = run(bot, {
+    sink: {
+      concurrency: cfg.agent?.maxConcurrent ?? 1,
+    },
     runner: {
       fetch: {
         // Match grammY defaults
@@ -66,7 +70,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted) {
-      runner.stop();
+      void runner.stop();
     }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });

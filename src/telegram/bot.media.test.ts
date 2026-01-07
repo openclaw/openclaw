@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 const useSpy = vi.fn();
+const middlewareUseSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
 const sendChatActionSpy = vi.fn();
@@ -18,12 +19,17 @@ const apiStub: ApiStub = {
 vi.mock("grammy", () => ({
   Bot: class {
     api = apiStub;
+    use = middlewareUseSpy;
     on = onSpy;
     stop = stopSpy;
     constructor(public token: string) {}
   },
   InputFile: class {},
   webhookCallback: vi.fn(),
+}));
+
+vi.mock("@grammyjs/runner", () => ({
+  sequentialize: () => vi.fn(),
 }));
 
 const throttlerSpy = vi.fn(() => "throttler");

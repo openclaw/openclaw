@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { Buffer } from "node:buffer";
 
+import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
@@ -127,6 +128,30 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const bot = new Bot(opts.token, { client });
   bot.api.config.use(apiThrottler());
+  const resolveSequentialKey = (ctx: {
+    chat?: { id?: number };
+    message?: TelegramMessage;
+    update?: {
+      message?: TelegramMessage;
+      edited_message?: TelegramMessage;
+      callback_query?: { message?: TelegramMessage };
+    };
+  }) => {
+    const msg =
+      ctx.message ??
+      ctx.update?.message ??
+      ctx.update?.edited_message ??
+      ctx.update?.callback_query?.message;
+    const chatId = msg?.chat?.id ?? ctx.chat?.id;
+    const threadId = msg?.message_thread_id;
+    if (typeof chatId === "number") {
+      return threadId != null
+        ? `telegram:${chatId}:topic:${threadId}`
+        : `telegram:${chatId}`;
+    }
+    return "telegram:unknown";
+  };
+  bot.use(sequentialize(resolveSequentialKey));
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
 
