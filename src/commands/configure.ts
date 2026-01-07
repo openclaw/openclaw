@@ -818,22 +818,22 @@ export async function runConfigureWizard(
     runtime.error(controlUiAssets.message);
   }
 
-    note(
-      (() => {
-        const bind = nextConfig.gateway?.bind ?? "loopback";
-        const links = resolveControlUiLinks({
-          bind,
-          port: gatewayPort,
-          basePath: nextConfig.gateway?.controlUi?.basePath,
-        });
-        return [
-          `Web UI: ${links.httpUrl}`,
-          `Gateway WS: ${links.wsUrl}`,
-          "Docs: https://docs.clawd.bot/web/control-ui",
-        ].join("\n");
-      })(),
-      "Control UI",
-    );
+  note(
+    (() => {
+      const bind = nextConfig.gateway?.bind ?? "loopback";
+      const links = resolveControlUiLinks({
+        bind,
+        port: gatewayPort,
+        basePath: nextConfig.gateway?.controlUi?.basePath,
+      });
+      return [
+        `Web UI: ${links.httpUrl}`,
+        `Gateway WS: ${links.wsUrl}`,
+        "Docs: https://docs.clawd.bot/web/control-ui",
+      ].join("\n");
+    })(),
+    "Control UI",
+  );
 
   const browserSupport = await detectBrowserOpenSupport();
   if (!browserSupport.ok) {
