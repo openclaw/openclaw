@@ -97,6 +97,7 @@
 - TUI: add `/elev` alias for `/elevated`.
 - Logging: redact sensitive tokens in verbose tool summaries by default (configurable patterns).
 - macOS: keep app connection settings local in remote mode to avoid overwriting gateway config. Thanks @ngutman for PR #310.
+- macOS: honor discovered gateway ports (Bonjour TXT) so remote tunnels connect to the right ports. Thanks @kkarimi for PR #375.
 - macOS: prefer gateway config reads/writes in local mode (fall back to disk if the gateway is unavailable).
 - macOS: local gateway now connects via tailnet IP when bind mode is `tailnet`/`auto`.
 - macOS: Connections settings now use a custom sidebar to avoid toolbar toggle issues, with rounded styling and full-width row hit targets.
