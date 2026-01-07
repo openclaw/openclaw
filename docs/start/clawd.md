@@ -93,7 +93,7 @@ Tip: treat this folder like Clawd’s “memory” and make it a git repo (ideal
 clawdbot setup
 ```
 
-Full workspace layout + backup guide: [`docs/agent-workspace.md`](/agent-workspace)
+Full workspace layout + backup guide: [`docs/agent-workspace.md`](/concepts/agent-workspace)
 
 Optional: choose a different workspace with `agent.workspace` (supports `~`).
 
@@ -206,12 +206,12 @@ Logs live under `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`).
 
 ## Next steps
 
-- WebChat: [WebChat](/webchat)
+- WebChat: [WebChat](/web/webchat)
 - Gateway ops: [Gateway runbook](/gateway)
-- Cron + wakeups: [Cron jobs](/cron-jobs)
-- macOS menu bar companion: [Clawdbot macOS app](/macos)
-- iOS node app: [iOS app](/ios)
-- Android node app: [Android app](/android)
-- Windows status: [Windows (WSL2)](/windows)
-- Linux status: [Linux app](/linux)
-- Security: [Security](/security)
+- Cron + wakeups: [Cron jobs](/automation/cron-jobs)
+- macOS menu bar companion: [Clawdbot macOS app](/platforms/macos)
+- iOS node app: [iOS app](/platforms/ios)
+- Android node app: [Android app](/platforms/android)
+- Windows status: [Windows (WSL2)](/platforms/windows)
+- Linux status: [Linux app](/platforms/linux)
+- Security: [Security](/gateway/security)

@@ -7,7 +7,7 @@ read_when:
 ---
 # Models CLI plan
 
-See [`docs/model-failover.md`](/model-failover) for how auth profiles rotate (OAuth vs API keys), cooldowns, and how that interacts with model fallbacks.
+See [`docs/model-failover.md`](/concepts/model-failover) for how auth profiles rotate (OAuth vs API keys), cooldowns, and how that interacts with model fallbacks.
 
 Goal: give clear model visibility + control (configured vs available), plus scan tooling
 that prefers tool-call + image-capable models and maintains ordered fallbacks.
@@ -83,7 +83,7 @@ Output
 - Image routing uses `agent.imageModel` **only when configured** and the primary
   model lacks image input.
 - Persist last successful provider/model to session entry; auth profile success is global.
-- See [`docs/model-failover.md`](/model-failover) for auth profile rotation, cooldowns, and timeout handling.
+- See [`docs/model-failover.md`](/concepts/model-failover) for auth profile rotation, cooldowns, and timeout handling.
 
 ## Tests
 
@@ -93,5 +93,5 @@ Output
 
 ## Docs
 
-- Update [`docs/configuration.md`](/configuration) with `agent.models` + `agent.model` + `agent.imageModel`.
+- Update [`docs/configuration.md`](/gateway/configuration) with `agent.models` + `agent.model` + `agent.imageModel`.
 - Keep this doc current when CLI surface or scan logic changes.

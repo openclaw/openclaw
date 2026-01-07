@@ -47,7 +47,7 @@ From the gateway machine:
 dns-sd -B _clawdbot-bridge._tcp local.
 ```
 
-More debugging notes: [`docs/bonjour.md`](/bonjour).
+More debugging notes: [`docs/bonjour.md`](/gateway/bonjour).
 
 #### Tailnet (Vienna ⇄ London) discovery via unicast DNS-SD
 
@@ -56,7 +56,7 @@ Android NSD/mDNS discovery won’t cross networks. If your Android node and the 
 1) Set up a DNS-SD zone (example `clawdbot.internal.`) on the gateway host and publish `_clawdbot-bridge._tcp` records.
 2) Configure Tailscale split DNS for `clawdbot.internal` pointing at that DNS server.
 
-Details and example CoreDNS config: [`docs/bonjour.md`](/bonjour).
+Details and example CoreDNS config: [`docs/bonjour.md`](/gateway/bonjour).
 
 ### 3) Connect from Android
 
@@ -130,4 +130,4 @@ Camera commands (foreground only; permission-gated):
 - `camera.snap` (jpg)
 - `camera.clip` (mp4)
 
-See [`docs/camera.md`](/camera) for parameters and CLI helpers.
+See [`docs/camera.md`](/nodes/camera) for parameters and CLI helpers.

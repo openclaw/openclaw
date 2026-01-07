@@ -1488,7 +1488,7 @@ Template placeholders are expanded in `routing.transcribeAudio.command` (and any
 
 ## Cron (Gateway scheduler)
 
-Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs](/cron-jobs) for the feature overview and CLI examples.
+Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs](/automation/cron-jobs) for the feature overview and CLI examples.
 
 ```json5
 {
@@ -1501,4 +1501,4 @@ Cron is a Gateway-owned scheduler for wakeups and scheduled jobs. See [Cron jobs
 
 ---
 
-*Next: [Agent Runtime](/agent)* 🦞
+*Next: [Agent Runtime](/concepts/agent)* 🦞

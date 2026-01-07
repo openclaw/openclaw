@@ -306,4 +306,4 @@ Notes:
 
 ## Troubleshooting
 
-For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting](/browser-linux-troubleshooting).
+For Linux-specific issues (especially Ubuntu with snap Chromium), see [browser-linux-troubleshooting](/tools/browser-linux-troubleshooting).

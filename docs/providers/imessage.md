@@ -43,7 +43,7 @@ DMs:
 - Approve via:
   - `clawdbot pairing list --provider imessage`
   - `clawdbot pairing approve --provider imessage <CODE>`
-- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/pairing)
+- Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/start/pairing)
 
 Groups:
 - `imessage.groupPolicy = open | allowlist | disabled`.
@@ -71,7 +71,7 @@ imsg chats --limit 20
 ```
 
 ## Configuration reference (iMessage)
-Full configuration: [Configuration](/configuration)
+Full configuration: [Configuration](/gateway/configuration)
 
 Provider options:
 - `imessage.enabled`: enable/disable provider startup.

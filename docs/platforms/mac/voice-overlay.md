@@ -3,7 +3,7 @@ summary: "Voice overlay lifecycle when wake-word and push-to-talk overlap"
 read_when:
   - Adjusting voice overlay behavior
 ---
-## Voice Overlay Lifecycle (macOS)
+# Voice Overlay Lifecycle (macOS)
 
 Audience: macOS app contributors. Goal: keep the voice overlay predictable when wake-word and push-to-talk overlap.
 

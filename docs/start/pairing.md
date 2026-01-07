@@ -14,13 +14,13 @@ It is used in two places:
 1) **DM pairing** (who is allowed to talk to the bot)
 2) **Node pairing** (which devices/nodes are allowed to join the gateway network)
 
-Security context: [Security](/security)
+Security context: [Security](/gateway/security)
 
 ## 1) DM pairing (inbound chat access)
 
 When a provider is configured with DM policy `pairing`, unknown senders get a short code and their message is **not processed** until you approve.
 
-Default DM policies are documented in: [Security](/security)
+Default DM policies are documented in: [Security](/gateway/security)
 
 ### Approve a sender
 
@@ -74,12 +74,12 @@ Full protocol + design notes: [Gateway pairing](/gateway/pairing)
 
 ## Related docs
 
-- Security model + prompt injection: [Security](/security)
-- Updating safely (run doctor): [Updating](/updating)
+- Security model + prompt injection: [Security](/gateway/security)
+- Updating safely (run doctor): [Updating](/install/updating)
 - Provider configs:
-  - Telegram: [Telegram](/telegram)
-  - WhatsApp: [WhatsApp](/whatsapp)
-  - Signal: [Signal](/signal)
-  - iMessage: [iMessage](/imessage)
-  - Discord: [Discord](/discord)
-  - Slack: [Slack](/slack)
+  - Telegram: [Telegram](/providers/telegram)
+  - WhatsApp: [WhatsApp](/providers/whatsapp)
+  - Signal: [Signal](/providers/signal)
+  - iMessage: [iMessage](/providers/imessage)
+  - Discord: [Discord](/providers/discord)
+  - Slack: [Slack](/providers/slack)

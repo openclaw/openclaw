@@ -60,7 +60,7 @@ It does **not** install or change anything on the remote host.
 3) **Workspace**
    - Default `~/clawd` (configurable).
    - Seeds the workspace files needed for the agent bootstrap ritual.
-   - Full workspace layout + backup guide: [`docs/agent-workspace.md`](/agent-workspace)
+   - Full workspace layout + backup guide: [`docs/agent-workspace.md`](/concepts/agent-workspace)
 
 4) **Gateway**
    - Port, bind, auth mode, tailscale exposure.
@@ -164,7 +164,7 @@ Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.
 
 ## Related docs
 
-- macOS app onboarding: [`docs/onboarding.md`](/onboarding)
-- Config reference: [`docs/configuration.md`](/configuration)
-- Providers: [`docs/whatsapp.md`](/whatsapp), [`docs/telegram.md`](/telegram), [`docs/discord.md`](/discord), [`docs/signal.md`](/signal), [`docs/imessage.md`](/imessage)
-- Skills: [`docs/skills.md`](/skills), [`docs/skills-config.md`](/skills-config)
+- macOS app onboarding: [`docs/onboarding.md`](/start/onboarding)
+- Config reference: [`docs/configuration.md`](/gateway/configuration)
+- Providers: [`docs/whatsapp.md`](/providers/whatsapp), [`docs/telegram.md`](/providers/telegram), [`docs/discord.md`](/providers/discord), [`docs/signal.md`](/providers/signal), [`docs/imessage.md`](/providers/imessage)
+- Skills: [`docs/skills.md`](/tools/skills), [`docs/skills-config.md`](/tools/skills-config)

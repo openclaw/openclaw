@@ -30,7 +30,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
 8. Group DMs are ignored by default; enable via `discord.dm.groupEnabled` and optionally restrict by `discord.dm.groupChannels`.
 9. Optional guild rules: set `discord.guilds` keyed by guild id (preferred) or slug, with per-channel rules.
 10. Optional native commands: set `commands.native: true` to register native commands in Discord; set `commands.native: false` to clear previously registered native commands. Text commands are controlled by `commands.text` and must be sent as standalone `/...` messages. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
-    - Full command list + config: [Slash commands](/slash-commands)
+    - Full command list + config: [Slash commands](/tools/slash-commands)
 11. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
 12. Reactions: the agent can trigger reactions via the `discord` tool (gated by `discord.actions.*`).
     - The `discord` tool is only exposed when the current provider is Discord.
