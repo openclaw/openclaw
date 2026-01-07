@@ -244,6 +244,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         message,
         to: sanitizedTo,
         sessionId: resolvedSessionId,
+        sessionKey: requestedSessionKey,
         thinking: request.thinking,
         deliver,
         provider: resolvedProvider,

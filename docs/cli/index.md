@@ -176,10 +176,13 @@ Interactive configuration wizard (models, providers, skills, gateway).
 Audit and modernize the local configuration.
 
 ### `doctor`
-Health checks + quick fixes.
+Health checks + quick fixes (config + gateway + legacy services).
 
 Options:
 - `--no-workspace-suggestions`: disable workspace memory hints.
+- `--yes`: accept defaults without prompting (headless).
+- `--non-interactive`: skip prompts; apply safe migrations only.
+- `--deep`: scan system services for extra gateway installs.
 
 ## Auth + provider helpers
 
@@ -362,6 +365,25 @@ Options:
 ### `gateway-daemon`
 Run the Gateway as a long-lived daemon (same options as `gateway`, minus `--allow-unconfigured` and `--force`).
 
+### `daemon`
+Manage the Gateway service (launchd/systemd/schtasks).
+
+Subcommands:
+- `daemon status` (probes the Gateway RPC by default)
+- `daemon install` (service install)
+- `daemon uninstall`
+- `daemon start`
+- `daemon stop`
+- `daemon restart`
+
+Notes:
+- `daemon status` uses the same URL/token defaults as `gateway status` unless you pass `--url/--token/--password`.
+- `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
+- `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans).
+- `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
+- `daemon install` options: `--port`, `--runtime`, `--token`.
+- `gateway install|uninstall|start|stop|restart` remain as service aliases; `daemon` is the dedicated manager.
+
 ### `gateway <subcommand>`
 Gateway RPC helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for each).
 
@@ -372,8 +394,12 @@ Subcommands:
 - `gateway wake --text <text> [--mode now|next-heartbeat]`
 - `gateway send --to <jidOrPhone> --message <text> [--media-url <url>] [--gif-playback] [--idempotency-key <key>]`
 - `gateway agent --message <text> [--to <jidOrPhone>] [--session-id <id>] [--thinking <level>] [--deliver] [--timeout-seconds <n>] [--idempotency-key <key>]`
+- `gateway install`
+- `gateway uninstall`
+- `gateway start`
 - `gateway stop`
 - `gateway restart`
+- `gateway daemon status` (alias for `clawdbot daemon status`)
 
 ## Models
 

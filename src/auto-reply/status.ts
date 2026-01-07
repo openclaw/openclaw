@@ -16,7 +16,7 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   resolveMainSessionKey,
-  resolveSessionTranscriptPath,
+  resolveSessionFilePath,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
@@ -185,6 +185,7 @@ const formatQueueDetails = (queue?: QueueStatus) => {
 
 const readUsageFromSessionLog = (
   sessionId?: string,
+  sessionEntry?: SessionEntry,
 ):
   | {
       input: number;
@@ -194,9 +195,9 @@ const readUsageFromSessionLog = (
       model?: string;
     }
   | undefined => {
-  // Transcripts always live at: ~/.clawdbot/sessions/<SessionId>.jsonl
+  // Transcripts are stored at the session file path (fallback: ~/.clawdbot/sessions/<SessionId>.jsonl)
   if (!sessionId) return undefined;
-  const logPath = resolveSessionTranscriptPath(sessionId);
+  const logPath = resolveSessionFilePath(sessionId, sessionEntry);
   if (!fs.existsSync(logPath)) return undefined;
 
   try {
@@ -249,8 +250,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     defaultModel: DEFAULT_MODEL,
   });
   const provider =
-    entry?.modelProvider ?? resolved.provider ?? DEFAULT_PROVIDER;
-  let model = entry?.model ?? resolved.model ?? DEFAULT_MODEL;
+    entry?.providerOverride ?? resolved.provider ?? DEFAULT_PROVIDER;
+  let model = entry?.modelOverride ?? resolved.model ?? DEFAULT_MODEL;
   let contextTokens =
     entry?.contextTokens ??
     args.agent?.contextTokens ??
@@ -264,7 +265,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(entry?.sessionId);
+    const logUsage = readUsageFromSessionLog(entry?.sessionId, entry);
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {

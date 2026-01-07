@@ -28,6 +28,9 @@ importers:
       '@clack/prompts':
         specifier: ^0.11.0
         version: 0.11.0
+      '@grammyjs/runner':
+        specifier: ^2.0.3
+        version: 2.0.3(grammy@1.39.2)
       '@grammyjs/transformer-throttler':
         specifier: ^1.2.1
         version: 1.2.1(grammy@1.39.2)
@@ -590,6 +593,12 @@ packages:
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
         optional: true
+
+  '@grammyjs/runner@2.0.3':
+    resolution: {integrity: sha512-nckmTs1dPWfVQteK9cxqxzE+0m1VRvluLWB8UgFzsjg62w3qthPJt0TYtJBEdG7OedvfQq4vnFAyE6iaMkR42A==}
+    engines: {node: '>=12.20.0 || >=14.13.1'}
+    peerDependencies:
+      grammy: ^1.13.1
 
   '@grammyjs/transformer-throttler@1.2.1':
     resolution: {integrity: sha512-CpWB0F3rJdUiKsq7826QhQsxbZi4wqfz1ccKX+fr+AOC+o8K7ZvS+wqX0suSu1QCsyUq2MDpNiKhyL2ZOJUS4w==}
@@ -3410,6 +3419,11 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  '@grammyjs/runner@2.0.3(grammy@1.39.2)':
+    dependencies:
+      abort-controller: 3.0.0
+      grammy: 1.39.2
 
   '@grammyjs/transformer-throttler@1.2.1(grammy@1.39.2)':
     dependencies:

@@ -157,6 +157,25 @@ See also: [`docs/presence.md`](/concepts/presence) for how presence is produced/
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
 
+## Daemon management (CLI)
+
+Use the CLI daemon manager for install/start/stop/restart/status:
+
+```bash
+clawdbot daemon status
+clawdbot daemon install
+clawdbot daemon stop
+clawdbot daemon restart
+```
+
+Notes:
+- `daemon status` probes the Gateway RPC by default (same URL/token defaults as `gateway status`).
+- `daemon status --deep` adds system-level scans (LaunchDaemons/system units).
+- `gateway install|uninstall|start|stop|restart` remain supported as aliases; `daemon` is the dedicated manager.
+- `gateway daemon status` is an alias for `clawdbot daemon status`.
+- If other gateway-like services are detected, the CLI warns. We recommend **one gateway per machine**; one gateway can host multiple agents.
+  - Cleanup: `clawdbot daemon uninstall` (current service) and `clawdbot doctor` (legacy migrations).
+
 Bundled mac app:
 - Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
 - To stop it cleanly, use `clawdbot gateway stop` (or `launchctl bootout gui/$UID/com.clawdbot.gateway`).

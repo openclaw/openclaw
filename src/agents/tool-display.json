@@ -168,7 +168,7 @@
     "sessions_spawn": {
       "emoji": "🧑‍🔧",
       "title": "Sub-agent",
-      "detailKeys": ["label", "timeoutSeconds", "cleanup"]
+      "detailKeys": ["label", "runTimeoutSeconds", "cleanup"]
     },
     "whatsapp_login": {
       "emoji": "🟢",

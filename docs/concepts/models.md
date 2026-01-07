@@ -12,6 +12,23 @@ See [`docs/model-failover.md`](/concepts/model-failover) for how auth profiles r
 Goal: give clear model visibility + control (configured vs available), plus scan tooling
 that prefers tool-call + image-capable models and maintains ordered fallbacks.
 
+## How Clawdbot models work (quick explainer)
+
+Clawdbot selects models in this order:
+1) The configured **primary** model (`agent.model.primary`).
+2) If it fails, fallbacks in `agent.model.fallbacks` (in order).
+3) Auth failover happens **inside** the provider first (see [/concepts/model-failover](/concepts/model-failover)).
+
+Key pieces:
+- `provider/model` is the canonical model id (e.g. `anthropic/claude-opus-4-5`).
+- `agent.models` is the **allowlist/catalog** of models Clawdbot can use, with optional aliases.
+- `agent.imageModel` is only used when the primary model **can’t** accept images.
+- `models.providers` lets you add custom providers + models (written to `models.json`).
+- `/model <id>` switches the active model for the current session; `/model list` shows what’s allowed.
+
+Related:
+- Context limits are model-specific; long sessions may trigger compaction. See [/concepts/compaction](/concepts/compaction).
+
 ## Model recommendations
 
 Through testing, we’ve found [Claude Opus 4.5](https://www.anthropic.com/claude/opus) is the most useful general-purpose model for anything coding-related. We suggest [GPT-5.2-Codex](https://developers.openai.com/codex/models) for coding and sub-agents. For personal assistant work, nothing comes close to Opus. If you’re going all-in on Claude, we recommend the [Claude Max $200 subscription](https://www.anthropic.com/pricing/).
@@ -44,6 +61,33 @@ Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “what
 ## Models CLI
 
 See [/cli](/cli) for the full command tree and CLI flags.
+
+### CLI output (list + status)
+
+`clawdbot models list` (default) prints a table with these columns:
+- `Model`: `provider/model` key (truncated in TTY).
+- `Input`: `text` or `text+image`.
+- `Ctx`: context window in K tokens (from the model registry).
+- `Local`: `yes/no` when the provider base URL is local.
+- `Auth`: `yes/no` when the provider has usable auth.
+- `Tags`: origin + role hints.
+
+Common tags:
+- `default` — resolved default model.
+- `fallback#N` — `agent.model.fallbacks` order.
+- `image` — `agent.imageModel.primary`.
+- `img-fallback#N` — `agent.imageModel.fallbacks` order.
+- `configured` — present in `agent.models`.
+- `alias:<name>` — alias from `agent.models.*.alias`.
+- `missing` — referenced in config but not found in the registry.
+
+Output formats:
+- `--plain`: prints only `provider/model` keys (one per line).
+- `--json`: `{ count, models: [{ key, name, input, contextWindow, local, available, tags, missing }] }`.
+
+`clawdbot models status` prints the resolved defaults, fallbacks, image model, aliases,
+and an **Auth overview** section showing which providers have profiles/env/models.json keys.
+`--plain` prints the resolved default model only; `--json` returns a structured object for tooling.
 
 ## Config changes
 

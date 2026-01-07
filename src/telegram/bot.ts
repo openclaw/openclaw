@@ -1,6 +1,7 @@
 // @ts-nocheck
 import { Buffer } from "node:buffer";
 
+import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
@@ -24,13 +25,17 @@ import {
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ReplyToMode } from "../config/config.js";
+import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveProviderGroupPolicy,
   resolveProviderGroupRequireMention,
 } from "../config/group-policy.js";
-import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveStorePath,
+  updateLastRoute,
+} from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getChildLogger } from "../logging.js";
@@ -107,7 +112,32 @@ export type TelegramBotOptions = {
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
+  config?: ClawdbotConfig;
 };
+
+export function getTelegramSequentialKey(ctx: {
+  chat?: { id?: number };
+  message?: TelegramMessage;
+  update?: {
+    message?: TelegramMessage;
+    edited_message?: TelegramMessage;
+    callback_query?: { message?: TelegramMessage };
+  };
+}): string {
+  const msg =
+    ctx.message ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.callback_query?.message;
+  const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const threadId = msg?.message_thread_id;
+  if (typeof chatId === "number") {
+    return threadId != null
+      ? `telegram:${chatId}:topic:${threadId}`
+      : `telegram:${chatId}`;
+  }
+  return "telegram:unknown";
+}
 
 export function createTelegramBot(opts: TelegramBotOptions) {
   const runtime: RuntimeEnv = opts.runtime ?? {
@@ -123,10 +153,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const bot = new Bot(opts.token, { client });
   bot.api.config.use(apiThrottler());
+  bot.use(sequentialize(getTelegramSequentialKey));
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
 
-  const cfg = loadConfig();
+  const cfg = opts.config ?? loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
   const dmPolicy = cfg.telegram?.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;
@@ -208,6 +239,27 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       provider: "telegram",
       groupId: String(chatId),
     });
+  const resolveGroupActivation = (params: {
+    chatId: string | number;
+    agentId?: string;
+    messageThreadId?: number;
+    sessionKey?: string;
+  }) => {
+    const agentId = params.agentId ?? cfg.agent?.id ?? "main";
+    const sessionKey =
+      params.sessionKey ??
+      `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    try {
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey];
+      if (entry?.groupActivation === "always") return false;
+      if (entry?.groupActivation === "mention") return true;
+    } catch (err) {
+      logVerbose(`Failed to load session for activation check: ${String(err)}`);
+    }
+    return undefined;
+  };
   const resolveGroupRequireMention = (chatId: string | number) =>
     resolveProviderGroupRequireMention({
       cfg,
@@ -246,6 +298,17 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       chatId,
       messageThreadId,
     );
+    const peerId = isGroup
+      ? buildTelegramGroupPeerId(chatId, messageThreadId)
+      : String(chatId);
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "telegram",
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: peerId,
+      },
+    });
     const effectiveDmAllow = normalizeAllowFrom([
       ...(allowFrom ?? []),
       ...storeAllowFrom,
@@ -380,8 +443,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
       (ent) => ent.type === "mention",
     );
+    const activationOverride = resolveGroupActivation({
+      chatId,
+      messageThreadId,
+      sessionKey: route.sessionKey,
+      agentId: route.agentId,
+    });
     const baseRequireMention = resolveGroupRequireMention(chatId);
     const requireMention = firstDefined(
+      activationOverride,
       topicConfig?.requireMention,
       groupConfig?.requireMention,
       baseRequireMention,
@@ -471,16 +541,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       body: `${bodyText}${replySuffix}`,
     });
 
-    const route = resolveAgentRoute({
-      cfg,
-      provider: "telegram",
-      peer: {
-        kind: isGroup ? "group" : "dm",
-        id: isGroup
-          ? buildTelegramGroupPeerId(chatId, messageThreadId)
-          : buildTelegramDmPeerId(chatId, messageThreadId),
-      },
-    });
     const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
     const systemPromptParts = [
       groupConfig?.systemPrompt?.trim() || null,
@@ -825,7 +885,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
             kind: isGroup ? "group" : "dm",
             id: isGroup
               ? buildTelegramGroupPeerId(chatId, messageThreadId)
-              : buildTelegramDmPeerId(chatId, messageThreadId),
+              : String(chatId),
           },
         });
         const skillFilter = firstDefined(
@@ -1208,15 +1268,6 @@ function resolveTelegramStreamMode(
 }
 
 function buildTelegramGroupPeerId(
-  chatId: number | string,
-  messageThreadId?: number,
-) {
-  return messageThreadId != null
-    ? `${chatId}:topic:${messageThreadId}`
-    : String(chatId);
-}
-
-function buildTelegramDmPeerId(
   chatId: number | string,
   messageThreadId?: number,
 ) {

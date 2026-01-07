@@ -61,6 +61,25 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
   - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`; codes expire after 1 hour).
   - Open: requires `whatsapp.allowFrom` to include `"*"`.
   - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
+
+### Same-phone mode (personal number)
+If you run Clawdbot on your **personal WhatsApp number**, set:
+
+```json
+{
+  "whatsapp": {
+    "selfChatMode": true
+  }
+}
+```
+
+Behavior:
+- Suppresses pairing replies for **outbound DMs** (prevents spamming contacts).
+- Inbound unknown senders still follow `whatsapp.dmPolicy`.
+
+Recommended for personal numbers:
+- Set `whatsapp.dmPolicy="allowlist"` and add your number to `whatsapp.allowFrom`.
+- Set `messages.responsePrefix` (for example, `[clawdbot]`) so replies are clearly labeled.
 - **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).
   - `allowlist` uses `whatsapp.groupAllowFrom` (fallback: explicit `whatsapp.allowFrom`).
 - **Self-chat mode**: avoids auto read receipts and ignores mention JIDs.
@@ -139,6 +158,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 
 ## Config quick map
 - `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
+- `whatsapp.selfChatMode` (same-phone setup; suppress pairing replies for outbound DMs).
 - `whatsapp.allowFrom` (DM allowlist).
 - `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
 - `whatsapp.groupAllowFrom` (group sender allowlist).

@@ -32,6 +32,7 @@ import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
+import { registerDaemonCli } from "./daemon-cli.js";
 import { createDefaultDeps } from "./deps.js";
 import { registerDnsCli } from "./dns-cli.js";
 import { registerDocsCli } from "./docs-cli.js";
@@ -323,12 +324,14 @@ export function buildProgram() {
       "Run without prompts (safe migrations only)",
       false,
     )
+    .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
       try {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
           nonInteractive: Boolean(opts.nonInteractive),
+          deep: Boolean(opts.deep),
         });
       } catch (err) {
         defaultRuntime.error(String(err));
@@ -624,6 +627,7 @@ Examples:
   });
 
   registerCanvasCli(program);
+  registerDaemonCli(program);
   registerGatewayCli(program);
   registerModelsCli(program);
   registerNodesCli(program);

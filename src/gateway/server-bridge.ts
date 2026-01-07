@@ -707,6 +707,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             for (const candidate of resolveSessionTranscriptCandidates(
               sessionId,
               storePath,
+              entry?.sessionFile,
             )) {
               if (!fs.existsSync(candidate)) continue;
               try {
@@ -773,6 +774,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           const filePath = resolveSessionTranscriptCandidates(
             sessionId,
             storePath,
+            entry?.sessionFile,
           ).find((candidate) => fs.existsSync(candidate));
           if (!filePath) {
             return {
@@ -843,7 +845,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           const sessionId = entry?.sessionId;
           const rawMessages =
             sessionId && storePath
-              ? readSessionMessages(sessionId, storePath)
+              ? readSessionMessages(sessionId, storePath, entry?.sessionFile)
               : [];
           const max = typeof limit === "number" ? limit : 200;
           const sliced =
@@ -1053,6 +1055,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               {
                 message: messageWithAttachments,
                 sessionId,
+                sessionKey: p.sessionKey,
                 runId: clientRunId,
                 thinking: p.thinking,
                 deliver: p.deliver,
@@ -1169,6 +1172,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           {
             message: text,
             sessionId,
+            sessionKey,
             thinking: "low",
             deliver: false,
             messageProvider: "node",
@@ -1245,6 +1249,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           {
             message,
             sessionId,
+            sessionKey,
             thinking: link?.thinking ?? undefined,
             deliver,
             to,

@@ -80,6 +80,56 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow(/chat_id=123/);
   });
 
+  it("retries on transient errors with retry_after", async () => {
+    vi.useFakeTimers();
+    const chatId = "123";
+    const err = Object.assign(new Error("429"), {
+      parameters: { retry_after: 0.5 },
+    });
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValueOnce(err)
+      .mockResolvedValueOnce({
+        message_id: 1,
+        chat: { id: chatId },
+      });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+    const setTimeoutSpy = vi.spyOn(global, "setTimeout");
+
+    const promise = sendMessageTelegram(chatId, "hi", {
+      token: "tok",
+      api,
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 1000, jitter: 0 },
+    });
+
+    await vi.runAllTimersAsync();
+    await expect(promise).resolves.toEqual({ messageId: "1", chatId });
+    expect(setTimeoutSpy.mock.calls[0]?.[1]).toBe(500);
+    setTimeoutSpy.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it("does not retry on non-transient errors", async () => {
+    const chatId = "123";
+    const sendMessage = vi
+      .fn()
+      .mockRejectedValue(new Error("400: Bad Request"));
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram(chatId, "hi", {
+        token: "tok",
+        api,
+        retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow(/Bad Request/);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("sends GIF media as animation", async () => {
     const chatId = "123";
     const sendAnimation = vi.fn().mockResolvedValue({

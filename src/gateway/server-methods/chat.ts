@@ -46,7 +46,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const { cfg, storePath, entry } = loadSessionEntry(sessionKey);
     const sessionId = entry?.sessionId;
     const rawMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath) : [];
+      sessionId && storePath
+        ? readSessionMessages(sessionId, storePath, entry?.sessionFile)
+        : [];
     const hardMax = 1000;
     const defaultLimit = 200;
     const requested = typeof limit === "number" ? limit : defaultLimit;
@@ -259,6 +261,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         {
           message: messageWithAttachments,
           sessionId,
+          sessionKey: p.sessionKey,
           runId: clientRunId,
           thinking: p.thinking,
           deliver: p.deliver,

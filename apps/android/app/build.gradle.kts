@@ -1,3 +1,5 @@
+import com.android.build.api.variant.impl.VariantOutputImpl
+
 plugins {
   id("com.android.application")
   id("org.jetbrains.kotlin.android")
@@ -19,8 +21,8 @@ android {
     applicationId = "com.clawdbot.android"
     minSdk = 31
     targetSdk = 36
-    versionCode = 1
-    versionName = "2.0.0-beta3"
+    versionCode = 20260107
+    versionName = "2026.1.7"
   }
 
   buildTypes {
@@ -54,6 +56,19 @@ android {
   }
 }
 
+androidComponents {
+  onVariants { variant ->
+    variant.outputs
+      .filterIsInstance<VariantOutputImpl>()
+      .forEach { output ->
+        val versionName = output.versionName.orNull ?: "0"
+        val buildType = variant.buildType
+
+        val outputFileName = "clawdbot-${versionName}-${buildType}.apk"
+        output.outputFileName = outputFileName
+      }
+  }
+}
 kotlin {
   compilerOptions {
     jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)

@@ -758,6 +758,7 @@ describe("gateway server node/bridge", () => {
     expect(spy.mock.calls.length).toBe(beforeCalls + 1);
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call.sessionId).toBe("sess-main");
+    expect(call.sessionKey).toBe("main");
     expect(call.deliver).toBe(false);
     expect(call.messageProvider).toBe("node");
 

@@ -41,8 +41,8 @@ final class RemotePortTunnel {
     static func create(
         remotePort: Int,
         preferredLocalPort: UInt16? = nil,
-        allowRemoteUrlOverride: Bool = true
-    ) async throws -> RemotePortTunnel {
+        allowRemoteUrlOverride: Bool = true) async throws -> RemotePortTunnel
+    {
         let settings = CommandResolver.connectionSettings()
         guard settings.mode == .remote, let parsed = CommandResolver.parseSSHTarget(settings.target) else {
             throw NSError(

@@ -1,3 +1,5 @@
+import { type RunOptions, run } from "@grammyjs/runner";
+import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTelegramBot } from "./bot.js";
@@ -17,8 +19,25 @@ export type MonitorTelegramOpts = {
   webhookUrl?: string;
 };
 
+export function createTelegramRunnerOptions(
+  cfg: ClawdbotConfig,
+): RunOptions<unknown> {
+  return {
+    sink: {
+      concurrency: cfg.agent?.maxConcurrent ?? 1,
+    },
+    runner: {
+      fetch: {
+        // Match grammY defaults
+        timeout: 30,
+      },
+    },
+  };
+}
+
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
-  const { token } = resolveTelegramToken(loadConfig(), {
+  const cfg = loadConfig();
+  const { token } = resolveTelegramToken(cfg, {
     envToken: opts.token,
   });
   if (!token) {
@@ -29,14 +48,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
   const proxyFetch =
     opts.proxyFetch ??
-    (loadConfig().telegram?.proxy
-      ? makeProxyFetch(loadConfig().telegram?.proxy as string)
+    (cfg.telegram?.proxy
+      ? makeProxyFetch(cfg.telegram?.proxy as string)
       : undefined);
 
   const bot = createTelegramBot({
     token,
     runtime: opts.runtime,
     proxyFetch,
+    config: cfg,
   });
 
   if (opts.useWebhook) {
@@ -53,13 +73,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     return;
   }
 
-  // Long polling
+  // Use grammyjs/runner for concurrent update processing
+  const runner = run(bot, createTelegramRunnerOptions(cfg));
+
   const stopOnAbort = () => {
-    if (opts.abortSignal?.aborted) void bot.stop();
+    if (opts.abortSignal?.aborted) {
+      void runner.stop();
+    }
   };
   opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
+
   try {
-    await bot.start();
+    // runner.task() returns a promise that resolves when the runner stops
+    await runner.task();
   } finally {
     opts.abortSignal?.removeEventListener("abort", stopOnAbort);
   }

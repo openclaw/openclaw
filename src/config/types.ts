@@ -1,8 +1,20 @@
 export type ReplyMode = "text" | "command";
+export type TypingMode = "never" | "instant" | "thinking" | "message";
 export type SessionScope = "per-sender" | "global";
 export type ReplyToMode = "off" | "first" | "all";
 export type GroupPolicy = "open" | "disabled" | "allowlist";
 export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
+
+export type OutboundRetryConfig = {
+  /** Max retry attempts for outbound requests (default: 3). */
+  attempts?: number;
+  /** Minimum retry delay in ms (default: 300-500ms depending on provider). */
+  minDelayMs?: number;
+  /** Maximum retry delay cap in ms (default: 30000). */
+  maxDelayMs?: number;
+  /** Jitter factor (0-1) applied to delays (default: 0.1). */
+  jitter?: number;
+};
 
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
@@ -26,6 +38,7 @@ export type SessionConfig = {
   heartbeatIdleMinutes?: number;
   store?: string;
   typingIntervalSeconds?: number;
+  typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
   agentToAgent?: {
@@ -86,6 +99,11 @@ export type WhatsAppConfig = {
   accounts?: Record<string, WhatsAppAccountConfig>;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /**
+   * Same-phone setup (bot uses your personal WhatsApp number).
+   * When true, suppress pairing replies for outbound DMs.
+   */
+  selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
   allowFrom?: string[];
   /** Optional allowlist for WhatsApp group senders (E.164). */
@@ -116,6 +134,8 @@ export type WhatsAppAccountConfig = {
   authDir?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
+  /** Same-phone setup for this account (suppresses pairing replies for outbound DMs). */
+  selfChatMode?: boolean;
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
@@ -294,6 +314,8 @@ export type TelegramConfig = {
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /** Retry policy for outbound Telegram API calls. */
+  retry?: OutboundRetryConfig;
   proxy?: string;
   webhookUrl?: string;
   webhookSecret?: string;
@@ -378,6 +400,8 @@ export type DiscordConfig = {
   textChunkLimit?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
+  /** Retry policy for outbound Discord API calls. */
+  retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
   actions?: DiscordActionConfig;
   /** Control reply threading when reply tags are present (off|first|all). */
@@ -850,6 +874,27 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
+export type AgentContextPruningConfig = {
+  mode?: "off" | "adaptive" | "aggressive";
+  keepLastAssistants?: number;
+  softTrimRatio?: number;
+  hardClearRatio?: number;
+  minPrunableToolChars?: number;
+  tools?: {
+    allow?: string[];
+    deny?: string[];
+  };
+  softTrim?: {
+    maxChars?: number;
+    headChars?: number;
+    tailChars?: number;
+  };
+  hardClear?: {
+    enabled?: boolean;
+    placeholder?: string;
+  };
+};
+
 export type ClawdbotConfig = {
   auth?: AuthConfig;
   env?: {
@@ -895,6 +940,8 @@ export type ClawdbotConfig = {
     userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
+    /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
+    contextPruning?: AgentContextPruningConfig;
     /** Default thinking level when no /think directive is present. */
     thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
     /** Default verbose level when no /verbose directive is present. */
@@ -919,6 +966,8 @@ export type ClawdbotConfig = {
     /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
     mediaMaxMb?: number;
     typingIntervalSeconds?: number;
+    /** Typing indicator start mode (never|instant|thinking|message). */
+    typingMode?: TypingMode;
     /** Periodic background heartbeat runs. */
     heartbeat?: {
       /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */

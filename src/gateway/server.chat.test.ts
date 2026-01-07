@@ -61,6 +61,26 @@ describe("gateway server chat", () => {
     await server.close();
   });
 
+  test("chat.send forwards sessionKey to agentCommand", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "chat.send", {
+      sessionKey: "agent:main:subagent:abc",
+      message: "hello",
+      idempotencyKey: "idem-session-key-1",
+    });
+    expect(res.ok).toBe(true);
+
+    const call = vi.mocked(agentCommand).mock.calls.at(-1)?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(call?.sessionKey).toBe("agent:main:subagent:abc");
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.send blocked by send policy", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -302,6 +322,67 @@ describe("gateway server chat", () => {
     const maxMsgs = maxRes.payload?.messages ?? [];
     expect(maxMsgs.length).toBe(1000);
     expect(firstContentText(maxMsgs[0])).toBe("b500");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("chat.history prefers sessionFile when set", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+
+    const forkedPath = path.join(dir, "sess-forked.jsonl");
+    await fs.writeFile(
+      forkedPath,
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "from-fork" }],
+          timestamp: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      path.join(dir, "sess-main.jsonl"),
+      JSON.stringify({
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "from-default" }],
+          timestamp: Date.now(),
+        },
+      }),
+      "utf-8",
+    );
+
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main",
+            sessionFile: forkedPath,
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+      sessionKey: "main",
+    });
+    expect(res.ok).toBe(true);
+    const messages = res.payload?.messages ?? [];
+    expect(messages.length).toBe(1);
+    const first = messages[0] as { content?: { text?: string }[] };
+    expect(first.content?.[0]?.text).toBe("from-fork");
 
     ws.close();
     await server.close();

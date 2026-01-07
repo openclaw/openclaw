@@ -101,6 +101,7 @@ export function createTypingController(params: {
 
   const startTypingLoop = async () => {
     if (sealed) return;
+    if (runComplete) return;
     if (!onReplyStart) return;
     if (typingIntervalMs <= 0) return;
     if (typingTimer) return;

@@ -42,11 +42,11 @@ Text + native (when enabled):
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
-- `/model <name>`
+- `/model <name>` (or `/<alias>` from `agent.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`)
 
 Text-only:
-- `/compact [instructions]`
+- `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
 
 ## Surface notes
 

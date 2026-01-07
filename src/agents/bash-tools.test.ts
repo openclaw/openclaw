@@ -185,4 +185,36 @@ describe("bash tool backgrounding", () => {
     const textBlock = log.content.find((c) => c.type === "text");
     expect(textBlock?.text).toBe("beta");
   });
+
+  it("scopes process sessions by scopeKey", async () => {
+    const bashA = createBashTool({ backgroundMs: 10, scopeKey: "agent:alpha" });
+    const processA = createProcessTool({ scopeKey: "agent:alpha" });
+    const bashB = createBashTool({ backgroundMs: 10, scopeKey: "agent:beta" });
+    const processB = createProcessTool({ scopeKey: "agent:beta" });
+
+    const resultA = await bashA.execute("call1", {
+      command: 'node -e "setTimeout(() => {}, 50)"',
+      background: true,
+    });
+    const resultB = await bashB.execute("call2", {
+      command: 'node -e "setTimeout(() => {}, 50)"',
+      background: true,
+    });
+
+    const sessionA = (resultA.details as { sessionId: string }).sessionId;
+    const sessionB = (resultB.details as { sessionId: string }).sessionId;
+
+    const listA = await processA.execute("call3", { action: "list" });
+    const sessionsA = (
+      listA.details as { sessions: Array<{ sessionId: string }> }
+    ).sessions;
+    expect(sessionsA.some((s) => s.sessionId === sessionA)).toBe(true);
+    expect(sessionsA.some((s) => s.sessionId === sessionB)).toBe(false);
+
+    const pollB = await processB.execute("call4", {
+      action: "poll",
+      sessionId: sessionA,
+    });
+    expect(pollB.details.status).toBe("failed");
+  });
 });

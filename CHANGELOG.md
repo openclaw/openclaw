@@ -18,27 +18,47 @@
 - Auto-reply: removed `autoReply` from Discord/Slack/Telegram channel configs; use `requireMention` instead (Telegram topics now support `requireMention` overrides).
 
 ### Fixes
+- Discord/Telegram: add per-request retry policy with configurable delays and docs.
+- Telegram: run long polling via grammY runner with per-chat sequentialization and concurrency tied to `agent.maxConcurrent`. Thanks @mukhtharcm for PR #366.
+- macOS: prevent gateway launchd startup race where the app could kill a just-started gateway; avoid unnecessary `bootout` and ensure the job is enabled at login. Fixes #306. Thanks @gupsammy for PR #387.
+- macOS: ignore ciao announcement cancellation rejections during Bonjour shutdown to avoid unhandled exits. Thanks @emanuelst for PR #419.
 - Pairing: generate DM pairing codes with CSPRNG, expire pending codes after 1 hour, and avoid re-sending codes for already pending requests.
 - Pairing: lock + atomically write pairing stores with 0600 perms and stop logging pairing codes in provider logs.
+- WhatsApp: add self-phone mode (no pairing replies for outbound DMs) and onboarding prompt for personal vs separate numbers (auto allowlist + response prefix for personal).
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.
+- Tools: make per-agent tool policies override global defaults and run bash synchronously when `process` is disallowed.
+- Tools: scope `process` sessions per agent to prevent cross-agent visibility.
+- Cron: clamp timer delay to avoid TimeoutOverflowWarning. Thanks @emanuelst for PR #412.
+- Web UI: allow reconnect + password URL auth for the control UI and always scrub auth params from the URL. Thanks @oswalpalash for PR #414.
+- ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
+- Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
+- Tools: keep tool failure logs concise (no stack traces); full stack only in debug logs.
 - Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
+- Android: fix APK output filename renaming after AGP updates. Thanks @Syhids for PR #410.
+- Android: rotate camera photos by EXIF orientation. Thanks @fcatuhe for PR #403.
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
+- Discord/Slack: fork thread sessions (agent-scoped) and inject thread starters for context. Thanks @thewilloftheshadow for PR #400.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
+- Agent: add opt-in session pruning for tool results to reduce context bloat. Thanks @maxsumrall for PR #381.
+- Agent: protect bootstrap prefix from context pruning. Thanks @maxsumrall for PR #381.
 - Agent: deliver final replies for non-streaming models when block chunking is enabled. Thank you @mneves75 for PR #369!
 - Agent: trim bootstrap context injections and keep group guidance concise (emoji reactions allowed). Thanks @tobiasbischoff for PR #370.
+- Agent: return a friendly context overflow response (413/request_too_large). Thanks @alejandroOPI for PR #395.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
 - Sub-agents: skip invalid model overrides with a warning and keep the run alive; tool exceptions now return tool errors instead of crashing the agent.
+- Sessions: forward explicit sessionKey through gateway/chat/node bridge to avoid sub-agent sessionId mixups.
 - Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.
 - Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
 - Docs: sanitize AGENTS guidance and add Clawdis migration troubleshooting note. Thanks @buddyh for PR #348.
 - Docs: add ClawdHub guide and hubs link for browsing, install, and sync workflows.
 - Docs: add FAQ for PNPM/Bun lockfile migration warning; link AgentSkills spec + ClawdHub guide (`/clawdhub`) from skills docs.
+- Docs: add showcase projects (xuezh, gohome, roborock, padel-cli). Thanks @joshp123.
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
 - Status: add provider usage snapshots to `/status`, `clawdbot status --usage`, and the macOS menu bar.
 - Build: fix macOS packaging QR smoke test for the bun-compiled relay. Thanks @dbhurley for PR #358.
@@ -49,6 +69,8 @@
 - Telegram: include sender identity in group envelope headers. (#336)
 - Telegram: support forum topics with topic-isolated sessions and message_thread_id routing. Thanks @HazAT, @nachoiacovino, @RandyVentures for PR #321/#333/#334.
 - Telegram: add draft streaming via `sendMessageDraft` with `telegram.streamMode`, plus `/reasoning stream` for draft-only reasoning.
+- Telegram: honor `/activation` session mode for group mention gating and clarify group activation docs. Thanks @julianengel for PR #377.
+- Telegram: isolate forum topic transcripts per thread and validate Gemini turn ordering in multi-topic sessions. Thanks @hsrvc for PR #407.
 - iMessage: ignore disconnect errors during shutdown (avoid unhandled promise rejections). Thanks @antons for PR #359.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
@@ -58,6 +80,7 @@
 - Auto-reply: add per-channel/topic skill filters + system prompts for Discord/Slack/Telegram. Thanks @kitze for PR #286.
 - Auto-reply: refresh `/status` output with build info, compact context, and queue depth.
 - Commands: add `/stop` to the registry and route native aborts to the active chat session. Thanks @nachoiacovino for PR #295.
+- Commands: allow `/<alias>` shorthand for `/model` using `agent.models.*.alias`, without shadowing built-ins. Thanks @azade-c for PR #393.
 - Commands: unify native + text chat commands behind `commands.*` config (Discord/Slack/Telegram). Thanks @thewilloftheshadow for PR #275.
 - Auto-reply: treat steer during compaction as a follow-up, queued until compaction completes.
 - Auth: lock auth profile refreshes to avoid multi-instance OAuth logouts; keep credentials on refresh failure.
@@ -70,6 +93,7 @@
 - Doctor: suggest adding the workspace memory system when missing (opt-out via `--no-workspace-suggestions`).
 - Doctor: normalize default workspace path to `~/clawd` (avoid `~/clawdbot`).
 - Doctor: add `--yes` and `--non-interactive` for headless/automation runs (`--non-interactive` only applies safe migrations).
+- Doctor/CLI: scan for extra gateway-like services (optional `--deep`) and show cleanup hints.
 - Gateway/CLI: auto-migrate legacy sessions + agent state layouts on startup (safe; WhatsApp auth still requires `clawdbot doctor`).
 - Workspace: only create `BOOTSTRAP.md` for brand-new workspaces (don’t recreate after deletion).
 - Build: fix duplicate protocol export, align Codex OAuth options, and add proper-lockfile typings.
@@ -78,6 +102,7 @@
 - Typing indicators: fix a race that could keep the typing indicator stuck after quick replies. Thanks @thewilloftheshadow for PR #270.
 - Google: merge consecutive messages to satisfy strict role alternation for Google provider models. Thanks @Asleep123 for PR #266.
 - Postinstall: handle targetDir symlinks in the install script. Thanks @obviyus for PR #272.
+- Status: show configured model in `/status` (override-aware). Thanks @azade-c for PR #396.
 - WhatsApp/Telegram: add groupPolicy handling for group messages and normalize allowFrom matching (tg/telegram prefixes). Thanks @mneves75.
 - Auto-reply: add configurable ack reactions for inbound messages (default 👀 or `identity.emoji`) with scope controls. Thanks @obviyus for PR #178.
 - Polls: unify WhatsApp + Discord poll sends via the gateway + CLI (`clawdbot poll`). (#123) — thanks @dbhurley
@@ -117,6 +142,7 @@
 - Control UI: show a reading indicator bubble while the assistant is responding.
 - Control UI: animate reading indicator dots (honors reduced-motion).
 - Control UI: stabilize chat streaming during tool runs (no flicker/vanishing text; correct run scoping).
+- Google: recover from corrupted transcripts that start with an assistant tool call to avoid Cloud Code Assist 400 ordering errors. Thanks @jonasjancarik for PR #421. (#406)
 - Control UI: let config-form enums select empty-string values. Thanks @sreekaransrinath for PR #268.
 - Control UI: scroll chat to bottom on initial load. Thanks @kiranjd for PR #274.
 - Control UI: add Chat focus mode toggle to collapse header + sidebar.
@@ -170,6 +196,11 @@
 - Lint: organize imports and wrap long lines in reply commands.
 - Refactor: centralize group allowlist/mention policy across providers.
 - Deps: update to latest across the repo.
+
+## 2026.1.7
+
+### Fixes
+- Android: bump version to 2026.1.7, add version code, and name APK outputs. Thanks @fcatuhe for PR #402.
 
 ## 2026.1.5-3
 

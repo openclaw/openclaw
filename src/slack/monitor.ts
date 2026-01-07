@@ -3,6 +3,7 @@ import {
   type SlackCommandMiddlewareArgs,
   type SlackEventMiddlewareArgs,
 } from "@slack/bolt";
+import type { WebClient as SlackWebClient } from "@slack/web-api";
 import {
   chunkMarkdownText,
   resolveTextChunkLimit,
@@ -13,7 +14,10 @@ import {
   listNativeCommandSpecs,
   shouldHandleTextCommands,
 } from "../auto-reply/commands-registry.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  formatAgentEnvelope,
+  formatThreadStarterEnvelope,
+} from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
@@ -43,6 +47,7 @@ import {
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
@@ -74,6 +79,7 @@ type SlackMessageEvent = {
   text?: string;
   ts?: string;
   thread_ts?: string;
+  parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
   files?: SlackFile[];
@@ -86,6 +92,7 @@ type SlackAppMentionEvent = {
   text?: string;
   ts?: string;
   thread_ts?: string;
+  parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
 };
@@ -388,6 +395,44 @@ async function resolveSlackMedia(params: {
     }
   }
   return null;
+}
+
+type SlackThreadStarter = {
+  text: string;
+  userId?: string;
+  ts?: string;
+};
+
+const THREAD_STARTER_CACHE = new Map<string, SlackThreadStarter>();
+
+async function resolveSlackThreadStarter(params: {
+  channelId: string;
+  threadTs: string;
+  client: SlackWebClient;
+}): Promise<SlackThreadStarter | null> {
+  const cacheKey = `${params.channelId}:${params.threadTs}`;
+  const cached = THREAD_STARTER_CACHE.get(cacheKey);
+  if (cached) return cached;
+  try {
+    const response = (await params.client.conversations.replies({
+      channel: params.channelId,
+      ts: params.threadTs,
+      limit: 1,
+      inclusive: true,
+    })) as { messages?: Array<{ text?: string; user?: string; ts?: string }> };
+    const message = response?.messages?.[0];
+    const text = (message?.text ?? "").trim();
+    if (!message || !text) return null;
+    const starter: SlackThreadStarter = {
+      text,
+      userId: message.user,
+      ts: message.ts,
+    };
+    THREAD_STARTER_CACHE.set(cacheKey, starter);
+    return starter;
+  } catch {
+    return null;
+  }
 }
 
 export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
@@ -883,7 +928,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
       },
     });
-    const sessionKey = route.sessionKey;
+    const baseSessionKey = route.sessionKey;
+    const threadTs = message.thread_ts;
+    const hasThreadTs = typeof threadTs === "string" && threadTs.length > 0;
+    const isThreadReply =
+      hasThreadTs &&
+      (threadTs !== message.ts || Boolean(message.parent_user_id));
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey,
+      threadId: isThreadReply ? threadTs : undefined,
+      parentSessionKey: isThreadReply ? baseSessionKey : undefined,
+    });
+    const sessionKey = threadKeys.sessionKey;
     enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
       sessionKey,
       contextKey: `slack:message:${message.channel}:${message.ts ?? "unknown"}`,
@@ -912,11 +968,39 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     ].filter((entry): entry is string => Boolean(entry));
     const groupSystemPrompt =
       systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+    let threadStarterBody: string | undefined;
+    let threadLabel: string | undefined;
+    if (isThreadReply && threadTs) {
+      const starter = await resolveSlackThreadStarter({
+        channelId: message.channel,
+        threadTs,
+        client: app.client,
+      });
+      if (starter?.text) {
+        const starterUser = starter.userId
+          ? await resolveUserName(starter.userId)
+          : null;
+        const starterName = starterUser?.name ?? starter.userId ?? "Unknown";
+        const starterWithId = `${starter.text}\n[slack message id: ${starter.ts ?? threadTs} channel: ${message.channel}]`;
+        threadStarterBody = formatThreadStarterEnvelope({
+          provider: "Slack",
+          author: starterName,
+          timestamp: starter.ts
+            ? Math.round(Number(starter.ts) * 1000)
+            : undefined,
+          body: starterWithId,
+        });
+        const snippet = starter.text.replace(/\s+/g, " ").slice(0, 80);
+        threadLabel = `Slack thread ${roomLabel}${snippet ? `: ${snippet}` : ""}`;
+      } else {
+        threadLabel = `Slack thread ${roomLabel}`;
+      }
+    }
     const ctxPayload = {
       Body: body,
       From: slackFrom,
       To: slackTo,
-      SessionKey: route.sessionKey,
+      SessionKey: sessionKey,
       AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
       GroupSubject: isRoomish ? roomLabel : undefined,
@@ -927,6 +1011,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       Surface: "slack" as const,
       MessageSid: message.ts,
       ReplyToId: message.thread_ts ?? message.ts,
+      ParentSessionKey: threadKeys.parentSessionKey,
+      ThreadStarterBody: threadStarterBody,
+      ThreadLabel: threadLabel,
       Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
       WasMentioned: isRoomish ? wasMentioned : undefined,
       MediaPath: media?.path,

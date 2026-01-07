@@ -5,6 +5,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -16,10 +17,12 @@ import { extractReplyToTag } from "./reply-tags.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
+  typingMode: TypingMode;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -30,6 +33,7 @@ export function createFollowupRunner(params: {
   const {
     opts,
     typing,
+    typingMode,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -37,6 +41,11 @@ export function createFollowupRunner(params: {
     defaultModel,
     agentCfgContextTokens,
   } = params;
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat: opts?.isHeartbeat === true,
+  });
 
   /**
    * Sends followup payloads, routing to the originating channel if set.
@@ -71,7 +80,7 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
-      await typing.startTypingOnText(payload.text);
+      await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {
@@ -99,6 +108,7 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    await typingSignals.signalRunStart();
     try {
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {

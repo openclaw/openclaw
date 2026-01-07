@@ -25,13 +25,16 @@ import {
   type ClawdbotConfig,
   loadConfig,
 } from "../config/config.js";
-import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
-import { shouldHandleTextCommands } from "./commands-registry.js";
+import {
+  listChatCommands,
+  shouldHandleTextCommands,
+} from "./commands-registry.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
@@ -62,6 +65,10 @@ import {
   prependSystemEvents,
 } from "./reply/session-updates.js";
 import { createTypingController } from "./reply/typing.js";
+import {
+  createTypingSignaler,
+  resolveTypingMode,
+} from "./reply/typing-mode.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
@@ -312,7 +319,18 @@ export async function getReplyFromConfig(
     rawDrop: undefined,
     hasQueueOptions: false,
   });
-  let parsedDirectives = parseInlineDirectives(rawBody);
+  const reservedCommands = new Set(
+    listChatCommands().flatMap((cmd) =>
+      cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
+    ),
+  );
+  const configuredAliases = Object.values(cfg.agent?.models ?? {})
+    .map((entry) => entry.alias?.trim())
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
+  let parsedDirectives = parseInlineDirectives(rawBody, {
+    modelAliases: configuredAliases,
+  });
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
@@ -580,7 +598,17 @@ export async function getReplyFromConfig(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
-  const shouldEagerType = (!isGroupChat || wasMentioned) && !isHeartbeat;
+  const typingMode = resolveTypingMode({
+    configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
+    isGroupChat,
+    wasMentioned,
+    isHeartbeat,
+  });
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat,
+  });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat &&
       (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -646,6 +674,11 @@ export async function getReplyFromConfig(
     isNewSession,
     prefixedBodyBase,
   });
+  const threadStarterBody = ctx.ThreadStarterBody?.trim();
+  const threadStarterNote =
+    isNewSession && threadStarterBody
+      ? `[Thread starter - for context]\n${threadStarterBody}`
+      : undefined;
   const skillResult = await ensureSkillSnapshot({
     sessionEntry,
     sessionStore,
@@ -661,10 +694,10 @@ export async function getReplyFromConfig(
   systemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   const prefixedBody = transcribedText
-    ? [prefixedBodyBase, `Transcript:\n${transcribedText}`]
+    ? [threadStarterNote, prefixedBodyBase, `Transcript:\n${transcribedText}`]
         .filter(Boolean)
         .join("\n\n")
-    : prefixedBodyBase;
+    : [threadStarterNote, prefixedBodyBase].filter(Boolean).join("\n\n");
   const mediaNote = ctx.MediaPath?.length
     ? `[media attached: ${ctx.MediaPath}${ctx.MediaType ? ` (${ctx.MediaType})` : ""}${ctx.MediaUrl ? ` | ${ctx.MediaUrl}` : ""}]`
     : undefined;
@@ -689,12 +722,12 @@ export async function getReplyFromConfig(
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
-  const sessionFile = resolveSessionTranscriptPath(sessionIdFinal);
+  const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);
   const queueBodyBase = transcribedText
-    ? [baseBodyFinal, `Transcript:\n${transcribedText}`]
+    ? [threadStarterNote, baseBodyFinal, `Transcript:\n${transcribedText}`]
         .filter(Boolean)
         .join("\n\n")
-    : baseBodyFinal;
+    : [threadStarterNote, baseBodyFinal].filter(Boolean).join("\n\n");
   const queuedBody = mediaNote
     ? [mediaNote, mediaReplyHint, queueBodyBase]
         .filter(Boolean)
@@ -769,8 +802,8 @@ export async function getReplyFromConfig(
     },
   };
 
-  if (shouldEagerType) {
-    await typing.startTypingLoop();
+  if (typingSignals.shouldStartImmediately) {
+    await typingSignals.signalRunStart();
   }
 
   return runReplyAgent({
@@ -797,6 +830,7 @@ export async function getReplyFromConfig(
     resolvedBlockStreamingBreak,
     sessionCtx,
     shouldInjectGroupIntro,
+    typingMode,
   });
 }
 

@@ -60,6 +60,8 @@ const createConfigIO = vi.fn(() => ({
 
 const findLegacyGatewayServices = vi.fn().mockResolvedValue([]);
 const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]);
+const findExtraGatewayServices = vi.fn().mockResolvedValue([]);
+const renderGatewayServiceCleanupHints = vi.fn().mockReturnValue(["cleanup"]);
 const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
   programArguments: ["node", "cli", "gateway-daemon", "--port", "18789"],
 });
@@ -96,6 +98,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
 vi.mock("../daemon/legacy.js", () => ({
   findLegacyGatewayServices,
   uninstallLegacyGatewayServices,
+}));
+
+vi.mock("../daemon/inspect.js", () => ({
+  findExtraGatewayServices,
+  renderGatewayServiceCleanupHints,
 }));
 
 vi.mock("../daemon/program-args.js", () => ({

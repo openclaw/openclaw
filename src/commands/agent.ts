@@ -34,8 +34,9 @@ import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveSessionFilePath,
   resolveSessionKey,
-  resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
@@ -61,6 +62,7 @@ type AgentCommandOpts = {
   message: string;
   to?: string;
   sessionId?: string;
+  sessionKey?: string;
   thinking?: string;
   thinkingOnce?: string;
   verbose?: string;
@@ -92,6 +94,7 @@ function resolveSession(opts: {
   cfg: ClawdbotConfig;
   to?: string;
   sessionId?: string;
+  sessionKey?: string;
 }): SessionResolution {
   const sessionCfg = opts.cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
@@ -101,20 +104,25 @@ function resolveSession(opts: {
     1,
   );
   const idleMs = idleMinutes * 60_000;
-  const storePath = resolveStorePath(sessionCfg?.store);
+  const explicitSessionKey = opts.sessionKey?.trim();
+  const storeAgentId = resolveAgentIdFromSessionKey(explicitSessionKey);
+  const storePath = resolveStorePath(sessionCfg?.store, {
+    agentId: storeAgentId,
+  });
   const sessionStore = loadSessionStore(storePath);
   const now = Date.now();
 
   const ctx: MsgContext | undefined = opts.to?.trim()
     ? { From: opts.to }
     : undefined;
-  let sessionKey: string | undefined = ctx
-    ? resolveSessionKey(scope, ctx, mainKey)
-    : undefined;
+  let sessionKey: string | undefined =
+    explicitSessionKey ??
+    (ctx ? resolveSessionKey(scope, ctx, mainKey) : undefined);
   let sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
 
   // If a session id was provided, prefer to re-use its entry (by id) even when no key was derived.
   if (
+    !explicitSessionKey &&
     opts.sessionId &&
     (!sessionEntry || sessionEntry.sessionId !== opts.sessionId)
   ) {
@@ -162,7 +170,7 @@ export async function agentCommand(
 ) {
   const body = (opts.message ?? "").trim();
   if (!body) throw new Error("Message (--message) is required");
-  if (!opts.to && !opts.sessionId) {
+  if (!opts.to && !opts.sessionId && !opts.sessionKey) {
     throw new Error("Pass --to <E.164> or --session-id to choose a session");
   }
 
@@ -216,6 +224,7 @@ export async function agentCommand(
     cfg,
     to: opts.to,
     sessionId: opts.sessionId,
+    sessionKey: opts.sessionKey,
   });
 
   const {
@@ -377,7 +386,7 @@ export async function agentCommand(
       catalog: catalogForThinking,
     });
   }
-  const sessionFile = resolveSessionTranscriptPath(sessionId);
+  const sessionFile = resolveSessionFilePath(sessionId, sessionEntry);
 
   const startedAt = Date.now();
   let lifecycleEnded = false;

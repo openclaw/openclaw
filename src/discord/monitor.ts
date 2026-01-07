@@ -27,7 +27,10 @@ import {
   listNativeCommandSpecs,
   shouldHandleTextCommands,
 } from "../auto-reply/commands-registry.js";
-import { formatAgentEnvelope } from "../auto-reply/envelope.js";
+import {
+  formatAgentEnvelope,
+  formatThreadStarterEnvelope,
+} from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
@@ -51,7 +54,11 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
+import {
+  buildAgentSessionKey,
+  resolveAgentRoute,
+} from "../routing/resolve-route.js";
+import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { fetchDiscordApplicationId } from "./probe.js";
@@ -81,6 +88,67 @@ type DiscordHistoryEntry = {
 };
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
+type DiscordThreadChannel = {
+  id: string;
+  name?: string | null;
+  parentId?: string | null;
+  parent?: { id?: string; name?: string };
+};
+type DiscordThreadStarter = {
+  text: string;
+  author: string;
+  timestamp?: number;
+};
+
+const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
+
+async function resolveDiscordThreadStarter(params: {
+  channel: DiscordThreadChannel;
+  client: Client;
+  parentId?: string;
+}): Promise<DiscordThreadStarter | null> {
+  const cacheKey = params.channel.id;
+  const cached = DISCORD_THREAD_STARTER_CACHE.get(cacheKey);
+  if (cached) return cached;
+  try {
+    if (!params.parentId) return null;
+    const starter = (await params.client.rest.get(
+      Routes.channelMessage(params.parentId, params.channel.id),
+    )) as {
+      content?: string | null;
+      embeds?: Array<{ description?: string | null }>;
+      member?: { nick?: string | null; displayName?: string | null };
+      author?: {
+        id?: string | null;
+        username?: string | null;
+        discriminator?: string | null;
+      };
+      timestamp?: string | null;
+    };
+    if (!starter) return null;
+    const text =
+      starter.content?.trim() ?? starter.embeds?.[0]?.description?.trim() ?? "";
+    if (!text) return null;
+    const author =
+      starter.member?.nick ??
+      starter.member?.displayName ??
+      (starter.author
+        ? starter.author.discriminator && starter.author.discriminator !== "0"
+          ? `${starter.author.username ?? "Unknown"}#${starter.author.discriminator}`
+          : (starter.author.username ?? starter.author.id ?? "Unknown")
+        : "Unknown");
+    const timestamp = resolveTimestampMs(starter.timestamp);
+    const payload: DiscordThreadStarter = {
+      text,
+      author,
+      timestamp: timestamp ?? undefined,
+    };
+    DISCORD_THREAD_STARTER_CACHE.set(cacheKey, payload);
+    return payload;
+  } catch {
+    return null;
+  }
+}
 
 export type DiscordAllowList = {
   allowAll: boolean;
@@ -509,8 +577,33 @@ export function createDiscordMessageHandler(params: {
         return;
       }
 
-      const channelName = channelInfo?.name;
-      const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
+      const channelName =
+        channelInfo?.name ??
+        ((isGuildMessage || isGroupDm) &&
+        message.channel &&
+        "name" in message.channel
+          ? message.channel.name
+          : undefined);
+      const isThreadChannel =
+        isGuildMessage &&
+        message.channel &&
+        "isThread" in message.channel &&
+        message.channel.isThread();
+      const threadChannel = isThreadChannel
+        ? (message.channel as DiscordThreadChannel)
+        : null;
+      const threadParentId =
+        threadChannel?.parentId ?? threadChannel?.parent?.id ?? undefined;
+      const threadParentName = threadChannel?.parent?.name;
+      const threadName = threadChannel?.name;
+      const configChannelName = threadParentName ?? channelName;
+      const configChannelSlug = configChannelName
+        ? normalizeDiscordSlug(configChannelName)
+        : "";
+      const displayChannelName = threadName ?? channelName;
+      const displayChannelSlug = displayChannelName
+        ? normalizeDiscordSlug(displayChannelName)
+        : "";
       const guildSlug =
         guildInfo?.slug ||
         (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : "");
@@ -524,12 +617,13 @@ export function createDiscordMessageHandler(params: {
           id: isDirectMessage ? author.id : message.channelId,
         },
       });
+      const baseSessionKey = route.sessionKey;
       const channelConfig = isGuildMessage
         ? resolveDiscordChannelConfig({
             guildInfo,
-            channelId: message.channelId,
-            channelName,
-            channelSlug,
+            channelId: threadParentId ?? message.channelId,
+            channelName: configChannelName,
+            channelSlug: configChannelSlug,
           })
         : null;
       if (isGuildMessage && channelConfig?.enabled === false) {
@@ -544,8 +638,8 @@ export function createDiscordMessageHandler(params: {
         resolveGroupDmAllow({
           channels: groupDmChannels,
           channelId: message.channelId,
-          channelName,
-          channelSlug,
+          channelName: displayChannelName,
+          channelSlug: displayChannelSlug,
         });
       if (isGroupDm && !groupDmAllowed) return;
 
@@ -715,7 +809,9 @@ export function createDiscordMessageHandler(params: {
             channelId: message.channelId,
           });
       const groupRoom =
-        isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
+        isGuildMessage && displayChannelSlug
+          ? `#${displayChannelSlug}`
+          : undefined;
       const groupSubject = isDirectMessage ? undefined : groupRoom;
       const channelDescription = channelInfo?.topic?.trim();
       const systemPromptParts = [
@@ -761,15 +857,51 @@ export function createDiscordMessageHandler(params: {
         combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
       }
 
+      let threadStarterBody: string | undefined;
+      let threadLabel: string | undefined;
+      let parentSessionKey: string | undefined;
+      if (threadChannel) {
+        const starter = await resolveDiscordThreadStarter({
+          channel: threadChannel,
+          client,
+          parentId: threadParentId,
+        });
+        if (starter?.text) {
+          const starterEnvelope = formatThreadStarterEnvelope({
+            provider: "Discord",
+            author: starter.author,
+            timestamp: starter.timestamp,
+            body: starter.text,
+          });
+          threadStarterBody = starterEnvelope;
+        }
+        const parentName = threadParentName ?? "parent";
+        threadLabel = threadName
+          ? `Discord thread #${normalizeDiscordSlug(parentName)} › ${threadName}`
+          : `Discord thread #${normalizeDiscordSlug(parentName)}`;
+        if (threadParentId) {
+          parentSessionKey = buildAgentSessionKey({
+            agentId: route.agentId,
+            provider: route.provider,
+            peer: { kind: "channel", id: threadParentId },
+          });
+        }
+      }
       const mediaPayload = buildDiscordMediaPayload(mediaList);
       const discordTo = `channel:${message.channelId}`;
+      const threadKeys = resolveThreadSessionKeys({
+        baseSessionKey,
+        threadId: threadChannel ? message.channelId : undefined,
+        parentSessionKey,
+        useSuffix: false,
+      });
       const ctxPayload = {
         Body: combinedBody,
         From: isDirectMessage
           ? `discord:${author.id}`
           : `group:${message.channelId}`,
         To: discordTo,
-        SessionKey: route.sessionKey,
+        SessionKey: threadKeys.sessionKey,
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName:
@@ -787,6 +919,9 @@ export function createDiscordMessageHandler(params: {
         Surface: "discord" as const,
         WasMentioned: wasMentioned,
         MessageSid: message.id,
+        ParentSessionKey: threadKeys.parentSessionKey,
+        ThreadStarterBody: threadStarterBody,
+        ThreadLabel: threadLabel,
         Timestamp: resolveTimestampMs(message.timestamp),
         ...mediaPayload,
         CommandAuthorized: commandAuthorized,

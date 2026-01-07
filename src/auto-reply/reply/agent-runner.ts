@@ -14,6 +14,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -32,6 +33,7 @@ import {
 import { extractReplyToTag } from "./reply-tags.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 
@@ -76,6 +78,7 @@ export async function runReplyAgent(params: {
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
+  typingMode: TypingMode;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -101,9 +104,15 @@ export async function runReplyAgent(params: {
     resolvedBlockStreamingBreak,
     sessionCtx,
     shouldInjectGroupIntro,
+    typingMode,
   } = params;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat,
+  });
 
   const shouldEmitToolResult = () => {
     if (!sessionKey || !storePath) {
@@ -173,6 +182,7 @@ export async function runReplyAgent(params: {
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
+    typingMode,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -252,23 +262,23 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    if (!isHeartbeat) {
-                      await typing.startTypingOnText(text);
-                    }
+                    await typingSignals.signalTextDelta(text);
                     await opts.onPartialReply?.({
                       text,
                       mediaUrls: payload.mediaUrls,
                     });
                   }
                 : undefined,
-            onReasoningStream: opts?.onReasoningStream
-              ? async (payload) => {
-                  await opts.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onReasoningStream:
+              typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
+                ? async (payload) => {
+                    await typingSignals.signalReasoningDelta();
+                    await opts?.onReasoningStream?.({
+                      text: payload.text,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  }
+                : undefined,
             onAgentEvent: (evt) => {
               if (evt.stream !== "compaction") return;
               const phase =
@@ -320,9 +330,7 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      if (!isHeartbeat) {
-                        await typing.startTypingOnText(cleaned);
-                      }
+                      await typingSignals.signalTextDelta(cleaned);
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -367,9 +375,7 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    if (!isHeartbeat) {
-                      await typing.startTypingOnText(text);
-                    }
+                    await typingSignals.signalTextDelta(text);
                     await opts.onToolResult?.({
                       text,
                       mediaUrls: payload.mediaUrls,
@@ -524,8 +530,8 @@ export async function runReplyAgent(params: {
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
     });
-    if (shouldSignalTyping && !isHeartbeat) {
-      await typing.startTypingLoop();
+    if (shouldSignalTyping) {
+      await typingSignals.signalRunStart();
     }
 
     if (sessionStore && sessionKey) {

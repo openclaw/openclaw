@@ -89,6 +89,15 @@ const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 
+const RetryConfigSchema = z
+  .object({
+    attempts: z.number().int().min(1).optional(),
+    minDelayMs: z.number().int().min(0).optional(),
+    maxDelayMs: z.number().int().min(0).optional(),
+    jitter: z.number().min(0).max(1).optional(),
+  })
+  .optional();
+
 const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
@@ -120,6 +129,14 @@ const SessionSchema = z
     heartbeatIdleMinutes: z.number().int().positive().optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
+    typingMode: z
+      .union([
+        z.literal("never"),
+        z.literal("instant"),
+        z.literal("thinking"),
+        z.literal("message"),
+      ])
+      .optional(),
     mainKey: z.string().optional(),
     sendPolicy: z
       .object({
@@ -513,6 +530,40 @@ export const ClawdbotSchema = z.object({
       skipBootstrap: z.boolean().optional(),
       userTimezone: z.string().optional(),
       contextTokens: z.number().int().positive().optional(),
+      contextPruning: z
+        .object({
+          mode: z
+            .union([
+              z.literal("off"),
+              z.literal("adaptive"),
+              z.literal("aggressive"),
+            ])
+            .optional(),
+          keepLastAssistants: z.number().int().nonnegative().optional(),
+          softTrimRatio: z.number().min(0).max(1).optional(),
+          hardClearRatio: z.number().min(0).max(1).optional(),
+          minPrunableToolChars: z.number().int().nonnegative().optional(),
+          tools: z
+            .object({
+              allow: z.array(z.string()).optional(),
+              deny: z.array(z.string()).optional(),
+            })
+            .optional(),
+          softTrim: z
+            .object({
+              maxChars: z.number().int().nonnegative().optional(),
+              headChars: z.number().int().nonnegative().optional(),
+              tailChars: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
+          hardClear: z
+            .object({
+              enabled: z.boolean().optional(),
+              placeholder: z.string().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
       tools: z
         .object({
           allow: z.array(z.string()).optional(),
@@ -552,6 +603,14 @@ export const ClawdbotSchema = z.object({
       timeoutSeconds: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
       typingIntervalSeconds: z.number().int().positive().optional(),
+      typingMode: z
+        .union([
+          z.literal("never"),
+          z.literal("instant"),
+          z.literal("thinking"),
+          z.literal("message"),
+        ])
+        .optional(),
       heartbeat: HeartbeatSchema,
       maxConcurrent: z.number().int().positive().optional(),
       subagents: z
@@ -721,6 +780,7 @@ export const ClawdbotSchema = z.object({
               /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
               authDir: z.string().optional(),
               dmPolicy: DmPolicySchema.optional().default("pairing"),
+              selfChatMode: z.boolean().optional(),
               allowFrom: z.array(z.string()).optional(),
               groupAllowFrom: z.array(z.string()).optional(),
               groupPolicy: GroupPolicySchema.optional().default("open"),
@@ -753,6 +813,7 @@ export const ClawdbotSchema = z.object({
         )
         .optional(),
       dmPolicy: DmPolicySchema.optional().default("pairing"),
+      selfChatMode: z.boolean().optional(),
       allowFrom: z.array(z.string()).optional(),
       groupAllowFrom: z.array(z.string()).optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
@@ -833,6 +894,7 @@ export const ClawdbotSchema = z.object({
         .optional()
         .default("partial"),
       mediaMaxMb: z.number().positive().optional(),
+      retry: RetryConfigSchema,
       proxy: z.string().optional(),
       webhookUrl: z.string().optional(),
       webhookSecret: z.string().optional(),
@@ -865,6 +927,7 @@ export const ClawdbotSchema = z.object({
       textChunkLimit: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
       historyLimit: z.number().int().min(0).optional(),
+      retry: RetryConfigSchema,
       actions: z
         .object({
           reactions: z.boolean().optional(),

@@ -7,7 +7,7 @@ read_when:
 
 # Sub-agents
 
-Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<id>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat provider.
+Sub-agents are background agent runs spawned from an existing agent run. They run in their own session (`agent:<agentId>:subagent:<uuid>`) and, when finished, **announce** their result back to the requester chat provider.
 
 Primary goals:
 - Parallelize “research / long task / slow tool” work without blocking the main run.
@@ -25,7 +25,7 @@ Tool params:
 - `task` (required)
 - `label?` (optional)
 - `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
-- `timeoutSeconds?` (optional; omit for long-running jobs; when set, Clawdbot waits up to N seconds and aborts the sub-agent if it is still running)
+- `runTimeoutSeconds?` (default `0`; when set, the sub-agent run is aborted after N seconds)
 - `cleanup?` (`delete|keep`, default `keep`)
 
 Auto-archive:
@@ -33,7 +33,7 @@ Auto-archive:
 - Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).
 - `cleanup: "delete"` archives immediately after announce (still keeps the transcript via rename).
 - Auto-archive is best-effort; pending timers are lost if the gateway restarts.
-- Timeouts do **not** auto-archive; they only stop the run. The session remains until auto-archive.
+- `runTimeoutSeconds` does **not** auto-archive; it only stops the run. The session remains until auto-archive.
 
 ## Announce
 
@@ -84,3 +84,4 @@ Sub-agents use a dedicated in-process queue lane:
 
 - Sub-agent announce is **best-effort**. If the gateway restarts, pending “announce back” work is lost.
 - Sub-agents still share the same gateway process resources; treat `maxConcurrent` as a safety valve.
+- `sessions_spawn` is always non-blocking: it returns `{ status: "accepted", runId, childSessionKey }` immediately.
