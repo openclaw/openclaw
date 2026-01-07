@@ -174,8 +174,12 @@ function removeDirIfEmpty(dir: string) {
   }
 }
 
-export function resetAutoMigrateLegacyAgentDirForTest() {
+export function resetAutoMigrateLegacyStateForTest() {
   autoMigrateChecked = false;
+}
+
+export function resetAutoMigrateLegacyAgentDirForTest() {
+  resetAutoMigrateLegacyStateForTest();
 }
 
 export async function detectLegacyStateMigrations(params: {
@@ -479,6 +483,21 @@ export async function autoMigrateLegacyAgentDir(params: {
   changes: string[];
   warnings: string[];
 }> {
+  return await autoMigrateLegacyState(params);
+}
+
+export async function autoMigrateLegacyState(params: {
+  cfg: ClawdbotConfig;
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  log?: MigrationLogger;
+  now?: () => number;
+}): Promise<{
+  migrated: boolean;
+  skipped: boolean;
+  changes: string[];
+  warnings: string[];
+}> {
   if (autoMigrateChecked) {
     return { migrated: false, skipped: true, changes: [], warnings: [] };
   }
@@ -494,25 +513,27 @@ export async function autoMigrateLegacyAgentDir(params: {
     env,
     homedir: params.homedir,
   });
-  if (!detected.agentDir.hasLegacy) {
+  if (!detected.sessions.hasLegacy && !detected.agentDir.hasLegacy) {
     return { migrated: false, skipped: false, changes: [], warnings: [] };
   }
 
-  const { changes, warnings } = await migrateLegacyAgentDir(
-    detected,
-    params.now ?? (() => Date.now()),
-  );
+  const now = params.now ?? (() => Date.now());
+  const sessions = await migrateLegacySessions(detected, now);
+  const agentDir = await migrateLegacyAgentDir(detected, now);
+  const changes = [...sessions.changes, ...agentDir.changes];
+  const warnings = [...sessions.warnings, ...agentDir.warnings];
+
   const logger = params.log ?? createSubsystemLogger("state-migrations");
   if (changes.length > 0) {
     logger.info(
-      `Auto-migrated legacy agent dir:\n${changes
+      `Auto-migrated legacy state:\n${changes
         .map((entry) => `- ${entry}`)
         .join("\n")}`,
     );
   }
   if (warnings.length > 0) {
     logger.warn(
-      `Legacy agent dir migration warnings:\n${warnings
+      `Legacy state migration warnings:\n${warnings
         .map((entry) => `- ${entry}`)
         .join("\n")}`,
     );

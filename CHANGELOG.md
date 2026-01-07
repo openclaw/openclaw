@@ -50,6 +50,8 @@
 - Configure: add OpenAI Codex (ChatGPT OAuth) auth choice (align with onboarding).
 - Doctor: suggest adding the workspace memory system when missing (opt-out via `--no-workspace-suggestions`).
 - Doctor: normalize default workspace path to `~/clawd` (avoid `~/clawdbot`).
+- Doctor: add `--yes` and `--non-interactive` for headless/automation runs (`--non-interactive` only applies safe migrations).
+- Gateway/CLI: auto-migrate legacy sessions + agent state layouts on startup (safe; WhatsApp auth still requires `clawdbot doctor`).
 - Workspace: only create `BOOTSTRAP.md` for brand-new workspaces (don’t recreate after deletion).
 - Build: fix duplicate protocol export, align Codex OAuth options, and add proper-lockfile typings.
 - Build: install Bun in the Dockerfile so `pnpm build` can run Bun scripts. Thanks @loukotal for PR #284.

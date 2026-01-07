@@ -54,7 +54,7 @@ import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
-import { autoMigrateLegacyAgentDir } from "../infra/state-migrations.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
   listSystemPresence,
@@ -389,7 +389,7 @@ export async function startGatewayServer(
   }
 
   const cfgAtStart = loadConfig();
-  await autoMigrateLegacyAgentDir({ cfg: cfgAtStart, log });
+  await autoMigrateLegacyState({ cfg: cfgAtStart, log });
   const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
   const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
   if (!bindHost) {

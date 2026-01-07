@@ -19,7 +19,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { danger, setVerbose } from "../globals.js";
-import { autoMigrateLegacyAgentDir } from "../infra/state-migrations.js";
+import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
 import { VERSION } from "../version.js";
@@ -132,7 +132,7 @@ export function buildProgram() {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     if (actionCommand.name() === "doctor") return;
     const cfg = loadConfig();
-    await autoMigrateLegacyAgentDir({ cfg });
+    await autoMigrateLegacyState({ cfg });
   });
   const examples = [
     [
@@ -307,10 +307,18 @@ export function buildProgram() {
       "Disable workspace memory system suggestions",
       false,
     )
+    .option("--yes", "Accept defaults without prompting", false)
+    .option(
+      "--non-interactive",
+      "Run without prompts (safe migrations only)",
+      false,
+    )
     .action(async (opts) => {
       try {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
+          yes: Boolean(opts.yes),
+          nonInteractive: Boolean(opts.nonInteractive),
         });
       } catch (err) {
         defaultRuntime.error(String(err));

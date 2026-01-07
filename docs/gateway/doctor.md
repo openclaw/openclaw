@@ -48,13 +48,27 @@ Doctor can migrate older on-disk layouts into the current structure:
   - to `~/.clawdbot/credentials/whatsapp/<accountId>/...` (default account id: `default`)
 
 These migrations are best-effort and idempotent; doctor will emit warnings when it leaves any legacy folders behind as backups.
-The Gateway/CLI also auto-migrates the legacy agent dir on startup so auth/models land in the per-agent path without a manual doctor run.
+The Gateway/CLI also auto-migrates the legacy sessions + agent dir on startup so history/auth/models land in the per-agent path without a manual doctor run. WhatsApp auth is intentionally only migrated via `clawdbot doctor`.
 
 ## Usage
 
 ```bash
 clawdbot doctor
 ```
+
+### Headless / automation
+
+```bash
+clawdbot doctor --yes
+```
+
+Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
+
+```bash
+clawdbot doctor --non-interactive
+```
+
+Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
 
 If you want to review changes before writing, open the config file first:
 
