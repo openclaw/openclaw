@@ -662,12 +662,8 @@ export function createDiscordMessageHandler(params: {
         return;
       }
 
-      const media = await resolveMedia(message, mediaMaxBytes);
-      const text =
-        message.content?.trim() ||
-        media?.placeholder ||
-        message.embeds?.[0]?.description ||
-        "";
+      const mediaList = await resolveMediaList(message, mediaMaxBytes);
+      const text = baseText;
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
         return;
@@ -741,6 +737,7 @@ export function createDiscordMessageHandler(params: {
         combinedBody = `[Replied message - for context]\n${replyContext}\n\n${combinedBody}`;
       }
 
+      const mediaPayload = buildDiscordMediaPayload(mediaList);
       const discordTo = `channel:${message.channelId}`;
       const ctxPayload = {
         Body: combinedBody,
@@ -766,9 +763,7 @@ export function createDiscordMessageHandler(params: {
         WasMentioned: wasMentioned,
         MessageSid: message.id,
         Timestamp: resolveTimestampMs(message.timestamp),
-        MediaPath: media?.path,
-        MediaType: media?.contentType,
-        MediaUrl: media?.path,
+        ...mediaPayload,
         CommandAuthorized: commandAuthorized,
         CommandSource: "text" as const,
         // Originating channel for reply routing.
@@ -1356,30 +1351,41 @@ async function resolveDiscordChannelInfo(
   }
 }
 
-async function resolveMedia(
+async function resolveMediaList(
   message: Message,
   maxBytes: number,
-): Promise<DiscordMediaInfo | null> {
-  const attachment = message.attachments?.[0];
-  if (!attachment) return null;
-  const res = await fetch(attachment.url);
-  if (!res.ok) {
-    throw new Error(
-      `Failed to download discord attachment: HTTP ${res.status}`,
-    );
+): Promise<DiscordMediaInfo[]> {
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) return [];
+  const out: DiscordMediaInfo[] = [];
+  for (const attachment of attachments) {
+    try {
+      const res = await fetch(attachment.url);
+      if (!res.ok) {
+        throw new Error(
+          `Failed to download discord attachment: HTTP ${res.status}`,
+        );
+      }
+      const buffer = Buffer.from(await res.arrayBuffer());
+      const mime = await detectMime({
+        buffer,
+        headerMime: attachment.content_type ?? res.headers.get("content-type"),
+        filePath: attachment.filename ?? attachment.url,
+      });
+      const saved = await saveMediaBuffer(buffer, mime, "inbound", maxBytes);
+      out.push({
+        path: saved.path,
+        contentType: saved.contentType,
+        placeholder: inferPlaceholder(attachment),
+      });
+    } catch (err) {
+      const id = attachment.id ?? attachment.url;
+      logVerbose(
+        `discord: failed to download attachment ${id}: ${String(err)}`,
+      );
+    }
   }
-  const buffer = Buffer.from(await res.arrayBuffer());
-  const mime = await detectMime({
-    buffer,
-    headerMime: attachment.content_type ?? res.headers.get("content-type"),
-    filePath: attachment.filename ?? attachment.url,
-  });
-  const saved = await saveMediaBuffer(buffer, mime, "inbound", maxBytes);
-  return {
-    path: saved.path,
-    contentType: saved.contentType,
-    placeholder: inferPlaceholder(attachment),
-  };
+  return out;
 }
 
 function inferPlaceholder(attachment: APIAttachment): string {
@@ -1390,18 +1396,62 @@ function inferPlaceholder(attachment: APIAttachment): string {
   return "<media:document>";
 }
 
+function isImageAttachment(attachment: APIAttachment): boolean {
+  const mime = attachment.content_type ?? "";
+  if (mime.startsWith("image/")) return true;
+  const name = attachment.filename?.toLowerCase() ?? "";
+  if (!name) return false;
+  return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/.test(name);
+}
+
+function buildDiscordAttachmentPlaceholder(
+  attachments?: APIAttachment[],
+): string {
+  if (!attachments || attachments.length === 0) return "";
+  const count = attachments.length;
+  const allImages = attachments.every(isImageAttachment);
+  const label = allImages ? "image" : "file";
+  const suffix = count === 1 ? label : `${label}s`;
+  const tag = allImages ? "<media:image>" : "<media:document>";
+  return `${tag} (${count} ${suffix})`;
+}
+
 function resolveDiscordMessageText(
   message: Message,
   fallbackText?: string,
 ): string {
-  const attachment = message.attachments?.[0];
   return (
     message.content?.trim() ||
-    (attachment ? inferPlaceholder(attachment) : "") ||
+    buildDiscordAttachmentPlaceholder(message.attachments) ||
     message.embeds?.[0]?.description ||
     fallbackText?.trim() ||
     ""
   );
+}
+
+export function buildDiscordMediaPayload(
+  mediaList: Array<{ path: string; contentType?: string }>,
+): {
+  MediaPath?: string;
+  MediaType?: string;
+  MediaUrl?: string;
+  MediaPaths?: string[];
+  MediaUrls?: string[];
+  MediaTypes?: string[];
+} {
+  const first = mediaList[0];
+  const mediaPaths = mediaList.map((media) => media.path);
+  const mediaTypes = mediaList
+    .map((media) => media.contentType)
+    .filter(Boolean) as string[];
+  return {
+    MediaPath: first?.path,
+    MediaType: first?.contentType,
+    MediaUrl: first?.path,
+    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
+    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
+  };
 }
 
 function resolveReplyContext(message: Message): string | null {

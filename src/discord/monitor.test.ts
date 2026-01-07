@@ -2,6 +2,7 @@ import type { Guild } from "@buape/carbon";
 import { describe, expect, it } from "vitest";
 import {
   allowListMatches,
+  buildDiscordMediaPayload,
   type DiscordGuildEntryResolved,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -344,5 +345,28 @@ describe("discord reaction notification gating", () => {
         allowlist: ["123", "other"],
       }),
     ).toBe(true);
+  });
+});
+
+describe("discord media payload", () => {
+  it("preserves attachment order for MediaPaths/MediaUrls", () => {
+    const payload = buildDiscordMediaPayload([
+      { path: "/tmp/a.png", contentType: "image/png" },
+      { path: "/tmp/b.png", contentType: "image/png" },
+      { path: "/tmp/c.png", contentType: "image/png" },
+    ]);
+    expect(payload.MediaPath).toBe("/tmp/a.png");
+    expect(payload.MediaUrl).toBe("/tmp/a.png");
+    expect(payload.MediaType).toBe("image/png");
+    expect(payload.MediaPaths).toEqual([
+      "/tmp/a.png",
+      "/tmp/b.png",
+      "/tmp/c.png",
+    ]);
+    expect(payload.MediaUrls).toEqual([
+      "/tmp/a.png",
+      "/tmp/b.png",
+      "/tmp/c.png",
+    ]);
   });
 });
