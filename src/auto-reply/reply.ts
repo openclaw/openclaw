@@ -31,7 +31,10 @@ import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
-import { shouldHandleTextCommands } from "./commands-registry.js";
+import {
+  listChatCommands,
+  shouldHandleTextCommands,
+} from "./commands-registry.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
@@ -312,9 +315,15 @@ export async function getReplyFromConfig(
     rawDrop: undefined,
     hasQueueOptions: false,
   });
+  const reservedCommands = new Set(
+    listChatCommands().flatMap((cmd) =>
+      cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
+    ),
+  );
   const configuredAliases = Object.values(cfg.agent?.models ?? {})
     .map((entry) => entry.alias)
-    .filter((alias): alias is string => Boolean(alias));
+    .filter((alias): alias is string => Boolean(alias))
+    .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
   let parsedDirectives = parseInlineDirectives(rawBody, {
     modelAliases: configuredAliases,
   });
