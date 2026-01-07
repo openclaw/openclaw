@@ -28,25 +28,29 @@ import {
   readStringParam,
 } from "./common.js";
 
+const BROWSER_ACT_KINDS = [
+  "click",
+  "type",
+  "press",
+  "hover",
+  "drag",
+  "select",
+  "fill",
+  "resize",
+  "wait",
+  "evaluate",
+  "close",
+] as const;
+
+type BrowserActKind = (typeof BROWSER_ACT_KINDS)[number];
+
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
 // The discriminator (kind) determines which properties are relevant; runtime validates.
 const BrowserActSchema = Type.Object({
-  kind: Type.Unsafe<string>({
+  kind: Type.Unsafe<BrowserActKind>({
     type: "string",
-    enum: [
-      "click",
-      "type",
-      "press",
-      "hover",
-      "drag",
-      "select",
-      "fill",
-      "resize",
-      "wait",
-      "evaluate",
-      "close",
-    ],
+    enum: [...BROWSER_ACT_KINDS],
   }),
   // Common fields
   targetId: Type.Optional(Type.String()),
@@ -67,7 +71,9 @@ const BrowserActSchema = Type.Object({
   // select
   values: Type.Optional(Type.Array(Type.String())),
   // fill - use permissive array of objects
-  fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
+  fields: Type.Optional(
+    Type.Array(Type.Object({}, { additionalProperties: true })),
+  ),
   // resize
   width: Type.Optional(Type.Number()),
   height: Type.Optional(Type.Number()),
