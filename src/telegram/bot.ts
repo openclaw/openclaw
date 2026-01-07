@@ -25,7 +25,7 @@ import {
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ReplyToMode } from "../config/config.js";
+import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveProviderGroupPolicy,
@@ -112,7 +112,32 @@ export type TelegramBotOptions = {
   mediaMaxMb?: number;
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
+  config?: ClawdbotConfig;
 };
+
+export function getTelegramSequentialKey(ctx: {
+  chat?: { id?: number };
+  message?: TelegramMessage;
+  update?: {
+    message?: TelegramMessage;
+    edited_message?: TelegramMessage;
+    callback_query?: { message?: TelegramMessage };
+  };
+}): string {
+  const msg =
+    ctx.message ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.update?.callback_query?.message;
+  const chatId = msg?.chat?.id ?? ctx.chat?.id;
+  const threadId = msg?.message_thread_id;
+  if (typeof chatId === "number") {
+    return threadId != null
+      ? `telegram:${chatId}:topic:${threadId}`
+      : `telegram:${chatId}`;
+  }
+  return "telegram:unknown";
+}
 
 export function createTelegramBot(opts: TelegramBotOptions) {
   const runtime: RuntimeEnv = opts.runtime ?? {
@@ -128,34 +153,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const bot = new Bot(opts.token, { client });
   bot.api.config.use(apiThrottler());
-  const resolveSequentialKey = (ctx: {
-    chat?: { id?: number };
-    message?: TelegramMessage;
-    update?: {
-      message?: TelegramMessage;
-      edited_message?: TelegramMessage;
-      callback_query?: { message?: TelegramMessage };
-    };
-  }) => {
-    const msg =
-      ctx.message ??
-      ctx.update?.message ??
-      ctx.update?.edited_message ??
-      ctx.update?.callback_query?.message;
-    const chatId = msg?.chat?.id ?? ctx.chat?.id;
-    const threadId = msg?.message_thread_id;
-    if (typeof chatId === "number") {
-      return threadId != null
-        ? `telegram:${chatId}:topic:${threadId}`
-        : `telegram:${chatId}`;
-    }
-    return "telegram:unknown";
-  };
-  bot.use(sequentialize(resolveSequentialKey));
+  bot.use(sequentialize(getTelegramSequentialKey));
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
 
-  const cfg = loadConfig();
+  const cfg = opts.config ?? loadConfig();
   const textLimit = resolveTextChunkLimit(cfg, "telegram");
   const dmPolicy = cfg.telegram?.dmPolicy ?? "pairing";
   const allowFrom = opts.allowFrom ?? cfg.telegram?.allowFrom;

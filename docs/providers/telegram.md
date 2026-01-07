@@ -37,6 +37,7 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 - Inbound messages are normalized into the shared provider envelope with reply context and media placeholders.
 - Group replies require a mention by default (native @mention or `routing.groupChat.mentionPatterns`).
 - Replies always route back to the same Telegram chat.
+- Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agent.maxConcurrent`.
 
 ## Group activation modes
 
