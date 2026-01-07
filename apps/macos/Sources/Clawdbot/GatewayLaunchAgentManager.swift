@@ -59,19 +59,22 @@ enum GatewayLaunchAgentManager {
                 return "Embedded gateway missing in bundle; rebuild via scripts/package-mac-app.sh"
             }
 
-            // Check if service is already running - if so, skip bootout to avoid killing it
-            let alreadyRunning = await self.status()
-            if alreadyRunning {
-                self.logger.info("launchd service already running, skipping bootout")
-                // Still update plist in case config changed, but don't restart
-                self.writePlist(bundlePath: bundlePath, port: port)
-                // Ensure service is marked as enabled for auto-start on login
-                _ = await self.runLaunchctl(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+            let desiredBind = self.preferredGatewayBind() ?? "loopback"
+            self.logger.info("launchd enable requested port=\(port) bind=\(desiredBind)")
+            self.writePlist(bundlePath: bundlePath, port: port)
+
+            // If launchd already loaded the job (common on login), avoid `bootout` unless we must
+            // change the config. `bootout` can kill a just-started gateway and cause attach loops.
+            if let snapshot = await self.gatewayJobSnapshot(),
+               snapshot.matches(port: port, bind: desiredBind)
+            {
+                self.logger.info("launchd job already loaded with desired config; skipping bootout")
+                await self.ensureEnabled()
+                _ = await self.runLaunchctl(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
                 return nil
             }
 
-            self.logger.info("launchd enable requested port=\(port)")
-            self.writePlist(bundlePath: bundlePath, port: port)
+            await self.ensureEnabled()
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
             let bootstrap = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             if bootstrap.status != 0 {
@@ -81,11 +84,7 @@ enum GatewayLaunchAgentManager {
                     ? "Failed to bootstrap gateway launchd job"
                     : bootstrap.output.trimmingCharacters(in: .whitespacesAndNewlines)
             }
-            // Ensure service is marked as enabled for auto-start on login
-            _ = await self.runLaunchctl(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
-            // Note: removed redundant `kickstart -k` that caused race condition.
-            // bootstrap already starts the job; kickstart -k would kill it immediately
-            // and with KeepAlive=true, cause a restart loop with port conflicts.
+            await self.ensureEnabled()
             return nil
         }
 
@@ -225,6 +224,84 @@ enum GatewayLaunchAgentManager {
     private struct LaunchctlResult {
         let status: Int32
         let output: String
+    }
+
+    struct LaunchdJobSnapshot: Equatable {
+        let pid: Int?
+        let port: Int?
+        let bind: String?
+
+        func matches(port: Int, bind: String) -> Bool {
+            guard self.port == port else { return false }
+            if let bindValue = self.bind {
+                return bindValue == bind
+            }
+            return true
+        }
+    }
+
+    static func parseLaunchctlPrintSnapshot(_ output: String) -> LaunchdJobSnapshot {
+        let pid = self.extractIntValue(output: output, key: "pid")
+        let port = self.extractFlagIntValue(output: output, flag: "--port")
+        let bind = self.extractFlagStringValue(output: output, flag: "--bind")?.lowercased()
+        return LaunchdJobSnapshot(pid: pid, port: port, bind: bind)
+    }
+
+    private static func gatewayJobSnapshot() async -> LaunchdJobSnapshot? {
+        let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        guard result.status == 0 else { return nil }
+        return self.parseLaunchctlPrintSnapshot(result.output)
+    }
+
+    private static func ensureEnabled() async {
+        let result = await self.runLaunchctl(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        guard result.status != 0 else { return }
+        let msg = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if msg.isEmpty {
+            self.logger.warning("launchd enable failed")
+        } else {
+            self.logger.warning("launchd enable failed: \(msg)")
+        }
+    }
+
+    private static func extractIntValue(output: String, key: String) -> Int? {
+        // launchctl print commonly emits `pid = 123`
+        guard let range = output.range(of: "\(key) =") else { return nil }
+        var idx = range.upperBound
+        while idx < output.endIndex, output[idx].isWhitespace { idx = output.index(after: idx) }
+        var end = idx
+        while end < output.endIndex, output[end].isNumber { end = output.index(after: end) }
+        guard end > idx else { return nil }
+        return Int(output[idx..<end])
+    }
+
+    private static func extractFlagIntValue(output: String, flag: String) -> Int? {
+        guard let raw = self.extractFlagStringValue(output: output, flag: flag) else { return nil }
+        return Int(raw)
+    }
+
+    private static func extractFlagStringValue(output: String, flag: String) -> String? {
+        guard let range = output.range(of: flag) else { return nil }
+        var idx = range.upperBound
+        while idx < output.endIndex {
+            let ch = output[idx]
+            if ch.isWhitespace || ch == "," || ch == "(" || ch == ")" || ch == "=" || ch == "\"" || ch == "'" {
+                idx = output.index(after: idx)
+                continue
+            }
+            break
+        }
+        guard idx < output.endIndex else { return nil }
+        var end = idx
+        while end < output.endIndex {
+            let ch = output[end]
+            if ch.isWhitespace || ch == "," || ch == "(" || ch == ")" || ch == "\"" || ch == "'" || ch == "\n" || ch == "\r" {
+                break
+            }
+            end = output.index(after: end)
+        }
+        let token = output[idx..<end].trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : String(token)
     }
 
     @discardableResult
