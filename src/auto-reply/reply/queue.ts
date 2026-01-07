@@ -35,6 +35,10 @@ export type FollowupRun = {
    * The chat/channel/user ID where the reply should be sent.
    */
   originatingTo?: string;
+  /** Provider account id (multi-account). */
+  originatingAccountId?: string;
+  /** Telegram forum topic thread id. */
+  originatingThreadId?: number;
   run: {
     agentId: string;
     agentDir: string;
@@ -396,23 +400,34 @@ function buildCollectPrompt(items: FollowupRun[], summary?: string): string {
  * Also returns true for a mix of routable and non-routable channels.
  */
 function hasCrossProviderItems(items: FollowupRun[]): boolean {
-  const routableChannels = new Set<string>();
-  let hasNonRoutable = false;
+  const keys = new Set<string>();
+  let hasUnkeyed = false;
 
   for (const item of items) {
     const channel = item.originatingChannel;
-    if (isRoutableChannel(channel)) {
-      routableChannels.add(channel);
-    } else if (channel) {
-      // Has a channel but it's not routable (whatsapp, webchat).
-      hasNonRoutable = true;
+    const to = item.originatingTo;
+    const accountId = item.originatingAccountId;
+    const threadId = item.originatingThreadId;
+    if (!channel && !to && !accountId && typeof threadId !== "number") {
+      hasUnkeyed = true;
+      continue;
     }
+    if (!isRoutableChannel(channel) || !to) {
+      return true;
+    }
+    keys.add(
+      [
+        channel,
+        to,
+        accountId || "",
+        typeof threadId === "number" ? String(threadId) : "",
+      ].join("|"),
+    );
   }
 
-  // Cross-provider if: multiple routable channels, or mix of routable + non-routable.
-  return (
-    routableChannels.size > 1 || (routableChannels.size > 0 && hasNonRoutable)
-  );
+  if (keys.size === 0) return false;
+  if (hasUnkeyed) return true;
+  return keys.size > 1;
 }
 export function scheduleFollowupDrain(
   key: string,
@@ -423,14 +438,23 @@ export function scheduleFollowupDrain(
   queue.draining = true;
   void (async () => {
     try {
+      let forceIndividualCollect = false;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
         if (queue.mode === "collect") {
+          if (forceIndividualCollect) {
+            const next = queue.items.shift();
+            if (!next) break;
+            await runFollowup(next);
+            continue;
+          }
+
           // Check if messages span multiple providers.
           // If so, process individually to preserve per-message routing.
           const isCrossProvider = hasCrossProviderItems(queue.items);
 
           if (isCrossProvider) {
+            forceIndividualCollect = true;
             // Process one at a time to preserve per-message routing info.
             const next = queue.items.shift();
             if (!next) break;
@@ -451,6 +475,12 @@ export function scheduleFollowupDrain(
           const originatingTo = items.find(
             (i) => i.originatingTo,
           )?.originatingTo;
+          const originatingAccountId = items.find(
+            (i) => i.originatingAccountId,
+          )?.originatingAccountId;
+          const originatingThreadId = items.find(
+            (i) => typeof i.originatingThreadId === "number",
+          )?.originatingThreadId;
 
           const prompt = buildCollectPrompt(items, summary);
           await runFollowup({
@@ -459,6 +489,8 @@ export function scheduleFollowupDrain(
             enqueuedAt: Date.now(),
             originatingChannel,
             originatingTo,
+            originatingAccountId,
+            originatingThreadId,
           });
           continue;
         }

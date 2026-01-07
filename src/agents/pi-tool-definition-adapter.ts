@@ -38,7 +38,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
               : "";
           if (name === "AbortError") throw err;
           const message =
-            err instanceof Error ? err.stack ?? err.message : String(err);
+            err instanceof Error ? (err.stack ?? err.message) : String(err);
           logError(`[tools] ${tool.name} failed: ${message}`);
           return jsonResult({
             status: "error",
