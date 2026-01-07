@@ -1407,6 +1407,61 @@ describe("createTelegramBot", () => {
     });
   });
 
+  it("applies topic skill filters and system prompts", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      telegram: {
+        groups: {
+          "-1001234567890": {
+            requireMention: false,
+            systemPrompt: "Group prompt",
+            skills: ["group-skill"],
+            topics: {
+              "99": {
+                skills: [],
+                systemPrompt: "Topic prompt",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 12345, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 42,
+        message_thread_id: 99,
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.GroupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
+    const opts = replySpy.mock.calls[0][1];
+    expect(opts?.skillFilter).toEqual([]);
+  });
+
   it("passes message_thread_id to topic replies", async () => {
     onSpy.mockReset();
     sendMessageSpy.mockReset();

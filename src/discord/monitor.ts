@@ -94,12 +94,28 @@ export type DiscordGuildEntryResolved = {
   requireMention?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
   users?: Array<string | number>;
-  channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+  channels?: Record<
+    string,
+    {
+      allow?: boolean;
+      requireMention?: boolean;
+      skills?: string[];
+      enabled?: boolean;
+      autoReply?: boolean;
+      users?: Array<string | number>;
+      systemPrompt?: string;
+    }
+  >;
 };
 
 export type DiscordChannelConfigResolved = {
   allowed: boolean;
   requireMention?: boolean;
+  skills?: string[];
+  enabled?: boolean;
+  autoReply?: boolean;
+  users?: Array<string | number>;
+  systemPrompt?: string;
 };
 
 export type DiscordMessageEvent = Parameters<
@@ -518,6 +534,12 @@ export function createDiscordMessageHandler(params: {
             channelSlug,
           })
         : null;
+      if (isGuildMessage && channelConfig?.enabled === false) {
+        logVerbose(
+          `Blocked discord channel ${message.channelId} (channel disabled)`,
+        );
+        return;
+      }
 
       const groupDmAllowed =
         isGroupDm &&
@@ -579,8 +601,14 @@ export function createDiscordMessageHandler(params: {
         guildHistories.set(message.channelId, history);
       }
 
-      const resolvedRequireMention =
+      const baseRequireMention =
         channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
+      const shouldRequireMention =
+        channelConfig?.autoReply === true
+          ? false
+          : channelConfig?.autoReply === false
+            ? true
+            : baseRequireMention;
       const hasAnyMention = Boolean(
         !isDirectMessage &&
           (message.mentionedEveryone ||
@@ -602,13 +630,13 @@ export function createDiscordMessageHandler(params: {
       const shouldBypassMention =
         allowTextCommands &&
         isGuildMessage &&
-        resolvedRequireMention &&
+        shouldRequireMention &&
         !wasMentioned &&
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(baseText);
       const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
-      if (isGuildMessage && resolvedRequireMention) {
+      if (isGuildMessage && shouldRequireMention) {
         if (botId && !wasMentioned && !shouldBypassMention) {
           logVerbose(
             `discord: drop guild message (mention required, botId=${botId})`,
@@ -625,22 +653,17 @@ export function createDiscordMessageHandler(params: {
       }
 
       if (isGuildMessage) {
-        const userAllow = guildInfo?.users;
-        if (Array.isArray(userAllow) && userAllow.length > 0) {
-          const users = normalizeDiscordAllowList(userAllow, [
-            "discord:",
-            "user:",
-          ]);
-          const userOk =
-            !users ||
-            allowListMatches(users, {
-              id: author.id,
-              name: author.username,
-              tag: formatDiscordUserTag(author),
-            });
+        const channelUsers = channelConfig?.users ?? guildInfo?.users;
+        if (Array.isArray(channelUsers) && channelUsers.length > 0) {
+          const userOk = resolveDiscordUserAllowed({
+            allowList: channelUsers,
+            userId: author.id,
+            userName: author.username,
+            userTag: formatDiscordUserTag(author),
+          });
           if (!userOk) {
             logVerbose(
-              `Blocked discord guild sender ${author.id} (not in guild users allowlist)`,
+              `Blocked discord guild sender ${author.id} (not in channel users allowlist)`,
             );
             return;
           }
@@ -676,7 +699,7 @@ export function createDiscordMessageHandler(params: {
         if (ackReactionScope === "group-all") return isGroupChat;
         if (ackReactionScope === "group-mentions") {
           if (!isGuildMessage) return false;
-          if (!resolvedRequireMention) return false;
+          if (!shouldRequireMention) return false;
           if (!canDetectMention) return false;
           return wasMentioned || shouldBypassMention;
         }
@@ -702,6 +725,15 @@ export function createDiscordMessageHandler(params: {
       const groupRoom =
         isGuildMessage && channelSlug ? `#${channelSlug}` : undefined;
       const groupSubject = isDirectMessage ? undefined : groupRoom;
+      const channelDescription = channelInfo?.topic?.trim();
+      const systemPromptParts = [
+        channelDescription ? `Channel topic: ${channelDescription}` : null,
+        channelConfig?.systemPrompt?.trim() || null,
+      ].filter((entry): entry is string => Boolean(entry));
+      const groupSystemPrompt =
+        systemPromptParts.length > 0
+          ? systemPromptParts.join("\n\n")
+          : undefined;
       let combinedBody = formatAgentEnvelope({
         provider: "Discord",
         from: fromLabel,
@@ -755,6 +787,7 @@ export function createDiscordMessageHandler(params: {
         SenderTag: formatDiscordUserTag(author),
         GroupSubject: groupSubject,
         GroupRoom: groupRoom,
+        GroupSystemPrompt: isGuildMessage ? groupSystemPrompt : undefined,
         GroupSpace: isGuildMessage
           ? (guildInfo?.id ?? guildSlug) || undefined
           : undefined,
@@ -825,7 +858,7 @@ export function createDiscordMessageHandler(params: {
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions,
+        replyOptions: { ...replyOptions, skillFilter: channelConfig?.skills },
       });
       markDispatchIdle();
       if (!queuedFinal) {
@@ -1053,13 +1086,27 @@ function createDiscordNativeCommand(params: {
         guild: interaction.guild ?? undefined,
         guildEntries: cfg.discord?.guilds,
       });
-      if (useAccessGroups && interaction.guild) {
-        const channelConfig = resolveDiscordChannelConfig({
-          guildInfo,
-          channelId: channel?.id ?? "",
-          channelName,
-          channelSlug,
+      const channelConfig = interaction.guild
+        ? resolveDiscordChannelConfig({
+            guildInfo,
+            channelId: channel?.id ?? "",
+            channelName,
+            channelSlug,
+          })
+        : null;
+      if (channelConfig?.enabled === false) {
+        await interaction.reply({
+          content: "This channel is disabled.",
         });
+        return;
+      }
+      if (interaction.guild && channelConfig?.allowed === false) {
+        await interaction.reply({
+          content: "This channel is not allowed.",
+        });
+        return;
+      }
+      if (useAccessGroups && interaction.guild) {
         const channelAllowlistConfigured =
           Boolean(guildInfo?.channels) &&
           Object.keys(guildInfo?.channels ?? {}).length > 0;
@@ -1138,23 +1185,21 @@ function createDiscordNativeCommand(params: {
           commandAuthorized = true;
         }
       }
-      if (guildInfo?.users && !isDirectMessage) {
-        const allowList = normalizeDiscordAllowList(guildInfo.users, [
-          "discord:",
-          "user:",
-        ]);
-        if (
-          allowList &&
-          !allowListMatches(allowList, {
-            id: user.id,
-            name: user.username,
-            tag: formatDiscordUserTag(user),
-          })
-        ) {
-          await interaction.reply({
-            content: "You are not authorized to use this command.",
+      if (!isDirectMessage) {
+        const channelUsers = channelConfig?.users ?? guildInfo?.users;
+        if (Array.isArray(channelUsers) && channelUsers.length > 0) {
+          const userOk = resolveDiscordUserAllowed({
+            allowList: channelUsers,
+            userId: user.id,
+            userName: user.username,
+            userTag: formatDiscordUserTag(user),
           });
-          return;
+          if (!userOk) {
+            await interaction.reply({
+              content: "You are not authorized to use this command.",
+            });
+            return;
+          }
         }
       }
       if (isGroupDm && cfg.discord?.dm?.groupEnabled === false) {
@@ -1183,6 +1228,24 @@ function createDiscordNativeCommand(params: {
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         GroupSubject: isGuild ? interaction.guild?.name : undefined,
+        GroupSystemPrompt: isGuild
+          ? (() => {
+              const channelTopic =
+                channel && "topic" in channel
+                  ? (channel.topic ?? undefined)
+                  : undefined;
+              const channelDescription = channelTopic?.trim();
+              const systemPromptParts = [
+                channelDescription
+                  ? `Channel topic: ${channelDescription}`
+                  : null,
+                channelConfig?.systemPrompt?.trim() || null,
+              ].filter((entry): entry is string => Boolean(entry));
+              return systemPromptParts.length > 0
+                ? systemPromptParts.join("\n\n")
+                : undefined;
+            })()
+          : undefined,
         SenderName: user.globalName ?? user.username,
         SenderId: user.id,
         SenderUsername: user.username,
@@ -1213,7 +1276,11 @@ function createDiscordNativeCommand(params: {
         },
       });
 
-      const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);
+      const replyResult = await getReplyFromConfig(
+        ctxPayload,
+        { skillFilter: channelConfig?.skills },
+        cfg,
+      );
       const replies = replyResult
         ? Array.isArray(replyResult)
           ? replyResult
@@ -1339,12 +1406,13 @@ async function deliverDiscordReply(params: {
 async function resolveDiscordChannelInfo(
   client: Client,
   channelId: string,
-): Promise<{ type: ChannelType; name?: string } | null> {
+): Promise<{ type: ChannelType; name?: string; topic?: string } | null> {
   try {
     const channel = await client.fetchChannel(channelId);
     if (!channel) return null;
     const name = "name" in channel ? (channel.name ?? undefined) : undefined;
-    return { type: channel.type, name };
+    const topic = "topic" in channel ? (channel.topic ?? undefined) : undefined;
+    return { type: channel.type, name, topic };
   } catch (err) {
     logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
     return null;
@@ -1671,6 +1739,24 @@ export function allowListMatches(
   return false;
 }
 
+function resolveDiscordUserAllowed(params: {
+  allowList?: Array<string | number>;
+  userId: string;
+  userName?: string;
+  userTag?: string;
+}) {
+  const allowList = normalizeDiscordAllowList(params.allowList, [
+    "discord:",
+    "user:",
+  ]);
+  if (!allowList) return true;
+  return allowListMatches(allowList, {
+    id: params.userId,
+    name: params.userName,
+    tag: params.userTag,
+  });
+}
+
 export function resolveDiscordCommandAuthorized(params: {
   isDirectMessage: boolean;
   allowFrom?: Array<string | number>;
@@ -1722,12 +1808,22 @@ export function resolveDiscordChannelConfig(params: {
     return {
       allowed: byId.allow !== false,
       requireMention: byId.requireMention,
+      skills: byId.skills,
+      enabled: byId.enabled,
+      autoReply: byId.autoReply,
+      users: byId.users,
+      systemPrompt: byId.systemPrompt,
     };
   if (channelSlug && channels[channelSlug]) {
     const entry = channels[channelSlug];
     return {
       allowed: entry.allow !== false,
       requireMention: entry.requireMention,
+      skills: entry.skills,
+      enabled: entry.enabled,
+      autoReply: entry.autoReply,
+      users: entry.users,
+      systemPrompt: entry.systemPrompt,
     };
   }
   if (channelName && channels[channelName]) {
@@ -1735,6 +1831,11 @@ export function resolveDiscordChannelConfig(params: {
     return {
       allowed: entry.allow !== false,
       requireMention: entry.requireMention,
+      skills: entry.skills,
+      enabled: entry.enabled,
+      autoReply: entry.autoReply,
+      users: entry.users,
+      systemPrompt: entry.systemPrompt,
     };
   }
   return { allowed: false };

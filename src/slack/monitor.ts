@@ -159,6 +159,10 @@ type SlackThreadBroadcastEvent = {
 type SlackChannelConfigResolved = {
   allowed: boolean;
   requireMention: boolean;
+  autoReply?: boolean;
+  users?: Array<string | number>;
+  skills?: string[];
+  systemPrompt?: string;
 };
 
 function normalizeSlackSlug(raw?: string) {
@@ -175,6 +179,13 @@ function normalizeAllowList(list?: Array<string | number>) {
 
 function normalizeAllowListLower(list?: Array<string | number>) {
   return normalizeAllowList(list).map((entry) => entry.toLowerCase());
+}
+
+function firstDefined<T>(...values: Array<T | undefined>) {
+  for (const value of values) {
+    if (typeof value !== "undefined") return value;
+  }
+  return undefined;
 }
 
 function allowListMatches(params: {
@@ -197,6 +208,20 @@ function allowListMatches(params: {
     slug,
   ].filter(Boolean) as string[];
   return candidates.some((value) => allowList.includes(value));
+}
+
+function resolveSlackUserAllowed(params: {
+  allowList?: Array<string | number>;
+  userId?: string;
+  userName?: string;
+}) {
+  const allowList = normalizeAllowListLower(params.allowList);
+  if (allowList.length === 0) return true;
+  return allowListMatches({
+    allowList,
+    id: params.userId,
+    name: params.userName,
+  });
 }
 
 function resolveSlackSlashCommandConfig(
@@ -253,7 +278,18 @@ function resolveSlackChannelLabel(params: {
 function resolveSlackChannelConfig(params: {
   channelId: string;
   channelName?: string;
-  channels?: Record<string, { allow?: boolean; requireMention?: boolean }>;
+  channels?: Record<
+    string,
+    {
+      enabled?: boolean;
+      allow?: boolean;
+      requireMention?: boolean;
+      autoReply?: boolean;
+      users?: Array<string | number>;
+      skills?: string[];
+      systemPrompt?: string;
+    }
+  >;
 }): SlackChannelConfigResolved | null {
   const { channelId, channelName, channels } = params;
   const entries = channels ?? {};
@@ -267,7 +303,17 @@ function resolveSlackChannelConfig(params: {
     normalizedName,
   ].filter(Boolean);
 
-  let matched: { allow?: boolean; requireMention?: boolean } | undefined;
+  let matched:
+    | {
+        enabled?: boolean;
+        allow?: boolean;
+        requireMention?: boolean;
+        autoReply?: boolean;
+        users?: Array<string | number>;
+        skills?: string[];
+        systemPrompt?: string;
+      }
+    | undefined;
   for (const candidate of candidates) {
     if (candidate && entries[candidate]) {
       matched = entries[candidate];
@@ -284,10 +330,25 @@ function resolveSlackChannelConfig(params: {
   }
 
   const resolved = matched ?? fallback ?? {};
-  const allowed = resolved.allow ?? true;
+  const allowed =
+    firstDefined(
+      resolved.enabled,
+      resolved.allow,
+      fallback?.enabled,
+      fallback?.allow,
+      true,
+    ) ?? true;
   const requireMention =
-    resolved.requireMention ?? fallback?.requireMention ?? true;
-  return { allowed, requireMention };
+    firstDefined(resolved.requireMention, fallback?.requireMention, true) ??
+    true;
+  const autoReply = firstDefined(resolved.autoReply, fallback?.autoReply);
+  const users = firstDefined(resolved.users, fallback?.users);
+  const skills = firstDefined(resolved.skills, fallback?.skills);
+  const systemPrompt = firstDefined(
+    resolved.systemPrompt,
+    fallback?.systemPrompt,
+  );
+  return { allowed, requireMention, autoReply, users, skills, systemPrompt };
 }
 
 async function resolveSlackMedia(params: {
@@ -410,7 +471,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const logger = getChildLogger({ module: "slack-auto-reply" });
   const channelCache = new Map<
     string,
-    { name?: string; type?: SlackMessageEvent["channel_type"] }
+    {
+      name?: string;
+      type?: SlackMessageEvent["channel_type"];
+      topic?: string;
+      purpose?: string;
+    }
   >();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = new Map<string, number>();
@@ -469,7 +535,15 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             : channel?.is_group
               ? "group"
               : undefined;
-      const entry = { name, type };
+      const topic =
+        channel && "topic" in channel
+          ? (channel.topic?.value ?? undefined)
+          : undefined;
+      const purpose =
+        channel && "purpose" in channel
+          ? (channel.purpose?.value ?? undefined)
+          : undefined;
+      const entry = { name, type, topic, purpose };
       channelCache.set(channelId, entry);
       return entry;
     } catch {
@@ -606,6 +680,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     let channelInfo: {
       name?: string;
       type?: SlackMessageEvent["channel_type"];
+      topic?: string;
+      purpose?: string;
     } = {};
     let channelType = message.channel_type;
     if (!channelType || channelType !== "im") {
@@ -706,23 +782,44 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           matchesMentionPatterns(message.text ?? "", mentionRegexes)));
     const sender = await resolveUserName(message.user);
     const senderName = sender?.name ?? message.user;
+    const channelUserAuthorized = isRoom
+      ? resolveSlackUserAllowed({
+          allowList: channelConfig?.users,
+          userId: message.user,
+          userName: senderName,
+        })
+      : true;
+    if (isRoom && !channelUserAuthorized) {
+      logVerbose(
+        `Blocked unauthorized slack sender ${message.user} (not in channel users)`,
+      );
+      return;
+    }
     const allowList = effectiveAllowFromLower;
     const commandAuthorized =
-      allowList.length === 0 ||
-      allowListMatches({
-        allowList,
-        id: message.user,
-        name: senderName,
-      });
+      (allowList.length === 0 ||
+        allowListMatches({
+          allowList,
+          id: message.user,
+          name: senderName,
+        })) &&
+      channelUserAuthorized;
     const hasAnyMention = /<@[^>]+>/.test(message.text ?? "");
     const allowTextCommands = shouldHandleTextCommands({
       cfg,
       surface: "slack",
     });
+    const shouldRequireMention = isRoom
+      ? channelConfig?.autoReply === true
+        ? false
+        : channelConfig?.autoReply === false
+          ? true
+          : (channelConfig?.requireMention ?? true)
+      : false;
     const shouldBypassMention =
       allowTextCommands &&
       isRoom &&
-      channelConfig?.requireMention &&
+      shouldRequireMention &&
       !wasMentioned &&
       !hasAnyMention &&
       commandAuthorized &&
@@ -730,7 +827,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const canDetectMention = Boolean(botUserId) || mentionRegexes.length > 0;
     if (
       isRoom &&
-      channelConfig?.requireMention &&
+      shouldRequireMention &&
       canDetectMention &&
       !wasMentioned &&
       !shouldBypassMention
@@ -757,7 +854,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       if (ackReactionScope === "group-all") return isGroupChat;
       if (ackReactionScope === "group-mentions") {
         if (!isRoom) return false;
-        if (!channelConfig?.requireMention) return false;
+        if (!shouldRequireMention) return false;
         if (!canDetectMention) return false;
         return wasMentioned || shouldBypassMention;
       }
@@ -812,6 +909,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const slackTo = isDirectMessage
       ? `user:${message.user}`
       : `channel:${message.channel}`;
+    const channelDescription = [channelInfo?.topic, channelInfo?.purpose]
+      .map((entry) => entry?.trim())
+      .filter((entry): entry is string => Boolean(entry))
+      .filter((entry, index, list) => list.indexOf(entry) === index)
+      .join("\n");
+    const systemPromptParts = [
+      channelDescription ? `Channel description: ${channelDescription}` : null,
+      channelConfig?.systemPrompt?.trim() || null,
+    ].filter((entry): entry is string => Boolean(entry));
+    const groupSystemPrompt =
+      systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
     const ctxPayload = {
       Body: body,
       From: slackFrom,
@@ -820,6 +928,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       AccountId: route.accountId,
       ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
       GroupSubject: isRoomish ? roomLabel : undefined,
+      GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
       SenderName: senderName,
       SenderId: message.user,
       Provider: "slack" as const,
@@ -907,7 +1016,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ctx: ctxPayload,
       cfg,
       dispatcher,
-      replyOptions,
+      replyOptions: { ...replyOptions, skillFilter: channelConfig?.skills },
     });
     markDispatchIdle();
     if (didSetStatus) {
@@ -1457,6 +1566,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         normalizeAllowListLower(effectiveAllowFrom);
 
       let commandAuthorized = true;
+      let channelConfig: SlackChannelConfigResolved | null = null;
       if (isDirectMessage) {
         if (!dmEnabled || dmPolicy === "disabled") {
           await respond({
@@ -1506,7 +1616,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
 
       if (isRoom) {
-        const channelConfig = resolveSlackChannelConfig({
+        channelConfig = resolveSlackChannelConfig({
           channelId: command.channel_id,
           channelName: channelInfo?.name,
           channels: channelsConfig,
@@ -1538,6 +1648,20 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
       const sender = await resolveUserName(command.user_id);
       const senderName = sender?.name ?? command.user_name ?? command.user_id;
+      const channelUserAllowed = isRoom
+        ? resolveSlackUserAllowed({
+            allowList: channelConfig?.users,
+            userId: command.user_id,
+            userName: senderName,
+          })
+        : true;
+      if (isRoom && !channelUserAllowed) {
+        await respond({
+          text: "You are not authorized to use this command here.",
+          response_type: "ephemeral",
+        });
+        return;
+      }
       const channelName = channelInfo?.name;
       const roomLabel = channelName
         ? `#${channelName}`
@@ -1552,6 +1676,21 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           id: isDirectMessage ? command.user_id : command.channel_id,
         },
       });
+      const channelDescription = [channelInfo?.topic, channelInfo?.purpose]
+        .map((entry) => entry?.trim())
+        .filter((entry): entry is string => Boolean(entry))
+        .filter((entry, index, list) => list.indexOf(entry) === index)
+        .join("\n");
+      const systemPromptParts = [
+        channelDescription
+          ? `Channel description: ${channelDescription}`
+          : null,
+        channelConfig?.systemPrompt?.trim() || null,
+      ].filter((entry): entry is string => Boolean(entry));
+      const groupSystemPrompt =
+        systemPromptParts.length > 0
+          ? systemPromptParts.join("\n\n")
+          : undefined;
 
       const ctxPayload = {
         Body: prompt,
@@ -1563,6 +1702,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         To: `slash:${command.user_id}`,
         ChatType: isDirectMessage ? "direct" : isRoom ? "room" : "group",
         GroupSubject: isRoomish ? roomLabel : undefined,
+        GroupSystemPrompt: isRoomish ? groupSystemPrompt : undefined,
         SenderName: senderName,
         SenderId: command.user_id,
         Provider: "slack" as const,
@@ -1580,7 +1720,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         OriginatingTo: `user:${command.user_id}`,
       };
 
-      const replyResult = await getReplyFromConfig(ctxPayload, undefined, cfg);
+      const replyResult = await getReplyFromConfig(
+        ctxPayload,
+        { skillFilter: channelConfig?.skills },
+        cfg,
+      );
       const replies = replyResult
         ? Array.isArray(replyResult)
           ? replyResult
