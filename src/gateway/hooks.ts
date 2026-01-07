@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { ClawdbotConfig } from "../config/config.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
 import {
   type HookMappingResolved,
   resolveHookMappings,
@@ -174,20 +175,22 @@ export function normalizeAgentPayload(
       ? sessionKeyRaw.trim()
       : `hook:${idFactory()}`;
   const providerRaw = payload.provider;
+  const providerNormalized =
+    typeof providerRaw === "string"
+      ? normalizeMessageProvider(providerRaw)
+      : undefined;
   const provider =
-    providerRaw === "whatsapp" ||
-    providerRaw === "telegram" ||
-    providerRaw === "discord" ||
-    providerRaw === "slack" ||
-    providerRaw === "signal" ||
-    providerRaw === "imessage" ||
-    providerRaw === "last"
-      ? providerRaw
-      : providerRaw === "imsg"
-        ? "imessage"
-        : providerRaw === undefined
-          ? "last"
-          : null;
+    providerNormalized === "whatsapp" ||
+    providerNormalized === "telegram" ||
+    providerNormalized === "discord" ||
+    providerNormalized === "slack" ||
+    providerNormalized === "signal" ||
+    providerNormalized === "imessage" ||
+    providerNormalized === "last"
+      ? providerNormalized
+      : providerRaw === undefined
+        ? "last"
+        : null;
   if (provider === null) {
     return {
       ok: false,

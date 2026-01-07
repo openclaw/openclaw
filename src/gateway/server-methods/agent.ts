@@ -11,6 +11,7 @@ import {
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   type AgentWaitParams,
@@ -138,15 +139,8 @@ export const agentHandlers: GatewayRequestHandlers = {
 
     const runId = idem;
 
-    const requestedProviderRaw =
-      typeof request.provider === "string" ? request.provider.trim() : "";
-    const requestedProviderNormalized = requestedProviderRaw
-      ? requestedProviderRaw.toLowerCase()
-      : "last";
     const requestedProvider =
-      requestedProviderNormalized === "imsg"
-        ? "imessage"
-        : requestedProviderNormalized;
+      normalizeMessageProvider(request.provider) ?? "last";
 
     const lastProvider = sessionEntry?.lastProvider;
     const lastTo =
