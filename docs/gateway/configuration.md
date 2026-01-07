@@ -336,8 +336,10 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
   - `model`: per-agent default model (provider/model), overrides `agent.model` for that agent.
   - `sandbox`: per-agent sandbox config (overrides `agent.sandbox`).
     - `mode`: `"off"` | `"non-main"` | `"all"`
+    - `workspaceAccess`: `"none"` | `"ro"` | `"rw"`
     - `scope`: `"session"` | `"agent"` | `"shared"`
     - `workspaceRoot`: custom sandbox workspace root
+    - `tools`: per-agent sandbox tool policy (deny wins; overrides `agent.sandbox.tools`)
   - `tools`: per-agent tool restrictions (applied before sandbox tool policy).
     - `allow`: array of allowed tool names
     - `deny`: array of denied tool names (deny wins)

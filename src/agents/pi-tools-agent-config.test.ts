@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
+import type { SandboxDockerConfig } from "./sandbox.js";
 
 describe("Agent-specific tool filtering", () => {
   it("should apply global tool policy when no agent-specific policy exists", () => {
@@ -188,7 +189,15 @@ describe("Agent-specific tool filtering", () => {
         workspaceAccess: "none",
         containerName: "test-container",
         containerWorkdir: "/workspace",
-        docker: {} as any,
+        docker: {
+          image: "test-image",
+          containerPrefix: "test-",
+          workdir: "/workspace",
+          readOnlyRoot: true,
+          tmpfs: [],
+          network: "none",
+          capDrop: [],
+        } satisfies SandboxDockerConfig,
         tools: {
           allow: ["read", "write", "bash"],
           deny: [],
