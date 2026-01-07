@@ -56,9 +56,7 @@ describe("provider usage formatting", () => {
         {
           provider: "anthropic",
           displayName: "Claude",
-          windows: [
-            { label: "5h", usedPercent: 20, resetAt: now + 60_000 },
-          ],
+          windows: [{ label: "5h", usedPercent: 20, resetAt: now + 60_000 }],
         },
       ],
     };
@@ -69,40 +67,49 @@ describe("provider usage formatting", () => {
 
 describe("provider usage loading", () => {
   it("loads usage snapshots with injected auth", async () => {
-    const makeResponse = (status: number, body: unknown) =>
-      ({
-        ok: status >= 200 && status < 300,
-        status,
-        json: async () => body,
-      }) as any;
+    const makeResponse = (status: number, body: unknown): Response => {
+      const payload = typeof body === "string" ? body : JSON.stringify(body);
+      const headers =
+        typeof body === "string"
+          ? undefined
+          : { "Content-Type": "application/json" };
+      return new Response(payload, { status, headers });
+    };
 
-    const mockFetch = vi.fn(async (input: any) => {
-      const url = String(input);
-      if (url.includes("api.anthropic.com")) {
-        return makeResponse(200, {
-          five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-        });
-      }
-      if (url.includes("api.z.ai")) {
-        return makeResponse(200, {
-          success: true,
-          code: 200,
-          data: {
-            planName: "Pro",
-            limits: [
-              {
-                type: "TOKENS_LIMIT",
-                percentage: 25,
-                unit: 3,
-                number: 6,
-                nextResetTime: "2026-01-07T06:00:00Z",
-              },
-            ],
-          },
-        });
-      }
-      return makeResponse(404, "not found");
-    });
+    const mockFetch = vi.fn<Parameters<typeof fetch>, ReturnType<typeof fetch>>(
+      async (input) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        if (url.includes("api.anthropic.com")) {
+          return makeResponse(200, {
+            five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
+          });
+        }
+        if (url.includes("api.z.ai")) {
+          return makeResponse(200, {
+            success: true,
+            code: 200,
+            data: {
+              planName: "Pro",
+              limits: [
+                {
+                  type: "TOKENS_LIMIT",
+                  percentage: 25,
+                  unit: 3,
+                  number: 6,
+                  nextResetTime: "2026-01-07T06:00:00Z",
+                },
+              ],
+            },
+          });
+        }
+        return makeResponse(404, "not found");
+      },
+    );
 
     const summary = await loadProviderUsageSummary({
       now: Date.UTC(2026, 0, 7, 0, 0, 0),

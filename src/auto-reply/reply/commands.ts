@@ -20,6 +20,10 @@ import {
   saveSessionStore,
 } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
+import {
+  formatUsageSummaryLine,
+  loadProviderUsageSummary,
+} from "../../infra/provider-usage.js";
 import { triggerClawdbotRestart } from "../../infra/restart.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -38,10 +42,6 @@ import {
   formatContextUsageShort,
   formatTokenCount,
 } from "../status.js";
-import {
-  formatUsageSummaryLine,
-  loadProviderUsageSummary,
-} from "../../infra/provider-usage.js";
 import type { MsgContext } from "../templating.js";
 import type {
   ElevatedLevel,

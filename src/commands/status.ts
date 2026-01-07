@@ -11,13 +11,13 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { callGateway } from "../gateway/call.js";
+import { info } from "../globals.js";
+import { buildProviderSummary } from "../infra/provider-summary.js";
 import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
-import { callGateway } from "../gateway/call.js";
-import { info } from "../globals.js";
-import { buildProviderSummary } from "../infra/provider-summary.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";

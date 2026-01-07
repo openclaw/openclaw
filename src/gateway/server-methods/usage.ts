@@ -7,4 +7,3 @@ export const usageHandlers: GatewayRequestHandlers = {
     respond(true, summary, undefined);
   },
 };
-

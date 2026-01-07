@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { loadConfig } from "../config/config.js";
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -14,6 +13,7 @@ import {
   resolveEnvApiKey,
 } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
+import { loadConfig } from "../config/config.js";
 
 export type UsageWindow = {
   label: string;
@@ -41,6 +41,59 @@ export type UsageProviderId =
   | "google-antigravity"
   | "openai-codex"
   | "zai";
+
+type ClaudeUsageResponse = {
+  five_hour?: { utilization?: number; resets_at?: string };
+  seven_day?: { utilization?: number; resets_at?: string };
+  seven_day_sonnet?: { utilization?: number };
+  seven_day_opus?: { utilization?: number };
+};
+
+type CopilotUsageResponse = {
+  quota_snapshots?: {
+    premium_interactions?: { percent_remaining?: number | null };
+    chat?: { percent_remaining?: number | null };
+  };
+  copilot_plan?: string;
+};
+
+type GeminiUsageResponse = {
+  buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
+};
+
+type CodexUsageResponse = {
+  rate_limit?: {
+    primary_window?: {
+      limit_window_seconds?: number;
+      used_percent?: number;
+      reset_at?: number;
+    };
+    secondary_window?: {
+      limit_window_seconds?: number;
+      used_percent?: number;
+      reset_at?: number;
+    };
+  };
+  plan_type?: string;
+  credits?: { balance?: number | string | null };
+};
+
+type ZaiUsageResponse = {
+  success?: boolean;
+  code?: number;
+  msg?: string;
+  data?: {
+    planName?: string;
+    plan?: string;
+    limits?: Array<{
+      type?: string;
+      percentage?: number;
+      unit?: number;
+      number?: number;
+      nextResetTime?: string;
+    }>;
+  };
+};
 
 type ProviderAuth = {
   provider: UsageProviderId;
@@ -121,8 +174,10 @@ function formatResetRemaining(targetMs?: number, now?: number): string | null {
   const days = Math.floor(hours / 24);
   if (days < 7) return `${days}d ${hours % 24}h`;
 
-  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" })
-    .format(new Date(targetMs));
+  return new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+  }).format(new Date(targetMs));
 }
 
 function pickPrimaryWindow(windows: UsageWindow[]): UsageWindow | undefined {
@@ -148,11 +203,13 @@ export function formatUsageSummaryLine(
     .slice(0, opts?.maxProviders ?? summary.providers.length);
   if (providers.length === 0) return null;
 
-  const parts = providers.map((entry) => {
-    const window = pickPrimaryWindow(entry.windows);
-    if (!window) return null;
-    return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
-  }).filter(Boolean) as string[];
+  const parts = providers
+    .map((entry) => {
+      const window = pickPrimaryWindow(entry.windows);
+      if (!window) return null;
+      return `${entry.displayName} ${formatWindowShort(window, opts?.now)}`;
+    })
+    .filter(Boolean) as string[];
 
   if (parts.length === 0) return null;
   return `📊 Usage: ${parts.join(" · ")}`;
@@ -244,7 +301,7 @@ async function fetchClaudeUsage(
     };
   }
 
-  const data = (await res.json()) as any;
+  const data = (await res.json()) as ClaudeUsageResponse;
   const windows: UsageWindow[] = [];
 
   if (data.five_hour?.utilization !== undefined) {
@@ -310,12 +367,12 @@ async function fetchCopilotUsage(
     };
   }
 
-  const data = (await res.json()) as any;
+  const data = (await res.json()) as CopilotUsageResponse;
   const windows: UsageWindow[] = [];
 
   if (data.quota_snapshots?.premium_interactions) {
-    const remaining = data.quota_snapshots.premium_interactions
-      .percent_remaining;
+    const remaining =
+      data.quota_snapshots.premium_interactions.percent_remaining;
     windows.push({
       label: "Premium",
       usedPercent: clampPercent(100 - (remaining ?? 0)),
@@ -367,7 +424,7 @@ async function fetchGeminiUsage(
     };
   }
 
-  const data = (await res.json()) as any;
+  const data = (await res.json()) as GeminiUsageResponse;
   const quotas: Record<string, number> = {};
 
   for (const bucket of data.buckets || []) {
@@ -395,7 +452,10 @@ async function fetchGeminiUsage(
   }
 
   if (hasPro) {
-    windows.push({ label: "Pro", usedPercent: clampPercent((1 - proMin) * 100) });
+    windows.push({
+      label: "Pro",
+      usedPercent: clampPercent((1 - proMin) * 100),
+    });
   }
   if (hasFlash) {
     windows.push({
@@ -445,7 +505,7 @@ async function fetchCodexUsage(
     };
   }
 
-  const data = (await res.json()) as any;
+  const data = (await res.json()) as CodexUsageResponse;
   const windows: UsageWindow[] = [];
 
   if (data.rate_limit?.primary_window) {
@@ -513,7 +573,7 @@ async function fetchZaiUsage(
     };
   }
 
-  const data = (await res.json()) as any;
+  const data = (await res.json()) as ZaiUsageResponse;
   if (!data.success || data.code !== 200) {
     return {
       provider: "zai",
@@ -562,8 +622,7 @@ async function fetchZaiUsage(
 
 function resolveZaiApiKey(): string | undefined {
   const envDirect =
-    process.env.ZAI_API_KEY?.trim() ||
-    process.env.Z_AI_API_KEY?.trim();
+    process.env.ZAI_API_KEY?.trim() || process.env.Z_AI_API_KEY?.trim();
   if (envDirect) return envDirect;
 
   const envResolved = resolveEnvApiKey("zai");
@@ -571,8 +630,7 @@ function resolveZaiApiKey(): string | undefined {
 
   const cfg = loadConfig();
   const key =
-    getCustomProviderApiKey(cfg, "zai") ||
-    getCustomProviderApiKey(cfg, "z-ai");
+    getCustomProviderApiKey(cfg, "zai") || getCustomProviderApiKey(cfg, "z-ai");
   if (key) return key;
 
   const store = ensureAuthProfileStore();
@@ -637,9 +695,7 @@ async function resolveOAuthToken(params: {
             ? (cred as { accountId?: string }).accountId
             : undefined,
       };
-    } catch {
-      continue;
-    }
+    } catch {}
   }
 
   return null;
@@ -648,9 +704,7 @@ async function resolveOAuthToken(params: {
 function resolveOAuthProviders(): UsageProviderId[] {
   const store = ensureAuthProfileStore();
   const cfg = loadConfig();
-  const providers = usageProviders.filter((provider) =>
-    provider !== "zai",
-  );
+  const providers = usageProviders.filter((provider) => provider !== "zai");
   return providers.filter((provider) => {
     const profiles = listProfilesForProvider(store, provider).filter((id) => {
       const cred = store.profiles[id];
@@ -659,7 +713,9 @@ function resolveOAuthProviders(): UsageProviderId[] {
     if (profiles.length > 0) return true;
     const normalized = normalizeProviderId(provider);
     const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
-      .filter(([, profile]) => normalizeProviderId(profile.provider) === normalized)
+      .filter(
+        ([, profile]) => normalizeProviderId(profile.provider) === normalized,
+      )
       .map(([id]) => id)
       .filter((id) => store.profiles[id]?.type === "oauth");
     return configuredProfiles.length > 0;
