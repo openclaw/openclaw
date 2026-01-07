@@ -76,6 +76,7 @@ describe("createFollowupRunner compaction", () => {
     const runner = createFollowupRunner({
       opts: { onBlockReply },
       typing: createTyping(),
+      typingMode: "instant",
       sessionEntry,
       sessionStore,
       sessionKey: "main",

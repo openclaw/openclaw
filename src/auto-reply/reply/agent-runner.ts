@@ -14,6 +14,7 @@ import {
   type SessionEntry,
   saveSessionStore,
 } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -76,6 +77,7 @@ export async function runReplyAgent(params: {
   resolvedBlockStreamingBreak: "text_end" | "message_end";
   sessionCtx: TemplateContext;
   shouldInjectGroupIntro: boolean;
+  typingMode: TypingMode;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const {
     commandBody,
@@ -101,9 +103,30 @@ export async function runReplyAgent(params: {
     resolvedBlockStreamingBreak,
     sessionCtx,
     shouldInjectGroupIntro,
+    typingMode,
   } = params;
 
   const isHeartbeat = opts?.isHeartbeat === true;
+  const shouldStartTypingOnText =
+    typingMode === "message" || typingMode === "instant";
+  const shouldStartTypingOnReasoning = typingMode === "thinking";
+
+  const signalTypingFromText = async (text?: string) => {
+    if (isHeartbeat || typingMode === "never") return;
+    if (shouldStartTypingOnText) {
+      await typing.startTypingOnText(text);
+      return;
+    }
+    if (shouldStartTypingOnReasoning) {
+      typing.refreshTypingTtl();
+    }
+  };
+
+  const signalTypingFromReasoning = async () => {
+    if (isHeartbeat || !shouldStartTypingOnReasoning) return;
+    await typing.startTypingLoop();
+    typing.refreshTypingTtl();
+  };
 
   const shouldEmitToolResult = () => {
     if (!sessionKey || !storePath) {
@@ -173,6 +196,7 @@ export async function runReplyAgent(params: {
   const runFollowupTurn = createFollowupRunner({
     opts,
     typing,
+    typingMode,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -252,23 +276,23 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    if (!isHeartbeat) {
-                      await typing.startTypingOnText(text);
-                    }
+                    await signalTypingFromText(text);
                     await opts.onPartialReply?.({
                       text,
                       mediaUrls: payload.mediaUrls,
                     });
                   }
                 : undefined,
-            onReasoningStream: opts?.onReasoningStream
-              ? async (payload) => {
-                  await opts.onReasoningStream?.({
-                    text: payload.text,
-                    mediaUrls: payload.mediaUrls,
-                  });
-                }
-              : undefined,
+            onReasoningStream:
+              shouldStartTypingOnReasoning || opts?.onReasoningStream
+                ? async (payload) => {
+                    await signalTypingFromReasoning();
+                    await opts?.onReasoningStream?.({
+                      text: payload.text,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  }
+                : undefined,
             onAgentEvent: (evt) => {
               if (evt.stream !== "compaction") return;
               const phase =
@@ -320,9 +344,7 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      if (!isHeartbeat) {
-                        await typing.startTypingOnText(cleaned);
-                      }
+                      await signalTypingFromText(cleaned);
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -367,9 +389,7 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
-                    if (!isHeartbeat) {
-                      await typing.startTypingOnText(text);
-                    }
+                    await signalTypingFromText(text);
                     await opts.onToolResult?.({
                       text,
                       mediaUrls: payload.mediaUrls,
@@ -524,7 +544,7 @@ export async function runReplyAgent(params: {
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;
     });
-    if (shouldSignalTyping && !isHeartbeat) {
+    if (shouldSignalTyping && typingMode === "instant" && !isHeartbeat) {
       await typing.startTypingLoop();
     }
 

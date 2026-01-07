@@ -993,6 +993,13 @@ Block streaming:
   ```
 See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 
+Typing indicators:
+- `agent.typingMode`: `"never" | "instant" | "thinking" | "message"`. Defaults to
+  `instant` for direct chats / mentions and `message` for unmentioned group chats.
+- `agent.typingIntervalSeconds`: how often the typing signal is refreshed (default: 6s).
+- `session.typingIntervalSeconds`: per-session override for the refresh interval.
+See [/concepts/typing-indicators](/concepts/typing-indicators) for behavior details.
+
 `agent.model.primary` should be set as `provider/model` (e.g. `anthropic/claude-opus-4-5`).
 Aliases come from `agent.models.*.alias` (e.g. `Opus`).
 If you omit the provider, CLAWDBOT currently assumes `anthropic` as a temporary

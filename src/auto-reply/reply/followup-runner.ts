@@ -5,6 +5,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -20,6 +21,7 @@ import type { TypingController } from "./typing.js";
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
+  typingMode: TypingMode;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -30,6 +32,7 @@ export function createFollowupRunner(params: {
   const {
     opts,
     typing,
+    typingMode,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -71,7 +74,13 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
-      await typing.startTypingOnText(payload.text);
+      if (typingMode !== "never") {
+        if (typingMode === "message" || typingMode === "instant") {
+          await typing.startTypingOnText(payload.text);
+        } else if (typingMode === "thinking") {
+          typing.refreshTypingTtl();
+        }
+      }
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {

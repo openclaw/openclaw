@@ -554,6 +554,7 @@
           "concepts/provider-routing",
           "concepts/groups",
           "concepts/group-messages",
+          "concepts/typing-indicators",
           "concepts/queue",
           "concepts/models",
           "concepts/model-failover",

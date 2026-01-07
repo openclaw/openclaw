@@ -595,6 +595,14 @@ export const ClawdbotSchema = z.object({
       timeoutSeconds: z.number().int().positive().optional(),
       mediaMaxMb: z.number().positive().optional(),
       typingIntervalSeconds: z.number().int().positive().optional(),
+      typingMode: z
+        .union([
+          z.literal("never"),
+          z.literal("instant"),
+          z.literal("thinking"),
+          z.literal("message"),
+        ])
+        .optional(),
       heartbeat: HeartbeatSchema,
       maxConcurrent: z.number().int().positive().optional(),
       subagents: z
