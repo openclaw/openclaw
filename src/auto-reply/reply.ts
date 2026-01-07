@@ -66,8 +66,8 @@ import {
 } from "./reply/session-updates.js";
 import { createTypingController } from "./reply/typing.js";
 import {
+  createTypingSignaler,
   resolveTypingMode,
-  shouldStartTypingImmediately,
 } from "./reply/typing-mode.js";
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
@@ -599,12 +599,16 @@ export async function getReplyFromConfig(
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
   const typingMode = resolveTypingMode({
-    configured: agentCfg?.typingMode,
+    configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned,
     isHeartbeat,
   });
-  const shouldEagerType = shouldStartTypingImmediately(typingMode);
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat,
+  });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat &&
       (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -798,8 +802,8 @@ export async function getReplyFromConfig(
     },
   };
 
-  if (shouldEagerType) {
-    await typing.startTypingLoop();
+  if (typingSignals.shouldStartImmediately) {
+    await typingSignals.signalRunStart();
   }
 
   return runReplyAgent({

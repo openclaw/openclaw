@@ -9,7 +9,7 @@ import type { TypingMode } from "../../config/types.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
-import type { TypingController } from "./typing.js";
+import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 
@@ -46,18 +46,6 @@ vi.mock("./queue.js", async () => {
 
 import { runReplyAgent } from "./agent-runner.js";
 
-function createTyping(): TypingController {
-  return {
-    onReplyStart: vi.fn(async () => {}),
-    startTypingLoop: vi.fn(async () => {}),
-    startTypingOnText: vi.fn(async () => {}),
-    refreshTypingTtl: vi.fn(),
-    markRunComplete: vi.fn(),
-    markDispatchIdle: vi.fn(),
-    cleanup: vi.fn(),
-  };
-}
-
 type EmbeddedPiAgentParams = {
   onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
 };
@@ -71,7 +59,7 @@ function createMinimalRun(params?: {
   storePath?: string;
   typingMode?: TypingMode;
 }) {
-  const typing = createTyping();
+  const typing = createMockTypingController();
   const opts = params?.opts;
   const sessionCtx = {
     Provider: "whatsapp",

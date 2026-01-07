@@ -17,6 +17,7 @@ import { extractReplyToTag } from "./reply-tags.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
+import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
@@ -40,6 +41,11 @@ export function createFollowupRunner(params: {
     defaultModel,
     agentCfgContextTokens,
   } = params;
+  const typingSignals = createTypingSignaler({
+    typing,
+    mode: typingMode,
+    isHeartbeat: opts?.isHeartbeat === true,
+  });
 
   /**
    * Sends followup payloads, routing to the originating channel if set.
@@ -74,13 +80,7 @@ export function createFollowupRunner(params: {
       ) {
         continue;
       }
-      if (typingMode !== "never") {
-        if (typingMode === "message" || typingMode === "instant") {
-          await typing.startTypingOnText(payload.text);
-        } else if (typingMode === "thinking") {
-          typing.refreshTypingTtl();
-        }
-      }
+      await typingSignals.signalTextDelta(payload.text);
 
       // Route to originating channel if set, otherwise fall back to dispatcher.
       if (shouldRouteToOriginating) {
@@ -108,6 +108,7 @@ export function createFollowupRunner(params: {
   };
 
   return async (queued: FollowupRun) => {
+    await typingSignals.signalRunStart();
     try {
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
