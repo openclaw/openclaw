@@ -28,6 +28,7 @@
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.
+- Tools: make per-agent tool policies override global defaults and run bash synchronously when `process` is disallowed.
 - Cron: clamp timer delay to avoid TimeoutOverflowWarning. Thanks @emanuelst for PR #412.
 - Web UI: allow reconnect + password URL auth for the control UI and always scrub auth params from the URL. Thanks @oswalpalash for PR #414.
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.

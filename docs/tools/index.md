@@ -42,6 +42,7 @@ Core parameters:
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
+- If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
 
 ### `process`
 Manage background bash sessions.

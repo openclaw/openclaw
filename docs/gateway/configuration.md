@@ -340,7 +340,7 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
     - `scope`: `"session"` | `"agent"` | `"shared"`
     - `workspaceRoot`: custom sandbox workspace root
     - `tools`: per-agent sandbox tool policy (deny wins; overrides `agent.sandbox.tools`)
-  - `tools`: per-agent tool restrictions (applied before sandbox tool policy).
+  - `tools`: per-agent tool restrictions (overrides `agent.tools`; applied before sandbox tool policy).
     - `allow`: array of allowed tool names
     - `deny`: array of denied tool names (deny wins)
 - `routing.bindings[]`: routes inbound messages to an `agentId`.

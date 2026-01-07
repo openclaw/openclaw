@@ -24,6 +24,7 @@ Behavior:
 - Foreground runs return output directly.
 - When backgrounded (explicit or timeout), the tool returns `status: "running"` + `sessionId` and a short tail.
 - Output is kept in memory until the session is polled or cleared.
+- If the `process` tool is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
 
 Environment overrides:
 - `PI_BASH_YIELD_MS`: default yield (ms)

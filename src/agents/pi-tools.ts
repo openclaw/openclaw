@@ -432,6 +432,24 @@ function filterToolsByPolicy(
   });
 }
 
+function isToolAllowedByPolicy(name: string, policy?: SandboxToolPolicy) {
+  if (!policy) return true;
+  const deny = new Set(normalizeToolNames(policy.deny));
+  const allowRaw = normalizeToolNames(policy.allow);
+  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
+  const normalized = name.trim().toLowerCase();
+  if (deny.has(normalized)) return false;
+  if (allow) return allow.has(normalized);
+  return true;
+}
+
+function isToolAllowedByPolicies(
+  name: string,
+  policies: Array<SandboxToolPolicy | undefined>,
+) {
+  return policies.every((policy) => isToolAllowedByPolicy(name, policy));
+}
+
 function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return {
     ...tool,
@@ -595,6 +613,25 @@ export function createClawdbotCodingTools(options?: {
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
+  const agentConfig =
+    options?.sessionKey && options?.config
+      ? resolveAgentConfig(
+          options.config,
+          resolveAgentIdFromSessionKey(options.sessionKey),
+        )
+      : undefined;
+  const hasAgentTools = agentConfig?.tools !== undefined;
+  const globalTools = options?.config?.agent?.tools;
+  const effectiveToolsPolicy = hasAgentTools ? agentConfig?.tools : globalTools;
+  const subagentPolicy =
+    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
+      ? resolveSubagentToolPolicy(options.config)
+      : undefined;
+  const allowBackground = isToolAllowedByPolicies("process", [
+    effectiveToolsPolicy,
+    sandbox?.tools,
+    subagentPolicy,
+  ]);
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
@@ -611,6 +648,7 @@ export function createClawdbotCodingTools(options?: {
   });
   const bashTool = createBashTool({
     ...options?.bash,
+    allowBackground,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
@@ -656,33 +694,15 @@ export function createClawdbotCodingTools(options?: {
     if (tool.name === "whatsapp") return allowWhatsApp;
     return true;
   });
-  const globallyFiltered =
-    options?.config?.agent?.tools &&
-    (options.config.agent.tools.allow?.length ||
-      options.config.agent.tools.deny?.length)
-      ? filterToolsByPolicy(filtered, options.config.agent.tools)
-      : filtered;
-
-  // Agent-specific tool policy
-  let agentFiltered = globallyFiltered;
-  if (options?.sessionKey && options?.config) {
-    const agentId = resolveAgentIdFromSessionKey(options.sessionKey);
-    const agentConfig = resolveAgentConfig(options.config, agentId);
-    if (agentConfig?.tools) {
-      agentFiltered = filterToolsByPolicy(globallyFiltered, agentConfig.tools);
-    }
-  }
-
+  const toolsFiltered = effectiveToolsPolicy
+    ? filterToolsByPolicy(filtered, effectiveToolsPolicy)
+    : filtered;
   const sandboxed = sandbox
-    ? filterToolsByPolicy(agentFiltered, sandbox.tools)
-    : agentFiltered;
-  const subagentFiltered =
-    isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
-      ? filterToolsByPolicy(
-          sandboxed,
-          resolveSubagentToolPolicy(options.config),
-        )
-      : sandboxed;
+    ? filterToolsByPolicy(toolsFiltered, sandbox.tools)
+    : toolsFiltered;
+  const subagentFiltered = subagentPolicy
+    ? filterToolsByPolicy(sandboxed, subagentPolicy)
+    : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   return subagentFiltered.map(normalizeToolParameters);

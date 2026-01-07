@@ -58,6 +58,7 @@ export type BashToolDefaults = {
   timeoutSec?: number;
   sandbox?: BashSandboxConfig;
   elevated?: BashElevatedDefaults;
+  allowBackground?: boolean;
 };
 
 export type ProcessToolDefaults = {
@@ -128,6 +129,7 @@ export function createBashTool(
     10,
     120_000,
   );
+  const allowBackground = defaults?.allowBackground ?? true;
   const defaultTimeoutSec =
     typeof defaults?.timeoutSec === "number" && defaults.timeoutSec > 0
       ? defaults.timeoutSec
@@ -154,14 +156,23 @@ export function createBashTool(
         throw new Error("Provide a command to start.");
       }
 
-      const yieldWindow = params.background
-        ? 0
-        : clampNumber(
-            params.yieldMs ?? defaultBackgroundMs,
-            defaultBackgroundMs,
-            10,
-            120_000,
-          );
+      const backgroundRequested = params.background === true;
+      const yieldRequested = typeof params.yieldMs === "number";
+      if (!allowBackground && (backgroundRequested || yieldRequested)) {
+        warnings.push(
+          "Warning: background execution is disabled; running synchronously.",
+        );
+      }
+      const yieldWindow = allowBackground
+        ? backgroundRequested
+          ? 0
+          : clampNumber(
+              params.yieldMs ?? defaultBackgroundMs,
+              defaultBackgroundMs,
+              10,
+              120_000,
+            )
+        : null;
       const maxOutput = DEFAULT_MAX_OUTPUT;
       const startedAt = Date.now();
       const sessionId = randomUUID();
@@ -353,15 +364,17 @@ export function createBashTool(
             resolveRunning();
           };
 
-          if (yieldWindow === 0) {
-            onYieldNow();
-          } else {
-            yieldTimer = setTimeout(() => {
-              if (settled) return;
-              yielded = true;
-              markBackgrounded(session);
-              resolveRunning();
-            }, yieldWindow);
+          if (allowBackground && yieldWindow !== null) {
+            if (yieldWindow === 0) {
+              onYieldNow();
+            } else {
+              yieldTimer = setTimeout(() => {
+                if (settled) return;
+                yielded = true;
+                markBackgrounded(session);
+                resolveRunning();
+              }, yieldWindow);
+            }
           }
 
           const handleExit = (
