@@ -20,12 +20,20 @@ android {
     minSdk = 31
     targetSdk = 36
     versionCode = 1
-    versionName = "2.0.0-beta3"
+    versionName = "2026.1.5"
   }
 
   buildTypes {
     release {
       isMinifyEnabled = false
+    }
+  }
+
+  applicationVariants.all {
+    val variant = this
+    outputs.all {
+      val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
+      output.outputFileName = "clawdbot-${variant.versionName}-${variant.buildType.name}.apk"
     }
   }
 
