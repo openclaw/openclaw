@@ -213,6 +213,7 @@ function formatUserTime(date: Date, timeZone: string): string | undefined {
   try {
     const parts = new Intl.DateTimeFormat("en-CA", {
       timeZone,
+      weekday: "long",
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -224,10 +225,17 @@ function formatUserTime(date: Date, timeZone: string): string | undefined {
     for (const part of parts) {
       if (part.type !== "literal") map[part.type] = part.value;
     }
-    if (!map.year || !map.month || !map.day || !map.hour || !map.minute) {
+    if (
+      !map.weekday ||
+      !map.year ||
+      !map.month ||
+      !map.day ||
+      !map.hour ||
+      !map.minute
+    ) {
       return undefined;
     }
-    return `${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
+    return `${map.weekday} ${map.year}-${map.month}-${map.day} ${map.hour}:${map.minute}`;
   } catch {
     return undefined;
   }
