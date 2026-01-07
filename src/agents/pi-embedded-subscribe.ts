@@ -516,8 +516,10 @@ export function subscribeEmbeddedPiSession(params: {
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
-          const chunkingEnabled = Boolean(blockChunking);
-          if (!chunkingEnabled && !addedDuringMessage && text) {
+          const chunkerHasBuffered = blockChunker?.hasBuffered() ?? false;
+          // Non-streaming models (no text_delta): ensure assistantTexts gets the
+          // final text when the chunker has nothing buffered to drain.
+          if (!addedDuringMessage && !chunkerHasBuffered && text) {
             const last = assistantTexts.at(-1);
             if (!last || last !== text) assistantTexts.push(text);
           }
