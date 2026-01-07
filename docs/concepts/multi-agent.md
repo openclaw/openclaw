@@ -131,3 +131,41 @@ multiple phone numbers without mixing sessions.
   },
 }
 ```
+
+## Per-Agent Sandbox and Tool Configuration
+
+Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
+
+```js
+{
+  routing: {
+    agents: {
+      personal: {
+        workspace: "~/clawd-personal",
+        sandbox: {
+          mode: "off",  // No sandbox for personal agent
+        },
+        // No tool restrictions - all tools available
+      },
+      family: {
+        workspace: "~/clawd-family",
+        sandbox: {
+          mode: "all",     // Always sandboxed
+          scope: "agent",  // One container per agent
+        },
+        tools: {
+          allow: ["read"],                    // Only read tool
+          deny: ["bash", "write", "edit"],    // Deny others
+        },
+      },
+    },
+  },
+}
+```
+
+**Benefits:**
+- **Security isolation**: Restrict tools for untrusted agents
+- **Resource control**: Sandbox specific agents while keeping others on host
+- **Flexible policies**: Different permissions per agent
+
+See [Multi-Agent Sandbox & Tools](/docs/multi-agent-sandbox-tools) for detailed examples.
