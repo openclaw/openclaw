@@ -840,11 +840,17 @@ Initial recommendation: support this type first; treat other attachment types as
 - **Tailscale Funnel**: Must be running separately (`tailscale funnel 3978`) - doesn't work well as background task
 - **Auth errors (401)**: Expected when testing manually without Azure JWT - means endpoint is reachable
 
-### In Progress (2026-01-07 - Session 2)
+### Completed (2026-01-07 - Session 2)
 
 6. ✅ **Agent dispatch (sync)**: Wired inbound messages to `dispatchReplyFromConfig()` - replies sent via `context.sendActivity()` within turn
 7. ✅ **Typing indicator**: Added typing indicator support via `sendActivities([{ type: "typing" }])`
 8. ✅ **Type system updates**: Added `msteams` to `TextChunkProvider`, `OriginatingChannelType`, and route-reply switch
+9. ✅ **@mention stripping**: Strip `<at>...</at>` HTML tags from message text
+10. ✅ **Session key fix**: Remove `;messageid=...` suffix from conversation ID
+11. ✅ **Config reload**: Added msteams to `config-reload.ts` (ProviderKind, ReloadAction, RELOAD_RULES)
+12. ✅ **Pairing support**: Added msteams to PairingProvider type
+13. ✅ **Conversation store**: Created `src/msteams/conversation-store.ts` for storing ConversationReference
+14. ✅ **DM policy**: Implemented DM policy check with pairing support (disabled/pairing/open/allowlist)
 
 ### Implementation Notes
 
@@ -868,13 +874,15 @@ await dispatchReplyFromConfig({ ctx: ctxPayload, cfg, dispatcher, replyOptions }
 - `To`: `user:<userId>` (DM) or `conversation:<conversationId>` (group/channel)
 - `ChatType`: `"direct"` | `"group"` | `"room"` based on conversation type
 
+**DM Policy:**
+- `dmPolicy: "disabled"` - Drop all DMs
+- `dmPolicy: "open"` - Allow all DMs
+- `dmPolicy: "pairing"` (default) - Require pairing code approval
+- `dmPolicy: "allowlist"` - Only allow from `allowFrom` list
+
 ### Remaining
 
-9. **Test full agent flow**: Send message in Teams → verify agent responds (not just echo)
-10. **Conversation store**: Persist `ConversationReference` by `conversation.id` for proactive messaging
-11. **Proactive messaging**: For slow LLM responses, store reference and send replies asynchronously
-12. **Access control**: Implement DM policy + pairing (reuse existing pairing store) + mention gating in channels
-13. **Config reload**: Add msteams to `config-reload.ts` restart rules
-14. **Outbound CLI/gateway sends**: Implement `sendMessageMSTeams` properly; wire `clawdbot send --provider msteams`
-15. **Media**: Implement inbound attachment download and outbound strategy
-16. **Docs + UI + Onboard**: Write `docs/providers/msteams.md`, add UI config form, update `clawdbot onboard`
+15. **Proactive messaging**: For slow LLM responses, use stored ConversationReference to send async replies
+16. **Outbound CLI/gateway sends**: Implement `sendMessageMSTeams` properly; wire `clawdbot send --provider msteams`
+17. **Media**: Implement inbound attachment download and outbound strategy
+18. **Docs + UI + Onboard**: Write `docs/providers/msteams.md`, add UI config form, update `clawdbot onboard`

@@ -17,7 +17,8 @@ export type ProviderKind =
   | "discord"
   | "slack"
   | "signal"
-  | "imessage";
+  | "imessage"
+  | "msteams";
 
 export type GatewayReloadPlan = {
   changedPaths: string[];
@@ -50,7 +51,8 @@ type ReloadAction =
   | "restart-provider:discord"
   | "restart-provider:slack"
   | "restart-provider:signal"
-  | "restart-provider:imessage";
+  | "restart-provider:imessage"
+  | "restart-provider:msteams";
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
@@ -75,6 +77,7 @@ const RELOAD_RULES: ReloadRule[] = [
   { prefix: "slack", kind: "hot", actions: ["restart-provider:slack"] },
   { prefix: "signal", kind: "hot", actions: ["restart-provider:signal"] },
   { prefix: "imessage", kind: "hot", actions: ["restart-provider:imessage"] },
+  { prefix: "msteams", kind: "hot", actions: ["restart-provider:msteams"] },
   { prefix: "identity", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
@@ -211,6 +214,9 @@ export function buildGatewayReloadPlan(
         break;
       case "restart-provider:imessage":
         plan.restartProviders.add("imessage");
+        break;
+      case "restart-provider:msteams":
+        plan.restartProviders.add("msteams");
         break;
       default:
         break;
