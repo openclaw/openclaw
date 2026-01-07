@@ -837,6 +837,7 @@ This is intended to reduce token usage for chatty agents that accumulate large t
 High level:
 - Never touches user/assistant messages.
 - Protects the last `keepLastAssistants` assistant messages (no tool results after that point are pruned).
+- Protects the bootstrap prefix (nothing before the first user message is pruned).
 - Modes:
   - `adaptive`: soft-trims oversized tool results (keep head/tail) when the estimated context ratio crosses `softTrimRatio`.
     Then hard-clears the oldest eligible tool results when the estimated context ratio crosses `hardClearRatio` **and**
