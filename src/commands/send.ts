@@ -4,6 +4,7 @@ import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 export async function sendCommand(
@@ -37,10 +38,17 @@ export async function sendCommand(
     provider === "signal" ||
     provider === "imessage"
   ) {
+    const resolvedTarget = resolveOutboundTarget({
+      provider,
+      to: opts.to,
+    });
+    if (!resolvedTarget.ok) {
+      throw resolvedTarget.error;
+    }
     const results = await deliverOutboundPayloads({
       cfg: loadConfig(),
       provider,
-      to: opts.to,
+      to: resolvedTarget.to,
       payloads: [{ text: opts.message, mediaUrl: opts.media }],
       deps: {
         sendWhatsApp: deps.sendMessageWhatsApp,
