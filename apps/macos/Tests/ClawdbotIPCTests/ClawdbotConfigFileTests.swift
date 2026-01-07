@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Clawdbot
 
-@Suite
+@Suite(.serialized)
 struct ClawdbotConfigFileTests {
     @Test
     func configPathRespectsEnvOverride() {

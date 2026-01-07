@@ -1,12 +1,46 @@
 import AppKit
 import ClawdbotIPC
 import ClawdbotKit
+import CoreLocation
 import Foundation
 
 actor MacNodeRuntime {
     private let cameraCapture = CameraCaptureService()
-    @MainActor private let screenRecorder = ScreenRecordService()
-    @MainActor private let locationService = MacNodeLocationService()
+    private struct LocationPermissionRequired: Error {}
+
+    @MainActor
+    private static func currentLocation(
+        desiredAccuracy: ClawdbotLocationAccuracy,
+        maxAgeMs: Int?,
+        timeoutMs: Int?) async throws -> (location: CLLocation, isPrecise: Bool)
+    {
+        let locationService = MacNodeLocationService()
+        if locationService.authorizationStatus() != .authorizedAlways {
+            throw LocationPermissionRequired()
+        }
+        let location = try await locationService.currentLocation(
+            desiredAccuracy: desiredAccuracy,
+            maxAgeMs: maxAgeMs,
+            timeoutMs: timeoutMs)
+        let isPrecise = locationService.accuracyAuthorization() == .fullAccuracy
+        return (location: location, isPrecise: isPrecise)
+    }
+
+    @MainActor
+    private static func recordScreen(
+        screenIndex: Int?,
+        durationMs: Int?,
+        fps: Double?,
+        includeAudio: Bool?) async throws -> (path: String, hasAudio: Bool)
+    {
+        let screenRecorder = ScreenRecordService()
+        return try await screenRecorder.record(
+            screenIndex: screenIndex,
+            durationMs: durationMs,
+            fps: fps,
+            includeAudio: includeAudio,
+            outPath: nil)
+    }
 
     func handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
         let command = req.command
@@ -212,21 +246,11 @@ actor MacNodeRuntime {
             ClawdbotLocationGetParams()
         let desired = params.desiredAccuracy ??
             (Self.locationPreciseEnabled() ? .precise : .balanced)
-        let status = await self.locationService.authorizationStatus()
-        if status != .authorizedAlways {
-            return BridgeInvokeResponse(
-                id: req.id,
-                ok: false,
-                error: ClawdbotNodeError(
-                    code: .unavailable,
-                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
-        }
         do {
-            let location = try await self.locationService.currentLocation(
+            let (location, isPrecise) = try await Self.currentLocation(
                 desiredAccuracy: desired,
                 maxAgeMs: params.maxAgeMs,
                 timeoutMs: params.timeoutMs)
-            let isPrecise = await self.locationService.accuracyAuthorization() == .fullAccuracy
             let payload = ClawdbotLocationPayload(
                 lat: location.coordinate.latitude,
                 lon: location.coordinate.longitude,
@@ -239,6 +263,13 @@ actor MacNodeRuntime {
                 source: nil)
             let json = try Self.encodePayload(payload)
             return BridgeInvokeResponse(id: req.id, ok: true, payloadJSON: json)
+        } catch is LocationPermissionRequired {
+            return BridgeInvokeResponse(
+                id: req.id,
+                ok: false,
+                error: ClawdbotNodeError(
+                    code: .unavailable,
+                    message: "LOCATION_PERMISSION_REQUIRED: grant Location permission"))
         } catch MacNodeLocationService.Error.timeout {
             return BridgeInvokeResponse(
                 id: req.id,
@@ -265,12 +296,11 @@ actor MacNodeRuntime {
                 code: .invalidRequest,
                 message: "INVALID_REQUEST: screen format must be mp4")
         }
-        let res = try await self.screenRecorder.record(
+        let res = try await Self.recordScreen(
             screenIndex: params.screenIndex,
             durationMs: params.durationMs,
             fps: params.fps,
-            includeAudio: params.includeAudio,
-            outPath: nil)
+            includeAudio: params.includeAudio)
         defer { try? FileManager.default.removeItem(atPath: res.path) }
         let data = try Data(contentsOf: URL(fileURLWithPath: res.path))
         struct ScreenPayload: Encodable {

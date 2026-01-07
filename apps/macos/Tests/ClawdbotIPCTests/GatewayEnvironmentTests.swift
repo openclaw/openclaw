@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import Clawdbot
 
-@Suite struct GatewayEnvironmentTests {
+@Suite(.serialized) struct GatewayEnvironmentTests {
     @Test func semverParsesCommonForms() {
         #expect(Semver.parse("1.2.3") == Semver(major: 1, minor: 2, patch: 3))
         #expect(Semver.parse("v2.0.0") == Semver(major: 2, minor: 0, patch: 0))
