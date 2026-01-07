@@ -165,10 +165,14 @@ export function createBashTool(
       const sessionId = randomUUID();
       const warnings: string[] = [];
       const elevatedDefaults = defaults?.elevated;
+      const elevatedDefaultOn =
+        elevatedDefaults?.defaultLevel === "on" &&
+        elevatedDefaults.enabled &&
+        elevatedDefaults.allowed;
       const elevatedRequested =
         typeof params.elevated === "boolean"
           ? params.elevated
-          : elevatedDefaults?.defaultLevel === "on";
+          : elevatedDefaultOn;
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
           throw new Error("elevated is not available right now.");

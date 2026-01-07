@@ -177,6 +177,8 @@ const isAbortError = (err: unknown): boolean => {
 type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
+  workspaceAccess?: "none" | "ro" | "rw";
+  agentWorkspaceMount?: string;
   browserControlUrl?: string;
   browserNoVncUrl?: string;
 };
@@ -249,6 +251,9 @@ export function buildEmbeddedSandboxInfo(
   return {
     enabled: true,
     workspaceDir: sandbox.workspaceDir,
+    workspaceAccess: sandbox.workspaceAccess,
+    agentWorkspaceMount:
+      sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
     browserControlUrl: sandbox.browser?.controlUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
   };
@@ -466,32 +471,38 @@ export async function compactEmbeddedPiSession(params: {
       }
 
       await fs.mkdir(resolvedWorkspace, { recursive: true });
+      const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+      const sandbox = await resolveSandboxContext({
+        config: params.config,
+        sessionKey: sandboxSessionKey,
+        workspaceDir: resolvedWorkspace,
+      });
+      const effectiveWorkspace = sandbox?.enabled
+        ? sandbox.workspaceAccess === "rw"
+          ? resolvedWorkspace
+          : sandbox.workspaceDir
+        : resolvedWorkspace;
+      await fs.mkdir(effectiveWorkspace, { recursive: true });
       await ensureSessionHeader({
         sessionFile: params.sessionFile,
         sessionId: params.sessionId,
-        cwd: resolvedWorkspace,
+        cwd: effectiveWorkspace,
       });
 
       let restoreSkillEnv: (() => void) | undefined;
-      process.chdir(resolvedWorkspace);
+      process.chdir(effectiveWorkspace);
       try {
         const shouldLoadSkillEntries =
           !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
         const skillEntries = shouldLoadSkillEntries
-          ? loadWorkspaceSkillEntries(resolvedWorkspace)
+          ? loadWorkspaceSkillEntries(effectiveWorkspace)
           : [];
         const skillsSnapshot =
           params.skillsSnapshot ??
-          buildWorkspaceSkillSnapshot(resolvedWorkspace, {
+          buildWorkspaceSkillSnapshot(effectiveWorkspace, {
             config: params.config,
             entries: skillEntries,
           });
-        const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
-        const sandbox = await resolveSandboxContext({
-          config: params.config,
-          sessionKey: sandboxSessionKey,
-          workspaceDir: resolvedWorkspace,
-        });
         restoreSkillEnv = params.skillsSnapshot
           ? applySkillEnvOverridesFromSnapshot({
               snapshot: params.skillsSnapshot,
@@ -503,7 +514,7 @@ export async function compactEmbeddedPiSession(params: {
             });
 
         const bootstrapFiles =
-          await loadWorkspaceBootstrapFiles(resolvedWorkspace);
+          await loadWorkspaceBootstrapFiles(effectiveWorkspace);
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
         const promptSkills = resolvePromptSkills(skillsSnapshot, skillEntries);
         const tools = createClawdbotCodingTools({
@@ -533,7 +544,7 @@ export async function compactEmbeddedPiSession(params: {
         const userTime = formatUserTime(new Date(), userTimezone);
         const systemPrompt = buildSystemPrompt({
           appendPrompt: buildAgentSystemPromptAppend({
-            workspaceDir: resolvedWorkspace,
+            workspaceDir: effectiveWorkspace,
             defaultThinkLevel: params.thinkLevel,
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
@@ -550,13 +561,13 @@ export async function compactEmbeddedPiSession(params: {
           }),
           contextFiles,
           skills: promptSkills,
-          cwd: resolvedWorkspace,
+          cwd: effectiveWorkspace,
           tools,
         });
 
         const sessionManager = SessionManager.open(params.sessionFile);
         const settingsManager = SettingsManager.create(
-          resolvedWorkspace,
+          effectiveWorkspace,
           agentDir,
         );
 
@@ -760,33 +771,38 @@ export async function runEmbeddedPiAgent(params: {
         );
 
         await fs.mkdir(resolvedWorkspace, { recursive: true });
+        const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
+        const sandbox = await resolveSandboxContext({
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          workspaceDir: resolvedWorkspace,
+        });
+        const effectiveWorkspace = sandbox?.enabled
+          ? sandbox.workspaceAccess === "rw"
+            ? resolvedWorkspace
+            : sandbox.workspaceDir
+          : resolvedWorkspace;
+        await fs.mkdir(effectiveWorkspace, { recursive: true });
         await ensureSessionHeader({
           sessionFile: params.sessionFile,
           sessionId: params.sessionId,
-          cwd: resolvedWorkspace,
+          cwd: effectiveWorkspace,
         });
 
         let restoreSkillEnv: (() => void) | undefined;
-        process.chdir(resolvedWorkspace);
+        process.chdir(effectiveWorkspace);
         try {
           const shouldLoadSkillEntries =
             !params.skillsSnapshot || !params.skillsSnapshot.resolvedSkills;
           const skillEntries = shouldLoadSkillEntries
-            ? loadWorkspaceSkillEntries(resolvedWorkspace)
+            ? loadWorkspaceSkillEntries(effectiveWorkspace)
             : [];
           const skillsSnapshot =
             params.skillsSnapshot ??
-            buildWorkspaceSkillSnapshot(resolvedWorkspace, {
+            buildWorkspaceSkillSnapshot(effectiveWorkspace, {
               config: params.config,
               entries: skillEntries,
             });
-          const sandboxSessionKey =
-            params.sessionKey?.trim() || params.sessionId;
-          const sandbox = await resolveSandboxContext({
-            config: params.config,
-            sessionKey: sandboxSessionKey,
-            workspaceDir: resolvedWorkspace,
-          });
           restoreSkillEnv = params.skillsSnapshot
             ? applySkillEnvOverridesFromSnapshot({
                 snapshot: params.skillsSnapshot,
@@ -798,7 +814,7 @@ export async function runEmbeddedPiAgent(params: {
               });
 
           const bootstrapFiles =
-            await loadWorkspaceBootstrapFiles(resolvedWorkspace);
+            await loadWorkspaceBootstrapFiles(effectiveWorkspace);
           const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
           const promptSkills = resolvePromptSkills(
             skillsSnapshot,
@@ -833,7 +849,7 @@ export async function runEmbeddedPiAgent(params: {
           const userTime = formatUserTime(new Date(), userTimezone);
           const systemPrompt = buildSystemPrompt({
             appendPrompt: buildAgentSystemPromptAppend({
-              workspaceDir: resolvedWorkspace,
+              workspaceDir: effectiveWorkspace,
               defaultThinkLevel: thinkLevel,
               extraSystemPrompt: params.extraSystemPrompt,
               ownerNumbers: params.ownerNumbers,
@@ -850,13 +866,13 @@ export async function runEmbeddedPiAgent(params: {
             }),
             contextFiles,
             skills: promptSkills,
-            cwd: resolvedWorkspace,
+            cwd: effectiveWorkspace,
             tools,
           });
 
           const sessionManager = SessionManager.open(params.sessionFile);
           const settingsManager = SettingsManager.create(
-            resolvedWorkspace,
+            effectiveWorkspace,
             agentDir,
           );
 

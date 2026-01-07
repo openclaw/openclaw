@@ -21,6 +21,8 @@ export function buildAgentSystemPromptAppend(params: {
   sandboxInfo?: {
     enabled: boolean;
     workspaceDir?: string;
+    workspaceAccess?: "none" | "ro" | "rw";
+    agentWorkspaceMount?: string;
     browserControlUrl?: string;
     browserNoVncUrl?: string;
   };
@@ -184,6 +186,13 @@ export function buildAgentSystemPromptAppend(params: {
           "Some tools may be unavailable due to sandbox policy.",
           params.sandboxInfo.workspaceDir
             ? `Sandbox workspace: ${params.sandboxInfo.workspaceDir}`
+            : "",
+          params.sandboxInfo.workspaceAccess
+            ? `Agent workspace access: ${params.sandboxInfo.workspaceAccess}${
+                params.sandboxInfo.agentWorkspaceMount
+                  ? ` (mounted at ${params.sandboxInfo.agentWorkspaceMount})`
+                  : ""
+              }`
             : "",
           params.sandboxInfo.browserControlUrl
             ? `Sandbox browser control URL: ${params.sandboxInfo.browserControlUrl}`

@@ -17,6 +17,8 @@ describe("buildEmbeddedSandboxInfo", () => {
       enabled: true,
       sessionKey: "session:test",
       workspaceDir: "/tmp/clawdbot-sandbox",
+      agentWorkspaceDir: "/tmp/clawdbot-workspace",
+      workspaceAccess: "none",
       containerName: "clawdbot-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
@@ -44,6 +46,8 @@ describe("buildEmbeddedSandboxInfo", () => {
     expect(buildEmbeddedSandboxInfo(sandbox)).toEqual({
       enabled: true,
       workspaceDir: "/tmp/clawdbot-sandbox",
+      workspaceAccess: "none",
+      agentWorkspaceMount: undefined,
       browserControlUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
     });

@@ -20,6 +20,7 @@
 - Pairing: generate DM pairing codes with CSPRNG, expire pending codes after 1 hour, and avoid re-sending codes for already pending requests.
 - Pairing: lock + atomically write pairing stores with 0600 perms and stop logging pairing codes in provider logs.
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
+- Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.

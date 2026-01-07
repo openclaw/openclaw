@@ -23,6 +23,7 @@ import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   DEFAULT_AGENTS_FILENAME,
   DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
   DEFAULT_SOUL_FILENAME,
   DEFAULT_TOOLS_FILENAME,
@@ -34,6 +35,8 @@ export type SandboxToolPolicy = {
   allow?: string[];
   deny?: string[];
 };
+
+export type SandboxWorkspaceAccess = "none" | "ro" | "rw";
 
 export type SandboxBrowserConfig = {
   enabled: boolean;
@@ -78,6 +81,7 @@ export type SandboxScope = "session" | "agent" | "shared";
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
   scope: SandboxScope;
+  workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
   browser: SandboxBrowserConfig;
@@ -95,6 +99,8 @@ export type SandboxContext = {
   enabled: boolean;
   sessionKey: string;
   workspaceDir: string;
+  agentWorkspaceDir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
   containerName: string;
   containerWorkdir: string;
   docker: SandboxDockerConfig;
@@ -144,6 +150,7 @@ const DEFAULT_SANDBOX_BROWSER_PREFIX = "clawdbot-sbx-browser-";
 const DEFAULT_SANDBOX_BROWSER_CDP_PORT = 9222;
 const DEFAULT_SANDBOX_BROWSER_VNC_PORT = 5900;
 const DEFAULT_SANDBOX_BROWSER_NOVNC_PORT = 6080;
+const SANDBOX_AGENT_WORKSPACE_MOUNT = "/agent";
 
 const SANDBOX_STATE_DIR = path.join(STATE_DIR_CLAWDBOT, "sandbox");
 const SANDBOX_REGISTRY_PATH = path.join(SANDBOX_STATE_DIR, "containers.json");
@@ -227,6 +234,7 @@ function defaultSandboxConfig(cfg?: ClawdbotConfig): SandboxConfig {
       scope: agent?.scope,
       perSession: agent?.perSession,
     }),
+    workspaceAccess: agent?.workspaceAccess ?? "none",
     workspaceRoot: agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
     docker: {
       image: agent?.docker?.image ?? DEFAULT_SANDBOX_IMAGE,
@@ -474,6 +482,7 @@ async function ensureSandboxWorkspace(
       DEFAULT_IDENTITY_FILENAME,
       DEFAULT_USER_FILENAME,
       DEFAULT_BOOTSTRAP_FILENAME,
+      DEFAULT_HEARTBEAT_FILENAME,
     ];
     for (const name of files) {
       const src = path.join(seed, name);
@@ -582,6 +591,8 @@ async function createSandboxContainer(params: {
   name: string;
   cfg: SandboxDockerConfig;
   workspaceDir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
+  agentWorkspaceDir: string;
   scopeKey: string;
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
@@ -593,7 +604,21 @@ async function createSandboxContainer(params: {
     scopeKey,
   });
   args.push("--workdir", cfg.workdir);
-  args.push("-v", `${workspaceDir}:${cfg.workdir}`);
+  const mainMountSuffix =
+    params.workspaceAccess === "ro" && workspaceDir === params.agentWorkspaceDir
+      ? ":ro"
+      : "";
+  args.push("-v", `${workspaceDir}:${cfg.workdir}${mainMountSuffix}`);
+  if (
+    params.workspaceAccess !== "none" &&
+    workspaceDir !== params.agentWorkspaceDir
+  ) {
+    const agentMountSuffix = params.workspaceAccess === "ro" ? ":ro" : "";
+    args.push(
+      "-v",
+      `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
+    );
+  }
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
@@ -607,6 +632,7 @@ async function createSandboxContainer(params: {
 async function ensureSandboxContainer(params: {
   sessionKey: string;
   workspaceDir: string;
+  agentWorkspaceDir: string;
   cfg: SandboxConfig;
 }) {
   const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
@@ -620,6 +646,8 @@ async function ensureSandboxContainer(params: {
       name: containerName,
       cfg: params.cfg.docker,
       workspaceDir: params.workspaceDir,
+      workspaceAccess: params.cfg.workspaceAccess,
+      agentWorkspaceDir: params.agentWorkspaceDir,
       scopeKey,
     });
   } else if (!state.running) {
@@ -675,6 +703,7 @@ function buildSandboxBrowserResolvedConfig(params: {
 async function ensureSandboxBrowser(params: {
   scopeKey: string;
   workspaceDir: string;
+  agentWorkspaceDir: string;
   cfg: SandboxConfig;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) return null;
@@ -695,7 +724,25 @@ async function ensureSandboxBrowser(params: {
       scopeKey: params.scopeKey,
       labels: { "clawdbot.sandboxBrowser": "1" },
     });
-    args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}`);
+    const mainMountSuffix =
+      params.cfg.workspaceAccess === "ro" &&
+      params.workspaceDir === params.agentWorkspaceDir
+        ? ":ro"
+        : "";
+    args.push(
+      "-v",
+      `${params.workspaceDir}:${params.cfg.docker.workdir}${mainMountSuffix}`,
+    );
+    if (
+      params.cfg.workspaceAccess !== "none" &&
+      params.workspaceDir !== params.agentWorkspaceDir
+    ) {
+      const agentMountSuffix = params.cfg.workspaceAccess === "ro" ? ":ro" : "";
+      args.push(
+        "-v",
+        `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
+      );
+    }
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (params.cfg.browser.enableNoVnc && !params.cfg.browser.headless) {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);
@@ -883,29 +930,38 @@ export async function resolveSandboxContext(params: {
 
   await maybePruneSandboxes(cfg);
 
+  const agentWorkspaceDir = resolveUserPath(
+    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
-  const workspaceDir =
+  const sandboxWorkspaceDir =
     cfg.scope === "shared"
       ? workspaceRoot
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const seedWorkspace =
-    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
-  await ensureSandboxWorkspace(
-    workspaceDir,
-    seedWorkspace,
-    params.config?.agent?.skipBootstrap,
-  );
+  const workspaceDir =
+    cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+  if (workspaceDir === sandboxWorkspaceDir) {
+    await ensureSandboxWorkspace(
+      sandboxWorkspaceDir,
+      agentWorkspaceDir,
+      params.config?.agent?.skipBootstrap,
+    );
+  } else {
+    await fs.mkdir(workspaceDir, { recursive: true });
+  }
 
   const containerName = await ensureSandboxContainer({
     sessionKey: rawSessionKey,
     workspaceDir,
+    agentWorkspaceDir,
     cfg,
   });
 
   const browser = await ensureSandboxBrowser({
     scopeKey,
     workspaceDir,
+    agentWorkspaceDir,
     cfg,
   });
 
@@ -913,6 +969,8 @@ export async function resolveSandboxContext(params: {
     enabled: true,
     sessionKey: rawSessionKey,
     workspaceDir,
+    agentWorkspaceDir,
+    workspaceAccess: cfg.workspaceAccess,
     containerName,
     containerWorkdir: cfg.docker.workdir,
     docker: cfg.docker,
@@ -932,19 +990,26 @@ export async function ensureSandboxWorkspaceForSession(params: {
   const mainKey = params.config?.session?.mainKey?.trim() || "main";
   if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
 
+  const agentWorkspaceDir = resolveUserPath(
+    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR,
+  );
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
   const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
-  const workspaceDir =
+  const sandboxWorkspaceDir =
     cfg.scope === "shared"
       ? workspaceRoot
       : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
-  const seedWorkspace =
-    params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
-  await ensureSandboxWorkspace(
-    workspaceDir,
-    seedWorkspace,
-    params.config?.agent?.skipBootstrap,
-  );
+  const workspaceDir =
+    cfg.workspaceAccess === "rw" ? agentWorkspaceDir : sandboxWorkspaceDir;
+  if (workspaceDir === sandboxWorkspaceDir) {
+    await ensureSandboxWorkspace(
+      sandboxWorkspaceDir,
+      agentWorkspaceDir,
+      params.config?.agent?.skipBootstrap,
+    );
+  } else {
+    await fs.mkdir(workspaceDir, { recursive: true });
+  }
 
   return {
     workspaceDir,

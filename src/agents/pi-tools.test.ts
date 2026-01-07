@@ -240,6 +240,8 @@ describe("createClawdbotCodingTools", () => {
       enabled: true,
       sessionKey: "sandbox:test",
       workspaceDir: path.join(os.tmpdir(), "clawdbot-sandbox"),
+      agentWorkspaceDir: path.join(os.tmpdir(), "clawdbot-workspace"),
+      workspaceAccess: "none",
       containerName: "clawdbot-sbx-test",
       containerWorkdir: "/workspace",
       docker: {
@@ -262,6 +264,37 @@ describe("createClawdbotCodingTools", () => {
     expect(tools.some((tool) => tool.name === "bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "read")).toBe(false);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+  });
+
+  it("hard-disables write/edit when sandbox workspaceAccess is ro", () => {
+    const sandbox = {
+      enabled: true,
+      sessionKey: "sandbox:test",
+      workspaceDir: path.join(os.tmpdir(), "clawdbot-sandbox"),
+      agentWorkspaceDir: path.join(os.tmpdir(), "clawdbot-workspace"),
+      workspaceAccess: "ro",
+      containerName: "clawdbot-sbx-test",
+      containerWorkdir: "/workspace",
+      docker: {
+        image: "clawdbot-sandbox:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: [],
+        network: "none",
+        user: "1000:1000",
+        capDrop: ["ALL"],
+        env: { LANG: "C.UTF-8" },
+      },
+      tools: {
+        allow: ["read", "write", "edit"],
+        deny: [],
+      },
+    };
+    const tools = createClawdbotCodingTools({ sandbox });
+    expect(tools.some((tool) => tool.name === "read")).toBe(true);
+    expect(tools.some((tool) => tool.name === "write")).toBe(false);
+    expect(tools.some((tool) => tool.name === "edit")).toBe(false);
   });
 
   it("filters tools by agent tool policy even without sandbox", () => {

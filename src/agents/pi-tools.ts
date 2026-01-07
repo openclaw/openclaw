@@ -526,6 +526,7 @@ export function createClawdbotCodingTools(options?: {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const sandboxRoot = sandbox?.workspaceDir;
+  const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
       return sandboxRoot
@@ -555,10 +556,12 @@ export function createClawdbotCodingTools(options?: {
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
-      ? [
-          createSandboxedEditTool(sandboxRoot),
-          createSandboxedWriteTool(sandboxRoot),
-        ]
+      ? allowWorkspaceWrites
+        ? [
+            createSandboxedEditTool(sandboxRoot),
+            createSandboxedWriteTool(sandboxRoot),
+          ]
+        : []
       : []),
     bashTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,

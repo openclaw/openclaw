@@ -132,6 +132,20 @@ describe("bash tool backgrounding", () => {
     ).rejects.toThrow("elevated is not available right now.");
   });
 
+  it("does not default to elevated when not allowed", async () => {
+    const customBash = createBashTool({
+      elevated: { enabled: true, allowed: false, defaultLevel: "on" },
+      backgroundMs: 1000,
+      timeoutSec: 5,
+    });
+
+    const result = await customBash.execute("call1", {
+      command: "echo hi",
+    });
+    const text = result.content.find((c) => c.type === "text")?.text ?? "";
+    expect(text).toContain("hi");
+  });
+
   it("logs line-based slices and defaults to last lines", async () => {
     const result = await bashTool.execute("call1", {
       command:

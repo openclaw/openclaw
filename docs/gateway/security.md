@@ -146,6 +146,11 @@ Note: to prevent cross-agent access, keep `sandbox.scope` at `"agent"` (default)
 or `"session"` for stricter per-session isolation. `scope: "shared"` uses a
 single container/workspace.
 
+Also consider agent workspace access inside the sandbox:
+- `agent.sandbox.workspaceAccess: "none"` (default) keeps the agent workspace off-limits; tools run against a sandbox workspace under `~/.clawdbot/sandboxes`
+- `workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`)
+- `workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
+
 Important: `agent.elevated` is an explicit escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
 
 ## What to Tell Your AI

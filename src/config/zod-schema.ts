@@ -579,6 +579,9 @@ export const ClawdbotSchema = z.object({
           mode: z
             .union([z.literal("off"), z.literal("non-main"), z.literal("all")])
             .optional(),
+          workspaceAccess: z
+            .union([z.literal("none"), z.literal("ro"), z.literal("rw")])
+            .optional(),
           sessionToolsVisibility: z
             .union([z.literal("spawned"), z.literal("all")])
             .optional(),

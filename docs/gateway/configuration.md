@@ -867,7 +867,10 @@ sessions so they cannot access your host system.
 Defaults (if enabled):
 - scope: `"agent"` (one container + workspace per agent)
 - Debian bookworm-slim based image
-- workspace per agent under `~/.clawdbot/sandboxes`
+- agent workspace access: `workspaceAccess: "none"` (default)
+  - `"none"`: use a per-scope sandbox workspace under `~/.clawdbot/sandboxes`
+  - `"ro"`: keep the sandbox workspace at `/workspace`, and mount the agent workspace read-only at `/agent` (disables `write`/`edit`)
+  - `"rw"`: mount the agent workspace read/write at `/workspace`
 - auto-prune: idle > 24h OR age > 7d
 - tools: allow only `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn` (deny wins)
 - optional sandboxed browser (Chromium + CDP, noVNC observer)
@@ -885,6 +888,7 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
     sandbox: {
       mode: "non-main", // off | non-main | all
       scope: "agent", // session | agent | shared (agent is default)
+      workspaceAccess: "none", // none | ro | rw
       workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
         image: "clawdbot-sandbox:bookworm-slim",
@@ -940,6 +944,8 @@ scripts/sandbox-setup.sh
 
 Note: sandbox containers default to `network: "none"`; set `agent.sandbox.docker.network`
 to `"bridge"` (or your custom network) if the agent needs outbound access.
+
+Note: inbound attachments are staged into the active workspace at `media/inbound/*`. With `workspaceAccess: "rw"`, that means files are written into the agent workspace.
 
 Build the optional browser image with:
 ```bash

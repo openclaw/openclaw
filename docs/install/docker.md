@@ -79,8 +79,9 @@ container. The gateway stays on your host, but the tool execution is isolated:
 - scope: `"agent"` by default (one container + workspace per agent)
 - scope: `"session"` for per-session isolation
 - per-scope workspace folder mounted at `/workspace`
+- optional agent workspace access (`agent.sandbox.workspaceAccess`)
 - allow/deny tool policy (deny wins)
-- inbound media is copied into the sandbox workspace (`media/inbound/*`) so tools can read it
+- inbound media is copied into the active sandbox workspace (`media/inbound/*`) so tools can read it (with `workspaceAccess: "rw"`, this lands in the agent workspace)
 
 Warning: `scope: "shared"` disables cross-session isolation. All sessions share
 one container and one workspace.
@@ -89,7 +90,9 @@ one container and one workspace.
 
 - Image: `clawdbot-sandbox:bookworm-slim`
 - One container per agent
-- Workspace per agent under `~/.clawdbot/sandboxes`
+- Agent workspace access: `workspaceAccess: "none"` (default) uses `~/.clawdbot/sandboxes`
+  - `"ro"` keeps the sandbox workspace at `/workspace` and mounts the agent workspace read-only at `/agent` (disables `write`/`edit`)
+  - `"rw"` mounts the agent workspace read/write at `/workspace`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
 - Default allow: `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`
@@ -103,6 +106,7 @@ one container and one workspace.
     sandbox: {
       mode: "non-main", // off | non-main | all
       scope: "agent", // session | agent | shared (agent is default)
+      workspaceAccess: "none", // none | ro | rw
       workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
         image: "clawdbot-sandbox:bookworm-slim",

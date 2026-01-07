@@ -925,6 +925,13 @@ export type ClawdbotConfig = {
       /** Enable sandboxing for sessions. */
       mode?: "off" | "non-main" | "all";
       /**
+       * Agent workspace access inside the sandbox.
+       * - "none": do not mount the agent workspace into the container; use a sandbox workspace under workspaceRoot
+       * - "ro": mount the agent workspace read-only; disables write/edit tools
+       * - "rw": mount the agent workspace read/write; enables write/edit tools
+       */
+      workspaceAccess?: "none" | "ro" | "rw";
+      /**
        * Session tools visibility for sandboxed sessions.
        * - "spawned": only allow session tools to target sessions spawned from this session (default)
        * - "all": allow session tools to target any session
