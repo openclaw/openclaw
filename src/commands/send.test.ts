@@ -243,7 +243,7 @@ describe("sendCommand", () => {
       runtime,
     );
     expect(runtime.log).toHaveBeenCalledWith(
-      expect.stringContaining('"provider": "web"'),
+      expect.stringContaining('"provider": "whatsapp"'),
     );
   });
 });
