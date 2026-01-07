@@ -62,7 +62,11 @@ enum GatewayLaunchAgentManager {
             let desiredBind = self.preferredGatewayBind() ?? "loopback"
             let desiredToken = self.preferredGatewayToken()
             let desiredPassword = self.preferredGatewayPassword()
-            let desiredConfig = DesiredConfig(port: port, bind: desiredBind, token: desiredToken, password: desiredPassword)
+            let desiredConfig = DesiredConfig(
+                port: port,
+                bind: desiredBind,
+                token: desiredToken,
+                password: desiredPassword)
 
             // If launchd already loaded the job (common on login), avoid `bootout` unless we must
             // change the config. `bootout` can kill a just-started gateway and cause attach loops.

@@ -79,4 +79,3 @@ enum LaunchAgentPlist {
         return token.isEmpty ? nil : token
     }
 }
-
