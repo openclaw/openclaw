@@ -524,16 +524,34 @@ export async function monitorSignalProvider(
       if (!queuedFinal) return;
     };
 
-    await streamSignalEvents({
-      baseUrl,
-      account,
-      abortSignal: opts.abortSignal,
-      onEvent: (event) => {
-        void handleEvent(event).catch((err) => {
-          runtime.error?.(`event handler failed: ${String(err)}`);
+    // Reconnection loop for SSE stream
+    const MAX_RETRY_DELAY = 30_000; // 30 seconds
+    const INITIAL_RETRY_DELAY = 1_000; // 1 second
+    let retryDelay = INITIAL_RETRY_DELAY;
+
+    while (!opts.abortSignal?.aborted) {
+      try {
+        await streamSignalEvents({
+          baseUrl,
+          account,
+          abortSignal: opts.abortSignal,
+          onEvent: (event) => {
+            void handleEvent(event).catch((err) => {
+              runtime.error?.(`event handler failed: ${String(err)}`);
+            });
+          },
         });
-      },
-    });
+        // If streamSignalEvents returns normally, break (shouldn't happen normally)
+        break;
+      } catch (err) {
+        if (opts.abortSignal?.aborted) return;
+        runtime.log?.(
+          `Signal SSE connection lost, reconnecting in ${retryDelay / 1000}s...`,
+        );
+        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY);
+      }
+    }
   } catch (err) {
     if (opts.abortSignal?.aborted) return;
     throw err;
