@@ -17,6 +17,7 @@
 
 ### Fixes
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
+- CLI: add `clawdbot docs` live docs search with pretty output.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
 - Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
