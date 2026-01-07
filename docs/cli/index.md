@@ -30,6 +30,10 @@ clawdbot [--dev] [--profile <name>] <command>
   send
   poll
   agent
+  agents
+    list
+    add
+    delete
   status
   health
   sessions
@@ -147,7 +151,7 @@ Options:
 - `--workspace <dir>`
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--auth-choice <oauth|apiKey|minimax|skip>`
+- `--auth-choice <oauth|openai-codex|antigravity|apiKey|minimax|skip>`
 - `--anthropic-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto>`
@@ -271,6 +275,29 @@ Options:
 - `--deliver`
 - `--json`
 - `--timeout <seconds>`
+
+### `agents`
+Manage isolated agents (workspaces + auth + routing).
+
+#### `agents list`
+List configured agents.
+
+Options:
+- `--json`
+
+#### `agents add [name]`
+Add a new isolated agent. If `--workspace` is omitted, runs the guided wizard.
+
+Options:
+- `--workspace <dir>`
+- `--json`
+
+#### `agents delete <id>`
+Delete an agent and prune its workspace + state.
+
+Options:
+- `--force`
+- `--json`
 
 ### `status`
 Show linked session health and recent recipients.

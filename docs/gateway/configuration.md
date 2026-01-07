@@ -330,8 +330,10 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
 
 - `routing.defaultAgentId`: fallback when no binding matches (default: `main`).
 - `routing.agents.<agentId>`: per-agent overrides.
+  - `name`: display name for the agent.
   - `workspace`: default `~/clawd-<agentId>` (for `main`, falls back to legacy `agent.workspace`).
   - `agentDir`: default `~/.clawdbot/agents/<agentId>/agent`.
+  - `model`: per-agent default model (provider/model), overrides `agent.model` for that agent.
 - `routing.bindings[]`: routes inbound messages to an `agentId`.
   - `match.provider` (required)
   - `match.accountId` (optional; `*` = any account; omitted = default account)

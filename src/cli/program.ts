@@ -1,6 +1,11 @@
 import chalk from "chalk";
 import { Command } from "commander";
 import { agentCliCommand } from "../commands/agent-via-gateway.js";
+import {
+  agentsAddCommand,
+  agentsDeleteCommand,
+  agentsListCommand,
+} from "../commands/agents.js";
 import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
@@ -217,7 +222,10 @@ export function buildProgram() {
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
     .option("--non-interactive", "Run without prompts", false)
     .option("--mode <mode>", "Wizard mode: local|remote")
-    .option("--auth-choice <choice>", "Auth: oauth|apiKey|minimax|skip")
+    .option(
+      "--auth-choice <choice>",
+      "Auth: oauth|openai-codex|antigravity|apiKey|minimax|skip",
+    )
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|lan|tailnet|auto")
@@ -243,6 +251,8 @@ export function buildProgram() {
             mode: opts.mode as "local" | "remote" | undefined,
             authChoice: opts.authChoice as
               | "oauth"
+              | "openai-codex"
+              | "antigravity"
               | "apiKey"
               | "minimax"
               | "skip"
@@ -544,6 +554,74 @@ Examples:
         defaultRuntime.exit(1);
       }
     });
+
+  const agents = program
+    .command("agents")
+    .description("Manage isolated agents (workspaces + auth + routing)");
+
+  agents
+    .command("list")
+    .description("List configured agents")
+    .option("--json", "Output JSON instead of text", false)
+    .action(async (opts) => {
+      try {
+        await agentsListCommand({ json: Boolean(opts.json) }, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  agents
+    .command("add [name]")
+    .description("Add a new isolated agent")
+    .option("--workspace <dir>", "Workspace directory for the new agent")
+    .option("--json", "Output JSON summary", false)
+    .action(async (name, opts) => {
+      try {
+        await agentsAddCommand(
+          {
+            name: typeof name === "string" ? name : undefined,
+            workspace: opts.workspace as string | undefined,
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  agents
+    .command("delete <id>")
+    .description("Delete an agent and prune workspace/state")
+    .option("--force", "Skip confirmation", false)
+    .option("--json", "Output JSON summary", false)
+    .action(async (id, opts) => {
+      try {
+        await agentsDeleteCommand(
+          {
+            id: String(id),
+            force: Boolean(opts.force),
+            json: Boolean(opts.json),
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  agents.action(async () => {
+    try {
+      await agentsListCommand({}, defaultRuntime);
+    } catch (err) {
+      defaultRuntime.error(String(err));
+      defaultRuntime.exit(1);
+    }
+  });
 
   registerCanvasCli(program);
   registerGatewayCli(program);

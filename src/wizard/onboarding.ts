@@ -1,38 +1,15 @@
 import path from "node:path";
 
 import {
-  loginAnthropic,
-  loginOpenAICodex,
-  type OAuthCredentials,
-  type OAuthProvider,
-} from "@mariozechner/pi-ai";
-import {
-  ensureAuthProfileStore,
-  listProfilesForProvider,
-} from "../agents/auth-profiles.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
-import {
-  getCustomProviderApiKey,
-  resolveEnvApiKey,
-} from "../agents/model-auth.js";
-import { loadModelCatalog } from "../agents/model-catalog.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import {
-  isRemoteEnvironment,
-  loginAntigravityVpsAware,
-} from "../commands/antigravity-oauth.js";
+  applyAuthChoice,
+  warnIfModelConfigLooksOff,
+} from "../commands/auth-choice.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "../commands/daemon-runtime.js";
 import { healthCommand } from "../commands/health.js";
-import {
-  applyAuthProfileConfig,
-  applyMinimaxConfig,
-  setAnthropicApiKey,
-  writeOAuthCredentials,
-} from "../commands/onboard-auth.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -57,10 +34,6 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import {
-  applyOpenAICodexModelDefault,
-  OPENAI_CODEX_DEFAULT_MODEL,
-} from "../commands/openai-codex-model-default.js";
 import { ensureSystemdUserLingerInteractive } from "../commands/systemd-linger.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -77,52 +50,6 @@ import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
-
-async function warnIfModelConfigLooksOff(
-  config: ClawdbotConfig,
-  prompter: WizardPrompter,
-) {
-  const ref = resolveConfiguredModelRef({
-    cfg: config,
-    defaultProvider: DEFAULT_PROVIDER,
-    defaultModel: DEFAULT_MODEL,
-  });
-  const warnings: string[] = [];
-  const catalog = await loadModelCatalog({ config, useCache: false });
-  if (catalog.length > 0) {
-    const known = catalog.some(
-      (entry) => entry.provider === ref.provider && entry.id === ref.model,
-    );
-    if (!known) {
-      warnings.push(
-        `Model not found: ${ref.provider}/${ref.model}. Update agent.model or run /models list.`,
-      );
-    }
-  }
-
-  const store = ensureAuthProfileStore();
-  const hasProfile = listProfilesForProvider(store, ref.provider).length > 0;
-  const envKey = resolveEnvApiKey(ref.provider);
-  const customKey = getCustomProviderApiKey(config, ref.provider);
-  if (!hasProfile && !envKey && !customKey) {
-    warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
-    );
-  }
-
-  if (ref.provider === "openai") {
-    const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
-    if (hasCodex) {
-      warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agent.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
-      );
-    }
-  }
-
-  if (warnings.length > 0) {
-    await prompter.note(warnings.join("\n"), "Model check");
-  }
-}
 
 export async function runOnboardingWizard(
   opts: OnboardOptions,
@@ -203,18 +130,18 @@ export async function runOnboardingWizard(
   const mode =
     opts.mode ??
     ((await prompter.select({
-      message: "Where will the Gateway run?",
+      message: "What do you want to set up?",
       options: [
         {
           value: "local",
-          label: "Local (this machine)",
+          label: "Local gateway (this machine)",
           hint: localProbe.ok
             ? `Gateway reachable (${localUrl})`
             : `No gateway detected (${localUrl})`,
         },
         {
           value: "remote",
-          label: "Remote (info-only)",
+          label: "Remote gateway (info-only)",
           hint: !remoteUrl
             ? "No remote URL configured yet"
             : remoteProbe?.ok
@@ -271,214 +198,14 @@ export async function runOnboardingWizard(
     ],
   })) as AuthChoice;
 
-  if (authChoice === "oauth") {
-    await prompter.note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
-    );
-    const spin = prompter.progress("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = await prompter.text({
-            message: "Paste authorization code (code#state)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
-      );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
-      }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      runtime.error(String(err));
-      await prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
-      );
-    }
-  } else if (authChoice === "openai-codex") {
-    const isRemote = isRemoteEnvironment();
-    await prompter.note(
-      isRemote
-        ? [
-            "You are running in a remote/VPS environment.",
-            "A URL will be shown for you to open in your LOCAL browser.",
-            "After signing in, paste the redirect URL back here.",
-          ].join("\n")
-        : [
-            "Browser will open for OpenAI authentication.",
-            "If the callback doesn't auto-complete, paste the redirect URL.",
-            "OpenAI OAuth uses localhost:1455 for the callback.",
-          ].join("\n"),
-      "OpenAI Codex OAuth",
-    );
-    const spin = prompter.progress("Starting OAuth flow…");
-    let manualCodePromise: Promise<string> | undefined;
-    try {
-      const creds = await loginOpenAICodex({
-        onAuth: async ({ url }) => {
-          if (isRemote) {
-            spin.stop("OAuth URL ready");
-            runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-            manualCodePromise = prompter
-              .text({
-                message: "Paste the redirect URL (or authorization code)",
-                validate: (value) => (value?.trim() ? undefined : "Required"),
-              })
-              .then((value) => String(value));
-          } else {
-            spin.update("Complete sign-in in browser…");
-            await openUrl(url);
-            runtime.log(`Open: ${url}`);
-          }
-        },
-        onPrompt: async (prompt) => {
-          if (manualCodePromise) {
-            return manualCodePromise;
-          }
-          const code = await prompter.text({
-            message: prompt.message,
-            placeholder: prompt.placeholder,
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
-        onProgress: (msg) => spin.update(msg),
-      });
-      spin.stop("OpenAI OAuth complete");
-      if (creds) {
-        await writeOAuthCredentials(
-          "openai-codex" as unknown as OAuthProvider,
-          creds,
-        );
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: "openai-codex:default",
-          provider: "openai-codex",
-          mode: "oauth",
-        });
-        const applied = applyOpenAICodexModelDefault(nextConfig);
-        nextConfig = applied.next;
-        if (applied.changed) {
-          await prompter.note(
-            `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-            "Model configured",
-          );
-        }
-      }
-    } catch (err) {
-      spin.stop("OpenAI OAuth failed");
-      runtime.error(String(err));
-      await prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
-      );
-    }
-  } else if (authChoice === "antigravity") {
-    const isRemote = isRemoteEnvironment();
-    await prompter.note(
-      isRemote
-        ? [
-            "You are running in a remote/VPS environment.",
-            "A URL will be shown for you to open in your LOCAL browser.",
-            "After signing in, copy the redirect URL and paste it back here.",
-          ].join("\n")
-        : [
-            "Browser will open for Google authentication.",
-            "Sign in with your Google account that has Antigravity access.",
-            "The callback will be captured automatically on localhost:51121.",
-          ].join("\n"),
-      "Google Antigravity OAuth",
-    );
-    const spin = prompter.progress("Starting OAuth flow…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAntigravityVpsAware(
-        async (url) => {
-          if (isRemote) {
-            spin.stop("OAuth URL ready");
-            runtime.log(`\nOpen this URL in your LOCAL browser:\n\n${url}\n`);
-          } else {
-            spin.update("Complete sign-in in browser…");
-            await openUrl(url);
-            runtime.log(`Open: ${url}`);
-          }
-        },
-        (msg) => spin.update(msg),
-      );
-      spin.stop("Antigravity OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("google-antigravity", oauthCreds);
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
-          provider: "google-antigravity",
-          mode: "oauth",
-        });
-        nextConfig = {
-          ...nextConfig,
-          agent: {
-            ...nextConfig.agent,
-            model: {
-              ...(nextConfig.agent?.model &&
-              "fallbacks" in (nextConfig.agent.model as Record<string, unknown>)
-                ? {
-                    fallbacks: (
-                      nextConfig.agent.model as { fallbacks?: string[] }
-                    ).fallbacks,
-                  }
-                : undefined),
-              primary: "google-antigravity/claude-opus-4-5-thinking",
-            },
-            models: {
-              ...nextConfig.agent?.models,
-              "google-antigravity/claude-opus-4-5-thinking":
-                nextConfig.agent?.models?.[
-                  "google-antigravity/claude-opus-4-5-thinking"
-                ] ?? {},
-            },
-          },
-        };
-        await prompter.note(
-          "Default model set to google-antigravity/claude-opus-4-5-thinking",
-          "Model configured",
-        );
-      }
-    } catch (err) {
-      spin.stop("Antigravity OAuth failed");
-      runtime.error(String(err));
-      await prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
-      );
-    }
-  } else if (authChoice === "apiKey") {
-    const key = await prompter.text({
-      message: "Enter Anthropic API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    await setAnthropicApiKey(String(key).trim());
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "anthropic:default",
-      provider: "anthropic",
-      mode: "api_key",
-    });
-  } else if (authChoice === "minimax") {
-    nextConfig = applyMinimaxConfig(nextConfig);
-  }
+  const authResult = await applyAuthChoice({
+    authChoice,
+    config: nextConfig,
+    prompter,
+    runtime,
+    setDefaultModel: true,
+  });
+  nextConfig = authResult.config;
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
 

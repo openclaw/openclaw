@@ -38,6 +38,12 @@ clawdbot configure
 **Remote mode** only configures the local client to connect to a Gateway elsewhere.
 It does **not** install or change anything on the remote host.
 
+To add more isolated agents (separate workspace + sessions + auth), use:
+
+```bash
+clawdbot agents add <name>
+```
+
 ## Flow details (local)
 
 1) **Existing config detection**
@@ -110,6 +116,20 @@ Notes:
   - macOS: Bonjour (`dns-sd`)
   - Linux: Avahi (`avahi-browse`)
 
+## Add another agent
+
+Use `clawdbot agents add <name>` to create a separate agent with its own workspace,
+sessions, and auth profiles. Running without `--workspace` launches the wizard.
+
+What it sets:
+- `routing.agents.<agentId>.name`
+- `routing.agents.<agentId>.workspace`
+- `routing.agents.<agentId>.agentDir`
+
+Notes:
+- Default workspaces follow `~/clawd-<agentId>`.
+- Add `routing.bindings` to route inbound messages (the wizard can do this).
+
 ## Non‑interactive mode
 
 Use `--non-interactive` to automate or script onboarding:
@@ -127,6 +147,12 @@ clawdbot onboard --non-interactive \
 ```
 
 Add `--json` for a machine‑readable summary.
+
+Add agent (non‑interactive) example:
+
+```bash
+clawdbot agents add work --workspace ~/clawd-work
+```
 
 ## Gateway wizard RPC
 
@@ -158,6 +184,8 @@ Typical fields in `~/.clawdbot/clawdbot.json`:
 - `wizard.lastRunCommit`
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
+
+`clawdbot agents add` writes `routing.agents.<agentId>` and optional `routing.bindings`.
 
 WhatsApp credentials go under `~/.clawdbot/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.

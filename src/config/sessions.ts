@@ -115,6 +115,14 @@ export function resolveSessionTranscriptsDir(
   return resolveAgentSessionsDir(DEFAULT_AGENT_ID, env, homedir);
 }
 
+export function resolveSessionTranscriptsDirForAgent(
+  agentId?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  homedir: () => string = os.homedir,
+): string {
+  return resolveAgentSessionsDir(agentId, env, homedir);
+}
+
 export function resolveDefaultSessionStorePath(agentId?: string): string {
   return path.join(resolveAgentSessionsDir(agentId), "sessions.json");
 }

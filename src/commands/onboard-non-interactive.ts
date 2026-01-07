@@ -29,11 +29,7 @@ import {
   ensureWorkspaceAndSessions,
   randomToken,
 } from "./onboard-helpers.js";
-import type {
-  AuthChoice,
-  OnboardMode,
-  OnboardOptions,
-} from "./onboard-types.js";
+import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
 
 export async function runNonInteractiveOnboarding(
@@ -42,7 +38,12 @@ export async function runNonInteractiveOnboarding(
 ) {
   const snapshot = await readConfigFileSnapshot();
   const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
-  const mode: OnboardMode = opts.mode ?? "local";
+  const mode = opts.mode ?? "local";
+  if (mode !== "local" && mode !== "remote") {
+    runtime.error(`Invalid --mode "${String(mode)}" (use local|remote).`);
+    runtime.exit(1);
+    return;
+  }
 
   if (mode === "remote") {
     const remoteUrl = opts.remoteUrl?.trim();

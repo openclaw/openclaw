@@ -1,4 +1,5 @@
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
+import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import {
   resolveAuthProfileDisplayLabel,
   resolveAuthStorePathForDisplay,
@@ -768,20 +769,41 @@ export async function persistInlineDirectives(params: {
   };
 }
 
-export function resolveDefaultModel(params: { cfg: ClawdbotConfig }): {
+export function resolveDefaultModel(params: {
+  cfg: ClawdbotConfig;
+  agentId?: string;
+}): {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
 } {
+  const agentModelOverride = params.agentId
+    ? resolveAgentConfig(params.cfg, params.agentId)?.model?.trim()
+    : undefined;
+  const cfg =
+    agentModelOverride && agentModelOverride.length > 0
+      ? {
+          ...params.cfg,
+          agent: {
+            ...params.cfg.agent,
+            model: {
+              ...(typeof params.cfg.agent?.model === "object"
+                ? params.cfg.agent.model
+                : undefined),
+              primary: agentModelOverride,
+            },
+          },
+        }
+      : params.cfg;
   const mainModel = resolveConfiguredModelRef({
-    cfg: params.cfg,
+    cfg,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
   const defaultProvider = mainModel.provider;
   const defaultModel = mainModel.model;
   const aliasIndex = buildModelAliasIndex({
-    cfg: params.cfg,
+    cfg,
     defaultProvider,
   });
   return { defaultProvider, defaultModel, aliasIndex };

@@ -539,6 +539,7 @@ export type RoutingConfig = {
   agents?: Record<
     string,
     {
+      name?: string;
       workspace?: string;
       agentDir?: string;
       model?: string;

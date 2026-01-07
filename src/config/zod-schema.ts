@@ -223,6 +223,7 @@ const RoutingSchema = z
         z.string(),
         z
           .object({
+            name: z.string().optional(),
             workspace: z.string().optional(),
             agentDir: z.string().optional(),
             model: z.string().optional(),

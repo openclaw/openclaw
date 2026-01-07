@@ -3,9 +3,17 @@ import path from "node:path";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { DmPolicy } from "../config/types.js";
 import { loginWeb } from "../provider-web.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeE164 } from "../utils.js";
-import { WA_WEB_AUTH_DIR } from "../web/session.js";
+import {
+  listWhatsAppAccountIds,
+  resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppAuthDir,
+} from "../web/accounts.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { ProviderChoice } from "./onboard-types.js";
@@ -28,8 +36,12 @@ async function pathExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function detectWhatsAppLinked(): Promise<boolean> {
-  const credsPath = path.join(WA_WEB_AUTH_DIR, "creds.json");
+async function detectWhatsAppLinked(
+  cfg: ClawdbotConfig,
+  accountId: string,
+): Promise<boolean> {
+  const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
+  const credsPath = path.join(authDir, "creds.json");
   return await pathExists(credsPath);
 }
 
@@ -461,13 +473,24 @@ async function promptWhatsAppAllowFrom(
   return setWhatsAppAllowFrom(next, unique);
 }
 
+type SetupProvidersOptions = {
+  allowDisable?: boolean;
+  allowSignalInstall?: boolean;
+  onSelection?: (selection: ProviderChoice[]) => void;
+  whatsappAccountId?: string;
+  promptWhatsAppAccountId?: boolean;
+  onWhatsAppAccountId?: (accountId: string) => void;
+};
+
 export async function setupProviders(
   cfg: ClawdbotConfig,
   runtime: RuntimeEnv,
   prompter: WizardPrompter,
-  options?: { allowDisable?: boolean; allowSignalInstall?: boolean },
+  options?: SetupProvidersOptions,
 ): Promise<ClawdbotConfig> {
-  const whatsappLinked = await detectWhatsAppLinked();
+  let whatsappAccountId =
+    options?.whatsappAccountId?.trim() || resolveDefaultWhatsAppAccountId(cfg);
+  let whatsappLinked = await detectWhatsAppLinked(cfg, whatsappAccountId);
   const telegramEnv = Boolean(process.env.TELEGRAM_BOT_TOKEN?.trim());
   const discordEnv = Boolean(process.env.DISCORD_BOT_TOKEN?.trim());
   const slackBotEnv = Boolean(process.env.SLACK_BOT_TOKEN?.trim());
@@ -491,9 +514,11 @@ export async function setupProviders(
   const imessageCliPath = cfg.imessage?.cliPath ?? "imsg";
   const imessageCliDetected = await detectBinary(imessageCliPath);
 
+  const waAccountLabel =
+    whatsappAccountId === DEFAULT_ACCOUNT_ID ? "default" : whatsappAccountId;
   await prompter.note(
     [
-      `WhatsApp: ${whatsappLinked ? "linked" : "not linked"}`,
+      `WhatsApp (${waAccountLabel}): ${whatsappLinked ? "linked" : "not linked"}`,
       `Telegram: ${telegramConfigured ? "configured" : "needs token"}`,
       `Discord: ${discordConfigured ? "configured" : "needs token"}`,
       `Slack: ${slackConfigured ? "configured" : "needs tokens"}`,
@@ -549,14 +574,71 @@ export async function setupProviders(
     ],
   })) as ProviderChoice[];
 
+  options?.onSelection?.(selection);
+
   let next = cfg;
 
   if (selection.includes("whatsapp")) {
+    if (options?.promptWhatsAppAccountId && !options.whatsappAccountId) {
+      const existingIds = listWhatsAppAccountIds(next);
+      const choice = (await prompter.select({
+        message: "WhatsApp account",
+        options: [
+          ...existingIds.map((id) => ({
+            value: id,
+            label: id === DEFAULT_ACCOUNT_ID ? "default (primary)" : id,
+          })),
+          { value: "__new__", label: "Add a new account" },
+        ],
+      })) as string;
+
+      if (choice === "__new__") {
+        const entered = await prompter.text({
+          message: "New WhatsApp account id",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        });
+        const normalized = normalizeAccountId(String(entered));
+        if (String(entered).trim() !== normalized) {
+          await prompter.note(
+            `Normalized account id to "${normalized}".`,
+            "WhatsApp account",
+          );
+        }
+        whatsappAccountId = normalized;
+      } else {
+        whatsappAccountId = choice;
+      }
+    }
+
+    if (whatsappAccountId !== DEFAULT_ACCOUNT_ID) {
+      next = {
+        ...next,
+        whatsapp: {
+          ...next.whatsapp,
+          accounts: {
+            ...next.whatsapp?.accounts,
+            [whatsappAccountId]: {
+              ...(next.whatsapp?.accounts?.[whatsappAccountId] ?? {}),
+              enabled:
+                next.whatsapp?.accounts?.[whatsappAccountId]?.enabled ?? true,
+            },
+          },
+        },
+      };
+    }
+
+    options?.onWhatsAppAccountId?.(whatsappAccountId);
+    whatsappLinked = await detectWhatsAppLinked(next, whatsappAccountId);
+    const { authDir } = resolveWhatsAppAuthDir({
+      cfg: next,
+      accountId: whatsappAccountId,
+    });
+
     if (!whatsappLinked) {
       await prompter.note(
         [
           "Scan the QR with WhatsApp on your phone.",
-          `Credentials are stored under ${WA_WEB_AUTH_DIR}/ for future runs.`,
+          `Credentials are stored under ${authDir}/ for future runs.`,
           "Docs: https://docs.clawd.bot/whatsapp",
         ].join("\n"),
         "WhatsApp linking",
@@ -570,7 +652,7 @@ export async function setupProviders(
     });
     if (wantsLink) {
       try {
-        await loginWeb(false, "web");
+        await loginWeb(false, "web", undefined, runtime, whatsappAccountId);
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
         await prompter.note(

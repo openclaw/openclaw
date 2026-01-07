@@ -199,10 +199,12 @@ export async function getReplyFromConfig(
   configOverride?: ClawdbotConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const cfg = configOverride ?? loadConfig();
+  const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
   const agentCfg = cfg.agent;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
+    agentId,
   });
   let provider = defaultProvider;
   let model = defaultModel;
@@ -221,7 +223,6 @@ export async function getReplyFromConfig(
     }
   }
 
-  const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
   const workspaceDirRaw =
     resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({

@@ -21,16 +21,25 @@ export function resolveAgentIdFromSessionKey(
 export function resolveAgentConfig(
   cfg: ClawdbotConfig,
   agentId: string,
-): { workspace?: string; agentDir?: string } | undefined {
+):
+  | {
+      name?: string;
+      workspace?: string;
+      agentDir?: string;
+      model?: string;
+    }
+  | undefined {
   const id = normalizeAgentId(agentId);
   const agents = cfg.routing?.agents;
   if (!agents || typeof agents !== "object") return undefined;
   const entry = agents[id];
   if (!entry || typeof entry !== "object") return undefined;
   return {
+    name: typeof entry.name === "string" ? entry.name : undefined,
     workspace:
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
+    model: typeof entry.model === "string" ? entry.model : undefined,
   };
 }
 

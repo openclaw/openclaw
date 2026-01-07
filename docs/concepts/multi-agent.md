@@ -28,6 +28,16 @@ If you do nothing, Clawdbot runs a single agent:
 - Workspace defaults to `~/clawd` (or `~/clawd-<profile>` when `CLAWDBOT_PROFILE` is set).
 - State defaults to `~/.clawdbot/agents/main/agent`.
 
+## Agent helper
+
+Use the agent wizard to add a new isolated agent:
+
+```bash
+clawdbot agents add work
+```
+
+Then add `routing.bindings` (or let the wizard do it) to route inbound messages.
+
 ## Multiple agents = multiple people, multiple personalities
 
 With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
@@ -73,10 +83,12 @@ multiple phone numbers without mixing sessions.
 
     agents: {
       home: {
+        name: "Home",
         workspace: "~/clawd-home",
         agentDir: "~/.clawdbot/agents/home/agent",
       },
       work: {
+        name: "Work",
         workspace: "~/clawd-work",
         agentDir: "~/.clawdbot/agents/work/agent",
       },
