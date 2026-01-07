@@ -119,11 +119,11 @@ rotation order used for failover.
 {
   auth: {
     profiles: {
-      "anthropic:default": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
+      "anthropic:me@example.com": { provider: "anthropic", mode: "oauth", email: "me@example.com" },
       "anthropic:work": { provider: "anthropic", mode: "api_key" }
     },
     order: {
-      anthropic: ["anthropic:default", "anthropic:work"]
+      anthropic: ["anthropic:me@example.com", "anthropic:work"]
     }
   }
 }

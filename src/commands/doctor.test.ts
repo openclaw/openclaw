@@ -40,6 +40,10 @@ const runCommandWithTimeout = vi.fn().mockResolvedValue({
   killed: false,
 });
 
+const ensureAuthProfileStore = vi
+  .fn()
+  .mockReturnValue({ version: 1, profiles: {} });
+
 const legacyReadConfigFileSnapshot = vi.fn().mockResolvedValue({
   path: "/tmp/clawdis.json",
   exists: false,
@@ -102,6 +106,14 @@ vi.mock("../process/exec.js", () => ({
   runExec,
   runCommandWithTimeout,
 }));
+
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    ensureAuthProfileStore,
+  };
+});
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({
@@ -613,5 +625,53 @@ describe("doctor", () => {
 
     expect(serviceRestart).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
+  });
+
+  it("migrates anthropic oauth config profile id when only email profile exists", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {
+        auth: {
+          profiles: {
+            "anthropic:default": { provider: "anthropic", mode: "oauth" },
+          },
+        },
+      },
+      issues: [],
+      legacyIssues: [],
+    });
+
+    ensureAuthProfileStore.mockReturnValueOnce({
+      version: 1,
+      profiles: {
+        "anthropic:me@example.com": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+          email: "me@example.com",
+        },
+      },
+    });
+
+    const { doctorCommand } = await import("./doctor.js");
+    await doctorCommand(
+      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      { yes: true },
+    );
+
+    const written = writeConfigFile.mock.calls.at(-1)?.[0] as Record<
+      string,
+      unknown
+    >;
+    const profiles = (written.auth as { profiles: Record<string, unknown> })
+      .profiles;
+    expect(profiles["anthropic:me@example.com"]).toBeTruthy();
+    expect(profiles["anthropic:default"]).toBeUndefined();
   });
 });
