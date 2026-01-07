@@ -305,8 +305,23 @@ Show linked session health and recent recipients.
 Options:
 - `--json`
 - `--deep` (probe providers)
+- `--usage` (show provider usage/quota)
 - `--timeout <ms>`
 - `--verbose`
+
+### Usage tracking
+Clawdbot can surface provider usage/quota when OAuth/API creds are available.
+
+Surfaces:
+- `/status` (adds a short usage line when available)
+- `clawdbot status --usage` (prints full provider breakdown)
+- macOS menu bar (Usage section under Context)
+
+Notes:
+- Data comes directly from provider usage endpoints (no estimates).
+- Providers: Anthropic, GitHub Copilot, Gemini CLI, Antigravity, OpenAI Codex OAuth, plus z.ai when an API key is configured.
+- If no matching credentials exist, usage is hidden.
+- Details: see [Usage tracking](/concepts/usage-tracking).
 
 ### `health`
 Fetch health from the running Gateway.

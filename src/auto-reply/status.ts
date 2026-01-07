@@ -50,6 +50,7 @@ type StatusArgs = {
   resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
+  usageLine?: string;
   queue?: QueueStatus;
   includeTranscriptUsage?: boolean;
   now?: number;
@@ -356,6 +357,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     modelLine,
     `📚 ${contextLine}`,
+    args.usageLine,
     `🧵 ${sessionLine}`,
     `⚙️ ${optionsLine}`,
     activationLine,

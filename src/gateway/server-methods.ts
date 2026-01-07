@@ -17,6 +17,7 @@ import type {
   GatewayRequestHandlers,
   GatewayRequestOptions,
 } from "./server-methods/types.js";
+import { usageHandlers } from "./server-methods/usage.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
@@ -38,6 +39,7 @@ const handlers: GatewayRequestHandlers = {
   ...systemHandlers,
   ...nodeHandlers,
   ...sendHandlers,
+  ...usageHandlers,
   ...agentHandlers,
 };
 

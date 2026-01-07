@@ -22,6 +22,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private var cachedErrorText: String?
     private var cacheUpdatedAt: Date?
     private let refreshIntervalSeconds: TimeInterval = 12
+    private var cachedUsageSummary: GatewayUsageSummary?
+    private var cachedUsageErrorText: String?
+    private var usageCacheUpdatedAt: Date?
+    private let usageRefreshIntervalSeconds: TimeInterval = 30
     private let nodesStore = NodesStore.shared
     #if DEBUG
     private var testControlChannelConnected: Bool?
@@ -58,6 +62,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         self.loadTask = Task { [weak self] in
             guard let self else { return }
             await self.refreshCache(force: forceRefresh)
+            await self.refreshUsageCache(force: forceRefresh)
             await MainActor.run {
                 guard self.isMenuOpen else { return }
                 self.inject(into: menu)
@@ -108,65 +113,69 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
         guard self.isControlChannelConnected else { return }
 
-        guard let snapshot = self.cachedSnapshot else {
+        var cursor = insertIndex
+        var headerView: NSView?
+
+        if let snapshot = self.cachedSnapshot {
+            let now = Date()
+            let rows = snapshot.rows.filter { row in
+                if row.key == "main" { return true }
+                guard let updatedAt = row.updatedAt else { return false }
+                return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
+            }.sorted { lhs, rhs in
+                if lhs.key == "main" { return true }
+                if rhs.key == "main" { return false }
+                return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
+            }
+
             let headerItem = NSMenuItem()
             headerItem.tag = self.tag
             headerItem.isEnabled = false
-            headerItem.view = self.makeHostedView(
+            let hosted = self.makeHostedView(
+                rootView: AnyView(MenuSessionsHeaderView(count: rows.count, statusText: nil)),
+                width: width,
+                highlighted: false)
+            headerItem.view = hosted
+            headerView = hosted
+            menu.insertItem(headerItem, at: cursor)
+            cursor += 1
+
+            if rows.isEmpty {
+                menu.insertItem(
+                    self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
+                    at: cursor)
+                cursor += 1
+            } else {
+                for row in rows {
+                    let item = NSMenuItem()
+                    item.tag = self.tag
+                    item.isEnabled = true
+                    item.submenu = self.buildSubmenu(for: row, storePath: snapshot.storePath)
+                    item.view = self.makeHostedView(
+                        rootView: AnyView(SessionMenuLabelView(row: row, width: width)),
+                        width: width,
+                        highlighted: true)
+                    menu.insertItem(item, at: cursor)
+                    cursor += 1
+                }
+            }
+        } else {
+            let headerItem = NSMenuItem()
+            headerItem.tag = self.tag
+            headerItem.isEnabled = false
+            let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: 0,
                     statusText: self.cachedErrorText ?? "Loading sessions…")),
                 width: width,
                 highlighted: false)
-            menu.insertItem(headerItem, at: insertIndex)
-            DispatchQueue.main.async { [weak self, weak view = headerItem.view] in
-                guard let self, let view else { return }
-                self.captureMenuWidthIfAvailable(from: view)
-            }
-            return
-        }
-
-        let now = Date()
-        let rows = snapshot.rows.filter { row in
-            if row.key == "main" { return true }
-            guard let updatedAt = row.updatedAt else { return false }
-            return now.timeIntervalSince(updatedAt) <= self.activeWindowSeconds
-        }.sorted { lhs, rhs in
-            if lhs.key == "main" { return true }
-            if rhs.key == "main" { return false }
-            return (lhs.updatedAt ?? .distantPast) > (rhs.updatedAt ?? .distantPast)
-        }
-
-        let headerItem = NSMenuItem()
-        headerItem.tag = self.tag
-        headerItem.isEnabled = false
-        let headerView = self.makeHostedView(
-            rootView: AnyView(MenuSessionsHeaderView(count: rows.count, statusText: nil)),
-            width: width,
-            highlighted: false)
-        headerItem.view = headerView
-        menu.insertItem(headerItem, at: insertIndex)
-
-        var cursor = insertIndex + 1
-        if rows.isEmpty {
-            menu.insertItem(
-                self.makeMessageItem(text: "No active sessions", symbolName: "minus", width: width),
-                at: cursor)
-            return
-        }
-
-        for row in rows {
-            let item = NSMenuItem()
-            item.tag = self.tag
-            item.isEnabled = true
-            item.submenu = self.buildSubmenu(for: row, storePath: snapshot.storePath)
-            item.view = self.makeHostedView(
-                rootView: AnyView(SessionMenuLabelView(row: row, width: width)),
-                width: width,
-                highlighted: true)
-            menu.insertItem(item, at: cursor)
+            headerItem.view = hosted
+            headerView = hosted
+            menu.insertItem(headerItem, at: cursor)
             cursor += 1
         }
+
+        cursor = self.insertUsageSection(into: menu, at: cursor, width: width)
 
         DispatchQueue.main.async { [weak self, weak headerView] in
             guard let self, let headerView else { return }
@@ -238,6 +247,55 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
 
         _ = cursor
+    }
+
+    private func insertUsageSection(into menu: NSMenu, at cursor: Int, width: CGFloat) -> Int {
+        let rows = self.usageRows
+        let errorText = self.cachedUsageErrorText
+
+        if rows.isEmpty && errorText == nil {
+            return cursor
+        }
+
+        var cursor = cursor
+        let headerItem = NSMenuItem()
+        headerItem.tag = self.tag
+        headerItem.isEnabled = false
+        headerItem.view = self.makeHostedView(
+            rootView: AnyView(MenuUsageHeaderView(
+                count: rows.count,
+                statusText: errorText)),
+            width: width,
+            highlighted: false)
+        menu.insertItem(headerItem, at: cursor)
+        cursor += 1
+
+        if rows.isEmpty {
+            menu.insertItem(
+                self.makeMessageItem(text: errorText ?? "No usage available", symbolName: "minus", width: width),
+                at: cursor)
+            cursor += 1
+            return cursor
+        }
+
+        for row in rows {
+            let item = NSMenuItem()
+            item.tag = self.tag
+            item.isEnabled = false
+            item.view = self.makeHostedView(
+                rootView: AnyView(UsageMenuLabelView(row: row, width: width)),
+                width: width,
+                highlighted: false)
+            menu.insertItem(item, at: cursor)
+            cursor += 1
+        }
+
+        return cursor
+    }
+
+    private var usageRows: [UsageRow] {
+        guard let summary = self.cachedUsageSummary else { return [] }
+        return summary.primaryRows()
     }
 
     private var isControlChannelConnected: Bool {
@@ -362,6 +420,40 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             self.cachedErrorText = self.compactError(error)
             self.cacheUpdatedAt = Date()
         }
+    }
+
+    private func refreshUsageCache(force: Bool) async {
+        if !force,
+           let updated = self.usageCacheUpdatedAt,
+           Date().timeIntervalSince(updated) < self.usageRefreshIntervalSeconds
+        {
+            return
+        }
+
+        guard self.isControlChannelConnected else {
+            self.cachedUsageSummary = nil
+            self.cachedUsageErrorText = nil
+            self.usageCacheUpdatedAt = Date()
+            return
+        }
+
+        do {
+            self.cachedUsageSummary = try await UsageLoader.loadSummary()
+            self.cachedUsageErrorText = nil
+            self.usageCacheUpdatedAt = Date()
+        } catch {
+            if self.cachedUsageSummary == nil {
+                self.cachedUsageErrorText = self.compactUsageError(error)
+            }
+            self.usageCacheUpdatedAt = Date()
+        }
+    }
+
+    private func compactUsageError(_ error: Error) -> String {
+        let message = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        if message.isEmpty { return "Usage unavailable" }
+        if message.count > 90 { return "\(message.prefix(87))…" }
+        return message
     }
 
     private func compactError(_ error: Error) -> String {

@@ -639,6 +639,7 @@ Examples:
     .command("status")
     .description("Show web session health and recent session recipients")
     .option("--json", "Output JSON instead of text", false)
+    .option("--usage", "Show provider usage/quota snapshots", false)
     .option(
       "--deep",
       "Probe providers (WhatsApp Web + Telegram + Discord + Slack + Signal)",
@@ -652,6 +653,7 @@ Examples:
 Examples:
   clawdbot status                   # show linked account + session store summary
   clawdbot status --json            # machine-readable output
+  clawdbot status --usage           # show provider usage/quota snapshots
   clawdbot status --deep            # run provider probes (WA + Telegram + Discord + Slack + Signal)
   clawdbot status --deep --timeout 5000 # tighten probe timeout`,
     )
@@ -672,6 +674,7 @@ Examples:
           {
             json: Boolean(opts.json),
             deep: Boolean(opts.deep),
+            usage: Boolean(opts.usage),
             timeoutMs: timeout,
           },
           defaultRuntime,
