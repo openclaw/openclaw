@@ -28,7 +28,7 @@ struct SessionDataTests {
             key: "[redacted-email]",
             kind: .direct,
             displayName: nil,
-            surface: nil,
+            provider: nil,
             subject: nil,
             room: nil,
             space: nil,

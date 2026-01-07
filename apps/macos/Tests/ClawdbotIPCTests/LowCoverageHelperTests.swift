@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Testing
+import ClawdbotProtocol
 
 @testable import Clawdbot
 
@@ -23,7 +24,7 @@ struct LowCoverageHelperTests {
         #expect(dict["list"]?.arrayValue?.count == 2)
 
         let foundation = any.foundationValue as? [String: Any]
-        #expect(foundation?["title"] as? String == "Hello")
+        #expect((foundation?["title"] as? String) == "Hello")
     }
 
     @Test func attributedStringStripsForegroundColor() {

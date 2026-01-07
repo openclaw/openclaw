@@ -45,7 +45,7 @@ struct SettingsViewSmokeTests {
                 thinking: "low",
                 timeoutSeconds: 30,
                 deliver: true,
-                channel: "sms",
+                provider: "sms",
                 to: "+15551234567",
                 bestEffortDeliver: true),
             isolation: CronIsolation(postToMainPrefix: "[cron] "),
