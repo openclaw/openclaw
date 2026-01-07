@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { deliverOutboundPayloads } from "./deliver.js";
+import {
+  deliverOutboundPayloads,
+  normalizeOutboundPayloads,
+} from "./deliver.js";
 
 describe("deliverOutboundPayloads", () => {
   it("chunks telegram markdown and passes config token", async () => {
@@ -86,9 +89,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("uses iMessage media maxBytes from agent fallback", async () => {
-    const sendIMessage = vi
-      .fn()
-      .mockResolvedValue({ messageId: "i1" });
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
     const cfg: ClawdbotConfig = { agent: { mediaMaxMb: 3 } };
 
     await deliverOutboundPayloads({
@@ -104,5 +105,42 @@ describe("deliverOutboundPayloads", () => {
       "hello",
       expect.objectContaining({ maxBytes: 3 * 1024 * 1024 }),
     );
+  });
+
+  it("normalizes payloads and drops empty entries", () => {
+    const normalized = normalizeOutboundPayloads([
+      { text: "hi" },
+      { mediaUrl: "https://x.test/a.jpg" },
+      { text: " ", mediaUrls: [] },
+    ]);
+    expect(normalized).toEqual([
+      { text: "hi", mediaUrls: [] },
+      { text: "", mediaUrls: ["https://x.test/a.jpg"] },
+    ]);
+  });
+
+  it("continues on errors when bestEffort is enabled", async () => {
+    const sendWhatsApp = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fail"))
+      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+    const onError = vi.fn();
+    const cfg: ClawdbotConfig = {};
+
+    const results = await deliverOutboundPayloads({
+      cfg,
+      provider: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "a" }, { text: "b" }],
+      deps: { sendWhatsApp },
+      bestEffort: true,
+      onError,
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(results).toEqual([
+      { provider: "whatsapp", messageId: "w2", toJid: "jid" },
+    ]);
   });
 });
