@@ -56,6 +56,7 @@
 - Docs: add ClawdHub guide and hubs link for browsing, install, and sync workflows.
 - Docs: add FAQ for PNPM/Bun lockfile migration warning; link AgentSkills spec + ClawdHub guide (`/clawdhub`) from skills docs.
 - Docs: add Clawdhub showcase projects with hover previews. Thanks @joshp123 for PR #416.
+- Docs: fold showcase entries into existing sections and update nix-clawdbot link. Thanks @joshp123 for PR #426.
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
 - Status: add provider usage snapshots to `/status`, `clawdbot status --usage`, and the macOS menu bar.
 - Build: fix macOS packaging QR smoke test for the bun-compiled relay. Thanks @dbhurley for PR #358.
