@@ -124,17 +124,28 @@ enum ClawdbotConfigFile {
     }
 
     static func remoteGatewayPort() -> Int? {
-        let root = self.loadDict()
-        guard let gateway = root["gateway"] as? [String: Any],
-              let remote = gateway["remote"] as? [String: Any],
-              let raw = remote["url"] as? String
+        guard let url = self.remoteGatewayUrl(),
+              let port = url.port,
+              port > 0
+        else { return nil }
+        return port
+    }
+
+    static func remoteGatewayPort(matchingHost sshHost: String) -> Int? {
+        let trimmedSshHost = sshHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedSshHost.isEmpty,
+              let url = self.remoteGatewayUrl(),
+              let port = url.port,
+              port > 0,
+              let urlHost = url.host?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !urlHost.isEmpty
         else {
             return nil
         }
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed), let port = url.port, port > 0 else {
-            return nil
-        }
+
+        let sshKey = Self.hostKey(trimmedSshHost)
+        let urlKey = Self.hostKey(urlHost)
+        guard !sshKey.isEmpty, !urlKey.isEmpty, sshKey == urlKey else { return nil }
         return port
     }
 
@@ -150,6 +161,30 @@ enum ClawdbotConfigFile {
             remote["url"] = "\(scheme)://\(trimmedHost):\(port)"
             gateway["remote"] = remote
         }
+    }
+
+    private static func remoteGatewayUrl() -> URL? {
+        let root = self.loadDict()
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["url"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return nil }
+        return url
+    }
+
+    private static func hostKey(_ host: String) -> String {
+        let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !trimmed.isEmpty else { return "" }
+        if trimmed.contains(":") { return trimmed }
+        let digits = CharacterSet(charactersIn: "0123456789.")
+        if trimmed.rangeOfCharacter(from: digits.inverted) == nil {
+            return trimmed
+        }
+        return trimmed.split(separator: ".").first.map(String.init) ?? trimmed
     }
 
     private static func parseConfigData(_ data: Data) -> [String: Any]? {

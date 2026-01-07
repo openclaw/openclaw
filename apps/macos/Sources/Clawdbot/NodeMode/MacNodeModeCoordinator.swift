@@ -204,7 +204,11 @@ final class MacNodeModeCoordinator {
 
     static func remoteBridgePort() -> Int {
         let fallback = Int(Self.loopbackBridgePort() ?? 18790)
-        let base = ClawdbotConfigFile.remoteGatewayPort() ?? GatewayEnvironment.gatewayPort()
+        let settings = CommandResolver.connectionSettings()
+        let sshHost = CommandResolver.parseSSHTarget(settings.target)?.host ?? ""
+        let base =
+            ClawdbotConfigFile.remoteGatewayPort(matchingHost: sshHost) ??
+            GatewayEnvironment.gatewayPort()
         guard base > 0 else { return fallback }
         return Self.derivePort(base: base, offset: 1, fallback: fallback)
     }

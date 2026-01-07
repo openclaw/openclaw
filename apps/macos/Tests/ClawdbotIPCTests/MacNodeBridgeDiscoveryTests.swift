@@ -45,6 +45,70 @@ import Testing
         let ok = await MacNodeModeCoordinator.probeEndpoint(endpoint, timeoutSeconds: 0.4)
         #expect(ok == false)
     }
+
+    @MainActor
+    @Test func remoteBridgePortUsesMatchingRemoteUrlPort() {
+        let configPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdbot-config-\(UUID().uuidString)")
+            .appendingPathComponent("clawdbot.json")
+            .path
+
+        let defaults = UserDefaults.standard
+        let prevTarget = defaults.string(forKey: remoteTargetKey)
+        defer {
+            if let prevTarget {
+                defaults.set(prevTarget, forKey: remoteTargetKey)
+            } else {
+                defaults.removeObject(forKey: remoteTargetKey)
+            }
+        }
+
+        withEnv("CLAWDBOT_CONFIG_PATH", value: configPath) {
+            withEnv("CLAWDBOT_GATEWAY_PORT", value: "20000") {
+                defaults.set("user@bridge.ts.net", forKey: remoteTargetKey)
+                ClawdbotConfigFile.saveDict([
+                    "gateway": [
+                        "remote": [
+                            "url": "ws://bridge.ts.net:25000",
+                        ],
+                    ],
+                ])
+                #expect(MacNodeModeCoordinator.remoteBridgePort() == 25001)
+            }
+        }
+    }
+
+    @MainActor
+    @Test func remoteBridgePortFallsBackWhenRemoteUrlHostMismatch() {
+        let configPath = FileManager.default.temporaryDirectory
+            .appendingPathComponent("clawdbot-config-\(UUID().uuidString)")
+            .appendingPathComponent("clawdbot.json")
+            .path
+
+        let defaults = UserDefaults.standard
+        let prevTarget = defaults.string(forKey: remoteTargetKey)
+        defer {
+            if let prevTarget {
+                defaults.set(prevTarget, forKey: remoteTargetKey)
+            } else {
+                defaults.removeObject(forKey: remoteTargetKey)
+            }
+        }
+
+        withEnv("CLAWDBOT_CONFIG_PATH", value: configPath) {
+            withEnv("CLAWDBOT_GATEWAY_PORT", value: "20000") {
+                defaults.set("user@other.ts.net", forKey: remoteTargetKey)
+                ClawdbotConfigFile.saveDict([
+                    "gateway": [
+                        "remote": [
+                            "url": "ws://bridge.ts.net:25000",
+                        ],
+                    ],
+                ])
+                #expect(MacNodeModeCoordinator.remoteBridgePort() == 20001)
+            }
+        }
+    }
 }
 
 private struct TestError: Error {
