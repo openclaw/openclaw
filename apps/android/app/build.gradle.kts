@@ -19,21 +19,13 @@ android {
     applicationId = "com.clawdbot.android"
     minSdk = 31
     targetSdk = 36
-    versionCode = 1
-    versionName = "2026.1.5"
+    versionCode = 20260107
+    versionName = "2026.1.7"
   }
 
   buildTypes {
     release {
       isMinifyEnabled = false
-    }
-  }
-
-  applicationVariants.all {
-    val variant = this
-    outputs.all {
-      val output = this as com.android.build.gradle.internal.api.BaseVariantOutputImpl
-      output.outputFileName = "clawdbot-${variant.versionName}-${variant.buildType.name}.apk"
     }
   }
 
@@ -59,6 +51,16 @@ android {
 
   testOptions {
     unitTests.isIncludeAndroidResources = true
+  }
+}
+
+androidComponents {
+  onVariants { variant ->
+    variant.outputs.forEach { output ->
+      val apkOutput = output as? com.android.build.api.variant.ApkVariantOutput ?: return@forEach
+      val versionName = variant.versionName.orNull ?: "0"
+      apkOutput.outputFileName.set("clawdbot-${versionName}-${variant.name}.apk")
+    }
   }
 }
 
