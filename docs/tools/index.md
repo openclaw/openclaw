@@ -157,13 +157,14 @@ Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey`, `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey`, `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `model?`, `timeoutSeconds?`, `cleanup?`
+- `sessions_spawn`: `task`, `label?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
 
 Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.
 - `messageLimit > 0` fetches last N messages per session (tool messages filtered).
 - `sessions_send` waits for final completion when `timeoutSeconds > 0`.
 - `sessions_spawn` starts a sub-agent run and posts an announce reply back to the requester chat.
+- `sessions_spawn` is non-blocking and returns `status: "accepted"` immediately.
 - `sessions_send` runs a reply‑back ping‑pong (reply `REPLY_SKIP` to stop; max turns via `session.agentToAgent.maxPingPongTurns`, 0–5).
 - After the ping‑pong, the target agent runs an **announce step**; reply `ANNOUNCE_SKIP` to suppress the announcement.
 
