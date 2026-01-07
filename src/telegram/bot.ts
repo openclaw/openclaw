@@ -247,33 +247,34 @@ export function createTelegramBot(opts: TelegramBotOptions) {
                     username?: string;
                   }
                 | undefined;
-              const { code } = await upsertTelegramPairingRequest({
+              const { code, created } = await upsertTelegramPairingRequest({
                 chatId: candidate,
                 username: from?.username,
                 firstName: from?.first_name,
                 lastName: from?.last_name,
               });
-              logger.info(
-                {
-                  chatId: candidate,
-                  username: from?.username,
-                  firstName: from?.first_name,
-                  lastName: from?.last_name,
-                  code,
-                },
-                "telegram pairing request",
-              );
-              await bot.api.sendMessage(
-                chatId,
-                [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  "clawdbot telegram pairing approve <code>",
-                ].join("\n"),
-              );
+              if (created) {
+                logger.info(
+                  {
+                    chatId: candidate,
+                    username: from?.username,
+                    firstName: from?.first_name,
+                    lastName: from?.last_name,
+                  },
+                  "telegram pairing request",
+                );
+                await bot.api.sendMessage(
+                  chatId,
+                  [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot telegram pairing approve <code>",
+                  ].join("\n"),
+                );
+              }
             } catch (err) {
               logVerbose(
                 `telegram pairing reply failed for chat ${chatId}: ${String(err)}`,

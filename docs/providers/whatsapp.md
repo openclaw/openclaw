@@ -51,7 +51,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
 - **DM policy**: `whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
-  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`).
+  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`; codes expire after 1 hour).
   - Open: requires `whatsapp.allowFrom` to include `"*"`.
   - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
 - **Group policy**: `whatsapp.groupPolicy` controls group handling (`open|disabled|allowlist`).

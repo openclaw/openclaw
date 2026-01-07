@@ -144,4 +144,47 @@ describe("monitorSignalProvider tool results", () => {
       "Pairing code: PAIRCODE",
     );
   });
+
+  it("does not resend pairing code when a request is already pending", async () => {
+    config = {
+      ...config,
+      signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
+    };
+    upsertPairingRequestMock
+      .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
+      .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      const payload = {
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Ada",
+          timestamp: 1,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify({
+          ...payload,
+          envelope: { ...payload.envelope, timestamp: 2 },
+        }),
+      });
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+    });
+
+    await flush();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
 });

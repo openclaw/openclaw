@@ -258,31 +258,33 @@ export async function monitorWebInbox(options: {
               normalizedAllowFrom.includes(candidate));
           if (!allowed) {
             if (dmPolicy === "pairing") {
-              const { code } = await upsertProviderPairingRequest({
+              const { code, created } = await upsertProviderPairingRequest({
                 provider: "whatsapp",
                 id: candidate,
                 meta: {
                   name: (msg.pushName ?? "").trim() || undefined,
                 },
               });
-              logVerbose(
-                `whatsapp pairing request sender=${candidate} name=${msg.pushName ?? "unknown"} code=${code}`,
-              );
-              try {
-                await sock.sendMessage(remoteJid, {
-                  text: [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider whatsapp <code>",
-                  ].join("\n"),
-                });
-              } catch (err) {
+              if (created) {
                 logVerbose(
-                  `whatsapp pairing reply failed for ${candidate}: ${String(err)}`,
+                  `whatsapp pairing request sender=${candidate} name=${msg.pushName ?? "unknown"}`,
                 );
+                try {
+                  await sock.sendMessage(remoteJid, {
+                    text: [
+                      "Clawdbot: access not configured.",
+                      "",
+                      `Pairing code: ${code}`,
+                      "",
+                      "Ask the bot owner to approve with:",
+                      "clawdbot pairing approve --provider whatsapp <code>",
+                    ].join("\n"),
+                  });
+                } catch (err) {
+                  logVerbose(
+                    `whatsapp pairing reply failed for ${candidate}: ${String(err)}`,
+                  );
+                }
               }
             } else {
               logVerbose(

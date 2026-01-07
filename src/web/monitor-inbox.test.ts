@@ -1005,6 +1005,9 @@ describe("web monitor inbox", () => {
   it("locks down when no config is present (pairing for unknown senders)", async () => {
     // No config file => locked-down defaults apply (pairing for unknown senders)
     mockLoadConfig.mockReturnValue({});
+    upsertPairingRequestMock
+      .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
+      .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({ verbose: false, onMessage });
@@ -1033,6 +1036,26 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });
+
+    const upsertBlockedAgain = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "no-config-1b",
+            fromMe: false,
+            remoteJid: "999@s.whatsapp.net",
+          },
+          message: { conversation: "ping again" },
+          messageTimestamp: 1_700_000_002,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsertBlockedAgain);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(onMessage).not.toHaveBeenCalled();
+    expect(sock.sendMessage).toHaveBeenCalledTimes(1);
 
     // Message from self should be allowed
     const upsertSelf = {

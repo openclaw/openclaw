@@ -1,0 +1,109 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { describe, expect, it, vi } from "vitest";
+
+import { resolveOAuthDir } from "../config/paths.js";
+import {
+  listProviderPairingRequests,
+  upsertProviderPairingRequest,
+} from "./pairing-store.js";
+
+async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
+  const previous = process.env.CLAWDBOT_STATE_DIR;
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-pairing-"));
+  process.env.CLAWDBOT_STATE_DIR = dir;
+  try {
+    return await fn(dir);
+  } finally {
+    if (previous === undefined) delete process.env.CLAWDBOT_STATE_DIR;
+    else process.env.CLAWDBOT_STATE_DIR = previous;
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+describe("pairing store", () => {
+  it("reuses pending code and reports created=false", async () => {
+    await withTempStateDir(async () => {
+      const first = await upsertProviderPairingRequest({
+        provider: "discord",
+        id: "u1",
+      });
+      const second = await upsertProviderPairingRequest({
+        provider: "discord",
+        id: "u1",
+      });
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(false);
+      expect(second.code).toBe(first.code);
+
+      const list = await listProviderPairingRequests("discord");
+      expect(list).toHaveLength(1);
+      expect(list[0]?.code).toBe(first.code);
+    });
+  });
+
+  it("expires pending requests after TTL", async () => {
+    await withTempStateDir(async (stateDir) => {
+      const created = await upsertProviderPairingRequest({
+        provider: "signal",
+        id: "+15550001111",
+      });
+      expect(created.created).toBe(true);
+
+      const oauthDir = resolveOAuthDir(process.env, stateDir);
+      const filePath = path.join(oauthDir, "signal-pairing.json");
+      const raw = await fs.readFile(filePath, "utf8");
+      const parsed = JSON.parse(raw) as {
+        requests?: Array<Record<string, unknown>>;
+      };
+      const expiredAt = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const requests = (parsed.requests ?? []).map((entry) => ({
+        ...entry,
+        createdAt: expiredAt,
+        lastSeenAt: expiredAt,
+      }));
+      await fs.writeFile(
+        filePath,
+        `${JSON.stringify({ version: 1, requests }, null, 2)}\n`,
+        "utf8",
+      );
+
+      const list = await listProviderPairingRequests("signal");
+      expect(list).toHaveLength(0);
+
+      const next = await upsertProviderPairingRequest({
+        provider: "signal",
+        id: "+15550001111",
+      });
+      expect(next.created).toBe(true);
+    });
+  });
+
+  it("regenerates when a generated code collides", async () => {
+    await withTempStateDir(async () => {
+      const spy = vi.spyOn(crypto, "randomInt");
+      try {
+        spy.mockReturnValue(0);
+        const first = await upsertProviderPairingRequest({
+          provider: "telegram",
+          id: "123",
+        });
+        expect(first.code).toBe("AAAAAAAA");
+
+        const sequence = Array(8).fill(0).concat(Array(8).fill(1));
+        let idx = 0;
+        spy.mockImplementation(() => sequence[idx++] ?? 1);
+        const second = await upsertProviderPairingRequest({
+          provider: "telegram",
+          id: "456",
+        });
+        expect(second.code).toBe("BBBBBBBB");
+      } finally {
+        spy.mockRestore();
+      }
+    });
+  });
+});

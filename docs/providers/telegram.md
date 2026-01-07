@@ -45,7 +45,7 @@ Telegram forum topics include a `message_thread_id` per message. Clawdbot:
 - Exposes `MessageThreadId` + `IsForum` in template context for routing/templating.
 
 ## Access control (DMs + groups)
-- Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved.
+- Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
   - `clawdbot pairing list --provider telegram`
   - `clawdbot pairing approve --provider telegram <CODE>`

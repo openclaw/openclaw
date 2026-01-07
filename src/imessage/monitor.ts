@@ -230,7 +230,7 @@ export async function monitorIMessageProvider(
       if (!dmAuthorized) {
         if (dmPolicy === "pairing") {
           const senderId = normalizeIMessageHandle(sender);
-          const { code } = await upsertProviderPairingRequest({
+          const { code, created } = await upsertProviderPairingRequest({
             provider: "imessage",
             id: senderId,
             meta: {
@@ -238,30 +238,30 @@ export async function monitorIMessageProvider(
               chatId: chatId ? String(chatId) : undefined,
             },
           });
-          logVerbose(
-            `imessage pairing request sender=${senderId} code=${code}`,
-          );
-          try {
-            await sendMessageIMessage(
-              sender,
-              [
-                "Clawdbot: access not configured.",
-                "",
-                `Pairing code: ${code}`,
-                "",
-                "Ask the bot owner to approve with:",
-                "clawdbot pairing approve --provider imessage <code>",
-              ].join("\n"),
-              {
-                client,
-                maxBytes: mediaMaxBytes,
-                ...(chatId ? { chatId } : {}),
-              },
-            );
-          } catch (err) {
-            logVerbose(
-              `imessage pairing reply failed for ${senderId}: ${String(err)}`,
-            );
+          if (created) {
+            logVerbose(`imessage pairing request sender=${senderId}`);
+            try {
+              await sendMessageIMessage(
+                sender,
+                [
+                  "Clawdbot: access not configured.",
+                  "",
+                  `Pairing code: ${code}`,
+                  "",
+                  "Ask the bot owner to approve with:",
+                  "clawdbot pairing approve --provider imessage <code>",
+                ].join("\n"),
+                {
+                  client,
+                  maxBytes: mediaMaxBytes,
+                  ...(chatId ? { chatId } : {}),
+                },
+              );
+            } catch (err) {
+              logVerbose(
+                `imessage pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            }
           }
         } else {
           logVerbose(

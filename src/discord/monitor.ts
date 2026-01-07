@@ -412,7 +412,7 @@ export function createDiscordMessageHandler(params: {
           if (!permitted) {
             commandAuthorized = false;
             if (dmPolicy === "pairing") {
-              const { code } = await upsertProviderPairingRequest({
+              const { code, created } = await upsertProviderPairingRequest({
                 provider: "discord",
                 id: author.id,
                 meta: {
@@ -420,26 +420,28 @@ export function createDiscordMessageHandler(params: {
                   name: author.username ?? undefined,
                 },
               });
-              logVerbose(
-                `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)} code=${code}`,
-              );
-              try {
-                await sendMessageDiscord(
-                  `user:${author.id}`,
-                  [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider discord <code>",
-                  ].join("\n"),
-                  { token, rest: client.rest },
-                );
-              } catch (err) {
+              if (created) {
                 logVerbose(
-                  `discord pairing reply failed for ${author.id}: ${String(err)}`,
+                  `discord pairing request sender=${author.id} tag=${formatDiscordUserTag(author)}`,
                 );
+                try {
+                  await sendMessageDiscord(
+                    `user:${author.id}`,
+                    [
+                      "Clawdbot: access not configured.",
+                      "",
+                      `Pairing code: ${code}`,
+                      "",
+                      "Ask the bot owner to approve with:",
+                      "clawdbot pairing approve --provider discord <code>",
+                    ].join("\n"),
+                    { token, rest: client.rest },
+                  );
+                } catch (err) {
+                  logVerbose(
+                    `discord pairing reply failed for ${author.id}: ${String(err)}`,
+                  );
+                }
               }
             } else {
               logVerbose(
@@ -1107,7 +1109,7 @@ function createDiscordNativeCommand(params: {
           if (!permitted) {
             commandAuthorized = false;
             if (dmPolicy === "pairing") {
-              const { code } = await upsertProviderPairingRequest({
+              const { code, created } = await upsertProviderPairingRequest({
                 provider: "discord",
                 id: user.id,
                 meta: {
@@ -1115,17 +1117,19 @@ function createDiscordNativeCommand(params: {
                   name: user.username ?? undefined,
                 },
               });
-              await interaction.reply({
-                content: [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  "clawdbot pairing approve --provider discord <code>",
-                ].join("\n"),
-                ephemeral: true,
-              });
+              if (created) {
+                await interaction.reply({
+                  content: [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot pairing approve --provider discord <code>",
+                  ].join("\n"),
+                  ephemeral: true,
+                });
+              }
             } else {
               await interaction.reply({
                 content: "You are not authorized to use this command.",

@@ -42,7 +42,7 @@ Example:
 ## Access control (DMs + groups)
 DMs:
 - Default: `signal.dmPolicy = "pairing"`.
-- Unknown senders receive a pairing code; messages are ignored until approved.
+- Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
   - `clawdbot pairing list --provider signal`
   - `clawdbot pairing approve --provider signal <CODE>`

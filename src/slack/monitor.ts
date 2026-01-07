@@ -653,31 +653,33 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           if (dmPolicy === "pairing") {
             const sender = await resolveUserName(message.user);
             const senderName = sender?.name ?? undefined;
-            const { code } = await upsertProviderPairingRequest({
+            const { code, created } = await upsertProviderPairingRequest({
               provider: "slack",
               id: message.user,
               meta: { name: senderName },
             });
-            logVerbose(
-              `slack pairing request sender=${message.user} name=${senderName ?? "unknown"} code=${code}`,
-            );
-            try {
-              await sendMessageSlack(
-                message.channel,
-                [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  "clawdbot pairing approve --provider slack <code>",
-                ].join("\n"),
-                { token: botToken, client: app.client },
-              );
-            } catch (err) {
+            if (created) {
               logVerbose(
-                `slack pairing reply failed for ${message.user}: ${String(err)}`,
+                `slack pairing request sender=${message.user} name=${senderName ?? "unknown"}`,
               );
+              try {
+                await sendMessageSlack(
+                  message.channel,
+                  [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot pairing approve --provider slack <code>",
+                  ].join("\n"),
+                  { token: botToken, client: app.client },
+                );
+              } catch (err) {
+                logVerbose(
+                  `slack pairing reply failed for ${message.user}: ${String(err)}`,
+                );
+              }
             }
           } else {
             logVerbose(
@@ -1468,22 +1470,24 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           });
           if (!permitted) {
             if (dmPolicy === "pairing") {
-              const { code } = await upsertProviderPairingRequest({
+              const { code, created } = await upsertProviderPairingRequest({
                 provider: "slack",
                 id: command.user_id,
                 meta: { name: senderName },
               });
-              await respond({
-                text: [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  "clawdbot pairing approve --provider slack <code>",
-                ].join("\n"),
-                response_type: "ephemeral",
-              });
+              if (created) {
+                await respond({
+                  text: [
+                    "Clawdbot: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "clawdbot pairing approve --provider slack <code>",
+                  ].join("\n"),
+                  response_type: "ephemeral",
+                });
+              }
             } else {
               await respond({
                 text: "You are not authorized to use this command.",

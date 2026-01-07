@@ -195,7 +195,7 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - Full command list + config: [Slash commands](/tools/slash-commands)
 
 ## DM security (pairing)
-- Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code.
+- Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code (expires after 1 hour).
 - Approve via: `clawdbot pairing approve --provider slack <code>`.
 - To allow anyone: set `slack.dm.policy="open"` and `slack.dm.allowFrom=["*"]`.
 

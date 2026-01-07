@@ -193,6 +193,47 @@ describe("createTelegramBot", () => {
     expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("PAIRME12");
   });
 
+  it("does not resend pairing code when a request is already pending", async () => {
+    onSpy.mockReset();
+    sendMessageSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({ telegram: { dmPolicy: "pairing" } });
+    readTelegramAllowFromStore.mockResolvedValue([]);
+    upsertTelegramPairingRequest
+      .mockResolvedValueOnce({ code: "PAIRME12", created: true })
+      .mockResolvedValueOnce({ code: "PAIRME12", created: false });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    const message = {
+      chat: { id: 1234, type: "private" },
+      text: "hello",
+      date: 1736380800,
+      from: { id: 999, username: "random" },
+    };
+
+    await handler({
+      message,
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+    await handler({
+      message: { ...message, text: "hello again" },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).not.toHaveBeenCalled();
+    expect(sendMessageSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("triggers typing cue via onReplyStart", async () => {
     onSpy.mockReset();
     sendChatActionSpy.mockReset();
