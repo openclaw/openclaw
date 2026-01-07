@@ -503,6 +503,12 @@ function shouldIncludeSlackTool(messageProvider?: string): boolean {
   return normalized === "slack" || normalized.startsWith("slack:");
 }
 
+function shouldIncludeWhatsAppTool(messageProvider?: string): boolean {
+  const normalized = normalizeMessageProvider(messageProvider);
+  if (!normalized) return false;
+  return normalized === "whatsapp" || normalized.startsWith("whatsapp:");
+}
+
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
@@ -562,9 +568,11 @@ export function createClawdbotCodingTools(options?: {
   ];
   const allowDiscord = shouldIncludeDiscordTool(options?.messageProvider);
   const allowSlack = shouldIncludeSlackTool(options?.messageProvider);
+  const allowWhatsApp = shouldIncludeWhatsAppTool(options?.messageProvider);
   const filtered = tools.filter((tool) => {
     if (tool.name === "discord") return allowDiscord;
     if (tool.name === "slack") return allowSlack;
+    if (tool.name === "whatsapp") return allowWhatsApp;
     return true;
   });
   const globallyFiltered =
