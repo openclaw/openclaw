@@ -126,12 +126,32 @@ export function buildBootstrapContextFiles(
   return result;
 }
 
+export function isContextOverflowError(errorMessage?: string): boolean {
+  if (!errorMessage) return false;
+  const lower = errorMessage.toLowerCase();
+  return (
+    lower.includes("request_too_large") ||
+    lower.includes("request exceeds the maximum size") ||
+    lower.includes("context length exceeded") ||
+    lower.includes("maximum context length") ||
+    (lower.includes("413") && lower.includes("too large"))
+  );
+}
+
 export function formatAssistantErrorText(
   msg: AssistantMessage,
 ): string | undefined {
   if (msg.stopReason !== "error") return undefined;
   const raw = (msg.errorMessage ?? "").trim();
   if (!raw) return "LLM request failed with an unknown error.";
+
+  // Check for context overflow (413) errors
+  if (isContextOverflowError(raw)) {
+    return (
+      "Context overflow: the conversation history is too large. " +
+      "Use /new or /reset to start a fresh session."
+    );
+  }
 
   const invalidRequest = raw.match(
     /"type":"invalid_request_error".*?"message":"([^"]+)"/,
