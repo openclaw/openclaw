@@ -596,7 +596,7 @@ export function createClawdbotCodingTools(options?: {
       options.config.agent.tools.deny?.length)
       ? filterToolsByPolicy(filtered, options.config.agent.tools)
       : filtered;
-  
+
   // Agent-specific tool policy
   let agentFiltered = globallyFiltered;
   if (options?.sessionKey && options?.config) {
@@ -606,7 +606,7 @@ export function createClawdbotCodingTools(options?: {
       agentFiltered = filterToolsByPolicy(globallyFiltered, agentConfig.tools);
     }
   }
-  
+
   const sandboxed = sandbox
     ? filterToolsByPolicy(agentFiltered, sandbox.tools)
     : agentFiltered;

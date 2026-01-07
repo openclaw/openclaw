@@ -168,4 +168,4 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
 - **Resource control**: Sandbox specific agents while keeping others on host
 - **Flexible policies**: Different permissions per agent
 
-See [Multi-Agent Sandbox & Tools](/docs/multi-agent-sandbox-tools) for detailed examples.
+See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.

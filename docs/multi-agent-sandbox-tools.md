@@ -3,7 +3,7 @@
 ## Overview
 
 Each agent in a multi-agent setup can now have its own:
-- **Sandbox configuration** (`mode`, `scope`, `workspaceRoot`)
+- **Sandbox configuration** (`mode`, `scope`, `workspaceRoot`, `workspaceAccess`, `tools`)
 - **Tool restrictions** (`allow`, `deny`)
 
 This allows you to run multiple agents with different security profiles:
@@ -141,9 +141,10 @@ Agent-specific settings override global:
 routing.agents[id].sandbox.mode > agent.sandbox.mode
 routing.agents[id].sandbox.scope > agent.sandbox.scope
 routing.agents[id].sandbox.workspaceRoot > agent.sandbox.workspaceRoot
+routing.agents[id].sandbox.workspaceAccess > agent.sandbox.workspaceAccess
 ```
 
-**Note:** `docker`, `browser`, `tools`, and `prune` settings from `agent.sandbox` are still **global** and apply to all sandboxed agents.
+**Note:** `docker`, `browser`, and `prune` settings from `agent.sandbox` are still **global** and apply to all sandboxed agents.
 
 ### Tool Restrictions
 The filtering order is:
@@ -153,6 +154,7 @@ The filtering order is:
 4. **Subagent tool policy** (if applicable)
 
 Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
+If `routing.agents[id].sandbox.tools` is set, it replaces `agent.sandbox.tools` for that agent.
 
 ---
 
