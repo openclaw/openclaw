@@ -91,6 +91,52 @@ export async function sendMessageWhatsApp(
     throw err;
   }
 }
+
+export async function sendReactionWhatsApp(
+  chatJid: string,
+  messageId: string,
+  emoji: string,
+  options: {
+    verbose: boolean;
+    fromMe?: boolean;
+    participant?: string;
+  },
+): Promise<void> {
+  const correlationId = randomUUID();
+  const active = getActiveWebListener();
+  if (!active) {
+    throw new Error(
+      "No active gateway listener. Start the gateway before sending WhatsApp reactions.",
+    );
+  }
+  const logger = getChildLogger({
+    module: "web-outbound",
+    correlationId,
+    chatJid,
+    messageId,
+  });
+  try {
+    const jid = toWhatsappJid(chatJid);
+    outboundLog.info(`Sending reaction "${emoji}" -> message ${messageId}`);
+    logger.info({ chatJid: jid, messageId, emoji }, "sending reaction");
+    await active.sendReaction(
+      chatJid,
+      messageId,
+      emoji,
+      options.fromMe ?? false,
+      options.participant,
+    );
+    outboundLog.info(`Sent reaction "${emoji}" -> message ${messageId}`);
+    logger.info({ chatJid: jid, messageId, emoji }, "sent reaction");
+  } catch (err) {
+    logger.error(
+      { err: String(err), chatJid, messageId, emoji },
+      "failed to send reaction via web session",
+    );
+    throw err;
+  }
+}
+
 export async function sendPollWhatsApp(
   to: string,
   poll: PollInput,

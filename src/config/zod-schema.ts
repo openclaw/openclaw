@@ -723,6 +723,11 @@ export const ClawdbotSchema = z.object({
       groupAllowFrom: z.array(z.string()).optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
+      actions: z
+        .object({
+          reactions: z.boolean().optional(),
+        })
+        .optional(),
       groups: z
         .record(
           z.string(),
