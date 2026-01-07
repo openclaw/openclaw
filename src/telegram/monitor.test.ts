@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { monitorTelegramProvider } from "./monitor.js";
 
@@ -23,6 +23,25 @@ const api = {
   setWebhook: vi.fn(),
   deleteWebhook: vi.fn(),
 };
+const { initSpy, runSpy, loadConfig } = vi.hoisted(() => ({
+  initSpy: vi.fn(async () => undefined),
+  runSpy: vi.fn(() => ({
+    task: () => Promise.resolve(),
+    stop: vi.fn(),
+  })),
+  loadConfig: vi.fn(() => ({
+    agent: { maxConcurrent: 2 },
+    telegram: {},
+  })),
+}));
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig,
+  };
+});
 
 vi.mock("./bot.js", () => ({
   createTelegramBot: () => {
@@ -38,6 +57,7 @@ vi.mock("./bot.js", () => ({
       on: vi.fn(),
       api,
       me: { username: "mybot" },
+      init: initSpy,
       stop: vi.fn(),
       start: vi.fn(),
     };
@@ -47,10 +67,7 @@ vi.mock("./bot.js", () => ({
 
 // Mock the grammyjs/runner to resolve immediately
 vi.mock("@grammyjs/runner", () => ({
-  run: vi.fn(() => ({
-    task: () => Promise.resolve(),
-    stop: vi.fn(),
-  })),
+  run: runSpy,
 }));
 
 vi.mock("../auto-reply/reply.js", () => ({
@@ -60,6 +77,15 @@ vi.mock("../auto-reply/reply.js", () => ({
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
+  beforeEach(() => {
+    loadConfig.mockReturnValue({
+      agent: { maxConcurrent: 2 },
+      telegram: {},
+    });
+    initSpy.mockClear();
+    runSpy.mockClear();
+  });
+
   it("processes a DM and sends reply", async () => {
     Object.values(api).forEach((fn) => {
       fn?.mockReset?.();
@@ -78,6 +104,23 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.sendMessage).toHaveBeenCalledWith(123, "echo:hi", {
       parse_mode: "Markdown",
     });
+  });
+
+  it("uses agent maxConcurrent for runner concurrency", async () => {
+    runSpy.mockClear();
+    loadConfig.mockReturnValue({
+      agent: { maxConcurrent: 3 },
+      telegram: {},
+    });
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(runSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        sink: { concurrency: 3 },
+      }),
+    );
   });
 
   it("requires mention in groups by default", async () => {

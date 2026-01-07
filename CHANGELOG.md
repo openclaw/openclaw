@@ -19,6 +19,7 @@
 
 ### Fixes
 - Discord/Telegram: add per-request retry policy with configurable delays and docs.
+- Telegram: run long polling via grammY runner with per-chat sequentialization and concurrency tied to `agent.maxConcurrent`. Thanks @mukhtharcm for PR #366.
 - macOS: prevent gateway launchd startup race where the app could kill a just-started gateway; avoid unnecessary `bootout` and ensure the job is enabled at login. Fixes #306. Thanks @gupsammy for PR #387.
 - macOS: ignore ciao announcement cancellation rejections during Bonjour shutdown to avoid unhandled exits. Thanks @emanuelst for PR #419.
 - Pairing: generate DM pairing codes with CSPRNG, expire pending codes after 1 hour, and avoid re-sending codes for already pending requests.
