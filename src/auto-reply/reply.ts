@@ -717,6 +717,8 @@ export async function getReplyFromConfig(
     // Originating channel for reply routing.
     originatingChannel: ctx.OriginatingChannel,
     originatingTo: ctx.OriginatingTo,
+    originatingAccountId: ctx.AccountId,
+    originatingThreadId: ctx.MessageThreadId,
     run: {
       agentId,
       agentDir,

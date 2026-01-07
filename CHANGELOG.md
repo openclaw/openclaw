@@ -111,6 +111,7 @@
 - Block streaming: preserve leading indentation in block replies (lists, indented fences).
 - Docs: document systemd lingering and logged-in session requirements on macOS/Windows.
 - Auto-reply: centralize tool/block/final dispatch across providers for consistent streaming + heartbeat/prefix handling. Thanks @MSch for PR #225.
+- Routing: route replies back to the originating provider/chat when multiple providers share the same session. Thanks @jalehman for PR #328.
 - Heartbeat: make HEARTBEAT_OK ack padding configurable across heartbeat and cron delivery. (#238) — thanks @jalehman
 - Skills: emit MEDIA token after Nano Banana Pro image generation. Thanks @Iamadig for PR #271.
 - WhatsApp: set sender E.164 for direct chats so owner commands work in DMs.

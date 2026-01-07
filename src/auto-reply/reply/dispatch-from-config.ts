@@ -27,7 +27,7 @@ export async function dispatchReplyFromConfig(params: {
   // flow when the provider handles its own messages.
   const originatingChannel = ctx.OriginatingChannel;
   const originatingTo = ctx.OriginatingTo;
-  const currentSurface = ctx.Surface?.toLowerCase();
+  const currentSurface = (ctx.Surface ?? ctx.Provider)?.toLowerCase();
   const shouldRouteToOriginating =
     isRoutableChannel(originatingChannel) &&
     originatingTo &&
@@ -47,6 +47,8 @@ export async function dispatchReplyFromConfig(params: {
       payload,
       channel: originatingChannel,
       to: originatingTo,
+      accountId: ctx.AccountId,
+      threadId: ctx.MessageThreadId,
       cfg,
     });
     if (!result.ok) {
@@ -89,6 +91,7 @@ export async function dispatchReplyFromConfig(params: {
     : [];
 
   let queuedFinal = false;
+  let routedFinalCount = 0;
   for (const reply of replies) {
     if (shouldRouteToOriginating && originatingChannel && originatingTo) {
       // Route final reply to originating channel.
@@ -96,6 +99,8 @@ export async function dispatchReplyFromConfig(params: {
         payload: reply,
         channel: originatingChannel,
         to: originatingTo,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
         cfg,
       });
       if (!result.ok) {
@@ -103,13 +108,15 @@ export async function dispatchReplyFromConfig(params: {
           `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
         );
       }
-      // Mark as queued since we handled it ourselves.
-      queuedFinal = true;
+      queuedFinal = result.ok || queuedFinal;
+      if (result.ok) routedFinalCount += 1;
     } else {
       queuedFinal = dispatcher.sendFinalReply(reply) || queuedFinal;
     }
   }
   await dispatcher.waitForIdle();
 
-  return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+  const counts = dispatcher.getQueuedCounts();
+  counts.final += routedFinalCount;
+  return { queuedFinal, counts };
 }

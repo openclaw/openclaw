@@ -13,6 +13,7 @@ import { sendMessageIMessage } from "../../imessage/send.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
+import { sendMessageWhatsApp } from "../../web/outbound.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 
@@ -23,6 +24,10 @@ export type RouteReplyParams = {
   channel: OriginatingChannelType;
   /** The destination chat/channel/user ID. */
   to: string;
+  /** Provider account id (multi-account). */
+  accountId?: string;
+  /** Telegram message thread id (forum topics). */
+  threadId?: number;
   /** Config for provider-specific settings. */
   cfg: ClawdbotConfig;
 };
@@ -47,29 +52,48 @@ export type RouteReplyResult = {
 export async function routeReply(
   params: RouteReplyParams,
 ): Promise<RouteReplyResult> {
-  const { payload, channel, to } = params;
+  const { payload, channel, to, accountId, threadId } = params;
+
   const text = payload.text ?? "";
-  const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.[0];
+  const mediaUrls = (payload.mediaUrls?.filter(Boolean) ?? []).length
+    ? (payload.mediaUrls?.filter(Boolean) as string[])
+    : payload.mediaUrl
+      ? [payload.mediaUrl]
+      : [];
+  const replyToId = payload.replyToId;
 
   // Skip empty replies.
-  if (!text.trim() && !mediaUrl) {
+  if (!text.trim() && mediaUrls.length === 0) {
     return { ok: true };
   }
 
-  try {
+  const sendOne = async (params: {
+    text: string;
+    mediaUrl?: string;
+  }): Promise<RouteReplyResult> => {
+    const { text, mediaUrl } = params;
     switch (channel) {
       case "telegram": {
-        const result = await sendMessageTelegram(to, text, { mediaUrl });
+        const result = await sendMessageTelegram(to, text, {
+          mediaUrl,
+          messageThreadId: threadId,
+        });
         return { ok: true, messageId: result.messageId };
       }
 
       case "slack": {
-        const result = await sendMessageSlack(to, text, { mediaUrl });
+        const result = await sendMessageSlack(to, text, {
+          mediaUrl,
+          threadTs: replyToId,
+        });
         return { ok: true, messageId: result.messageId };
       }
 
       case "discord": {
-        const result = await sendMessageDiscord(to, text, { mediaUrl });
+        const result = await sendMessageDiscord(to, text, {
+          mediaUrl,
+          replyTo: replyToId,
+        });
         return { ok: true, messageId: result.messageId };
       }
 
@@ -84,17 +108,15 @@ export async function routeReply(
       }
 
       case "whatsapp": {
-        // WhatsApp doesn't have a standalone send function in this codebase.
-        // Falls through to unknown channel handling.
-        return {
-          ok: false,
-          error: `WhatsApp routing not yet implemented`,
-        };
+        const result = await sendMessageWhatsApp(to, text, {
+          verbose: false,
+          mediaUrl,
+          accountId,
+        });
+        return { ok: true, messageId: result.messageId };
       }
 
       case "webchat": {
-        // Webchat is typically handled differently (real-time WebSocket).
-        // Falls through to unknown channel handling.
         return {
           ok: false,
           error: `Webchat routing not supported for queued replies`,
@@ -102,14 +124,26 @@ export async function routeReply(
       }
 
       default: {
-        // Exhaustive check for unknown channel types.
         const _exhaustive: never = channel;
-        return {
-          ok: false,
-          error: `Unknown channel: ${String(_exhaustive)}`,
-        };
+        return { ok: false, error: `Unknown channel: ${String(_exhaustive)}` };
       }
     }
+  };
+
+  try {
+    if (mediaUrls.length === 0) {
+      return await sendOne({ text });
+    }
+
+    let last: RouteReplyResult | undefined;
+    for (let i = 0; i < mediaUrls.length; i++) {
+      const mediaUrl = mediaUrls[i];
+      const caption = i === 0 ? text : "";
+      last = await sendOne({ text: caption, mediaUrl });
+      if (!last.ok) return last;
+    }
+
+    return last ?? { ok: true };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return {
@@ -122,14 +156,25 @@ export async function routeReply(
 /**
  * Checks if a channel type is routable via routeReply.
  *
- * Some channels (webchat, whatsapp) require special handling and
- * cannot be routed through this generic interface.
+ * Some channels (webchat) require special handling and cannot be routed through
+ * this generic interface.
  */
 export function isRoutableChannel(
   channel: OriginatingChannelType | undefined,
-): channel is "telegram" | "slack" | "discord" | "signal" | "imessage" {
+): channel is
+  | "telegram"
+  | "slack"
+  | "discord"
+  | "signal"
+  | "imessage"
+  | "whatsapp" {
   if (!channel) return false;
-  return ["telegram", "slack", "discord", "signal", "imessage"].includes(
-    channel,
-  );
+  return [
+    "telegram",
+    "slack",
+    "discord",
+    "signal",
+    "imessage",
+    "whatsapp",
+  ].includes(channel);
 }

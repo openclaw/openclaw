@@ -79,6 +79,8 @@ export function createFollowupRunner(params: {
           payload,
           channel: originatingChannel,
           to: originatingTo,
+          accountId: queued.originatingAccountId,
+          threadId: queued.originatingThreadId,
           cfg: queued.run.config,
         });
         if (!result.ok) {
