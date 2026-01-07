@@ -202,6 +202,19 @@ function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]) {
   };
 }
 
+function setMessagesResponsePrefix(
+  cfg: ClawdbotConfig,
+  responsePrefix?: string,
+) {
+  return {
+    ...cfg,
+    messages: {
+      ...cfg.messages,
+      responsePrefix,
+    },
+  };
+}
+
 function setWhatsAppSelfChatMode(
   cfg: ClawdbotConfig,
   selfChatMode?: boolean,
@@ -403,6 +416,7 @@ async function promptWhatsAppAllowFrom(
   const existingAllowFrom = cfg.whatsapp?.allowFrom ?? [];
   const existingLabel =
     existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
+  const existingResponsePrefix = cfg.messages?.responsePrefix;
 
   await prompter.note(
     [
@@ -418,6 +432,56 @@ async function promptWhatsAppAllowFrom(
     "WhatsApp DM access",
   );
 
+  const phoneMode = (await prompter.select({
+    message: "WhatsApp phone setup",
+    options: [
+      { value: "personal", label: "This is my personal phone number" },
+      { value: "separate", label: "Separate phone just for Clawdbot" },
+    ],
+  })) as "personal" | "separate";
+
+  if (phoneMode === "personal") {
+    const entry = await prompter.text({
+      message: "Your WhatsApp number (E.164)",
+      placeholder: "+15555550123",
+      initialValue: existingAllowFrom[0],
+      validate: (value) => {
+        const raw = String(value ?? "").trim();
+        if (!raw) return "Required";
+        const normalized = normalizeE164(raw);
+        if (!normalized) return `Invalid number: ${raw}`;
+        return undefined;
+      },
+    });
+    const normalized = normalizeE164(String(entry).trim());
+    const merged = [
+      ...existingAllowFrom
+        .filter((item) => item !== "*")
+        .map((item) => normalizeE164(item))
+        .filter(Boolean),
+      normalized,
+    ];
+    const unique = [...new Set(merged.filter(Boolean))];
+    let next = setWhatsAppSelfChatMode(cfg, true);
+    next = setWhatsAppDmPolicy(next, "allowlist");
+    next = setWhatsAppAllowFrom(next, unique);
+    if (existingResponsePrefix === undefined) {
+      next = setMessagesResponsePrefix(next, "[clawdbot]");
+    }
+    await prompter.note(
+      [
+        "Personal phone mode enabled.",
+        "- dmPolicy set to allowlist (pairing skipped)",
+        `- allowFrom includes ${normalized}`,
+        existingResponsePrefix === undefined
+          ? "- responsePrefix set to [clawdbot]"
+          : "- responsePrefix left unchanged",
+      ].join("\n"),
+      "WhatsApp personal phone",
+    );
+    return next;
+  }
+
   const policy = (await prompter.select({
     message: "WhatsApp DM policy",
     options: [
@@ -428,7 +492,8 @@ async function promptWhatsAppAllowFrom(
     ],
   })) as DmPolicy;
 
-  let next = setWhatsAppDmPolicy(cfg, policy);
+  let next = setWhatsAppSelfChatMode(cfg, false);
+  next = setWhatsAppDmPolicy(next, policy);
   if (policy === "open") {
     next = setWhatsAppAllowFrom(next, ["*"]);
   }
@@ -490,12 +555,7 @@ async function promptWhatsAppAllowFrom(
     next = setWhatsAppAllowFrom(next, unique);
   }
 
-  const selfChatMode = await prompter.confirm({
-    message:
-      "Same-phone setup? (using your personal WhatsApp number for Clawdbot)",
-    initialValue: next.whatsapp?.selfChatMode ?? false,
-  });
-  return setWhatsAppSelfChatMode(next, selfChatMode);
+  return next;
 }
 
 type SetupProvidersOptions = {
