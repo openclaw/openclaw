@@ -257,6 +257,16 @@ msteams:
     path: /msteams/messages
 ```
 
+### Useful Links
+
+- [Azure Portal](https://portal.azure.com)
+- [Create Azure Bot](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration)
+- [Bot Framework Overview](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-overview)
+- [Create Teams Bot](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/create-a-bot-for-teams)
+- [Teams App Manifest Schema](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/schema/manifest-schema)
+- [ngrok](https://ngrok.com) - local dev tunneling
+- [Tailscale Funnel](https://tailscale.com/kb/1223/funnel) - alternative tunnel
+
 ---
 
 ## 3) Recommended Architecture for Clawdbot
