@@ -300,6 +300,7 @@ export async function runOnboardingWizard(
           profileId,
           provider: "anthropic",
           mode: "oauth",
+          email: oauthCreds.email ?? undefined,
         });
       }
     } catch (err) {

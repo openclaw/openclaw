@@ -10,6 +10,7 @@ import lockfile from "proper-lockfile";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
+import type { AuthProfileConfig } from "../config/types.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -694,10 +695,36 @@ export async function resolveApiKeyForProfile(params: {
         email: refreshed.email ?? cred.email,
       };
     }
+    const fallbackProfileId = suggestOAuthProfileIdForLegacyDefault({
+      cfg,
+      store: refreshedStore,
+      provider: cred.provider,
+      legacyProfileId: profileId,
+    });
+    if (fallbackProfileId && fallbackProfileId !== profileId) {
+      try {
+        const fallbackResolved = await tryResolveOAuthProfile({
+          cfg,
+          store: refreshedStore,
+          profileId: fallbackProfileId,
+          agentDir: params.agentDir,
+        });
+        if (fallbackResolved) return fallbackResolved;
+      } catch {
+        // keep original error
+      }
+    }
     const message = error instanceof Error ? error.message : String(error);
+    const hint = formatAuthDoctorHint({
+      cfg,
+      store: refreshedStore,
+      provider: cred.provider,
+      profileId,
+    });
     throw new Error(
       `OAuth token refresh failed for ${cred.provider}: ${message}. ` +
-        "Please try again or re-authenticate.",
+        "Please try again or re-authenticate." +
+        (hint ? `\n\n${hint}` : ""),
     );
   }
 }
@@ -744,4 +771,235 @@ export function resolveAuthProfileDisplayLabel(params: {
   const email = configEmail || profile?.email?.trim();
   if (email) return `${profileId} (${email})`;
   return profileId;
+}
+
+async function tryResolveOAuthProfile(params: {
+  cfg?: ClawdbotConfig;
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+}): Promise<{ apiKey: string; provider: string; email?: string } | null> {
+  const { cfg, store, profileId } = params;
+  const cred = store.profiles[profileId];
+  if (!cred || cred.type !== "oauth") return null;
+  const profileConfig = cfg?.auth?.profiles?.[profileId];
+  if (profileConfig && profileConfig.provider !== cred.provider) return null;
+  if (profileConfig && profileConfig.mode !== cred.type) return null;
+
+  if (Date.now() < cred.expires) {
+    return {
+      apiKey: buildOAuthApiKey(cred.provider, cred),
+      provider: cred.provider,
+      email: cred.email,
+    };
+  }
+
+  const refreshed = await refreshOAuthTokenWithLock({
+    profileId,
+    provider: cred.provider,
+    agentDir: params.agentDir,
+  });
+  if (!refreshed) return null;
+  return {
+    apiKey: refreshed.apiKey,
+    provider: cred.provider,
+    email: cred.email,
+  };
+}
+
+function getProfileSuffix(profileId: string): string {
+  const idx = profileId.indexOf(":");
+  if (idx < 0) return "";
+  return profileId.slice(idx + 1);
+}
+
+function isEmailLike(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  return trimmed.includes("@") && trimmed.includes(".");
+}
+
+export function suggestOAuthProfileIdForLegacyDefault(params: {
+  cfg?: ClawdbotConfig;
+  store: AuthProfileStore;
+  provider: string;
+  legacyProfileId: string;
+}): string | null {
+  const providerKey = normalizeProviderId(params.provider);
+  const legacySuffix = getProfileSuffix(params.legacyProfileId);
+  if (legacySuffix !== "default") return null;
+
+  const legacyCfg = params.cfg?.auth?.profiles?.[params.legacyProfileId];
+  if (
+    legacyCfg &&
+    normalizeProviderId(legacyCfg.provider) === providerKey &&
+    legacyCfg.mode !== "oauth"
+  ) {
+    return null;
+  }
+
+  const oauthProfiles = listProfilesForProvider(
+    params.store,
+    providerKey,
+  ).filter((id) => params.store.profiles[id]?.type === "oauth");
+  if (oauthProfiles.length === 0) return null;
+
+  const configuredEmail = legacyCfg?.email?.trim();
+  if (configuredEmail) {
+    const byEmail = oauthProfiles.find((id) => {
+      const cred = params.store.profiles[id];
+      if (!cred || cred.type !== "oauth") return false;
+      const email = cred.email?.trim();
+      return (
+        email === configuredEmail || id === `${providerKey}:${configuredEmail}`
+      );
+    });
+    if (byEmail) return byEmail;
+  }
+
+  const lastGood =
+    params.store.lastGood?.[providerKey] ??
+    params.store.lastGood?.[params.provider];
+  if (lastGood && oauthProfiles.includes(lastGood)) return lastGood;
+
+  const nonLegacy = oauthProfiles.filter((id) => id !== params.legacyProfileId);
+  if (nonLegacy.length === 1) return nonLegacy[0] ?? null;
+
+  const emailLike = nonLegacy.filter((id) => isEmailLike(getProfileSuffix(id)));
+  if (emailLike.length === 1) return emailLike[0] ?? null;
+
+  return null;
+}
+
+export type AuthProfileIdRepairResult = {
+  config: ClawdbotConfig;
+  changes: string[];
+  migrated: boolean;
+  fromProfileId?: string;
+  toProfileId?: string;
+};
+
+export function repairOAuthProfileIdMismatch(params: {
+  cfg: ClawdbotConfig;
+  store: AuthProfileStore;
+  provider: string;
+  legacyProfileId?: string;
+}): AuthProfileIdRepairResult {
+  const legacyProfileId =
+    params.legacyProfileId ?? `${normalizeProviderId(params.provider)}:default`;
+  const legacyCfg = params.cfg.auth?.profiles?.[legacyProfileId];
+  if (!legacyCfg) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+  if (legacyCfg.mode !== "oauth") {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+  if (
+    normalizeProviderId(legacyCfg.provider) !==
+    normalizeProviderId(params.provider)
+  ) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+
+  const toProfileId = suggestOAuthProfileIdForLegacyDefault({
+    cfg: params.cfg,
+    store: params.store,
+    provider: params.provider,
+    legacyProfileId,
+  });
+  if (!toProfileId || toProfileId === legacyProfileId) {
+    return { config: params.cfg, changes: [], migrated: false };
+  }
+
+  const toCred = params.store.profiles[toProfileId];
+  const toEmail = toCred?.type === "oauth" ? toCred.email?.trim() : undefined;
+
+  const nextProfiles = {
+    ...(params.cfg.auth?.profiles as
+      | Record<string, AuthProfileConfig>
+      | undefined),
+  } as Record<string, AuthProfileConfig>;
+  delete nextProfiles[legacyProfileId];
+  nextProfiles[toProfileId] = {
+    ...legacyCfg,
+    ...(toEmail ? { email: toEmail } : {}),
+  };
+
+  const providerKey = normalizeProviderId(params.provider);
+  const nextOrder = (() => {
+    const order = params.cfg.auth?.order;
+    if (!order) return undefined;
+    const resolvedKey = Object.keys(order).find(
+      (key) => normalizeProviderId(key) === providerKey,
+    );
+    if (!resolvedKey) return order;
+    const existing = order[resolvedKey];
+    if (!Array.isArray(existing)) return order;
+    const replaced = existing
+      .map((id) => (id === legacyProfileId ? toProfileId : id))
+      .filter(
+        (id): id is string => typeof id === "string" && id.trim().length > 0,
+      );
+    const deduped: string[] = [];
+    for (const entry of replaced) {
+      if (!deduped.includes(entry)) deduped.push(entry);
+    }
+    return { ...order, [resolvedKey]: deduped };
+  })();
+
+  const nextCfg: ClawdbotConfig = {
+    ...params.cfg,
+    auth: {
+      ...params.cfg.auth,
+      profiles: nextProfiles,
+      ...(nextOrder ? { order: nextOrder } : {}),
+    },
+  };
+
+  const changes = [
+    `Auth: migrate ${legacyProfileId} → ${toProfileId} (OAuth profile id)`,
+  ];
+
+  return {
+    config: nextCfg,
+    changes,
+    migrated: true,
+    fromProfileId: legacyProfileId,
+    toProfileId,
+  };
+}
+
+export function formatAuthDoctorHint(params: {
+  cfg?: ClawdbotConfig;
+  store: AuthProfileStore;
+  provider: string;
+  profileId?: string;
+}): string {
+  const providerKey = normalizeProviderId(params.provider);
+  if (providerKey !== "anthropic") return "";
+
+  const legacyProfileId = params.profileId ?? "anthropic:default";
+  const suggested = suggestOAuthProfileIdForLegacyDefault({
+    cfg: params.cfg,
+    store: params.store,
+    provider: providerKey,
+    legacyProfileId,
+  });
+  if (!suggested || suggested === legacyProfileId) return "";
+
+  const storeOauthProfiles = listProfilesForProvider(params.store, providerKey)
+    .filter((id) => params.store.profiles[id]?.type === "oauth")
+    .join(", ");
+
+  const cfgMode = params.cfg?.auth?.profiles?.[legacyProfileId]?.mode;
+  const cfgProvider = params.cfg?.auth?.profiles?.[legacyProfileId]?.provider;
+
+  return [
+    "Doctor hint (for GitHub issue):",
+    `- provider: ${providerKey}`,
+    `- config: ${legacyProfileId}${cfgProvider || cfgMode ? ` (provider=${cfgProvider ?? "?"}, mode=${cfgMode ?? "?"})` : ""}`,
+    `- auth store oauth profiles: ${storeOauthProfiles || "(none)"}`,
+    `- suggested profile: ${suggested}`,
+    'Fix: run "clawdbot doctor --yes"',
+  ].join("\n");
 }
