@@ -1,11 +1,13 @@
 import { Type } from "@sinclair/typebox";
 
+import { createReactionSchema } from "./reaction-schema.js";
+
 export const TelegramToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("react"),
-    chatId: Type.Union([Type.String(), Type.Number()]),
-    messageId: Type.Union([Type.String(), Type.Number()]),
-    emoji: Type.String(),
-    remove: Type.Optional(Type.Boolean()),
+  createReactionSchema({
+    ids: {
+      chatId: Type.Union([Type.String(), Type.Number()]),
+      messageId: Type.Union([Type.String(), Type.Number()]),
+    },
+    includeRemove: true,
   }),
 ]);

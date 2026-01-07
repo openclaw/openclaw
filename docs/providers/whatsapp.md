@@ -97,8 +97,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 ## Agent tool (reactions)
 - Tool: `whatsapp` with `react` action (`chatJid`, `messageId`, `emoji`, optional `remove`).
 - Optional: `participant` (group sender), `fromMe` (reacting to your own message), `accountId` (multi-account).
-- `emoji=""` removes the bot's reaction(s) on the message.
-- `remove: true` removes the bot's reaction (same effect as empty emoji).
+- Reaction removal semantics: see [/tools/reactions](/tools/reactions).
 - Tool gating: `whatsapp.actions.reactions` (default: enabled).
 
 ## Outbound send (text + media)

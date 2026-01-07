@@ -71,8 +71,7 @@ Controlled by `telegram.replyToMode`:
 
 ## Agent tool (reactions)
 - Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
-- `emoji=""` removes the bot's reaction(s) on the message.
-- `remove: true` removes the reaction (Telegram only supports removing your own reaction).
+- Reaction removal semantics: see [/tools/reactions](/tools/reactions).
 - Tool gating: `telegram.actions.reactions` (default: enabled).
 
 ## Delivery targets (CLI/cron)
