@@ -592,6 +592,10 @@ export type RoutingConfig = {
         perSession?: boolean;
         workspaceRoot?: string;
       };
+      tools?: {
+        allow?: string[];
+        deny?: string[];
+      };
     }
   >;
   bindings?: Array<{
