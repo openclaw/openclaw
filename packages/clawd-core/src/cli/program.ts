@@ -1,8 +1,8 @@
-import { Command } from "commander";
 import chalk from "chalk";
-import { loadConfig } from "../config/index.js";
-import { runClawdAgent, resetSession, listSessions } from "../agents/runner.js";
+import { Command } from "commander";
+import { listSessions, resetSession, runClawdAgent } from "../agents/runner.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { loadConfig } from "../config/index.js";
 import type { ThinkLevel } from "../config/types.js";
 
 export const program = new Command();
@@ -46,10 +46,12 @@ program
         sessionKey: opts.session,
         config,
         thinkingLevel: opts.thinking as ThinkLevel,
-        onTextChunk: opts.json ? undefined : (text) => process.stdout.write(text),
+        onTextChunk: opts.json
+          ? undefined
+          : (text) => process.stdout.write(text),
         onToolUse: opts.json
           ? undefined
-          : (name, input) => {
+          : (name, _input) => {
               console.error(chalk.dim(`\n[tool: ${name}]`));
             },
       });
@@ -87,7 +89,11 @@ program
     });
 
     console.log(chalk.cyan("Clawd Chat"));
-    console.log(chalk.dim("Type your message and press Enter. Type /quit to exit, /new to reset session."));
+    console.log(
+      chalk.dim(
+        "Type your message and press Enter. Type /quit to exit, /new to reset session.",
+      ),
+    );
     console.log();
 
     const prompt = () => {
@@ -198,7 +204,8 @@ program
     if (result.soulPath) console.log(`  - ${chalk.cyan("SOUL.md")}`);
     if (result.toolsPath) console.log(`  - ${chalk.cyan("TOOLS.md")}`);
     if (result.heartbeatPath) console.log(`  - ${chalk.cyan("HEARTBEAT.md")}`);
-    if (result.bootstrapPath) console.log(`  - ${chalk.cyan("BOOTSTRAP.md")} (first-run ritual)`);
+    if (result.bootstrapPath)
+      console.log(`  - ${chalk.cyan("BOOTSTRAP.md")} (first-run ritual)`);
     console.log();
     console.log(chalk.dim("Run 'clawd chat' to start chatting!"));
   });

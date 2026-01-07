@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { resolveUserPath } from "../utils/index.js";
 
 export function resolveDefaultAgentWorkspaceDir(

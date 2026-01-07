@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
@@ -88,7 +88,6 @@ export type BashToolDetails =
       aggregated: string;
     };
 
-// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
 export function createBashTool(
   defaults?: BashToolDefaults,
 ): AgentTool<any, BashToolDetails> {
@@ -364,7 +363,6 @@ const processSchema = Type.Object({
   limit: Type.Optional(Type.Number({ description: "Log length" })),
 });
 
-// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentTool<any> {

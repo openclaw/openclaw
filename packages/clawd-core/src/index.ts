@@ -21,11 +21,10 @@
  * ```
  */
 
-// Config
-export * from "./config/index.js";
-
 // Agents
 export * from "./agents/index.js";
+// Config
+export * from "./config/index.js";
 
 // Tools
 export * from "./tools/index.js";

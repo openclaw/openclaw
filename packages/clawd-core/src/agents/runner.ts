@@ -1,13 +1,12 @@
-import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   type AgentSessionEvent,
-  buildSystemPrompt,
   codingTools,
   createAgentSession,
   discoverSkills,
+  SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import type { ClawdConfig, ThinkLevel } from "../config/types.js";
 import { createBashTool, createProcessTool } from "../tools/bash-tools.js";
@@ -20,10 +19,7 @@ import {
   saveSessionStore,
   updateSessionUsage,
 } from "./sessions.js";
-import {
-  applySkillEnvOverrides,
-  loadWorkspaceSkillEntries,
-} from "./skills.js";
+import { applySkillEnvOverrides, loadWorkspaceSkillEntries } from "./skills.js";
 import { buildAgentSystemPromptAppend } from "./system-prompt.js";
 import {
   buildBootstrapContextFiles,
@@ -67,7 +63,9 @@ export type AgentRunnerResult = {
   model?: string;
 };
 
-function mapThinkingLevel(level?: ThinkLevel): "off" | "low" | "medium" | "high" {
+function mapThinkingLevel(
+  level?: ThinkLevel,
+): "off" | "low" | "medium" | "high" {
   if (!level || level === "off") return "off";
   return level;
 }
@@ -79,7 +77,8 @@ function mapThinkingLevel(level?: ThinkLevel): "off" | "low" | "medium" | "high"
 export async function runClawdAgent(
   params: AgentRunnerParams,
 ): Promise<AgentRunnerResult> {
-  const { message, config, signal, onTextChunk, onToolUse, onToolResult } = params;
+  const { message, config, signal, onTextChunk, onToolUse, onToolResult } =
+    params;
 
   // Resolve workspace
   const workspaceDir = config?.agent?.workspace
@@ -99,16 +98,23 @@ export async function runClawdAgent(
   const cleanupEnv = applySkillEnvOverrides({ skills: skillEntries, config });
 
   try {
-    // Resolve session
+    // Resolve session key and sessions directory
     const sessionKey = params.sessionKey ?? resolveMainSessionKey(config);
     const storePath = resolveStorePath(config?.session?.store);
     const store = loadSessionStore(storePath);
     const sessionEntry = getOrCreateSession(store, sessionKey);
-    const sessionId = sessionEntry.sessionId;
 
-    // Ensure session directory exists
+    // Sessions directory for transcripts (separate from our metadata store)
     const sessionsDir = path.dirname(storePath);
     await fs.promises.mkdir(sessionsDir, { recursive: true });
+
+    // Create SessionManager that continues recent session or creates new one
+    // This ensures conversation history persists across runs
+    const sessionManager = SessionManager.continueRecent(
+      workspaceDir,
+      sessionsDir,
+    );
+    const sessionId = sessionManager.getSessionId();
 
     // Build custom tools (our bash tool replaces the default)
     const bashTool = createBashTool({
@@ -119,7 +125,6 @@ export async function runClawdAgent(
 
     // Filter out the default bash tool and add ours
     const baseTools = codingTools.filter((t) => t.name !== "bash");
-    // biome-ignore lint/suspicious/noExplicitAny: pi-coding-agent types
     const tools = [...baseTools, bashTool, processTool] as any[];
 
     // Discover skills using pi-coding-agent's discovery
@@ -145,15 +150,16 @@ export async function runClawdAgent(
       },
     });
 
-    // Create agent session using pi-coding-agent SDK
+    // Create agent session using pi-coding-agent SDK with our session manager
     const { session } = await createAgentSession({
       cwd: workspaceDir,
       tools,
       skills,
       contextFiles,
       thinkingLevel,
+      sessionManager,
       systemPrompt: (defaultPrompt: string) => {
-        return defaultPrompt + "\n\n" + systemPromptAppend;
+        return `${defaultPrompt}\n\n${systemPromptAppend}`;
       },
     });
 
@@ -204,9 +210,15 @@ export async function runClawdAgent(
       // Capture final message text on message_end
       if (event.type === "message_end") {
         const evt = event as AgentSessionEvent & {
-          message?: { role?: string; content?: Array<{ type: string; text?: string }> };
+          message?: {
+            role?: string;
+            content?: Array<{ type: string; text?: string }>;
+          };
         };
-        if (evt.message?.role === "assistant" && Array.isArray(evt.message.content)) {
+        if (
+          evt.message?.role === "assistant" &&
+          Array.isArray(evt.message.content)
+        ) {
           const textContent = evt.message.content
             .filter((c) => c.type === "text" && typeof c.text === "string")
             .map((c) => c.text)
@@ -227,11 +239,11 @@ export async function runClawdAgent(
 
     // Get model info
     const model = session.model;
-    // biome-ignore lint/suspicious/noExplicitAny: Model type is generic
-    const modelName = model ? `${(model as any).provider}/${(model as any).modelId}` : undefined;
+    const modelName = model
+      ? `${(model as any).provider}/${(model as any).modelId}`
+      : undefined;
 
     // Update session store
-    // biome-ignore lint/suspicious/noExplicitAny: Model type is generic
     const modelProvider = model ? (model as any).provider : undefined;
     await updateSessionUsage({
       storePath,
@@ -259,7 +271,7 @@ export async function runClawdAgent(
 }
 
 /**
- * Reset a session (clear history).
+ * Reset a session (clear history and start fresh).
  */
 export async function resetSession(params: {
   sessionKey?: string;
@@ -270,8 +282,18 @@ export async function resetSession(params: {
   const storePath = resolveStorePath(config?.session?.store);
   const store = loadSessionStore(storePath);
 
-  // Create new session ID
-  const newSessionId = crypto.randomUUID();
+  // Resolve workspace
+  const workspaceDir = config?.agent?.workspace
+    ? resolveUserPath(config.agent.workspace)
+    : path.join(os.homedir(), "clawd");
+
+  // Sessions directory for transcripts
+  const sessionsDir = path.dirname(storePath);
+  await fs.promises.mkdir(sessionsDir, { recursive: true });
+
+  // Create a new session using the SDK's SessionManager
+  const sessionManager = SessionManager.create(workspaceDir, sessionsDir);
+  const newSessionId = sessionManager.getSessionId();
 
   store[sessionKey] = {
     sessionId: newSessionId,

@@ -3,8 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
-import type { ClawdConfig, SessionEntry, SessionScope } from "../config/types.js";
-import { CONFIG_DIR, resolveUserPath } from "../utils/index.js";
+import type { ClawdConfig, SessionEntry } from "../config/types.js";
+import { resolveUserPath } from "../utils/index.js";
 
 export const DEFAULT_AGENT_ID = "main";
 export const DEFAULT_MAIN_KEY = "main";
@@ -30,7 +30,9 @@ function resolveAgentSessionsDir(
   homedir: () => string = os.homedir,
 ): string {
   const override = env.CLAWD_STATE_DIR?.trim();
-  const root = override ? resolveUserPath(override) : path.join(homedir(), ".clawd");
+  const root = override
+    ? resolveUserPath(override)
+    : path.join(homedir(), ".clawd");
   const id = normalizeAgentId(agentId ?? DEFAULT_AGENT_ID);
   return path.join(root, "agents", id, "sessions");
 }

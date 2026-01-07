@@ -2,13 +2,12 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { codingTools } from "@mariozechner/pi-coding-agent";
 import type { ClawdConfig } from "../config/types.js";
 import {
+  type BashToolDefaults,
   createBashTool,
   createProcessTool,
-  type BashToolDefaults,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 
-// biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
 type AnyAgentTool = AgentTool<any, unknown>;
 
 function normalizeToolNames(list?: string[]) {
@@ -43,7 +42,9 @@ export type ClawdToolsOptions = {
  * Create the core Clawd tools (file operations, bash, process management).
  * This is a simplified version without messaging providers.
  */
-export function createClawdCodingTools(options?: ClawdToolsOptions): AnyAgentTool[] {
+export function createClawdCodingTools(
+  options?: ClawdToolsOptions,
+): AnyAgentTool[] {
   const bashToolName = "bash";
 
   // Get base coding tools from pi-coding-agent (read, write, edit, grep, find, ls)

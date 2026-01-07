@@ -1,0 +1,14 @@
+{
+  "$schema": "https://biomejs.dev/schemas/biome.json",
+  "extends": ["../../biome.json"],
+  "files": {
+    "includes": ["src/**/*.ts"]
+  },
+  "linter": {
+    "rules": {
+      "suspicious": {
+        "noExplicitAny": "off"
+      }
+    }
+  }
+}
