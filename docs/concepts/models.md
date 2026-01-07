@@ -25,6 +25,7 @@ Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “what
 - [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): solid fallback when Opus caps out.
 - [GLM](https://www.zhipuai.cn/en/): used as a worker model under orchestration.
 - [MiniMax M2.1](https://platform.minimax.io/docs/guides/models-intro): “good enough” fallback for grunt tasks.
+- “Temu-Sonnet” (community shorthand) for MiniMax quality vs Claude Sonnet.
 - [Gemini 3 Pro](https://deepmind.google/en/models/gemini/pro/): some users said it maps Clawdbot structure well.
 
 **Mixed / unclear**
