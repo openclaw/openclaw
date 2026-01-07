@@ -157,7 +157,13 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     },
     "channels": {
       "C123": { "allow": true, "requireMention": true },
-      "#general": { "allow": true, "requireMention": false }
+      "#general": {
+        "allow": true,
+        "autoReply": false,
+        "users": ["U123"],
+        "skills": ["search", "docs"],
+        "systemPrompt": "Keep answers short."
+      }
     },
     "reactionNotifications": "own",
     "reactionAllowlist": ["U123"],
@@ -202,6 +208,15 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 ## Group policy
 - `slack.groupPolicy` controls channel handling (`open|disabled|allowlist`).
 - `allowlist` requires channels to be listed in `slack.channels`.
+
+Channel options (`slack.channels.<id>` or `slack.channels.<name>`):
+- `allow`: allow/deny the channel when `groupPolicy="allowlist"`.
+- `requireMention`: mention gating for the channel.
+- `autoReply`: if `true`, reply to every message (overrides `requireMention`).
+- `users`: optional per-channel user allowlist.
+- `skills`: skill filter (omit = all skills, empty = none).
+- `systemPrompt`: extra system prompt for the channel (combined with topic/purpose).
+- `enabled`: set `false` to disable the channel.
 
 ## Delivery targets
 Use these with cron/CLI sends:

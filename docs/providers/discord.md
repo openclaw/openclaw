@@ -197,7 +197,14 @@ Notes:
         users: ["987654321098765432", "steipete"],
         channels: {
           general: { allow: true },
-          help: { allow: true, requireMention: true }
+          help: {
+            allow: true,
+            requireMention: true,
+            users: ["987654321098765432"],
+            skills: ["search", "docs"],
+            systemPrompt: "Keep answers short.",
+            autoReply: false
+          }
         }
       }
     }
@@ -218,6 +225,13 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - `guilds."*"`: default per-guild settings applied when no explicit entry exists.
 - `guilds.<id>.slug`: optional friendly slug used for display names.
 - `guilds.<id>.users`: optional per-guild user allowlist (ids or names).
+- `guilds.<id>.channels.<channel>.allow`: allow/deny the channel when `groupPolicy="allowlist"`.
+- `guilds.<id>.channels.<channel>.requireMention`: mention gating for the channel.
+- `guilds.<id>.channels.<channel>.autoReply`: if `true`, reply to all messages (overrides `requireMention`).
+- `guilds.<id>.channels.<channel>.users`: optional per-channel user allowlist.
+- `guilds.<id>.channels.<channel>.skills`: skill filter (omit = all skills, empty = none).
+- `guilds.<id>.channels.<channel>.systemPrompt`: extra system prompt for the channel (combined with channel topic).
+- `guilds.<id>.channels.<channel>.enabled`: set `false` to disable the channel.
 - `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
 - `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
 - `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
