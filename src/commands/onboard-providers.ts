@@ -53,13 +53,12 @@ async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
       "Docs: https://docs.clawd.bot/start/pairing",
       "",
-      "WhatsApp: links via WhatsApp Web (scan QR), stores creds for future sends.",
-      "WhatsApp: dedicated second number recommended; primary number OK (self-chat).",
-      "Telegram: Bot API (token from @BotFather), replies via your bot.",
-      "Discord: Bot token from Discord Developer Portal; invite bot to your server.",
-      "Slack: Socket Mode app token + bot token, DMs via App Home Messages tab.",
-      "Signal: signal-cli as a linked device; separate number recommended.",
-      "iMessage: local imsg CLI; separate Apple ID recommended only on a separate Mac.",
+      "Telegram: easiest start — register a bot with @BotFather, paste token, go.",
+      "WhatsApp: works with your own number; recommend a separate phone + eSIM.",
+      "Discord: very well supported right now.",
+      "Slack: supported (Socket Mode).",
+      "Signal: signal-cli linked device; more setup (if you want easy, hop on Discord).",
+      "iMessage: this is still a work in progress.",
     ].join("\n"),
     "How providers work",
   );
@@ -609,8 +608,8 @@ export async function setupProviders(
     whatsappAccountId === DEFAULT_ACCOUNT_ID ? "default" : whatsappAccountId;
   await prompter.note(
     [
-      `WhatsApp (${waAccountLabel}): ${whatsappLinked ? "linked" : "not linked"}`,
       `Telegram: ${telegramConfigured ? "configured" : "needs token"}`,
+      `WhatsApp (${waAccountLabel}): ${whatsappLinked ? "linked" : "not linked"}`,
       `Discord: ${discordConfigured ? "configured" : "needs token"}`,
       `Slack: ${slackConfigured ? "configured" : "needs tokens"}`,
       `Signal: ${signalConfigured ? "configured" : "needs setup"}`,
@@ -633,14 +632,16 @@ export async function setupProviders(
     message: "Select providers",
     options: [
       {
+        value: "telegram",
+        label: "Telegram (Bot API)",
+        hint: telegramConfigured
+          ? "easy start · configured"
+          : "easy start · needs token",
+      },
+      {
         value: "whatsapp",
         label: "WhatsApp (QR link)",
         hint: whatsappLinked ? "linked" : "not linked",
-      },
-      {
-        value: "telegram",
-        label: "Telegram (Bot API)",
-        hint: telegramConfigured ? "configured" : "needs token",
       },
       {
         value: "discord",
@@ -666,6 +667,27 @@ export async function setupProviders(
   })) as ProviderChoice[];
 
   options?.onSelection?.(selection);
+
+  const selectionNotes: Record<ProviderChoice, string> = {
+    telegram:
+      "Telegram — easiest start: register a bot with @BotFather and paste the token. Docs: https://docs.clawd.bot/telegram",
+    whatsapp:
+      "WhatsApp — works with your own number; recommend a separate phone + eSIM. Docs: https://docs.clawd.bot/whatsapp",
+    discord:
+      "Discord — very well supported right now. Docs: https://docs.clawd.bot/discord",
+    slack:
+      "Slack — supported (Socket Mode). Docs: https://docs.clawd.bot/slack",
+    signal:
+      "Signal — signal-cli linked device; more setup (if you want easy, hop on Discord). Docs: https://docs.clawd.bot/signal",
+    imessage:
+      "iMessage — this is still a work in progress. Docs: https://docs.clawd.bot/imessage",
+  };
+  const selectedLines = selection
+    .map((provider) => selectionNotes[provider])
+    .filter(Boolean);
+  if (selectedLines.length > 0) {
+    await prompter.note(selectedLines.join("\n"), "Selected providers");
+  }
 
   let next = cfg;
 
@@ -1084,6 +1106,7 @@ export async function setupProviders(
 
     await prompter.note(
       [
+        "This is still a work in progress.",
         "Ensure Clawdbot has Full Disk Access to Messages DB.",
         "Grant Automation permission for Messages when prompted.",
         "List chats with: imsg chats --limit 20",
