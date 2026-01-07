@@ -8,6 +8,23 @@ read_when:
 
 Author: steipete · Status: draft spec · Date: 2025-12-20
 
+## Support snapshot
+- Core Gateway: supported (TypeScript on Node/Bun).
+- Companion app: macOS menu bar app with permissions + node bridge.
+- Install: [Getting Started](/start/getting-started) or [Install & updates](/install/updating).
+- Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
+
+## System control (launchd)
+If you run the bundled macOS app, it installs a per-user LaunchAgent labeled `com.clawdbot.gateway`.
+CLI-only installs can use `clawdbot onboard --install-daemon`, `clawdbot daemon install`, or `clawdbot configure` → **Gateway daemon**.
+
+```bash
+launchctl kickstart -k gui/$UID/com.clawdbot.gateway
+launchctl bootout gui/$UID/com.clawdbot.gateway
+```
+
+Details: [Gateway runbook](/gateway) and [Bundled bun Gateway](/platforms/mac/bun).
+
 ## Purpose
 - Single macOS menu-bar app named **Clawdbot** that:
   - Shows native notifications for Clawdbot/clawdbot events.

@@ -114,7 +114,16 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 ## Platforms
 
-- [macOS app overview](https://docs.clawd.bot/platforms/macos)
+- [Platforms overview](https://docs.clawd.bot/platforms)
+- [macOS](https://docs.clawd.bot/platforms/macos)
+- [iOS](https://docs.clawd.bot/platforms/ios)
+- [Android](https://docs.clawd.bot/platforms/android)
+- [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
+- [Linux](https://docs.clawd.bot/platforms/linux)
+- [Web surfaces](https://docs.clawd.bot/web)
+
+## macOS companion app (internals)
+
 - [macOS dev setup](https://docs.clawd.bot/platforms/mac/dev-setup)
 - [macOS menu bar](https://docs.clawd.bot/platforms/mac/menu-bar)
 - [macOS voice wake](https://docs.clawd.bot/platforms/mac/voicewake)
@@ -133,11 +142,6 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS XPC](https://docs.clawd.bot/platforms/mac/xpc)
 - [macOS skills](https://docs.clawd.bot/platforms/mac/skills)
 - [macOS Peekaboo plan](https://docs.clawd.bot/platforms/mac/peekaboo)
-- [iOS node](https://docs.clawd.bot/platforms/ios)
-- [Android node](https://docs.clawd.bot/platforms/android)
-- [Windows (WSL2)](https://docs.clawd.bot/platforms/windows)
-- [Linux app](https://docs.clawd.bot/platforms/linux)
-- [Web surfaces](https://docs.clawd.bot/web)
 
 ## Workspace + templates
 

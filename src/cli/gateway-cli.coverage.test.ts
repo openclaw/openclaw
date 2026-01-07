@@ -13,7 +13,9 @@ const forceFreePortAndWait = vi.fn(async () => ({
   waitedMs: 0,
   escalatedToSigkill: false,
 }));
+const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
+const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue(undefined);
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
 
@@ -82,12 +84,18 @@ vi.mock("../daemon/service.js", () => ({
     label: "LaunchAgent",
     loadedText: "loaded",
     notLoadedText: "not loaded",
-    install: vi.fn(),
-    uninstall: vi.fn(),
+    install: serviceInstall,
+    uninstall: serviceUninstall,
     stop: serviceStop,
     restart: serviceRestart,
     isLoaded: serviceIsLoaded,
     readCommand: vi.fn(),
+  }),
+}));
+
+vi.mock("../daemon/program-args.js", () => ({
+  resolveGatewayProgramArguments: async () => ({
+    programArguments: ["/bin/node", "cli", "gateway-daemon", "--port", "18789"],
   }),
 }));
 
@@ -261,6 +269,30 @@ describe("gateway-cli coverage", () => {
     await program.parseAsync(["gateway", "restart"], { from: "user" });
 
     expect(serviceStop).toHaveBeenCalledTimes(1);
+    expect(serviceRestart).toHaveBeenCalledTimes(1);
+  });
+
+  it("supports gateway install/uninstall/start via daemon helpers", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    serviceInstall.mockClear();
+    serviceUninstall.mockClear();
+    serviceRestart.mockClear();
+    serviceIsLoaded.mockResolvedValueOnce(false);
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await program.parseAsync(["gateway", "install", "--port", "18789"], {
+      from: "user",
+    });
+    await program.parseAsync(["gateway", "uninstall"], { from: "user" });
+    await program.parseAsync(["gateway", "start"], { from: "user" });
+
+    expect(serviceInstall).toHaveBeenCalledTimes(1);
+    expect(serviceUninstall).toHaveBeenCalledTimes(1);
     expect(serviceRestart).toHaveBeenCalledTimes(1);
   });
 
