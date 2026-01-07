@@ -174,17 +174,26 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   if (provider !== "whatsapp") {
-    return { provider, to };
+    const resolved = resolveOutboundTarget({ provider, to });
+    return resolved.ok
+      ? { provider, to: resolved.to }
+      : { provider: "none", reason: "no-target" };
   }
 
   const rawAllow = cfg.whatsapp?.allowFrom ?? [];
-  if (rawAllow.includes("*")) return { provider, to };
+  const resolved = resolveOutboundTarget({
+    provider: "whatsapp",
+    to,
+    allowFrom: rawAllow,
+  });
+  if (!resolved.ok) {
+    return { provider: "none", reason: "no-target" };
+  }
+  if (rawAllow.includes("*")) return { provider, to: resolved.to };
   const allowFrom = rawAllow
     .map((val) => normalizeE164(val))
     .filter((val) => val.length > 1);
-  if (allowFrom.length === 0) return { provider, to };
-
-  const normalized = normalizeE164(to);
-  if (allowFrom.includes(normalized)) return { provider, to: normalized };
+  if (allowFrom.length === 0) return { provider, to: resolved.to };
+  if (allowFrom.includes(resolved.to)) return { provider, to: resolved.to };
   return { provider, to: allowFrom[0], reason: "allowFrom-fallback" };
 }

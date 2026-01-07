@@ -1,6 +1,7 @@
 import type { CliDeps } from "../cli/deps.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
+import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
@@ -89,12 +90,14 @@ export async function pollCommand(
     runtime.log(
       JSON.stringify(
         {
-          ...buildOutboundDeliveryJson({
-            provider,
-            via: "gateway",
-            to: opts.to,
-            result,
-            mediaUrl: null,
+          ...buildOutboundResultEnvelope({
+            delivery: buildOutboundDeliveryJson({
+              provider,
+              via: "gateway",
+              to: opts.to,
+              result,
+              mediaUrl: null,
+            }),
           }),
           question: normalized.question,
           options: normalized.options,

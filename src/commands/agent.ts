@@ -45,6 +45,7 @@ import {
   registerAgentRunContext,
 } from "../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
 import {
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
@@ -548,7 +549,10 @@ export async function agentCommand(
   if (opts.json) {
     runtime.log(
       JSON.stringify(
-        { payloads: normalizedPayloads, meta: result.meta },
+        buildOutboundResultEnvelope({
+          payloads: normalizedPayloads,
+          meta: result.meta,
+        }),
         null,
         2,
       ),

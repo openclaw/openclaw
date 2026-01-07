@@ -3,6 +3,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
@@ -114,12 +115,14 @@ export async function sendCommand(
   if (opts.json) {
     runtime.log(
       JSON.stringify(
-        buildOutboundDeliveryJson({
-          provider,
-          via: "gateway",
-          to: opts.to,
-          result,
-          mediaUrl: opts.media ?? null,
+        buildOutboundResultEnvelope({
+          delivery: buildOutboundDeliveryJson({
+            provider,
+            via: "gateway",
+            to: opts.to,
+            result,
+            mediaUrl: opts.media ?? null,
+          }),
         }),
         null,
         2,
