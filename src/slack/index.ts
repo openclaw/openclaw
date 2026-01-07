@@ -8,6 +8,8 @@ export {
   pinSlackMessage,
   reactSlackMessage,
   readSlackMessages,
+  removeOwnSlackReactions,
+  removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
 } from "./actions.js";

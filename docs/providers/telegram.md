@@ -69,6 +69,12 @@ Telegram supports optional threaded replies via tags:
 Controlled by `telegram.replyToMode`:
 - `off` (default), `first`, `all`.
 
+## Agent tool (reactions)
+- Tool: `telegram` with `react` action (`chatId`, `messageId`, `emoji`).
+- `emoji=""` removes the bot's reaction(s) on the message.
+- `remove: true` removes the reaction (Telegram only supports removing your own reaction).
+- Tool gating: `telegram.actions.reactions` (default: enabled).
+
 ## Delivery targets (CLI/cron)
 - Use a chat id (`123456789`) or a username (`@name`) as the target.
 - Example: `clawdbot send --provider telegram --to 123456789 "hi"`.
@@ -92,6 +98,7 @@ Provider options:
 - `telegram.webhookUrl`: enable webhook mode.
 - `telegram.webhookSecret`: webhook secret (optional).
 - `telegram.webhookPath`: local webhook path (default `/telegram-webhook`).
+- `telegram.actions.reactions`: gate Telegram tool reactions.
 
 Related global options:
 - `routing.groupChat.mentionPatterns` (mention gating patterns).

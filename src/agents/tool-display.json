@@ -182,7 +182,7 @@
       "emoji": "💬",
       "title": "Discord",
       "actions": {
-        "react": { "label": "react", "detailKeys": ["channelId", "messageId", "emoji"] },
+        "react": { "label": "react", "detailKeys": ["channelId", "messageId", "emoji", "remove"] },
         "reactions": { "label": "reactions", "detailKeys": ["channelId", "messageId"] },
         "sticker": { "label": "sticker", "detailKeys": ["to", "stickerIds"] },
         "poll": { "label": "poll", "detailKeys": ["question", "to"] },
@@ -219,7 +219,7 @@
       "emoji": "💬",
       "title": "Slack",
       "actions": {
-        "react": { "label": "react", "detailKeys": ["channelId", "messageId", "emoji"] },
+        "react": { "label": "react", "detailKeys": ["channelId", "messageId", "emoji", "remove"] },
         "reactions": { "label": "reactions", "detailKeys": ["channelId", "messageId"] },
         "sendMessage": { "label": "send", "detailKeys": ["to", "content"] },
         "editMessage": { "label": "edit", "detailKeys": ["channelId", "messageId"] },
@@ -232,11 +232,21 @@
         "emojiList": { "label": "emoji list" }
       }
     },
+    "telegram": {
+      "emoji": "✈️",
+      "title": "Telegram",
+      "actions": {
+        "react": { "label": "react", "detailKeys": ["chatId", "messageId", "emoji", "remove"] }
+      }
+    },
     "whatsapp": {
       "emoji": "💬",
       "title": "WhatsApp",
       "actions": {
-        "react": { "label": "react", "detailKeys": ["chatJid", "messageId", "emoji"] }
+        "react": {
+          "label": "react",
+          "detailKeys": ["chatJid", "messageId", "emoji", "remove", "participant", "accountId", "fromMe"]
+        }
       }
     }
   }

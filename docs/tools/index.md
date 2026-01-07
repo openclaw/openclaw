@@ -201,9 +201,35 @@ Notes:
 - `to` accepts `channel:<id>` or `user:<id>`.
 - Polls require 2–10 answers and default to 24 hours.
 - `reactions` returns per-emoji user lists (limited to 100 per reaction).
+- `emoji=""` on `react` removes the bot's reaction(s) on the message.
+- `remove: true` on `react` removes just that emoji.
 - `discord.actions.*` gates Discord tool actions; `roles` + `moderation` default to `false`.
 - `searchMessages` follows the Discord preview spec (limit max 25, channel/author filters accept arrays).
 - The tool is only exposed when the current provider is Discord.
+
+### `whatsapp`
+Send WhatsApp reactions.
+
+Core actions:
+- `react` (`chatJid`, `messageId`, `emoji`, optional `remove`, `participant`, `fromMe`, `accountId`)
+
+Notes:
+- `emoji=""` removes the bot's reaction(s) on the message.
+- `remove: true` removes the bot's reaction (same effect as empty emoji).
+- `whatsapp.actions.*` gates WhatsApp tool actions.
+- The tool is only exposed when the current provider is WhatsApp.
+
+### `telegram`
+Send Telegram reactions.
+
+Core actions:
+- `react` (`chatId`, `messageId`, `emoji`, optional `remove`)
+
+Notes:
+- `emoji=""` removes the bot's reaction(s) on the message.
+- `remove: true` removes the reaction (Telegram only supports removing your own reaction).
+- `telegram.actions.*` gates Telegram tool actions.
+- The tool is only exposed when the current provider is Telegram.
 
 ## Parameters (common)
 

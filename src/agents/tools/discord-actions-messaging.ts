@@ -11,18 +11,21 @@ import {
   pinMessageDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
   searchMessagesDiscord,
   sendMessageDiscord,
   sendPollDiscord,
   sendStickerDiscord,
   unpinMessageDiscord,
 } from "../../discord/send.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
-
-type ActionGate = (
-  key: keyof DiscordActionConfig,
-  defaultValue?: boolean,
-) => boolean;
+import {
+  type ActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 
 function formatDiscordTimestamp(ts?: string | null): string | undefined {
   if (!ts) return undefined;
@@ -53,7 +56,7 @@ function formatDiscordTimestamp(ts?: string | null): string | undefined {
 export async function handleDiscordMessagingAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: ActionGate,
+  isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
   switch (action) {
     case "react": {
@@ -66,9 +69,19 @@ export async function handleDiscordMessagingAction(
       const messageId = readStringParam(params, "messageId", {
         required: true,
       });
-      const emoji = readStringParam(params, "emoji", { required: true });
+      const { emoji, remove, isEmpty } = readReactionParams(params, {
+        removeErrorMessage: "Emoji is required to remove a Discord reaction.",
+      });
+      if (remove) {
+        await removeReactionDiscord(channelId, messageId, emoji);
+        return jsonResult({ ok: true, removed: emoji });
+      }
+      if (isEmpty) {
+        const removed = await removeOwnReactionsDiscord(channelId, messageId);
+        return jsonResult({ ok: true, removed: removed.removed });
+      }
       await reactMessageDiscord(channelId, messageId, emoji);
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, added: emoji });
     }
     case "reactions": {
       if (!isActionEnabled("reactions")) {

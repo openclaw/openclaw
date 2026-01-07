@@ -94,6 +94,13 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - WhatsApp Web sends standard messages (no quoted reply threading in the current gateway).
 - Reply tags are ignored on this provider.
 
+## Agent tool (reactions)
+- Tool: `whatsapp` with `react` action (`chatJid`, `messageId`, `emoji`, optional `remove`).
+- Optional: `participant` (group sender), `fromMe` (reacting to your own message), `accountId` (multi-account).
+- `emoji=""` removes the bot's reaction(s) on the message.
+- `remove: true` removes the bot's reaction (same effect as empty emoji).
+- Tool gating: `whatsapp.actions.reactions` (default: enabled).
+
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
 - Text chunking: 4k max per message.
@@ -131,6 +138,7 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - `whatsapp.groupAllowFrom` (group sender allowlist).
 - `whatsapp.groupPolicy` (group policy).
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
+- `whatsapp.actions.reactions` (gate WhatsApp tool reactions).
 - `routing.groupChat.mentionPatterns`
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)

@@ -14,17 +14,17 @@ import {
   uploadEmojiDiscord,
   uploadStickerDiscord,
 } from "../../discord/send.js";
-import { jsonResult, readStringArrayParam, readStringParam } from "./common.js";
-
-type ActionGate = (
-  key: keyof DiscordActionConfig,
-  defaultValue?: boolean,
-) => boolean;
+import {
+  type ActionGate,
+  jsonResult,
+  readStringArrayParam,
+  readStringParam,
+} from "./common.js";
 
 export async function handleDiscordGuildAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: ActionGate,
+  isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
   switch (action) {
     case "memberInfo": {

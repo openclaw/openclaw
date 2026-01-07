@@ -45,6 +45,8 @@ export function buildAgentSystemPromptAppend(params: {
     image: "Analyze an image with the configured image model",
     discord: "Send Discord reactions/messages and manage threads",
     slack: "Send Slack messages and manage channels",
+    telegram: "Send Telegram reactions",
+    whatsapp: "Send WhatsApp reactions",
   };
 
   const toolOrder = [
@@ -68,6 +70,8 @@ export function buildAgentSystemPromptAppend(params: {
     "image",
     "discord",
     "slack",
+    "telegram",
+    "whatsapp",
   ];
 
   const normalizedTools = (params.toolNames ?? [])

@@ -793,6 +793,11 @@ export const ClawdbotSchema = z.object({
       webhookUrl: z.string().optional(),
       webhookSecret: z.string().optional(),
       webhookPath: z.string().optional(),
+      actions: z
+        .object({
+          reactions: z.boolean().optional(),
+        })
+        .optional(),
     })
     .superRefine((value, ctx) => {
       if (value.dmPolicy !== "open") return;

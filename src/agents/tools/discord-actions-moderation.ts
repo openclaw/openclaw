@@ -5,17 +5,12 @@ import {
   kickMemberDiscord,
   timeoutMemberDiscord,
 } from "../../discord/send.js";
-import { jsonResult, readStringParam } from "./common.js";
-
-type ActionGate = (
-  key: keyof DiscordActionConfig,
-  defaultValue?: boolean,
-) => boolean;
+import { type ActionGate, jsonResult, readStringParam } from "./common.js";
 
 export async function handleDiscordModerationAction(
   action: string,
   params: Record<string, unknown>,
-  isActionEnabled: ActionGate,
+  isActionEnabled: ActionGate<DiscordActionConfig>,
 ): Promise<AgentToolResult<unknown>> {
   switch (action) {
     case "timeout": {

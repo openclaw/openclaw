@@ -14,6 +14,8 @@ import {
   pinMessageDiscord,
   reactMessageDiscord,
   readMessagesDiscord,
+  removeOwnReactionsDiscord,
+  removeReactionDiscord,
   removeRoleDiscord,
   searchMessagesDiscord,
   sendMessageDiscord,
@@ -219,6 +221,47 @@ describe("reactMessageDiscord", () => {
       token: "t",
     });
     expect(putMock).toHaveBeenCalledWith(
+      Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
+    );
+  });
+});
+
+describe("removeReactionDiscord", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("removes a unicode emoji reaction", async () => {
+    const { rest, deleteMock } = makeRest();
+    await removeReactionDiscord("chan1", "msg1", "✅", { rest, token: "t" });
+    expect(deleteMock).toHaveBeenCalledWith(
+      Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
+    );
+  });
+});
+
+describe("removeOwnReactionsDiscord", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("removes all own reactions on a message", async () => {
+    const { rest, getMock, deleteMock } = makeRest();
+    getMock.mockResolvedValue({
+      reactions: [
+        { emoji: { name: "✅", id: null } },
+        { emoji: { name: "party_blob", id: "123" } },
+      ],
+    });
+    const res = await removeOwnReactionsDiscord("chan1", "msg1", {
+      rest,
+      token: "t",
+    });
+    expect(res).toEqual({ ok: true, removed: ["✅", "party_blob:123"] });
+    expect(deleteMock).toHaveBeenCalledWith(
+      Routes.channelMessageOwnReaction("chan1", "msg1", "%E2%9C%85"),
+    );
+    expect(deleteMock).toHaveBeenCalledWith(
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
   });

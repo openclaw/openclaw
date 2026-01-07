@@ -6,6 +6,7 @@ export const DiscordToolSchema = Type.Union([
     channelId: Type.String(),
     messageId: Type.String(),
     emoji: Type.String(),
+    remove: Type.Optional(Type.Boolean()),
   }),
   Type.Object({
     action: Type.Literal("reactions"),

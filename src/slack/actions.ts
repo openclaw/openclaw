@@ -54,6 +54,14 @@ async function getClient(opts: SlackActionClientOpts = {}) {
   return opts.client ?? new WebClient(token);
 }
 
+async function resolveBotUserId(client: WebClient) {
+  const auth = await client.auth.test();
+  if (!auth?.user_id) {
+    throw new Error("Failed to resolve Slack bot user id");
+  }
+  return auth.user_id;
+}
+
 export async function reactSlackMessage(
   channelId: string,
   messageId: string,
@@ -66,6 +74,50 @@ export async function reactSlackMessage(
     timestamp: messageId,
     name: normalizeEmoji(emoji),
   });
+}
+
+export async function removeSlackReaction(
+  channelId: string,
+  messageId: string,
+  emoji: string,
+  opts: SlackActionClientOpts = {},
+) {
+  const client = await getClient(opts);
+  await client.reactions.remove({
+    channel: channelId,
+    timestamp: messageId,
+    name: normalizeEmoji(emoji),
+  });
+}
+
+export async function removeOwnSlackReactions(
+  channelId: string,
+  messageId: string,
+  opts: SlackActionClientOpts = {},
+): Promise<string[]> {
+  const client = await getClient(opts);
+  const userId = await resolveBotUserId(client);
+  const reactions = await listSlackReactions(channelId, messageId, { client });
+  const toRemove = new Set<string>();
+  for (const reaction of reactions ?? []) {
+    const name = reaction?.name;
+    if (!name) continue;
+    const users = reaction?.users ?? [];
+    if (users.includes(userId)) {
+      toRemove.add(name);
+    }
+  }
+  if (toRemove.size === 0) return [];
+  await Promise.all(
+    Array.from(toRemove, (name) =>
+      client.reactions.remove({
+        channel: channelId,
+        timestamp: messageId,
+        name,
+      }),
+    ),
+  );
+  return Array.from(toRemove);
 }
 
 export async function listSlackReactions(

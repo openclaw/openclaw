@@ -8,7 +8,7 @@ vi.mock("../web/media.js", () => ({
   loadWebMedia,
 }));
 
-import { sendMessageTelegram } from "./send.js";
+import { reactMessageTelegram, sendMessageTelegram } from "./send.js";
 
 describe("sendMessageTelegram", () => {
   beforeEach(() => {
@@ -106,5 +106,52 @@ describe("sendMessageTelegram", () => {
       caption: "caption",
     });
     expect(res.messageId).toBe("9");
+  });
+});
+
+describe("reactMessageTelegram", () => {
+  it("sends emoji reactions", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("telegram:123", "456", "✅", {
+      token: "tok",
+      api,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [
+      { type: "emoji", emoji: "✅" },
+    ]);
+  });
+
+  it("removes reactions when emoji is empty", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "", {
+      token: "tok",
+      api,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
+  });
+
+  it("removes reactions when remove flag is set", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const api = { setMessageReaction } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+    };
+
+    await reactMessageTelegram("123", 456, "✅", {
+      token: "tok",
+      api,
+      remove: true,
+    });
+
+    expect(setMessageReaction).toHaveBeenCalledWith("123", 456, []);
   });
 });

@@ -232,6 +232,10 @@ export type HooksConfig = {
   gmail?: HooksGmailConfig;
 };
 
+export type TelegramActionConfig = {
+  reactions?: boolean;
+};
+
 export type TelegramConfig = {
   /**
    * Controls how Telegram direct chats (DMs) are handled:
@@ -271,6 +275,8 @@ export type TelegramConfig = {
   webhookUrl?: string;
   webhookSecret?: string;
   webhookPath?: string;
+  /** Per-action tool gating (default: true for all). */
+  actions?: TelegramActionConfig;
 };
 
 export type DiscordDmConfig = {

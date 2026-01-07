@@ -18,6 +18,12 @@ type TelegramSendResult = {
   chatId: string;
 };
 
+type TelegramReactionOpts = {
+  token?: string;
+  api?: Bot["api"];
+  remove?: boolean;
+};
+
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;
 
@@ -55,6 +61,21 @@ function normalizeChatId(to: string): string {
   if (/^[A-Za-z0-9_]{5,}$/i.test(normalized)) return `@${normalized}`;
 
   return normalized;
+}
+
+function normalizeMessageId(raw: string | number): number {
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return Math.trunc(raw);
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim();
+    if (!value) {
+      throw new Error("Message id is required for Telegram reactions");
+    }
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  throw new Error("Message id is required for Telegram reactions");
 }
 
 export async function sendMessageTelegram(
@@ -194,6 +215,28 @@ export async function sendMessageTelegram(
   });
   const messageId = String(res?.message_id ?? "unknown");
   return { messageId, chatId: String(res?.chat?.id ?? chatId) };
+}
+
+export async function reactMessageTelegram(
+  chatIdInput: string | number,
+  messageIdInput: string | number,
+  emoji: string,
+  opts: TelegramReactionOpts = {},
+): Promise<{ ok: true }> {
+  const token = resolveToken(opts.token);
+  const chatId = normalizeChatId(String(chatIdInput));
+  const messageId = normalizeMessageId(messageIdInput);
+  const bot = opts.api ? null : new Bot(token);
+  const api = opts.api ?? bot?.api;
+  const remove = opts.remove === true;
+  const trimmedEmoji = emoji.trim();
+  const reactions =
+    remove || !trimmedEmoji ? [] : [{ type: "emoji", emoji: trimmedEmoji }];
+  if (typeof api.setMessageReaction !== "function") {
+    throw new Error("Telegram reactions are unavailable in this bot API.");
+  }
+  await api.setMessageReaction(chatId, messageId, reactions);
+  return { ok: true };
 }
 
 function inferFilename(kind: ReturnType<typeof mediaKindFromMime>) {

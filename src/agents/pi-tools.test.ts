@@ -116,6 +116,22 @@ describe("createClawdbotCodingTools", () => {
     expect(slack.some((tool) => tool.name === "slack")).toBe(true);
   });
 
+  it("scopes telegram tool to telegram provider", () => {
+    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
+    expect(other.some((tool) => tool.name === "telegram")).toBe(false);
+
+    const telegram = createClawdbotCodingTools({ messageProvider: "telegram" });
+    expect(telegram.some((tool) => tool.name === "telegram")).toBe(true);
+  });
+
+  it("scopes whatsapp tool to whatsapp provider", () => {
+    const other = createClawdbotCodingTools({ messageProvider: "slack" });
+    expect(other.some((tool) => tool.name === "whatsapp")).toBe(false);
+
+    const whatsapp = createClawdbotCodingTools({ messageProvider: "whatsapp" });
+    expect(whatsapp.some((tool) => tool.name === "whatsapp")).toBe(true);
+  });
+
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createClawdbotCodingTools({
       sessionKey: "agent:main:subagent:test",

@@ -464,6 +464,7 @@ Set `telegram.enabled: false` to disable automatic startup.
     dmPolicy: "pairing",                 // pairing | allowlist | open | disabled
     allowFrom: ["tg:123456789"],         // optional; "open" requires ["*"]
     groups: { "*": { requireMention: true } },
+    actions: { reactions: true },        // tool action gates (false disables)
     mediaMaxMb: 5,
     proxy: "socks5://localhost:9050",
     webhookUrl: "https://example.com/telegram-webhook",

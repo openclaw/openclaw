@@ -1,6 +1,6 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
-import type { ClawdbotConfig, SlackActionConfig } from "../../config/config.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import {
   deleteSlackMessage,
   editSlackMessage,
@@ -11,10 +11,17 @@ import {
   pinSlackMessage,
   reactSlackMessage,
   readSlackMessages,
+  removeOwnSlackReactions,
+  removeSlackReaction,
   sendSlackMessage,
   unpinSlackMessage,
 } from "../../slack/actions.js";
-import { jsonResult, readStringParam } from "./common.js";
+import {
+  createActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringParam,
+} from "./common.js";
 
 const messagingActions = new Set([
   "sendMessage",
@@ -26,21 +33,12 @@ const messagingActions = new Set([
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
-type ActionGate = (
-  key: keyof SlackActionConfig,
-  defaultValue?: boolean,
-) => boolean;
-
 export async function handleSlackAction(
   params: Record<string, unknown>,
   cfg: ClawdbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
-  const isActionEnabled: ActionGate = (key, defaultValue = true) => {
-    const value = cfg.slack?.actions?.[key];
-    if (value === undefined) return defaultValue;
-    return value !== false;
-  };
+  const isActionEnabled = createActionGate(cfg.slack?.actions);
 
   if (reactionsActions.has(action)) {
     if (!isActionEnabled("reactions")) {
@@ -49,9 +47,19 @@ export async function handleSlackAction(
     const channelId = readStringParam(params, "channelId", { required: true });
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
-      const emoji = readStringParam(params, "emoji", { required: true });
+      const { emoji, remove, isEmpty } = readReactionParams(params, {
+        removeErrorMessage: "Emoji is required to remove a Slack reaction.",
+      });
+      if (remove) {
+        await removeSlackReaction(channelId, messageId, emoji);
+        return jsonResult({ ok: true, removed: emoji });
+      }
+      if (isEmpty) {
+        const removed = await removeOwnSlackReactions(channelId, messageId);
+        return jsonResult({ ok: true, removed });
+      }
       await reactSlackMessage(channelId, messageId, emoji);
-      return jsonResult({ ok: true });
+      return jsonResult({ ok: true, added: emoji });
     }
     const reactions = await listSlackReactions(channelId, messageId);
     return jsonResult({ ok: true, reactions });

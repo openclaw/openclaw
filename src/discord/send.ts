@@ -566,6 +566,55 @@ export async function reactMessageDiscord(
   return { ok: true };
 }
 
+export async function removeReactionDiscord(
+  channelId: string,
+  messageId: string,
+  emoji: string,
+  opts: DiscordReactOpts = {},
+) {
+  const token = resolveToken(opts.token);
+  const rest = resolveRest(token, opts.rest);
+  const encoded = normalizeReactionEmoji(emoji);
+  await rest.delete(
+    Routes.channelMessageOwnReaction(channelId, messageId, encoded),
+  );
+  return { ok: true };
+}
+
+export async function removeOwnReactionsDiscord(
+  channelId: string,
+  messageId: string,
+  opts: DiscordReactOpts = {},
+): Promise<{ ok: true; removed: string[] }> {
+  const token = resolveToken(opts.token);
+  const rest = resolveRest(token, opts.rest);
+  const message = (await rest.get(
+    Routes.channelMessage(channelId, messageId),
+  )) as {
+    reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;
+  };
+  const identifiers = new Set<string>();
+  for (const reaction of message.reactions ?? []) {
+    const identifier = buildReactionIdentifier(reaction.emoji);
+    if (identifier) identifiers.add(identifier);
+  }
+  if (identifiers.size === 0) return { ok: true, removed: [] };
+  const removed: string[] = [];
+  await Promise.allSettled(
+    Array.from(identifiers, (identifier) => {
+      removed.push(identifier);
+      return rest.delete(
+        Routes.channelMessageOwnReaction(
+          channelId,
+          messageId,
+          normalizeReactionEmoji(identifier),
+        ),
+      );
+    }),
+  );
+  return { ok: true, removed };
+}
+
 export async function fetchReactionsDiscord(
   channelId: string,
   messageId: string,

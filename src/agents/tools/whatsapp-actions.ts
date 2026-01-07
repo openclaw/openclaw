@@ -1,29 +1,20 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 
-import type {
-  ClawdbotConfig,
-  WhatsAppActionConfig,
-} from "../../config/config.js";
-import { isSelfChatMode } from "../../utils.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 import { sendReactionWhatsApp } from "../../web/outbound.js";
-import { readWebSelfId } from "../../web/session.js";
-import { jsonResult, readStringParam } from "./common.js";
-
-type ActionGate = (
-  key: keyof WhatsAppActionConfig,
-  defaultValue?: boolean,
-) => boolean;
+import {
+  createActionGate,
+  jsonResult,
+  readReactionParams,
+  readStringParam,
+} from "./common.js";
 
 export async function handleWhatsAppAction(
   params: Record<string, unknown>,
   cfg: ClawdbotConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
-  const isActionEnabled: ActionGate = (key, defaultValue = true) => {
-    const value = cfg.whatsapp?.actions?.[key];
-    if (value === undefined) return defaultValue;
-    return value !== false;
-  };
+  const isActionEnabled = createActionGate(cfg.whatsapp?.actions);
 
   if (action === "react") {
     if (!isActionEnabled("reactions")) {
@@ -31,16 +22,24 @@ export async function handleWhatsAppAction(
     }
     const chatJid = readStringParam(params, "chatJid", { required: true });
     const messageId = readStringParam(params, "messageId", { required: true });
-    const emoji = readStringParam(params, "emoji", { required: true });
+    const { emoji, remove, isEmpty } = readReactionParams(params, {
+      removeErrorMessage: "Emoji is required to remove a WhatsApp reaction.",
+    });
     const participant = readStringParam(params, "participant");
-    const selfE164 = readWebSelfId().e164;
-    const fromMe = isSelfChatMode(selfE164, cfg.whatsapp?.allowFrom);
-    await sendReactionWhatsApp(chatJid, messageId, emoji, {
+    const accountId = readStringParam(params, "accountId");
+    const fromMeRaw = params.fromMe;
+    const fromMe = typeof fromMeRaw === "boolean" ? fromMeRaw : undefined;
+    const resolvedEmoji = remove ? "" : emoji;
+    await sendReactionWhatsApp(chatJid, messageId, resolvedEmoji, {
       verbose: false,
       fromMe,
       participant: participant ?? undefined,
+      accountId: accountId ?? undefined,
     });
-    return jsonResult({ ok: true });
+    if (!remove && !isEmpty) {
+      return jsonResult({ ok: true, added: emoji });
+    }
+    return jsonResult({ ok: true, removed: true });
   }
 
   throw new Error(`Unsupported WhatsApp action: ${action}`);

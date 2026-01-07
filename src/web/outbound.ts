@@ -100,10 +100,11 @@ export async function sendReactionWhatsApp(
     verbose: boolean;
     fromMe?: boolean;
     participant?: string;
+    accountId?: string;
   },
 ): Promise<void> {
   const correlationId = randomUUID();
-  const active = getActiveWebListener();
+  const active = getActiveWebListener(options.accountId);
   if (!active) {
     throw new Error(
       "No active gateway listener. Start the gateway before sending WhatsApp reactions.",

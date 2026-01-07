@@ -12,6 +12,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSlackTool } from "./tools/slack-tool.js";
+import { createTelegramTool } from "./tools/telegram-tool.js";
 import { createWhatsAppTool } from "./tools/whatsapp-tool.js";
 
 export function createClawdbotTools(options?: {
@@ -33,6 +34,7 @@ export function createClawdbotTools(options?: {
     createCronTool(),
     createDiscordTool(),
     createSlackTool(),
+    createTelegramTool(),
     createWhatsAppTool(),
     createGatewayTool(),
     createSessionsListTool({

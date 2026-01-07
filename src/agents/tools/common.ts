@@ -12,7 +12,23 @@ export type StringParamOptions = {
   required?: boolean;
   trim?: boolean;
   label?: string;
+  allowEmpty?: boolean;
 };
+
+export type ActionGate<T extends Record<string, boolean | undefined>> = (
+  key: keyof T,
+  defaultValue?: boolean,
+) => boolean;
+
+export function createActionGate<T extends Record<string, boolean | undefined>>(
+  actions: T | undefined,
+): ActionGate<T> {
+  return (key, defaultValue = true) => {
+    const value = actions?.[key];
+    if (value === undefined) return defaultValue;
+    return value !== false;
+  };
+}
 
 export function readStringParam(
   params: Record<string, unknown>,
@@ -29,18 +45,65 @@ export function readStringParam(
   key: string,
   options: StringParamOptions = {},
 ) {
-  const { required = false, trim = true, label = key } = options;
+  const {
+    required = false,
+    trim = true,
+    label = key,
+    allowEmpty = false,
+  } = options;
   const raw = params[key];
   if (typeof raw !== "string") {
     if (required) throw new Error(`${label} required`);
     return undefined;
   }
   const value = trim ? raw.trim() : raw;
-  if (!value) {
+  if (!value && !allowEmpty) {
     if (required) throw new Error(`${label} required`);
     return undefined;
   }
   return value;
+}
+
+export function readStringOrNumberParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: { required?: boolean; label?: string } = {},
+): string | undefined {
+  const { required = false, label = key } = options;
+  const raw = params[key];
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    return String(raw);
+  }
+  if (typeof raw === "string") {
+    const value = raw.trim();
+    if (value) return value;
+  }
+  if (required) throw new Error(`${label} required`);
+  return undefined;
+}
+
+export function readNumberParam(
+  params: Record<string, unknown>,
+  key: string,
+  options: { required?: boolean; label?: string; integer?: boolean } = {},
+): number | undefined {
+  const { required = false, label = key, integer = false } = options;
+  const raw = params[key];
+  let value: number | undefined;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    value = raw;
+  } else if (typeof raw === "string") {
+    const trimmed = raw.trim();
+    if (trimmed) {
+      const parsed = Number.parseFloat(trimmed);
+      if (Number.isFinite(parsed)) value = parsed;
+    }
+  }
+  if (value === undefined) {
+    if (required) throw new Error(`${label} required`);
+    return undefined;
+  }
+  return integer ? Math.trunc(value) : value;
 }
 
 export function readStringArrayParam(
@@ -81,6 +144,34 @@ export function readStringArrayParam(
   }
   if (required) throw new Error(`${label} required`);
   return undefined;
+}
+
+export type ReactionParams = {
+  emoji: string;
+  remove: boolean;
+  isEmpty: boolean;
+};
+
+export function readReactionParams(
+  params: Record<string, unknown>,
+  options: {
+    emojiKey?: string;
+    removeKey?: string;
+    removeErrorMessage: string;
+  },
+): ReactionParams {
+  const emojiKey = options.emojiKey ?? "emoji";
+  const removeKey = options.removeKey ?? "remove";
+  const remove =
+    typeof params[removeKey] === "boolean" ? params[removeKey] : false;
+  const emoji = readStringParam(params, emojiKey, {
+    required: true,
+    allowEmpty: true,
+  });
+  if (remove && !emoji) {
+    throw new Error(options.removeErrorMessage);
+  }
+  return { emoji, remove, isEmpty: !emoji };
 }
 
 export function jsonResult(payload: unknown): AgentToolResult<unknown> {
