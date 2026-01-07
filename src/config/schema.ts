@@ -113,6 +113,7 @@ const FIELD_LABELS: Record<string, string> = {
   "telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
   "telegram.retry.jitter": "Telegram Retry Jitter",
   "whatsapp.dmPolicy": "WhatsApp DM Policy",
+  "whatsapp.selfChatMode": "WhatsApp Self-Phone Mode",
   "signal.dmPolicy": "Signal DM Policy",
   "imessage.dmPolicy": "iMessage DM Policy",
   "discord.dm.policy": "Discord DM Policy",
@@ -176,6 +177,8 @@ const FIELD_HELP: Record<string, string> = {
     "Jitter factor (0-1) applied to Telegram retry delays.",
   "whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
+  "whatsapp.selfChatMode":
+    "Same-phone setup (bot uses your personal WhatsApp number). Suppresses pairing replies for outbound DMs.",
   "signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires signal.allowFrom=["*"].',
   "imessage.dmPolicy":

@@ -22,6 +22,7 @@
 - macOS: prevent gateway launchd startup race where the app could kill a just-started gateway; avoid unnecessary `bootout` and ensure the job is enabled at login. Fixes #306. Thanks @gupsammy for PR #387.
 - Pairing: generate DM pairing codes with CSPRNG, expire pending codes after 1 hour, and avoid re-sending codes for already pending requests.
 - Pairing: lock + atomically write pairing stores with 0600 perms and stop logging pairing codes in provider logs.
+- WhatsApp: add self-phone mode to suppress pairing replies for outbound DMs and prompt during onboarding.
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.

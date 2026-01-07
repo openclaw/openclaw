@@ -202,6 +202,19 @@ function setWhatsAppAllowFrom(cfg: ClawdbotConfig, allowFrom?: string[]) {
   };
 }
 
+function setWhatsAppSelfChatMode(
+  cfg: ClawdbotConfig,
+  selfChatMode?: boolean,
+) {
+  return {
+    ...cfg,
+    whatsapp: {
+      ...cfg.whatsapp,
+      selfChatMode,
+    },
+  };
+}
+
 function setTelegramDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
   const allowFrom =
     dmPolicy === "open"
@@ -415,8 +428,10 @@ async function promptWhatsAppAllowFrom(
     ],
   })) as DmPolicy;
 
-  const next = setWhatsAppDmPolicy(cfg, policy);
-  if (policy === "open") return setWhatsAppAllowFrom(next, ["*"]);
+  let next = setWhatsAppDmPolicy(cfg, policy);
+  if (policy === "open") {
+    next = setWhatsAppAllowFrom(next, ["*"]);
+  }
   if (policy === "disabled") return next;
 
   const options =
@@ -439,38 +454,48 @@ async function promptWhatsAppAllowFrom(
     options: options.map((opt) => ({ value: opt.value, label: opt.label })),
   })) as (typeof options)[number]["value"];
 
-  if (mode === "keep") return next;
-  if (mode === "unset") return setWhatsAppAllowFrom(next, undefined);
+  if (mode === "keep") {
+    // Keep allowFrom as-is.
+  } else if (mode === "unset") {
+    next = setWhatsAppAllowFrom(next, undefined);
+  } else {
+    const allowRaw = await prompter.text({
+      message: "Allowed sender numbers (comma-separated, E.164)",
+      placeholder: "+15555550123, +447700900123",
+      validate: (value) => {
+        const raw = String(value ?? "").trim();
+        if (!raw) return "Required";
+        const parts = raw
+          .split(/[\n,;]+/g)
+          .map((p) => p.trim())
+          .filter(Boolean);
+        if (parts.length === 0) return "Required";
+        for (const part of parts) {
+          if (part === "*") continue;
+          const normalized = normalizeE164(part);
+          if (!normalized) return `Invalid number: ${part}`;
+        }
+        return undefined;
+      },
+    });
 
-  const allowRaw = await prompter.text({
-    message: "Allowed sender numbers (comma-separated, E.164)",
-    placeholder: "+15555550123, +447700900123",
-    validate: (value) => {
-      const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
-      const parts = raw
-        .split(/[\n,;]+/g)
-        .map((p) => p.trim())
-        .filter(Boolean);
-      if (parts.length === 0) return "Required";
-      for (const part of parts) {
-        if (part === "*") continue;
-        const normalized = normalizeE164(part);
-        if (!normalized) return `Invalid number: ${part}`;
-      }
-      return undefined;
-    },
+    const parts = String(allowRaw)
+      .split(/[\n,;]+/g)
+      .map((p) => p.trim())
+      .filter(Boolean);
+    const normalized = parts.map((part) =>
+      part === "*" ? "*" : normalizeE164(part),
+    );
+    const unique = [...new Set(normalized.filter(Boolean))];
+    next = setWhatsAppAllowFrom(next, unique);
+  }
+
+  const selfChatMode = await prompter.confirm({
+    message:
+      "Same-phone setup? (using your personal WhatsApp number for Clawdbot)",
+    initialValue: next.whatsapp?.selfChatMode ?? false,
   });
-
-  const parts = String(allowRaw)
-    .split(/[\n,;]+/g)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  const normalized = parts.map((part) =>
-    part === "*" ? "*" : normalizeE164(part),
-  );
-  const unique = [...new Set(normalized.filter(Boolean))];
-  return setWhatsAppAllowFrom(next, unique);
+  return setWhatsAppSelfChatMode(next, selfChatMode);
 }
 
 type SetupProvidersOptions = {
