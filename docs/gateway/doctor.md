@@ -15,6 +15,7 @@ read_when:
 - Migrates legacy `~/.clawdis/clawdis.json` when no Clawdbot config exists.
 - Checks sandbox Docker images when sandboxing is enabled (offers to build or switch to legacy names).
 - Detects legacy Clawdis services (launchd/systemd; legacy schtasks for native Windows) and offers to migrate them.
+- Detects other gateway-like services and prints cleanup hints (optional deep scan for system services).
 - On Linux, checks if systemd user lingering is enabled and can enable it (required to keep the Gateway alive after logout).
 - Migrates legacy on-disk state layouts (sessions, agentDir, provider auth dirs) into the current per-agent/per-account structure.
 
@@ -69,6 +70,12 @@ clawdbot doctor --non-interactive
 ```
 
 Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
+
+```bash
+clawdbot doctor --deep
+```
+
+Scan system services for extra gateway installs (launchd/systemd/schtasks).
 
 If you want to review changes before writing, open the config file first:
 

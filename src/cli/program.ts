@@ -324,12 +324,14 @@ export function buildProgram() {
       "Run without prompts (safe migrations only)",
       false,
     )
+    .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
       try {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
           nonInteractive: Boolean(opts.nonInteractive),
+          deep: Boolean(opts.deep),
         });
       } catch (err) {
         defaultRuntime.error(String(err));

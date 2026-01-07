@@ -15,6 +15,7 @@ import {
 import {
   type FindExtraGatewayServicesOptions,
   findExtraGatewayServices,
+  renderGatewayServiceCleanupHints,
 } from "../daemon/inspect.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -105,25 +106,6 @@ function renderGatewayServiceStartHints(): string[] {
       return [`systemctl --user start ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`];
     case "win32":
       return [`schtasks /Run /TN "${GATEWAY_WINDOWS_TASK_NAME}"`];
-    default:
-      return [];
-  }
-}
-
-function renderGatewayServiceCleanupHints(): string[] {
-  switch (process.platform) {
-    case "darwin":
-      return [
-        `launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
-        `rm ~/Library/LaunchAgents/${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
-      ];
-    case "linux":
-      return [
-        `systemctl --user disable --now ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
-        `rm ~/.config/systemd/user/${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
-      ];
-    case "win32":
-      return [`schtasks /Delete /TN "${GATEWAY_WINDOWS_TASK_NAME}" /F`];
     default:
       return [];
   }

@@ -26,6 +26,25 @@ export type FindExtraGatewayServicesOptions = {
 const EXTRA_MARKERS = ["clawdbot", "clawdis", "gateway-daemon"];
 const execFileAsync = promisify(execFile);
 
+export function renderGatewayServiceCleanupHints(): string[] {
+  switch (process.platform) {
+    case "darwin":
+      return [
+        `launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
+        `rm ~/Library/LaunchAgents/${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
+      ];
+    case "linux":
+      return [
+        `systemctl --user disable --now ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
+        `rm ~/.config/systemd/user/${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
+      ];
+    case "win32":
+      return [`schtasks /Delete /TN "${GATEWAY_WINDOWS_TASK_NAME}" /F`];
+    default:
+      return [];
+  }
+}
+
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
   if (!home) throw new Error("Missing HOME");

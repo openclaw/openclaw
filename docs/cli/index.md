@@ -176,10 +176,13 @@ Interactive configuration wizard (models, providers, skills, gateway).
 Audit and modernize the local configuration.
 
 ### `doctor`
-Health checks + quick fixes.
+Health checks + quick fixes (config + gateway + legacy services).
 
 Options:
 - `--no-workspace-suggestions`: disable workspace memory hints.
+- `--yes`: accept defaults without prompting (headless).
+- `--non-interactive`: skip prompts; apply safe migrations only.
+- `--deep`: scan system services for extra gateway installs.
 
 ## Auth + provider helpers
 
