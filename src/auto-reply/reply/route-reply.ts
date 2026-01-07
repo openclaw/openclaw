@@ -145,6 +145,14 @@ export async function routeReply(
         };
       }
 
+      case "msteams": {
+        // TODO: Implement proactive messaging for MS Teams
+        return {
+          ok: false,
+          error: `MS Teams routing not yet supported for queued replies`,
+        };
+      }
+
       default: {
         const _exhaustive: never = channel;
         return { ok: false, error: `Unknown channel: ${String(_exhaustive)}` };
