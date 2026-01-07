@@ -222,5 +222,5 @@ Slack tool actions can be gated with `slack.actions.*`:
 ## Notes
 - Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
-- For the Slack tool, `emoji=""` removes the bot's reaction(s) on the message; `remove: true` removes a specific emoji reaction.
+- For the Slack tool, reaction removal semantics are in [/tools/reactions](/tools/reactions).
 - Attachments are downloaded to the media store when permitted and under the size limit.

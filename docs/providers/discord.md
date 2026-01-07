@@ -33,8 +33,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
     - Full command list + config: [Slash commands](/tools/slash-commands)
 11. Optional guild context history: set `discord.historyLimit` (default 20) to include the last N guild messages as context when replying to a mention. Set `0` to disable.
 12. Reactions: the agent can trigger reactions via the `discord` tool (gated by `discord.actions.*`).
-    - `emoji=""` removes the bot's reaction(s) on the message.
-    - `remove: true` removes the specific emoji reaction.
+    - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
     - The `discord` tool is only exposed when the current provider is Discord.
 13. Native commands use isolated session keys (`discord:slash:${userId}`) rather than the shared `main` session.
 
