@@ -45,6 +45,14 @@ vi.mock("./bot.js", () => ({
   createTelegramWebhookCallback: vi.fn(),
 }));
 
+// Mock the grammyjs/runner to resolve immediately
+vi.mock("@grammyjs/runner", () => ({
+  run: vi.fn(() => ({
+    task: () => Promise.resolve(),
+    stop: vi.fn(),
+  })),
+}));
+
 vi.mock("../auto-reply/reply.js", () => ({
   getReplyFromConfig: async (ctx: { Body?: string }) => ({
     text: `echo:${ctx.Body}`,
