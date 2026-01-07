@@ -133,6 +133,17 @@ type EmbeddedRunWaiter = {
 };
 const EMBEDDED_RUN_WAITERS = new Map<string, Set<EmbeddedRunWaiter>>();
 
+const isAbortError = (err: unknown): boolean => {
+  if (!err || typeof err !== "object") return false;
+  const name = "name" in err ? String(err.name) : "";
+  if (name === "AbortError") return true;
+  const message =
+    "message" in err && typeof err.message === "string"
+      ? err.message.toLowerCase()
+      : "";
+  return message.includes("aborted");
+};
+
 type EmbeddedSandboxInfo = {
   enabled: boolean;
   workspaceDir?: string;
@@ -913,7 +924,11 @@ export async function runEmbeddedPiAgent(params: {
               await waitForCompactionRetry();
             } catch (err) {
               // Capture AbortError from waitForCompactionRetry to enable fallback/rotation
-              if (!promptError) promptError = err;
+              if (isAbortError(err)) {
+                if (!promptError) promptError = err;
+              } else {
+                throw err;
+              }
             }
             messagesSnapshot = session.messages.slice();
             sessionIdUsed = session.sessionId;
