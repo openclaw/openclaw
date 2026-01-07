@@ -33,6 +33,11 @@ export type OutboundDeliveryResult =
   | { provider: "signal"; messageId: string; timestamp?: number }
   | { provider: "imessage"; messageId: string };
 
+export type NormalizedOutboundPayload = {
+  text: string;
+  mediaUrls: string[];
+};
+
 type Chunker = (text: string, limit: number) => string[];
 
 function resolveChunker(provider: OutboundProvider): Chunker | null {
@@ -55,8 +60,15 @@ function resolveIMessageMaxBytes(cfg: ClawdbotConfig): number | undefined {
   return undefined;
 }
 
-function normalizeMediaUrls(payload: ReplyPayload): string[] {
-  return payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+export function normalizeOutboundPayloads(
+  payloads: ReplyPayload[],
+): NormalizedOutboundPayload[] {
+  return payloads
+    .map((payload) => ({
+      text: payload.text ?? "",
+      mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
+    }))
+    .filter((payload) => payload.text || payload.mediaUrls.length > 0);
 }
 
 export async function deliverOutboundPayloads(params: {
@@ -65,6 +77,9 @@ export async function deliverOutboundPayloads(params: {
   to: string;
   payloads: ReplyPayload[];
   deps?: OutboundSendDeps;
+  bestEffort?: boolean;
+  onError?: (err: unknown, payload: NormalizedOutboundPayload) => void;
+  onPayload?: (payload: NormalizedOutboundPayload) => void;
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, provider, to, payloads } = params;
   const deps = {
@@ -179,21 +194,24 @@ export async function deliverOutboundPayloads(params: {
     results.push({ provider: "discord", ...res });
   };
 
-  for (const payload of payloads) {
-    const text = payload.text ?? "";
-    const mediaUrls = normalizeMediaUrls(payload);
-    if (!text && mediaUrls.length === 0) continue;
+  const normalizedPayloads = normalizeOutboundPayloads(payloads);
+  for (const payload of normalizedPayloads) {
+    try {
+      params.onPayload?.(payload);
+      if (payload.mediaUrls.length === 0) {
+        await sendTextChunks(payload.text);
+        continue;
+      }
 
-    if (mediaUrls.length === 0) {
-      await sendTextChunks(text);
-      continue;
-    }
-
-    let first = true;
-    for (const url of mediaUrls) {
-      const caption = first ? text : "";
-      first = false;
-      await sendMedia(caption, url);
+      let first = true;
+      for (const url of payload.mediaUrls) {
+        const caption = first ? payload.text : "";
+        first = false;
+        await sendMedia(caption, url);
+      }
+    } catch (err) {
+      if (!params.bestEffort) throw err;
+      params.onError?.(err, payload);
     }
   }
   return results;

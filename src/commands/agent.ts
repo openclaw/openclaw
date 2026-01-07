@@ -44,7 +44,10 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../infra/agent-events.js";
-import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
+import {
+  deliverOutboundPayloads,
+  normalizeOutboundPayloads,
+} from "../infra/outbound/deliver.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveSendPolicy } from "../sessions/send-policy.js";
@@ -561,51 +564,46 @@ export async function agentCommand(
     return { payloads: [], meta: result.meta };
   }
 
-  for (const payload of payloads) {
-    const mediaList =
-      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-
-    if (!opts.json) {
-      const lines: string[] = [];
-      if (payload.text) lines.push(payload.text.trimEnd());
-      for (const url of mediaList) lines.push(`MEDIA:${url}`);
-      runtime.log(lines.join("\n"));
+  const deliveryPayloads = normalizeOutboundPayloads(payloads);
+  const logPayload = (payload: { text: string; mediaUrls: string[] }) => {
+    if (opts.json) return;
+    const lines: string[] = [];
+    if (payload.text) lines.push(payload.text.trimEnd());
+    for (const url of payload.mediaUrls) lines.push(`MEDIA:${url}`);
+    runtime.log(lines.join("\n"));
+  };
+  if (!deliver) {
+    for (const payload of deliveryPayloads) {
+      logPayload(payload);
     }
-
-    if (!deliver) continue;
-
-    const text = payload.text ?? "";
-    const media = mediaList;
-    if (!text && media.length === 0) continue;
-
-    if (
-      deliveryProvider === "whatsapp" ||
+  }
+  if (
+    deliver &&
+    (deliveryProvider === "whatsapp" ||
       deliveryProvider === "telegram" ||
       deliveryProvider === "discord" ||
       deliveryProvider === "slack" ||
       deliveryProvider === "signal" ||
-      deliveryProvider === "imessage"
-    ) {
-      if (!deliveryTarget) continue;
-      try {
-        await deliverOutboundPayloads({
-          cfg,
-          provider: deliveryProvider,
-          to: deliveryTarget,
-          payloads: [payload],
-          deps: {
-            sendWhatsApp: deps.sendMessageWhatsApp,
-            sendTelegram: deps.sendMessageTelegram,
-            sendDiscord: deps.sendMessageDiscord,
-            sendSlack: deps.sendMessageSlack,
-            sendSignal: deps.sendMessageSignal,
-            sendIMessage: deps.sendMessageIMessage,
-          },
-        });
-      } catch (err) {
-        if (!bestEffortDeliver) throw err;
-        logDeliveryError(err);
-      }
+      deliveryProvider === "imessage")
+  ) {
+    if (deliveryTarget) {
+      await deliverOutboundPayloads({
+        cfg,
+        provider: deliveryProvider,
+        to: deliveryTarget,
+        payloads: deliveryPayloads,
+        bestEffort: bestEffortDeliver,
+        onError: (err) => logDeliveryError(err),
+        onPayload: logPayload,
+        deps: {
+          sendWhatsApp: deps.sendMessageWhatsApp,
+          sendTelegram: deps.sendMessageTelegram,
+          sendDiscord: deps.sendMessageDiscord,
+          sendSlack: deps.sendMessageSlack,
+          sendSignal: deps.sendMessageSignal,
+          sendIMessage: deps.sendMessageIMessage,
+        },
+      });
     }
   }
 
