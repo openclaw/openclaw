@@ -45,6 +45,29 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Queue: collect");
   });
 
+  it("prefers model overrides over last-run model", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "override-1",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-4.1-mini",
+        modelProvider: "anthropic",
+        model: "claude-haiku-4-5",
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(text).toContain("🧠 Model: openai/gpt-4.1-mini");
+  });
+
   it("handles missing agent config gracefully", () => {
     const text = buildStatusMessage({
       agent: {},
