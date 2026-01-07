@@ -1,585 +1,648 @@
-# MS Teams Provider Research
+# MS Teams Provider Implementation Guide (Clawdbot)
 
-> Exploratory notes for adding `msteams` as a new provider to Clawdbot.
+Practical implementation notes for adding `msteams` as a new provider to Clawdbot.
+
+This document is written to match **this repo’s actual conventions** (verified against `src/` as of 2026-01-07), and to be used as an implementation checklist.
 
 ---
 
-## 1. Existing Provider Structure Analysis
+## 0) Scope / MVP
 
-### Directory Structure Pattern
+**MVP (recommended first milestone)**
 
-Each provider follows this structure (using Slack as reference):
+- Inbound: receive DMs + channel mentions via Bot Framework webhook.
+- Outbound: reply in the same conversation (and optionally proactive follow-ups) using the **Bot Framework connector** (not Graph message-post).
+- Basic media inbound: download Teams file attachments when possible; outbound media: send link (or Adaptive Card image) initially.
+- DM security: reuse existing Clawdbot `dmPolicy` + pairing store behavior.
+
+**Nice-to-have**
+
+- Rich cards (Adaptive Cards), message update/delete, reactions, channel-wide (non-mention) listening, proactive app installation via Graph, meeting chat support, multi-bot accounts.
+
+---
+
+## 1) Repo Conventions (Verified)
+
+### 1.1 Provider layout
+
+Most providers live in `src/<provider>/` and follow the Slack/Discord pattern:
 
 ```
 src/slack/
-├── index.ts                    # Public exports (barrel file)
-├── monitor.ts                  # Main event loop & message handling
-├── monitor.test.ts             # Unit tests
-├── monitor.tool-result.test.ts # Integration tests
-├── send.ts                     # Outbound message delivery
-├── actions.ts                  # Platform API actions (reactions, edits, pins)
-├── token.ts                    # Token resolution & validation
-└── probe.ts                    # Health check / connectivity validation
+├── index.ts
+├── monitor.ts
+├── monitor.test.ts
+├── monitor.tool-result.test.ts
+├── send.ts
+├── actions.ts
+├── token.ts
+└── probe.ts
 ```
 
-### Key Files by Provider
+Notes:
 
-| Provider | Files |
-|----------|-------|
-| Telegram | bot.ts, monitor.ts, send.ts, probe.ts, token.ts, webhook.ts, download.ts, draft-stream.ts, pairing-store.ts |
-| Discord | monitor.ts, send.ts, probe.ts, token.ts |
-| Slack | monitor.ts, send.ts, actions.ts, probe.ts, token.ts |
-| Signal | monitor.ts, send.ts, probe.ts (uses signal-cli) |
-| iMessage | monitor.ts, send.ts, probe.ts (uses imsg CLI) |
+- WhatsApp (web) is the exception: it’s split across `src/providers/web/` and shared helpers in `src/web/`.
+- Providers often include extra helpers (`webhook.ts`, `client.ts`, `targets.ts`, `daemon.ts`, etc.) when needed (see `src/telegram/`, `src/signal/`, `src/imessage/`).
+
+### 1.2 Monitor pattern & message pipeline
+
+Inbound providers ultimately build a `ctx` payload and call the shared pipeline:
+
+- `dispatchReplyFromConfig()` (auto-reply) + `createReplyDispatcherWithTyping()` (provider typing indicator).
+- `resolveAgentRoute()` for session key + agent routing.
+- `enqueueSystemEvent()` for human-readable “what happened” logging.
+- Pairing gates via `readProviderAllowFromStore()` and `upsertProviderPairingRequest()` for `dmPolicy=pairing`.
+
+A minimal (but accurate) sequence looks like:
+
+1. Validate activity (ignore bot echoes; ignore edits unless you want system events).
+2. Resolve peer identity + chat type + routing (`resolveAgentRoute()`).
+3. Apply access policy: DM policy + allowFrom/pairing; channel allowlist/mention requirements.
+4. Download attachments (bounded by `mediaMaxMb`).
+5. Build `ctx` envelope (matches other providers’ field names).
+6. Dispatch reply through `dispatchReplyFromConfig()`.
+
+### 1.3 Gateway lifecycle
+
+Providers started by the gateway are managed in:
+
+- `src/gateway/server-providers.ts` (start/stop + runtime snapshot)
+- `src/gateway/server.ts` (logger + `runtimeForLogger()` wiring)
+- `src/gateway/config-reload.ts` (restart rules + provider kind union)
+- `src/gateway/server-methods/providers.ts` (status endpoint)
+
+### 1.4 Outbound delivery plumbing (easy to miss)
+
+The CLI + gateway send paths share outbound helpers:
+
+- `src/infra/outbound/targets.ts` (validates `--to` per provider)
+- `src/infra/outbound/deliver.ts` (chunking + send abstraction)
+- `src/infra/outbound/format.ts` (summaries / JSON)
+- `src/gateway/server-methods/send.ts` (gateway “send” supports multiple providers)
+- `src/commands/send.ts` + `src/cli/deps.ts` (direct CLI send wiring)
+
+### 1.5 Pairing integration points
+
+Adding a new provider that supports `dmPolicy=pairing` requires:
+
+- `src/pairing/pairing-store.ts` (extend `PairingProvider`)
+- `src/cli/pairing-cli.ts` (provider list + optional notify-on-approve)
+
+### 1.6 UI surfaces
+
+The local web UI has explicit provider forms + unions:
+
+- `ui/src/ui/app.ts` (state + forms per provider)
+- `ui/src/ui/types.ts` and `ui/src/ui/ui-types.ts` (provider unions)
+- `ui/src/ui/controllers/connections.ts` (load/save config per provider)
+
+If we add `msteams`, the UI must be updated alongside backend config/types.
 
 ---
 
-## 2. Monitor Pattern (Event Loop)
+## 2) 2025/2026 Microsoft Guidance (What Changed)
 
-The `monitorXxxProvider()` function is the heart of each provider. Pattern from Slack:
+### 2.1 Bot Framework SDK v4 “modern” baseline (Node)
 
-```typescript
-export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
-  // 1. Load configuration
-  const cfg = loadConfig();
+For Node bots, Microsoft’s maintained samples now use:
 
-  // 2. Resolve tokens (options > env > config)
-  const botToken = resolveSlackBotToken(
-    opts.botToken ?? process.env.SLACK_BOT_TOKEN ?? cfg.slack?.botToken
-  );
+- `CloudAdapter` + `ConfigurationBotFrameworkAuthentication` (instead of older adapter patterns)
+- Express/Restify middleware to parse JSON into `req.body` before `adapter.process(...)`
 
-  // 3. Create SDK client
-  const app = new App({
-    token: botToken,
-    appToken,
-    socketMode: true,
-  });
+CloudAdapter’s request processing explicitly requires parsed JSON bodies (it will 400 if `req.body` isn’t an object).
 
-  // 4. Authenticate and cache identity
-  const auth = await app.client.auth.test({ token: botToken });
+### 2.2 Proactive messaging is required for “slow” work
 
-  // 5. Set up caches (channel info, user info, message dedup)
-  const channelCache = new Map<string, ChannelInfo>();
-  const userCache = new Map<string, UserInfo>();
-  const seenMessages = new Map<string, number>();
+Teams delivers messages via **HTTP webhook**. If we block the request while waiting on an LLM run, we risk:
 
-  // 6. Register event handlers
-  app.event("message", async ({ event }) => {
-    await handleMessage(event);
-  });
+- gateway timeouts,
+- Teams retries (duplicate inbound),
+- or dropped replies.
 
-  // 7. Start and wait for abort signal
-  await app.start();
-  await new Promise<void>((resolve) => {
-    opts.abortSignal?.addEventListener("abort", () => resolve());
-  });
-  await app.stop();
-}
-```
+Best practice for long-running work is:
 
-### Message Processing Pipeline
+- capture a `ConversationReference`,
+- **return quickly**,
+- then send replies later via proactive messaging (`continueConversationAsync` in CloudAdapter).
 
-1. **Validation**: Check message type, ignore bots, dedup check
-2. **Channel Resolution**: Get channel metadata (name, type, topic)
-3. **Authorization Checks**: DM policy, channel allowlist, user allowlist, mention requirements
-4. **Media Download**: Fetch attachments with size limits
-5. **Acknowledgment**: Send reaction to confirm receipt
-6. **Envelope Construction**: Build `ctxPayload` with all message metadata
-7. **System Event Logging**: `enqueueSystemEvent()`
-8. **Reply Dispatcher Setup**: Configure typing indicators and threading
-9. **Dispatch to Agent**: `dispatchReplyFromConfig()`
+### 2.3 Microsoft 365 Agents SDK exists (potential future path)
+
+Microsoft is actively building the **Microsoft 365 Agents SDK** (Node/TS) which positions itself as a replacement for parts of Bot Framework (`botbuilder`) for Teams and other channels.
+
+Practical implication for Clawdbot:
+
+- **Ship v1 with Bot Framework** (most stable, most docs, matches Teams docs),
+- but structure our MS Teams provider so it can be swapped to Agents SDK later (thin adapter boundary around “receive activity” + “send activity”).
+
+### 2.4 Deprecations / platform shifts to note
+
+- Creation of **new multi-tenant bots** has been announced as deprecated after **2025-07-31** (plan for **single-tenant** by default).
+- Office 365 connectors / incoming webhooks retirement has been extended to **2026-03-31** (don’t build a provider around incoming webhooks; use bots).
 
 ---
 
-## 3. Gateway Integration
+## 3) Recommended Architecture for Clawdbot
 
-### Provider Manager (src/gateway/server-providers.ts)
+### 3.1 Use Bot Framework for both receive + send
 
-```typescript
-// Status types per provider
-export type SlackRuntimeStatus = {
-  running: boolean;
-  lastStartAt?: number | null;
-  lastStopAt?: number | null;
-  lastError?: string | null;
-};
+Avoid “Graph API sendMessage” as the default path. For Teams, **posting chat/channel messages via Graph** is heavily constrained (often delegated-only and/or policy-restricted), while bots can reliably send messages in the conversations where they’re installed.
 
-// Combined snapshot
-export type ProviderRuntimeSnapshot = {
-  whatsapp: WebProviderStatus;
-  telegram: TelegramRuntimeStatus;
-  discord: DiscordRuntimeStatus;
-  slack: SlackRuntimeStatus;
-  signal: SignalRuntimeStatus;
-  imessage: IMessageRuntimeStatus;
-};
+**Key idea:** treat Teams as a “bot conversation provider”:
 
-// Manager interface
-export type ProviderManager = {
-  getRuntimeSnapshot: () => ProviderRuntimeSnapshot;
-  startProviders: () => Promise<void>;
-  startSlackProvider: () => Promise<void>;
-  stopSlackProvider: () => Promise<void>;
-  // ... per provider
-};
-```
+- Receive activity via webhook.
+- Reply (and send follow-ups) via the connector using the stored conversation reference.
 
-### Lifecycle Management
+### 3.2 Run a dedicated webhook server inside the provider monitor
 
-```typescript
-// State tracking
-let slackAbort: AbortController | null = null;
-let slackTask: Promise<unknown> | null = null;
-let slackRuntime: SlackRuntimeStatus = { running: false };
+This matches how Telegram webhooks are done (`src/telegram/webhook.ts`): the provider can run its own HTTP server on a configured port/path.
 
-const startSlackProvider = async () => {
-  if (slackTask) return; // Already running
+This avoids entangling the Teams webhook with the gateway HTTP server routes and lets users expose only the Teams webhook port if desired.
 
-  const cfg = loadConfig();
-  if (cfg.slack?.enabled === false) return;
+### 3.3 Explicitly store conversation references
 
-  const botToken = resolveSlackBotToken(...);
-  if (!botToken) return; // Not configured
+To send proactive replies (or to support `clawdbot send --provider msteams ...`), we need a small store that maps a stable key to a `ConversationReference`.
 
-  slackAbort = new AbortController();
-  slackRuntime = { running: true, lastStartAt: Date.now() };
+Recommendation:
 
-  slackTask = monitorSlackProvider({
-    botToken,
-    runtime: slackRuntimeEnv,
-    abortSignal: slackAbort.signal,
-  })
-    .catch(err => { slackRuntime.lastError = formatError(err); })
-    .finally(() => {
-      slackAbort = null;
-      slackTask = null;
-      slackRuntime.running = false;
-    });
-};
-```
-
-### RuntimeEnv Pattern
-
-```typescript
-// Minimal interface for provider DI
-export type RuntimeEnv = {
-  log: typeof console.log;
-  error: typeof console.error;
-  exit: (code: number) => never;
-};
-
-// Created from subsystem logger
-const logSlack = logProviders.child("slack");
-const slackRuntimeEnv = runtimeForLogger(logSlack);
-```
-
-### Config Hot-Reload (src/gateway/config-reload.ts)
-
-```typescript
-const RELOAD_RULES: ReloadRule[] = [
-  { prefix: "slack", kind: "hot", actions: ["restart-provider:slack"] },
-  { prefix: "telegram", kind: "hot", actions: ["restart-provider:telegram"] },
-  // ...
-];
-```
+- Key by `conversation.id` (works for DMs, group chats, channels).
+- Also store `tenantId`, `serviceUrl`, and useful labels (team/channel name when available) for debugging and allowlists.
 
 ---
 
-## 4. Configuration Types
+## 4) Configuration Design
 
-### Pattern from SlackConfig (src/config/types.ts)
+### 4.1 Proposed `msteams` config block
 
-```typescript
-export type SlackConfig = {
-  enabled?: boolean;                              // Master toggle
-  botToken?: string;                              // Primary credential
-  appToken?: string;                              // Socket mode credential
-  groupPolicy?: GroupPolicy;                      // "open" | "disabled" | "allowlist"
-  textChunkLimit?: number;                        // Platform message limit
-  mediaMaxMb?: number;                            // File size limit
-  dm?: SlackDmConfig;                             // DM-specific settings
-  channels?: Record<string, SlackChannelConfig>;  // Per-channel config
-  actions?: SlackActionConfig;                    // Feature gating
-  slashCommand?: SlackSlashCommandConfig;         // Command config
-};
+Suggested shape (mirrors Slack/Discord style + existing `DmPolicy` and `GroupPolicy`):
 
-export type SlackDmConfig = {
+```ts
+export type MSTeamsConfig = {
   enabled?: boolean;
-  policy?: DmPolicy;                              // "pairing" | "allowlist" | "open" | "disabled"
-  allowFrom?: Array<string | number>;
-  groupEnabled?: boolean;
-  groupChannels?: Array<string | number>;
-};
 
-export type SlackChannelConfig = {
-  enabled?: boolean;
-  requireMention?: boolean;
-  users?: Array<string | number>;                 // Per-channel allowlist
-  skills?: string[];                              // Skill filter
-  systemPrompt?: string;                          // Channel-specific prompt
-};
+  // Bot registration (Azure Bot / Entra app)
+  appId?: string; // Entra app (bot) ID
+  appPassword?: string; // secret
+  tenantId?: string; // recommended: single tenant
+  appType?: "singleTenant" | "multiTenant"; // default: singleTenant
 
-export type SlackActionConfig = {
-  reactions?: boolean;
-  messages?: boolean;
-  pins?: boolean;
-  search?: boolean;
-  // ... feature toggles
+  // Webhook listener (provider-owned HTTP server)
+  webhook?: {
+    host?: string; // default: 0.0.0.0
+    port?: number; // default: 3978 (Bot Framework conventional)
+    path?: string; // default: /msteams/messages
+  };
+
+  // Access control
+  dm?: {
+    enabled?: boolean;
+    policy?: DmPolicy; // pairing|open|disabled
+    allowFrom?: Array<string | number>; // allowlist for open/allowlist-like flows
+  };
+  groupPolicy?: GroupPolicy; // open|disabled|allowlist
+  channels?: Record<
+    string,
+    {
+      enabled?: boolean;
+      requireMention?: boolean;
+      users?: Array<string | number>;
+      skills?: string[];
+      systemPrompt?: string;
+    }
+  >;
+
+  // Limits
+  textChunkLimit?: number;
+  mediaMaxMb?: number;
 };
 ```
 
-### Where Provider Appears in Config
+### 4.2 Env var conventions
 
-- `ClawdbotConfig.slack` - main config block
-- `QueueModeByProvider.slack` - queue mode override
-- `AgentElevatedAllowFromConfig.slack` - elevated permissions
-- `HookMappingConfig.provider` - webhook routing
+To match repo patterns and Microsoft docs, support both:
+
+- Clawdbot-style: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`
+- Bot Framework defaults: `MicrosoftAppId`, `MicrosoftAppPassword`, `MicrosoftAppTenantId`, `MicrosoftAppType`
+
+Resolution order should follow other providers: `opts > env > config`.
 
 ---
 
-## 5. Zod Validation Schema
+## 5) File/Module Plan (`src/msteams/`)
 
-### Pattern (src/config/zod-schema.ts)
+Recommended structure (intentionally similar to Slack, with Teams-specific extras):
 
-```typescript
-const SlackConfigSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    botToken: z.string().optional(),
-    appToken: z.string().optional(),
-    groupPolicy: GroupPolicySchema.optional().default("open"),
-    textChunkLimit: z.number().optional(),
-    mediaMaxMb: z.number().optional(),
-    dm: SlackDmConfigSchema.optional(),
-    channels: z.record(z.string(), SlackChannelConfigSchema).optional(),
-    actions: SlackActionConfigSchema.optional(),
-  })
-  .superRefine((value, ctx) => {
-    // Cross-field validation
-    if (value.dm?.policy === "open" && !value.dm?.allowFrom?.includes("*")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["dm", "allowFrom"],
-        message: 'slack.dm.policy="open" requires allowFrom to include "*"',
-      });
-    }
-  })
-  .optional();
+```
+src/msteams/
+├── index.ts
+├── token.ts
+├── monitor.ts
+├── webhook.ts              # Express server + CloudAdapter.process
+├── conversation-store.ts   # Persist ConversationReference by conversation.id
+├── send.ts                 # Proactive send via adapter.continueConversationAsync
+├── attachments.ts          # Download helpers for Teams attachment types
+├── probe.ts                # Basic credential check (optional)
+├── monitor.test.ts
+└── monitor.tool-result.test.ts
 ```
 
 ---
 
-## 6. Onboarding Flow
+## 6) Concrete Code Examples
 
-### Pattern (src/commands/onboard-providers.ts)
+These are not drop-in (because `botbuilder` isn’t currently a dependency in this repo), but they’re written in the style of existing providers.
 
-```typescript
-// 1. Status detection
-const slackConfigured = Boolean(
-  process.env.SLACK_BOT_TOKEN || cfg.slack?.botToken
-);
+### 6.1 `src/msteams/token.ts` (credential resolution)
 
-// 2. Provider selection
-const selection = await prompter.multiselect({
-  message: "Select providers",
-  options: [
-    { value: "slack", label: "Slack", hint: slackConfigured ? "configured" : "needs token" },
-  ],
-});
+```ts
+export type ResolvedMSTeamsCreds = {
+  appId: string | null;
+  appPassword: string | null;
+  tenantId: string | null;
+  appType: "singleTenant" | "multiTenant";
+  source: {
+    appId: "opts" | "env" | "config" | "missing";
+    appPassword: "opts" | "env" | "config" | "missing";
+  };
+};
 
-// 3. Credential collection
-if (selection.includes("slack")) {
-  if (process.env.SLACK_BOT_TOKEN && !cfg.slack?.botToken) {
-    const useEnv = await prompter.confirm({
-      message: "SLACK_BOT_TOKEN detected. Use env var?",
-    });
-    if (!useEnv) {
-      token = await prompter.text({ message: "Enter Slack bot token" });
-    }
-  }
-  // ... also collect app token for socket mode
-}
+export function resolveMSTeamsCreds(
+  cfg: { msteams?: { appId?: string; appPassword?: string; tenantId?: string; appType?: string } },
+  opts?: { appId?: string; appPassword?: string; tenantId?: string; appType?: string },
+): ResolvedMSTeamsCreds {
+  const env = process.env;
+  const appId =
+    opts?.appId?.trim() ||
+    env.MSTEAMS_APP_ID?.trim() ||
+    env.MicrosoftAppId?.trim() ||
+    cfg.msteams?.appId?.trim() ||
+    null;
+  const appPassword =
+    opts?.appPassword?.trim() ||
+    env.MSTEAMS_APP_PASSWORD?.trim() ||
+    env.MicrosoftAppPassword?.trim() ||
+    cfg.msteams?.appPassword?.trim() ||
+    null;
+  const tenantId =
+    opts?.tenantId?.trim() ||
+    env.MSTEAMS_TENANT_ID?.trim() ||
+    env.MicrosoftAppTenantId?.trim() ||
+    cfg.msteams?.tenantId?.trim() ||
+    null;
 
-// 4. DM policy configuration
-const policy = await selectPolicy({ label: "Slack", provider: "slack" });
-cfg = setSlackDmPolicy(cfg, policy);
-```
+  const appTypeRaw =
+    (opts?.appType || env.MicrosoftAppType || cfg.msteams?.appType || "")
+      .trim()
+      .toLowerCase();
+  const appType =
+    appTypeRaw === "multitenant" || appTypeRaw === "multi-tenant"
+      ? "multiTenant"
+      : "singleTenant";
 
-### DM Policy Setter Helper
-
-```typescript
-function setSlackDmPolicy(cfg: ClawdbotConfig, dmPolicy: DmPolicy) {
-  const dm = cfg.slack?.dm ?? {};
-  const allowFrom = dmPolicy === "open"
-    ? addWildcardAllowFrom(dm.allowFrom)
-    : dm.allowFrom;
   return {
-    ...cfg,
-    slack: {
-      ...cfg.slack,
-      dm: { ...dm, policy: dmPolicy, ...(allowFrom ? { allowFrom } : {}) },
+    appId,
+    appPassword,
+    tenantId,
+    appType,
+    source: {
+      appId: opts?.appId
+        ? "opts"
+        : env.MSTEAMS_APP_ID || env.MicrosoftAppId
+          ? "env"
+          : cfg.msteams?.appId
+            ? "config"
+            : "missing",
+      appPassword: opts?.appPassword
+        ? "opts"
+        : env.MSTEAMS_APP_PASSWORD || env.MicrosoftAppPassword
+          ? "env"
+          : cfg.msteams?.appPassword
+            ? "config"
+            : "missing",
     },
   };
 }
 ```
 
----
+### 6.2 `src/msteams/webhook.ts` (Express + CloudAdapter)
 
-## 7. Probe (Health Check)
+Key best-practice points:
 
-### Pattern (src/slack/probe.ts)
+- `adapter.process(...)` requires JSON middleware (parsed `req.body`).
+- Keep request handling fast; offload long work to proactive sends.
 
-```typescript
-export type SlackProbe = {
-  ok: boolean;
-  status?: number | null;
-  error?: string | null;
-  elapsedMs?: number | null;
-  bot?: { id?: string; name?: string };
-  team?: { id?: string; name?: string };
-};
+```ts
+import express from "express";
+import type { Server } from "node:http";
+import {
+  CloudAdapter,
+  ConfigurationBotFrameworkAuthentication,
+} from "botbuilder";
+import type { RuntimeEnv } from "../runtime.js";
 
-export async function probeSlack(
-  token: string,
-  timeoutMs = 2500,
-): Promise<SlackProbe> {
-  const client = new WebClient(token);
-  const start = Date.now();
+export async function startMSTeamsWebhook(opts: {
+  host: string;
+  port: number;
+  path: string;
+  runtime: RuntimeEnv;
+  onTurn: (adapter: CloudAdapter) => (turnContext: unknown) => Promise<void>;
+}) {
+  const runtime = opts.runtime;
+  const app = express();
+  app.use(express.json({ limit: "10mb" }));
 
-  try {
-    const result = await withTimeout(client.auth.test(), timeoutMs);
-    if (!result.ok) {
-      return { ok: false, status: 200, error: result.error };
-    }
-    return {
-      ok: true,
-      status: 200,
-      elapsedMs: Date.now() - start,
-      bot: { id: result.user_id, name: result.user },
-      team: { id: result.team_id, name: result.team },
-    };
-  } catch (err) {
-    return { ok: false, status: err.status, error: err.message, elapsedMs: Date.now() - start };
-  }
-}
-```
+  const botFrameworkAuthentication = new ConfigurationBotFrameworkAuthentication(
+    process.env,
+  );
+  const adapter = new CloudAdapter(botFrameworkAuthentication);
 
----
-
-## 8. Send Function
-
-### Pattern (src/slack/send.ts)
-
-```typescript
-export async function sendMessageSlack(
-  to: string,
-  message: string,
-  opts: SlackSendOpts = {},
-): Promise<SlackSendResult> {
-  // 1. Parse recipient (user:X, channel:Y, #channel, @user, etc.)
-  const recipient = parseRecipient(to);
-
-  // 2. Resolve channel ID (open DM if needed)
-  const { channelId } = await resolveChannelId(client, recipient);
-
-  // 3. Chunk text to platform limit
-  const chunks = chunkMarkdownText(message, chunkLimit);
-
-  // 4. Upload media if present
-  if (opts.mediaUrl) {
-    await uploadSlackFile({ client, channelId, mediaUrl, threadTs });
-  }
-
-  // 5. Send each chunk
-  for (const chunk of chunks) {
-    await client.chat.postMessage({
-      channel: channelId,
-      text: chunk,
-      thread_ts: opts.threadTs,
+  app.get("/healthz", (_req, res) => res.status(200).send("ok"));
+  app.post(opts.path, async (req, res) => {
+    await adapter.process(req, res, async (turnContext) => {
+      await opts.onTurn(adapter)(turnContext);
     });
-  }
+  });
 
-  return { messageId, channelId };
+  const server: Server = await new Promise((resolve) => {
+    const srv = app.listen(opts.port, opts.host, () => resolve(srv));
+  });
+
+  runtime.log?.(
+    `msteams webhook listening on http://${opts.host}:${opts.port}${opts.path}`,
+  );
+  return { adapter, server, stop: () => server.close() };
 }
 ```
 
----
+### 6.3 `src/msteams/monitor.ts` (proactive dispatch pattern)
 
-## 9. CLI Integration
+This is the key “Clawdbot-specific” adaptation: don’t do the long LLM run inside the webhook turn.
 
-### Dependencies (src/cli/deps.ts)
+```ts
+import type { ConversationReference, TurnContext } from "botbuilder";
+import { TurnContext as TurnContextApi } from "botbuilder";
+import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
+import { loadConfig } from "../config/config.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { saveConversationReference } from "./conversation-store.js";
+import { startMSTeamsWebhook } from "./webhook.js";
 
-```typescript
-export type CliDeps = {
-  sendMessageWhatsApp: typeof sendMessageWhatsApp;
-  sendMessageTelegram: typeof sendMessageTelegram;
-  sendMessageDiscord: typeof sendMessageDiscord;
-  sendMessageSlack: typeof sendMessageSlack;
-  sendMessageSignal: typeof sendMessageSignal;
-  sendMessageIMessage: typeof sendMessageIMessage;
-};
+export async function monitorMSTeamsProvider(opts: {
+  runtime?: RuntimeEnv;
+  abortSignal?: AbortSignal;
+}) {
+  const cfg = loadConfig();
+  const runtime = opts.runtime;
+  if (cfg.msteams?.enabled === false) return;
 
-export function createDefaultDeps(): CliDeps {
-  return {
-    sendMessageWhatsApp,
-    sendMessageTelegram,
-    // ...
-  };
+  const host = cfg.msteams?.webhook?.host ?? "0.0.0.0";
+  const port = cfg.msteams?.webhook?.port ?? 3978;
+  const path = cfg.msteams?.webhook?.path ?? "/msteams/messages";
+
+  const seen = new Map<string, number>(); // activity de-dupe
+  const ttlMs = 2 * 60_000;
+
+  const { adapter, stop } = await startMSTeamsWebhook({
+    host,
+    port,
+    path,
+    runtime:
+      runtime ?? { log: console.log, error: console.error, exit: process.exit as any },
+    onTurn: (adapter) => async (ctxAny) => {
+      const context = ctxAny as TurnContext;
+      if (context.activity.type !== "message") return;
+      if (
+        !context.activity.text &&
+        (!context.activity.attachments ||
+          context.activity.attachments.length === 0)
+      )
+        return;
+
+      const activity = context.activity;
+      const convoId = activity.conversation?.id ?? "unknown";
+      const activityId = activity.id ?? "unknown";
+      const dedupeKey = `${convoId}:${activityId}`;
+      const now = Date.now();
+      for (const [key, ts] of seen) if (now - ts > ttlMs) seen.delete(key);
+      if (seen.has(dedupeKey)) return;
+      seen.set(dedupeKey, now);
+
+      const reference: ConversationReference =
+        TurnContextApi.getConversationReference(activity);
+      saveConversationReference(convoId, reference).catch(() => {});
+
+      // Kick off the long-running work without blocking the webhook request:
+      void (async () => {
+        const cfg = loadConfig();
+        const route = resolveAgentRoute({
+          cfg,
+          provider: "msteams",
+          teamId: (activity.channelData as any)?.team?.id ?? undefined,
+          peer: {
+            kind:
+              (activity.conversation as any)?.conversationType === "channel"
+                ? "channel"
+                : "dm",
+            id:
+              (activity.from as any)?.aadObjectId ??
+              activity.from?.id ??
+              "unknown",
+          },
+        });
+
+        enqueueSystemEvent(
+          `Teams message: ${String(activity.text ?? "").slice(0, 160)}`,
+          {
+            sessionKey: route.sessionKey,
+            contextKey: `msteams:message:${convoId}:${activityId}`,
+          },
+        );
+
+        const appId =
+          cfg.msteams?.appId ??
+          process.env.MSTEAMS_APP_ID ??
+          process.env.MicrosoftAppId ??
+          "";
+
+        const { dispatcher, replyOptions, markDispatchIdle } =
+          createReplyDispatcherWithTyping({
+            responsePrefix: cfg.messages?.responsePrefix,
+            onReplyStart: async () => {
+              // typing indicator
+              await adapter.continueConversationAsync(appId, reference, async (ctx) => {
+                await (ctx as any).sendActivity({ type: "typing" });
+              });
+            },
+            deliver: async (payload) => {
+              await adapter.continueConversationAsync(appId, reference, async (ctx) => {
+                await (ctx as any).sendActivity(payload.text ?? "");
+              });
+            },
+            onError: (err, info) => {
+              runtime?.error?.(`msteams ${info.kind} reply failed: ${String(err)}`);
+            },
+          });
+
+        const ctxPayload = {
+          Provider: "msteams" as const,
+          Surface: "msteams" as const,
+          From: `msteams:${activity.from?.id ?? "unknown"}`,
+          To: `conversation:${convoId}`,
+          SessionKey: route.sessionKey,
+          AccountId: route.accountId,
+          ChatType:
+            (activity.conversation as any)?.conversationType === "channel"
+              ? "room"
+              : "direct",
+          MessageSid: activityId,
+          ReplyToId: activity.replyToId ?? activityId,
+          Timestamp: activity.timestamp ? Date.parse(String(activity.timestamp)) : undefined,
+          Body: String(activity.text ?? ""),
+        };
+
+        await dispatchReplyFromConfig({
+          ctx: ctxPayload as any,
+          cfg,
+          dispatcher,
+          replyOptions,
+        });
+        markDispatchIdle();
+      })().catch((err) => runtime?.error?.(String(err)));
+    },
+  });
+
+  const shutdown = () => stop();
+  opts.abortSignal?.addEventListener("abort", shutdown, { once: true });
 }
 ```
 
-### Send Command (src/commands/send.ts)
+### 6.4 Attachment download (Teams file attachments)
 
-```typescript
-const provider = (opts.provider ?? "whatsapp").toLowerCase();
+Teams commonly sends file uploads as an attachment with content type:
 
-// Provider-specific delivery
-const results = await deliverOutboundPayloads({
-  cfg: loadConfig(),
-  provider,
-  to: resolvedTarget.to,
-  payloads: [{ text: opts.message, mediaUrl: opts.media }],
-  deps: {
-    sendSlack: deps.sendMessageSlack,
-    // ...
-  },
-});
-```
+- `application/vnd.microsoft.teams.file.download.info`
 
----
+The `downloadUrl` is the URL to fetch (often time-limited). A minimal helper:
 
-## 10. Files to Create/Modify for MS Teams
-
-### New Files (src/msteams/)
-
-```
-src/msteams/
-├── index.ts           # Exports
-├── monitor.ts         # Bot Framework event loop
-├── send.ts            # Send via Graph API
-├── probe.ts           # Health check (Graph API /me)
-├── token.ts           # Token resolution
-├── actions.ts         # Optional: reactions, edits, etc.
-└── *.test.ts          # Tests
-```
-
-### Files to Modify
-
-| File | Changes |
-|------|---------|
-| `src/config/types.ts` | Add `MSTeamsConfig`, update `QueueModeByProvider`, `AgentElevatedAllowFromConfig`, `HookMappingConfig` |
-| `src/config/zod-schema.ts` | Add `MSTeamsConfigSchema` |
-| `src/gateway/server-providers.ts` | Add `MSTeamsRuntimeStatus`, lifecycle methods, update `ProviderRuntimeSnapshot`, `ProviderManager` |
-| `src/gateway/server.ts` | Add logger, runtimeEnv, pass to provider manager |
-| `src/gateway/config-reload.ts` | Add reload rule |
-| `src/gateway/server-methods/providers.ts` | Add status endpoint |
-| `src/cli/deps.ts` | Add `sendMessageMSTeams` |
-| `src/cli/program.ts` | Add to `--provider` options |
-| `src/commands/send.ts` | Add msteams case |
-| `src/commands/onboard-providers.ts` | Add wizard flow |
-| `src/commands/onboard-types.ts` | Add to `ProviderChoice` |
-| `docs/providers/msteams.md` | Documentation |
-
----
-
-## 11. MS Teams SDK Options
-
-### Option A: Bot Framework SDK (@microsoft/botframework)
-
-```typescript
-import { CloudAdapter, ConfigurationBotFrameworkAuthentication } from "botbuilder";
-
-// Pros: Full-featured, handles auth, typing indicators, cards
-// Cons: More complex, requires Azure Bot registration
-```
-
-### Option B: Microsoft Graph API
-
-```typescript
-import { Client } from "@microsoft/microsoft-graph-client";
-
-// Pros: Simpler for basic messaging, direct API access
-// Cons: Less rich features, manual auth handling
-```
-
-### Recommended: Bot Framework for receiving, Graph for some sends
-
-MS Teams bots use the Bot Framework for receiving messages (webhook-based), and can use either Bot Framework or Graph API for sending.
-
-### Required Azure Resources
-
-1. **Azure Bot Registration** - Bot identity and channel configuration
-2. **App Registration** - OAuth for Graph API access
-3. **Teams App Manifest** - Defines bot capabilities in Teams
-
-### Credentials Needed
-
-```typescript
-export type MSTeamsConfig = {
-  enabled?: boolean;
-  appId?: string;           // Azure AD App ID
-  appPassword?: string;     // Azure AD App Secret
-  tenantId?: string;        // Optional: restrict to tenant
-  // ... rest follows pattern
+```ts
+type TeamsFileDownloadInfo = {
+  downloadUrl?: string;
+  uniqueId?: string;
+  fileType?: string;
 };
+
+export function resolveTeamsDownloadUrl(att: {
+  contentType?: string;
+  content?: unknown;
+}): string | null {
+  if (att.contentType !== "application/vnd.microsoft.teams.file.download.info")
+    return null;
+  const content = (att.content ?? {}) as TeamsFileDownloadInfo;
+  const url = typeof content.downloadUrl === "string" ? content.downloadUrl.trim() : "";
+  return url ? url : null;
+}
 ```
 
----
-
-## 12. Key Differences from Slack
-
-| Aspect | Slack | MS Teams |
-|--------|-------|----------|
-| Connection | Socket Mode (WebSocket) | Webhook (HTTP POST) |
-| Auth | Bot Token + App Token | Azure AD App ID + Secret |
-| Message ID | `ts` (timestamp) | Activity ID |
-| Threading | `thread_ts` | `replyToId` in conversation |
-| Channels | Channel ID | Channel ID + Team ID |
-| DMs | `conversations.open` | Proactive messaging with conversation reference |
-| Typing | `assistant.threads.setStatus` | `sendTypingActivity()` |
-| Reactions | `reactions.add` | Separate message with reaction |
-| Media | `files.uploadV2` | Attachments in activity |
+Initial recommendation: support this type first; treat other attachment types as “link-only” until needed.
 
 ---
 
-## 13. Implementation Considerations
+## 7) Integration Checklist (Files to Create/Modify)
 
-### Webhook vs Polling
+### 7.1 New backend files
 
-MS Teams uses webhooks exclusively (no polling option like Telegram). Need to:
-- Expose HTTP endpoint for Bot Framework
-- Handle activity validation (HMAC signature)
-- Consider tunneling for local dev (ngrok, Tailscale funnel)
+- `src/msteams/*` (new provider implementation; see structure above)
 
-### Proactive Messaging
+### 7.2 Backend integration points (must update)
 
-Unlike Slack where you can message any user, Teams requires:
-- User must have interacted with bot first, OR
-- Bot must be installed in team/chat, OR
-- Use Graph API with appropriate permissions
+**Config & validation**
 
-### Tenant Restrictions
+- `src/config/types.ts` (add `MSTeamsConfig`; extend unions like `QueueModeByProvider`, `AgentElevatedAllowFromConfig`, `HookMappingConfig.provider`)
+- `src/config/zod-schema.ts` (add schema + cross-field validation for `dm.policy="open"` → allowFrom includes `"*"`, etc.)
+- `src/config/schema.ts` (labels + descriptions used by tooling/UI)
 
-Enterprise Teams often restrict:
-- External app installations
-- Cross-tenant communication
-- Certain API permissions
+**Gateway provider lifecycle**
 
-Config should support `tenantId` restriction.
+- `src/gateway/server-providers.ts` (runtime status + start/stop + snapshot)
+- `src/gateway/server.ts` (logger + runtime env wiring)
+- `src/gateway/config-reload.ts` (provider kind union + reload rules)
+- `src/gateway/server-methods/providers.ts` (status payload)
+- `src/infra/provider-summary.ts` (optional but recommended: show “Teams configured” in `clawdbot status`)
 
-### Cards and Adaptive Cards
+**Outbound sending**
 
-Teams heavily uses Adaptive Cards for rich UI. Consider supporting:
-- Basic text (markdown subset)
-- Adaptive Card JSON
-- Hero Cards for media
+- `src/infra/outbound/targets.ts` (validate `--to` format for Teams)
+- `src/infra/outbound/deliver.ts` (provider caps + handler + result union)
+- `src/infra/outbound/format.ts` (optional: add more metadata fields)
+- `src/commands/send.ts` (treat `msteams` as direct-send provider if we implement `sendMessageMSTeams`)
+- `src/cli/deps.ts` (add `sendMessageMSTeams`)
+- `src/gateway/server-methods/send.ts` (support `provider === "msteams"` for gateway sends)
+
+**Pairing**
+
+- `src/pairing/pairing-store.ts` (add `"msteams"` to `PairingProvider`)
+- `src/cli/pairing-cli.ts` (include provider in CLI; decide whether `--notify` is supported for Teams)
+
+**Onboarding wizard**
+
+- `src/commands/onboard-types.ts` (add `"msteams"` to `ProviderChoice`)
+- `src/commands/onboard-providers.ts` (collect appId/secret/tenant, write config, add primer notes)
+
+**Hooks**
+
+- `src/gateway/hooks.ts` (extend provider allowlist validation: `last|whatsapp|telegram|discord|slack|signal|imessage|msteams`)
+
+**Docs**
+
+- `docs/providers/msteams.md` (Mintlify link conventions apply under `docs/**`)
+
+### 7.3 UI integration points
+
+- `ui/src/ui/ui-types.ts` (provider unions)
+- `ui/src/ui/types.ts` (gateway status typing)
+- `ui/src/ui/controllers/connections.ts` (load/save `msteams` config)
+- `ui/src/ui/app.ts` (form state, validation, UX)
 
 ---
 
-## Next Steps
+## 8) MS Teams Gotchas (Plan for These)
 
-1. **Research**: MS Teams Bot Framework SDK specifics
-2. **Azure Setup**: Document bot registration process
-3. **Implement**: Start with monitor.ts and basic send
-4. **Test**: Local dev with ngrok/tunnel
-5. **Docs**: Provider setup guide
+1. **Webhook timeouts / retries**: don’t block the webhook while waiting on LLM output; send replies proactively and dedupe inbound activities.
+2. **Proactive messaging requirements**: the app must be installed in the chat/team; and you need a valid conversation reference (or you must create a conversation).
+3. **Threading**: channel replies often need `replyToId` to keep replies in-thread; verify behavior for channel vs chat and standardize.
+4. **Mentions**: Teams message text includes `<at>...</at>`; strip bot mentions before sending to the agent and implement mention gating using `entities`.
+5. **Attachment downloads**: file uploads commonly arrive as `file.download.info` with time-limited URLs; enforce `mediaMaxMb` and handle 403/expired URLs.
+6. **Formatting limits**: Teams markdown is more limited than Slack; assume “plain text + links” for v1, and only later add Adaptive Cards.
+7. **Tenant/admin restrictions**: many orgs restrict custom app install or bot scopes. Expect setup friction; document it clearly.
+8. **Single-tenant default**: multi-tenant bot creation has a deprecation cutoff (2025-07-31); prefer single-tenant in config defaults and docs.
+9. **Incoming webhooks retirement**: Office 365 connectors / incoming webhooks retirement has moved to 2026-03-31; don’t rely on it as the primary integration surface.
+
+---
+
+## References (Current as of 2026-01)
+
+- Bot Framework (Node) CloudAdapter sample: https://raw.githubusercontent.com/microsoft/BotBuilder-Samples/main/samples/javascript_nodejs/02.echo-bot/index.js
+- Teams proactive messaging overview: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages
+- Teams bot file uploads / downloadUrl attachments: https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4
+- CloudAdapter proactive API (`continueConversationAsync`): https://raw.githubusercontent.com/microsoft/botbuilder-js/main/libraries/botbuilder-core/src/cloudAdapterBase.ts
+- Microsoft 365 Agents SDK (Node/TS): https://raw.githubusercontent.com/microsoft/Agents-for-js/main/README.md
+- Office 365 connectors retirement update: https://techcommunity.microsoft.com/blog/microsoftteamsblog/retirement-of-office-365-connectors-within-microsoft-teams/4369576
+
+---
+
+## Next Steps (Actionable Implementation Order)
+
+1. **Pick SDK + add deps**: start with Bot Framework (`botbuilder`) unless you’re ready to bet on Agents SDK; add packages + types in `package.json`.
+2. **Config plumbing**: add `msteams` types + zod schema + schema metadata (`src/config/types.ts`, `src/config/zod-schema.ts`, `src/config/schema.ts`).
+3. **Provider skeleton**: add `src/msteams/index.ts`, `token.ts`, and a stub `monitor.ts` that starts/stops cleanly (abortSignal).
+4. **Webhook + echo**: implement `webhook.ts` + minimal activity handler that logs inbound text and sends a fast “ok” reply (no agent yet).
+5. **Conversation store**: persist `ConversationReference` by `conversation.id` and include tenant/serviceUrl; add a small unit test.
+6. **Agent dispatch (async)**: wire inbound messages to `dispatchReplyFromConfig()` using proactive sends (`continueConversationAsync`) to avoid webhook timeouts.
+7. **Access control**: implement DM policy + pairing (reuse existing pairing store) + mention gating in channels.
+8. **Gateway integration**: add provider manager start/stop/status wiring + config reload rules + hook provider allowlist; ensure gateway status UI reflects it.
+9. **Outbound CLI/gateway sends**: add `sendMessageMSTeams` that targets stored conversation IDs; wire `clawdbot send --provider msteams`.
+10. **Media**: implement inbound attachment download for `file.download.info` and a safe outbound strategy (link-only first, cards later).
+11. **Docs + UI + Onboard**: write `docs/providers/msteams.md`, add a minimal UI config form (appId/secret/tenant + webhook port/path), and update `clawdbot onboard` provider selection.
+12. **Hardening**: add dedupe TTL tuning, better error reporting, probe/health endpoints, and integration tests (`monitor.tool-result.test.ts`).
