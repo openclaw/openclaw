@@ -43,10 +43,7 @@ export function buildOutboundDeliveryJson(params: {
   provider: string;
   to: string;
   result?: OutboundDeliveryMeta | OutboundDeliveryResult;
-  via?: "direct" | "gateway";
-  mediaUrl?: string | null;
-}): OutboundDeliveryJson {
-  const { provider, to, result } = params;
+  via?: "direct" | "gateway";                                                                        mediaUrl?: string | null;                                                                        }): OutboundDeliveryJson {                                                                           const { provider, to, result } = params;
   const messageId = result?.messageId ?? "unknown";
   const payload: OutboundDeliveryJson = {
     provider,
@@ -56,10 +53,10 @@ export function buildOutboundDeliveryJson(params: {
     mediaUrl: params.mediaUrl ?? null,
   };
 
-  if (result?.chatId !== undefined) payload.chatId = result.chatId;
-  if (result?.channelId !== undefined) payload.channelId = result.channelId;
-  if (result?.timestamp !== undefined) payload.timestamp = result.timestamp;
-  if (result?.toJid !== undefined) payload.toJid = result.toJid;
+  if (result && "chatId" in result) payload.chatId = result.chatId;
+  if (result && "channelId" in result) payload.channelId = result.channelId;
+  if (result && "timestamp" in result) payload.timestamp = result.timestamp;
+  if (result && "toJid" in result) payload.toJid = result.toJid;
 
   return payload;
 }
