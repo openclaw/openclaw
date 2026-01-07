@@ -17,7 +17,8 @@
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 
 ### Fixes
-- Tools: add Telegram/WhatsApp reaction tools (with per-provider gating), unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp, and allow WhatsApp reaction routing across accounts.
+- Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
+- Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
