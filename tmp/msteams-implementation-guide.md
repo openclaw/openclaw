@@ -263,6 +263,40 @@ To install the bot in Teams, you need an app manifest:
 3. Zip all three files into `clawdbot-teams.zip`
 4. In Teams → Apps → Manage your apps → Upload a custom app → Upload `clawdbot-teams.zip`
 
+### Step 7: Test the Bot
+
+**Option A: Azure Web Chat (verify webhook first)**
+
+1. Go to Azure Portal → your Azure Bot resource
+2. Click **Test in Web Chat** (left sidebar)
+3. Send a message - you should see the echo response
+4. This confirms your webhook endpoint is working before Teams setup
+
+**Option B: Teams Developer Portal (easier than manual manifest)**
+
+1. Go to https://dev.teams.microsoft.com/apps
+2. Click **+ New app**
+3. Fill in basic info:
+   - **Short name**: Clawdbot
+   - **Full name**: Clawdbot MS Teams
+   - **Short description**: AI assistant
+   - **Full description**: Clawdbot AI assistant for Teams
+   - **Developer name**: Your Name
+   - **Website**: https://clawd.bot (or any URL)
+4. Go to **App features** → **Bot**
+5. Select **Enter a bot ID manually**
+6. Paste your App ID: `49930686-61cb-44fd-a847-545d3f3fb638` (your Azure Bot's Microsoft App ID)
+7. Check scopes: **Personal** (for DMs), optionally **Team** and **Group Chat**
+8. Save
+9. Click **Distribute** (upper right) → **Download app package** (downloads a .zip)
+10. In Teams desktop/web:
+    - Click **Apps** (left sidebar)
+    - Click **Manage your apps**
+    - Click **Upload an app** → **Upload a custom app**
+    - Select the downloaded .zip file
+11. Click **Add** to install the bot
+12. Open a chat with the bot and send a message
+
 ### Credentials Summary
 
 After setup, you'll have:
@@ -288,6 +322,7 @@ msteams:
 ### Useful Links
 
 - [Azure Portal](https://portal.azure.com)
+- [Teams Developer Portal](https://dev.teams.microsoft.com/apps) - create/manage Teams apps
 - [Create Azure Bot](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration)
 - [Bot Framework Overview](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-overview)
 - [Create Teams Bot](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/create-a-bot-for-teams)
