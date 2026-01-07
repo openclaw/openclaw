@@ -116,6 +116,7 @@ describe("deliverOutboundPayloads", () => {
     expect(normalized).toEqual([
       { text: "hi", mediaUrls: [] },
       { text: "", mediaUrls: ["https://x.test/a.jpg"] },
+      { text: " ", mediaUrls: [] },
     ]);
   });
 
