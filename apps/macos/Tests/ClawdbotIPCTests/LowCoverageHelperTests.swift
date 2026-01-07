@@ -94,7 +94,7 @@ struct LowCoverageHelperTests {
     }
 
     @Test func gatewayLaunchAgentHelpers() async throws {
-        try await TestIsolation.withEnvValues(
+        await TestIsolation.withEnvValues(
             [
                 "CLAWDBOT_GATEWAY_BIND": "Lan",
                 "CLAWDBOT_GATEWAY_TOKEN": " secret ",
