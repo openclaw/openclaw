@@ -51,12 +51,12 @@ describe("buildAgentSystemPromptAppend", () => {
     const prompt = buildAgentSystemPromptAppend({
       workspaceDir: "/tmp/clawd",
       userTimezone: "America/Chicago",
-      userTime: "2026-01-05 15:26",
+      userTime: "Monday 2026-01-05 15:26",
     });
 
     expect(prompt).toContain("## Time");
     expect(prompt).toContain("User timezone: America/Chicago");
-    expect(prompt).toContain("Current user time: 2026-01-05 15:26");
+    expect(prompt).toContain("Current user time: Monday 2026-01-05 15:26");
   });
 
   it("includes model alias guidance when aliases are provided", () => {
