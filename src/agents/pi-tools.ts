@@ -432,6 +432,25 @@ function filterToolsByPolicy(
   });
 }
 
+function resolveEffectiveToolPolicy(params: {
+  config?: ClawdbotConfig;
+  sessionKey?: string;
+}) {
+  const agentId = params.sessionKey
+    ? resolveAgentIdFromSessionKey(params.sessionKey)
+    : undefined;
+  const agentConfig =
+    params.config && agentId
+      ? resolveAgentConfig(params.config, agentId)
+      : undefined;
+  const hasAgentTools = agentConfig?.tools !== undefined;
+  const globalTools = params.config?.agent?.tools;
+  return {
+    agentId,
+    policy: hasAgentTools ? agentConfig?.tools : globalTools,
+  };
+}
+
 function isToolAllowedByPolicy(name: string, policy?: SandboxToolPolicy) {
   if (!policy) return true;
   const deny = new Set(normalizeToolNames(policy.deny));
@@ -613,16 +632,12 @@ export function createClawdbotCodingTools(options?: {
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
-  const agentConfig =
-    options?.sessionKey && options?.config
-      ? resolveAgentConfig(
-          options.config,
-          resolveAgentIdFromSessionKey(options.sessionKey),
-        )
-      : undefined;
-  const hasAgentTools = agentConfig?.tools !== undefined;
-  const globalTools = options?.config?.agent?.tools;
-  const effectiveToolsPolicy = hasAgentTools ? agentConfig?.tools : globalTools;
+  const { agentId, policy: effectiveToolsPolicy } = resolveEffectiveToolPolicy({
+    config: options?.config,
+    sessionKey: options?.sessionKey,
+  });
+  const scopeKey =
+    options?.bash?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(options.config)
@@ -649,6 +664,7 @@ export function createClawdbotCodingTools(options?: {
   const bashTool = createBashTool({
     ...options?.bash,
     allowBackground,
+    scopeKey,
     sandbox: sandbox
       ? {
           containerName: sandbox.containerName,
@@ -660,6 +676,7 @@ export function createClawdbotCodingTools(options?: {
   });
   const processTool = createProcessTool({
     cleanupMs: options?.bash?.cleanupMs,
+    scopeKey,
   });
   const tools: AnyAgentTool[] = [
     ...base,

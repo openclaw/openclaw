@@ -53,6 +53,7 @@ Core actions:
 Notes:
 - `poll` returns new output and exit status when complete.
 - `log` supports line-based `offset`/`limit` (omit `offset` to grab the last N lines).
+- `process` is scoped per agent; sessions from other agents are not visible.
 
 ### `browser`
 Control the dedicated clawd browser.
