@@ -102,6 +102,7 @@ Control soft block chunking with `agent.blockStreamingChunk` (defaults to
 800–1200 chars; prefers paragraph breaks, then newlines; sentences last).
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
+More details: [Streaming + chunking](/concepts/streaming).
 
 ## Configuration (minimal)
 
