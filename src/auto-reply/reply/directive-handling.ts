@@ -309,6 +309,7 @@ export async function handleDirectiveOnly(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
+  currentThinkLevel?: ThinkLevel;
 }): Promise<ReplyPayload | undefined> {
   const {
     directives,
@@ -326,6 +327,7 @@ export async function handleDirectiveOnly(params: {
     resetModelOverride,
     initialModelLabel,
     formatModelSwitchEvent,
+    currentThinkLevel,
   } = params;
 
   if (directives.hasModelDirective) {
@@ -379,8 +381,13 @@ export async function handleDirectiveOnly(params: {
   }
 
   if (directives.hasThinkDirective && !directives.thinkLevel) {
+    // If no argument was provided, show the current level
+    if (!directives.rawThinkLevel) {
+      const level = currentThinkLevel ?? "off";
+      return { text: `Current thinking level: ${level}.` };
+    }
     return {
-      text: `Unrecognized thinking level "${directives.rawThinkLevel ?? ""}". Valid levels: off, minimal, low, medium, high.`,
+      text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: off, minimal, low, medium, high.`,
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {

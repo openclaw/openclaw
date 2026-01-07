@@ -16,9 +16,9 @@ export function extractThinkDirective(body?: string): {
   hasDirective: boolean;
 } {
   if (!body) return { cleaned: "", hasDirective: false };
-  // Match the longest keyword first to avoid partial captures (e.g. "/think:high")
+  // Match with optional argument - require word boundary via lookahead after keyword
   const match = body.match(
-    /(?:^|\s)\/(?:thinking|think|t)\s*:?\s*([a-zA-Z-]+)\b/i,
+    /(?:^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:?\s*([a-zA-Z-]+)\b)?/i,
   );
   const thinkLevel = normalizeThinkLevel(match?.[1]);
   const cleaned = match
