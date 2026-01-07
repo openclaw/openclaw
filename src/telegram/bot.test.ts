@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot } from "./bot.js";
@@ -669,6 +672,57 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
+  });
+
+  it("honors routed group activation from session store", async () => {
+    onSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+    const storeDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-telegram-"),
+    );
+    const storePath = path.join(storeDir, "sessions.json");
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:ops:telegram:group:123": { groupActivation: "always" },
+      }),
+      "utf-8",
+    );
+    loadConfig.mockReturnValue({
+      telegram: { groups: { "*": { requireMention: true } } },
+      routing: {
+        bindings: [
+          {
+            agentId: "ops",
+            match: {
+              provider: "telegram",
+              peer: { kind: "group", id: "123" },
+            },
+          },
+        ],
+      },
+      session: { store: storePath },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = onSpy.mock.calls[0][1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 123, type: "group", title: "Routing" },
+        text: "hello",
+        date: 1736380800,
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
   it("allows per-group requireMention override", async () => {
