@@ -23,6 +23,7 @@
 - Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.
 - Docs: add missing `ui:install` setup step in the README. Thanks @hugobarauna for PR #300.
+- Docs: sanitize AGENTS guidance and add Clawdis migration troubleshooting note. Thanks @buddyh for PR #348.
 - Docs: add ClawdHub guide and hubs link for browsing, install, and sync workflows.
 - Docs: add FAQ for PNPM/Bun lockfile migration warning; link AgentSkills spec + ClawdHub guide (`/clawdhub`) from skills docs.
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
