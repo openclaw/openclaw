@@ -154,12 +154,73 @@ function mergePropertySchemas(existing: unknown, incoming: unknown): unknown {
   return existing;
 }
 
+// Check if an anyOf array contains only literal values that can be flattened
+// TypeBox Type.Literal generates { const: "value", type: "string" }
+// Some schemas may use { enum: ["value"], type: "string" }
+// Both patterns are flattened to { type: "string", enum: ["a", "b", ...] }
+function tryFlattenLiteralAnyOf(
+  anyOf: unknown[],
+): { type: string; enum: unknown[] } | null {
+  if (anyOf.length === 0) return null;
+
+  const allValues: unknown[] = [];
+  let commonType: string | null = null;
+
+  for (const variant of anyOf) {
+    if (!variant || typeof variant !== "object") return null;
+    const v = variant as Record<string, unknown>;
+
+    // Extract the literal value - either from const or single-element enum
+    let literalValue: unknown;
+    if ("const" in v) {
+      literalValue = v.const;
+    } else if (Array.isArray(v.enum) && v.enum.length === 1) {
+      literalValue = v.enum[0];
+    } else {
+      return null; // Not a literal pattern
+    }
+
+    // Must have consistent type (usually "string")
+    const variantType = typeof v.type === "string" ? v.type : null;
+    if (!variantType) return null;
+    if (commonType === null) commonType = variantType;
+    else if (commonType !== variantType) return null;
+
+    allValues.push(literalValue);
+  }
+
+  if (commonType && allValues.length > 0) {
+    return { type: commonType, enum: allValues };
+  }
+  return null;
+}
+
 function cleanSchemaForGemini(schema: unknown): unknown {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
 
   const obj = schema as Record<string, unknown>;
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
+
+  // Try to flatten anyOf of literals to a single enum BEFORE processing
+  // This handles Type.Union([Type.Literal("a"), Type.Literal("b")]) patterns
+  if (hasAnyOf) {
+    const flattened = tryFlattenLiteralAnyOf(obj.anyOf as unknown[]);
+    if (flattened) {
+      // Return flattened enum, preserving metadata (description, title, default, examples)
+      const result: Record<string, unknown> = {
+        type: flattened.type,
+        enum: flattened.enum,
+      };
+      for (const key of ["description", "title", "default", "examples"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
+      return result;
+    }
+  }
+
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
@@ -409,8 +470,13 @@ function createWhatsAppLoginTool(): AnyAgentTool {
     name: "whatsapp_login",
     description:
       "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
+    // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)])
+    // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("start"), Type.Literal("wait")]),
+      action: Type.Unsafe<"start" | "wait">({
+        type: "string",
+        enum: ["start", "wait"],
+      }),
       timeoutMs: Type.Optional(Type.Number()),
       force: Type.Optional(Type.Boolean()),
     }),
