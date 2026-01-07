@@ -94,7 +94,12 @@ function parseSearchOutput(raw: string): DocResult[] {
     const content = extractLine(lines, "Content:");
     const contentIndex = lines.findIndex((line) => line.startsWith("Content:"));
     const body =
-      contentIndex >= 0 ? lines.slice(contentIndex + 1).join("\n").trim() : "";
+      contentIndex >= 0
+        ? lines
+            .slice(contentIndex + 1)
+            .join("\n")
+            .trim()
+        : "";
     const snippet = normalizeSnippet(content, firstParagraph(body));
     results.push({ title, link, snippet: snippet || undefined });
   }
@@ -102,7 +107,7 @@ function parseSearchOutput(raw: string): DocResult[] {
 }
 
 function escapeMarkdown(text: string): string {
-  return text.replace(/[\[\]()]/g, "\\$&");
+  return text.replace(/[()[\]]/g, "\\$&");
 }
 
 function buildMarkdown(query: string, results: DocResult[]): string {
