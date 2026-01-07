@@ -162,7 +162,9 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
     const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe("_Reasoning:_\n_Because it helps_\n\nFinal answer");
+    expect(payload.text).toBe(
+      "_Reasoning:_\n_Because it helps_\n\nFinal answer",
+    );
   });
 
   it("emits block replies on text_end and does not duplicate on message_end", () => {

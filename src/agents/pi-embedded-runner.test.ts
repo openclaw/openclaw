@@ -1,6 +1,10 @@
+import type { AgentTool } from "@mariozechner/pi-agent-core";
+import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-
-import { buildEmbeddedSandboxInfo } from "./pi-embedded-runner.js";
+import {
+  buildEmbeddedSandboxInfo,
+  splitSdkTools,
+} from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
 
 describe("buildEmbeddedSandboxInfo", () => {
@@ -43,5 +47,54 @@ describe("buildEmbeddedSandboxInfo", () => {
       browserControlUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
     });
+  });
+});
+
+function createStubTool(name: string): AgentTool {
+  return {
+    name,
+    label: name,
+    description: "",
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [], details: {} }),
+  };
+}
+
+describe("splitSdkTools", () => {
+  const tools = [
+    createStubTool("read"),
+    createStubTool("bash"),
+    createStubTool("edit"),
+    createStubTool("write"),
+    createStubTool("browser"),
+  ];
+
+  it("routes built-ins to custom tools when sandboxed", () => {
+    const { builtInTools, customTools } = splitSdkTools({
+      tools,
+      sandboxEnabled: true,
+    });
+    expect(builtInTools).toEqual([]);
+    expect(customTools.map((tool) => tool.name)).toEqual([
+      "read",
+      "bash",
+      "edit",
+      "write",
+      "browser",
+    ]);
+  });
+
+  it("keeps built-ins as SDK tools when not sandboxed", () => {
+    const { builtInTools, customTools } = splitSdkTools({
+      tools,
+      sandboxEnabled: false,
+    });
+    expect(builtInTools.map((tool) => tool.name)).toEqual([
+      "read",
+      "bash",
+      "edit",
+      "write",
+    ]);
+    expect(customTools.map((tool) => tool.name)).toEqual(["browser"]);
   });
 });
