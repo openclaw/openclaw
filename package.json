@@ -83,7 +83,7 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
-    "@buape/carbon": "^0.13.0",
+    "@buape/carbon": "0.0.0-beta-20260107085330",
     "@clack/prompts": "^0.11.0",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
