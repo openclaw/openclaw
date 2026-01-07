@@ -58,6 +58,18 @@ enum GatewayLaunchAgentManager {
                 self.logger.error("launchd enable failed: gateway missing at \(gatewayBin)")
                 return "Embedded gateway missing in bundle; rebuild via scripts/package-mac-app.sh"
             }
+
+            // Check if service is already running - if so, skip bootout to avoid killing it
+            let alreadyRunning = await self.status()
+            if alreadyRunning {
+                self.logger.info("launchd service already running, skipping bootout")
+                // Still update plist in case config changed, but don't restart
+                self.writePlist(bundlePath: bundlePath, port: port)
+                // Ensure service is marked as enabled for auto-start on login
+                _ = await self.runLaunchctl(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+                return nil
+            }
+
             self.logger.info("launchd enable requested port=\(port)")
             self.writePlist(bundlePath: bundlePath, port: port)
             _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
@@ -69,6 +81,8 @@ enum GatewayLaunchAgentManager {
                     ? "Failed to bootstrap gateway launchd job"
                     : bootstrap.output.trimmingCharacters(in: .whitespacesAndNewlines)
             }
+            // Ensure service is marked as enabled for auto-start on login
+            _ = await self.runLaunchctl(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
             // Note: removed redundant `kickstart -k` that caused race condition.
             // bootstrap already starts the job; kickstart -k would kill it immediately
             // and with KeepAlive=true, cause a restart loop with port conflicts.
