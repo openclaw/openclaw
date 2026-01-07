@@ -513,6 +513,40 @@ export const ClawdbotSchema = z.object({
       skipBootstrap: z.boolean().optional(),
       userTimezone: z.string().optional(),
       contextTokens: z.number().int().positive().optional(),
+      contextPruning: z
+        .object({
+          mode: z
+            .union([
+              z.literal("off"),
+              z.literal("adaptive"),
+              z.literal("aggressive"),
+            ])
+            .optional(),
+          keepLastAssistants: z.number().int().nonnegative().optional(),
+          softTrimRatio: z.number().min(0).max(1).optional(),
+          hardClearRatio: z.number().min(0).max(1).optional(),
+          minPrunableToolChars: z.number().int().nonnegative().optional(),
+          tools: z
+            .object({
+              allow: z.array(z.string()).optional(),
+              deny: z.array(z.string()).optional(),
+            })
+            .optional(),
+          softTrim: z
+            .object({
+              maxChars: z.number().int().nonnegative().optional(),
+              headChars: z.number().int().nonnegative().optional(),
+              tailChars: z.number().int().nonnegative().optional(),
+            })
+            .optional(),
+          hardClear: z
+            .object({
+              enabled: z.boolean().optional(),
+              placeholder: z.string().optional(),
+            })
+            .optional(),
+        })
+        .optional(),
       tools: z
         .object({
           allow: z.array(z.string()).optional(),
