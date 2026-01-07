@@ -156,6 +156,10 @@ export function createBashTool(
         throw new Error("Provide a command to start.");
       }
 
+      const maxOutput = DEFAULT_MAX_OUTPUT;
+      const startedAt = Date.now();
+      const sessionId = randomUUID();
+      const warnings: string[] = [];
       const backgroundRequested = params.background === true;
       const yieldRequested = typeof params.yieldMs === "number";
       if (!allowBackground && (backgroundRequested || yieldRequested)) {
@@ -173,10 +177,6 @@ export function createBashTool(
               120_000,
             )
         : null;
-      const maxOutput = DEFAULT_MAX_OUTPUT;
-      const startedAt = Date.now();
-      const sessionId = randomUUID();
-      const warnings: string[] = [];
       const elevatedDefaults = defaults?.elevated;
       const elevatedDefaultOn =
         elevatedDefaults?.defaultLevel === "on" &&
