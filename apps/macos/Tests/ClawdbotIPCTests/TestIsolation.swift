@@ -26,7 +26,7 @@ actor TestIsolationLock {
         next.resume()
     }
 
-    func withLock<T>(_ body: () async throws -> T) async rethrows -> T {
+    func withLock<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
         await self.lock()
         defer { self.unlock() }
         return try await body()
@@ -34,10 +34,10 @@ actor TestIsolationLock {
 }
 
 enum TestIsolation {
-    static func withIsolatedState<T>(
+    static func withIsolatedState<T: Sendable>(
         env: [String: String?] = [:],
         defaults: [String: Any?] = [:],
-        _ body: () async throws -> T) async rethrows -> T
+        _ body: @Sendable () async throws -> T) async rethrows -> T
     {
         try await TestIsolationLock.shared.withLock {
             var previousEnv: [String: String?] = [:]
@@ -82,16 +82,16 @@ enum TestIsolation {
         }
     }
 
-    static func withEnvValues<T>(
+    static func withEnvValues<T: Sendable>(
         _ values: [String: String?],
-        _ body: () async throws -> T) async rethrows -> T
+        _ body: @Sendable () async throws -> T) async rethrows -> T
     {
         try await Self.withIsolatedState(env: values, defaults: [:], body)
     }
 
-    static func withUserDefaultsValues<T>(
+    static func withUserDefaultsValues<T: Sendable>(
         _ values: [String: Any?],
-        _ body: () async throws -> T) async rethrows -> T
+        _ body: @Sendable () async throws -> T) async rethrows -> T
     {
         try await Self.withIsolatedState(env: [:], defaults: values, body)
     }
