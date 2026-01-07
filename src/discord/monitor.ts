@@ -15,7 +15,7 @@ import {
   type PartialUser,
   type User,
 } from "discord.js";
-import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
+import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -46,6 +46,7 @@ import {
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { chunkDiscordText } from "./chunk.js";
 import { sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
 
@@ -646,6 +647,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
             runtime,
             replyToMode,
             textLimit,
+            maxLinesPerMessage: cfg.discord?.maxLinesPerMessage,
           });
           didSendReply = true;
         },
@@ -1287,6 +1289,7 @@ async function deliverReplies({
   runtime,
   replyToMode,
   textLimit,
+  maxLinesPerMessage,
 }: {
   replies: ReplyPayload[];
   target: string;
@@ -1294,6 +1297,7 @@ async function deliverReplies({
   runtime: RuntimeEnv;
   replyToMode: ReplyToMode;
   textLimit: number;
+  maxLinesPerMessage?: number;
 }) {
   let hasReplied = false;
   const chunkLimit = Math.min(textLimit, 2000);
@@ -1304,7 +1308,10 @@ async function deliverReplies({
     const replyToId = payload.replyToId;
     if (!text && mediaList.length === 0) continue;
     if (mediaList.length === 0) {
-      for (const chunk of chunkText(text, chunkLimit)) {
+      for (const chunk of chunkDiscordText(text, {
+        maxChars: chunkLimit,
+        maxLines: maxLinesPerMessage,
+      })) {
         const replyTo = resolveDiscordReplyTarget({
           replyToMode,
           replyToId,
