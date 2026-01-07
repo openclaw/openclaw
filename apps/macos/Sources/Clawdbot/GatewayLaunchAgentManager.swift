@@ -43,15 +43,15 @@ enum GatewayLaunchAgentManager {
         return [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
     }
 
-    static func status() async -> Bool {
+    static func isLoaded() async -> Bool {
         guard FileManager.default.fileExists(atPath: self.plistURL.path) else { return false }
-        let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        let result = await Launchctl.run(["print", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
         return result.status == 0
     }
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
         if enabled {
-            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(self.legacyGatewayLaunchdLabel)"])
+            _ = await Launchctl.run(["bootout", "gui/\(getuid())/\(self.legacyGatewayLaunchdLabel)"])
             try? FileManager.default.removeItem(at: self.legacyPlistURL)
             let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
             guard FileManager.default.isExecutableFile(atPath: gatewayBin) else {
@@ -60,23 +60,31 @@ enum GatewayLaunchAgentManager {
             }
 
             let desiredBind = self.preferredGatewayBind() ?? "loopback"
-            self.logger.info("launchd enable requested port=\(port) bind=\(desiredBind)")
-            self.writePlist(bundlePath: bundlePath, port: port)
+            let desiredToken = self.preferredGatewayToken()
+            let desiredPassword = self.preferredGatewayPassword()
+            let desiredConfig = DesiredConfig(port: port, bind: desiredBind, token: desiredToken, password: desiredPassword)
 
             // If launchd already loaded the job (common on login), avoid `bootout` unless we must
             // change the config. `bootout` can kill a just-started gateway and cause attach loops.
-            if let snapshot = await self.gatewayJobSnapshot(),
-               snapshot.matches(port: port, bind: desiredBind)
+            let loaded = await self.isLoaded()
+            if loaded,
+               let existing = self.readPlistConfig(),
+               existing.matches(desiredConfig)
             {
                 self.logger.info("launchd job already loaded with desired config; skipping bootout")
                 await self.ensureEnabled()
-                _ = await self.runLaunchctl(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+                _ = await Launchctl.run(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
                 return nil
             }
 
+            self.logger.info("launchd enable requested port=\(port) bind=\(desiredBind)")
+            self.writePlist(bundlePath: bundlePath, port: port)
+
             await self.ensureEnabled()
-            _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
-            let bootstrap = await self.runLaunchctl(["bootstrap", "gui/\(getuid())", self.plistURL.path])
+            if loaded {
+                _ = await Launchctl.run(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+            }
+            let bootstrap = await Launchctl.run(["bootstrap", "gui/\(getuid())", self.plistURL.path])
             if bootstrap.status != 0 {
                 let msg = bootstrap.output.trimmingCharacters(in: .whitespacesAndNewlines)
                 self.logger.error("launchd bootstrap failed: \(msg)")
@@ -89,13 +97,14 @@ enum GatewayLaunchAgentManager {
         }
 
         self.logger.info("launchd disable requested")
-        _ = await self.runLaunchctl(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        _ = await Launchctl.run(["bootout", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        await self.ensureDisabled()
         try? FileManager.default.removeItem(at: self.plistURL)
         return nil
     }
 
     static func kickstart() async {
-        _ = await self.runLaunchctl(["kickstart", "-k", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        _ = await Launchctl.run(["kickstart", "-k", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
     }
 
     private static func writePlist(bundlePath: String, port: Int) {
@@ -221,40 +230,39 @@ enum GatewayLaunchAgentManager {
             .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    private struct LaunchctlResult {
-        let status: Int32
-        let output: String
+    private struct DesiredConfig: Equatable {
+        let port: Int
+        let bind: String
+        let token: String?
+        let password: String?
     }
 
-    struct LaunchdJobSnapshot: Equatable {
-        let pid: Int?
+    private struct InstalledConfig: Equatable {
         let port: Int?
         let bind: String?
+        let token: String?
+        let password: String?
 
-        func matches(port: Int, bind: String) -> Bool {
-            guard self.port == port else { return false }
-            if let bindValue = self.bind {
-                return bindValue == bind
-            }
+        func matches(_ desired: DesiredConfig) -> Bool {
+            guard self.port == desired.port else { return false }
+            guard (self.bind ?? "loopback") == desired.bind else { return false }
+            guard self.token == desired.token else { return false }
+            guard self.password == desired.password else { return false }
             return true
         }
     }
 
-    static func parseLaunchctlPrintSnapshot(_ output: String) -> LaunchdJobSnapshot {
-        let pid = self.extractIntValue(output: output, key: "pid")
-        let port = self.extractFlagIntValue(output: output, flag: "--port")
-        let bind = self.extractFlagStringValue(output: output, flag: "--bind")?.lowercased()
-        return LaunchdJobSnapshot(pid: pid, port: port, bind: bind)
-    }
-
-    private static func gatewayJobSnapshot() async -> LaunchdJobSnapshot? {
-        let result = await self.runLaunchctl(["print", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
-        guard result.status == 0 else { return nil }
-        return self.parseLaunchctlPrintSnapshot(result.output)
+    private static func readPlistConfig() -> InstalledConfig? {
+        guard let snapshot = LaunchAgentPlist.snapshot(url: self.plistURL) else { return nil }
+        return InstalledConfig(
+            port: snapshot.port,
+            bind: snapshot.bind,
+            token: snapshot.token,
+            password: snapshot.password)
     }
 
     private static func ensureEnabled() async {
-        let result = await self.runLaunchctl(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        let result = await Launchctl.run(["enable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
         guard result.status != 0 else { return }
         let msg = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
         if msg.isEmpty {
@@ -264,65 +272,15 @@ enum GatewayLaunchAgentManager {
         }
     }
 
-    private static func extractIntValue(output: String, key: String) -> Int? {
-        // launchctl print commonly emits `pid = 123`
-        guard let range = output.range(of: "\(key) =") else { return nil }
-        var idx = range.upperBound
-        while idx < output.endIndex, output[idx].isWhitespace { idx = output.index(after: idx) }
-        var end = idx
-        while end < output.endIndex, output[end].isNumber { end = output.index(after: end) }
-        guard end > idx else { return nil }
-        return Int(output[idx..<end])
-    }
-
-    private static func extractFlagIntValue(output: String, flag: String) -> Int? {
-        guard let raw = self.extractFlagStringValue(output: output, flag: flag) else { return nil }
-        return Int(raw)
-    }
-
-    private static func extractFlagStringValue(output: String, flag: String) -> String? {
-        guard let range = output.range(of: flag) else { return nil }
-        var idx = range.upperBound
-        while idx < output.endIndex {
-            let ch = output[idx]
-            if ch.isWhitespace || ch == "," || ch == "(" || ch == ")" || ch == "=" || ch == "\"" || ch == "'" {
-                idx = output.index(after: idx)
-                continue
-            }
-            break
+    private static func ensureDisabled() async {
+        let result = await Launchctl.run(["disable", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+        guard result.status != 0 else { return }
+        let msg = result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if msg.isEmpty {
+            self.logger.warning("launchd disable failed")
+        } else {
+            self.logger.warning("launchd disable failed: \(msg)")
         }
-        guard idx < output.endIndex else { return nil }
-        var end = idx
-        while end < output.endIndex {
-            let ch = output[end]
-            if ch.isWhitespace || ch == "," || ch == "(" || ch == ")" || ch == "\"" || ch == "'" || ch == "\n" || ch == "\r" {
-                break
-            }
-            end = output.index(after: end)
-        }
-        let token = output[idx..<end].trimmingCharacters(in: .whitespacesAndNewlines)
-        return token.isEmpty ? nil : String(token)
-    }
-
-    @discardableResult
-    private static func runLaunchctl(_ args: [String]) async -> LaunchctlResult {
-        await Task.detached(priority: .utility) { () -> LaunchctlResult in
-            let process = Process()
-            process.launchPath = "/bin/launchctl"
-            process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-            do {
-                try process.run()
-                process.waitUntilExit()
-                let data = pipe.fileHandleForReading.readToEndSafely()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                return LaunchctlResult(status: process.terminationStatus, output: output)
-            } catch {
-                return LaunchctlResult(status: -1, output: error.localizedDescription)
-            }
-        }.value
     }
 }
 
