@@ -1,6 +1,11 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let originalIsTTY: boolean | undefined;
+let originalStateDir: string | undefined;
+let tempStateDir: string | undefined;
 
 function setStdinTty(value: boolean | undefined) {
   try {
@@ -16,14 +21,33 @@ function setStdinTty(value: boolean | undefined) {
 beforeEach(() => {
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
+  originalStateDir = process.env.CLAWDBOT_STATE_DIR;
+  tempStateDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), "clawdbot-doctor-state-"),
+  );
+  process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+  fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
+    recursive: true,
+  });
+  fs.mkdirSync(path.join(tempStateDir, "credentials"), { recursive: true });
 });
 
 afterEach(() => {
   setStdinTty(originalIsTTY);
+  if (originalStateDir === undefined) {
+    delete process.env.CLAWDBOT_STATE_DIR;
+  } else {
+    process.env.CLAWDBOT_STATE_DIR = originalStateDir;
+  }
+  if (tempStateDir) {
+    fs.rmSync(tempStateDir, { recursive: true, force: true });
+    tempStateDir = undefined;
+  }
 });
 
 const readConfigFileSnapshot = vi.fn();
 const confirm = vi.fn().mockResolvedValue(true);
+const note = vi.fn();
 const select = vi.fn().mockResolvedValue("node");
 const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
@@ -736,5 +760,37 @@ describe("doctor", () => {
       .profiles;
     expect(profiles["anthropic:me@example.com"]).toBeTruthy();
     expect(profiles["anthropic:default"]).toBeUndefined();
+  });
+
+  it("warns when the state directory is missing", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {},
+      issues: [],
+      legacyIssues: [],
+    });
+
+    const missingDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-missing-state-"),
+    );
+    fs.rmSync(missingDir, { recursive: true, force: true });
+    process.env.CLAWDBOT_STATE_DIR = missingDir;
+    note.mockClear();
+
+    const { doctorCommand } = await import("./doctor.js");
+    await doctorCommand(
+      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      { nonInteractive: true, workspaceSuggestions: false },
+    );
+
+    const stateNote = note.mock.calls.find(
+      (call) => call[1] === "State integrity",
+    );
+    expect(stateNote).toBeTruthy();
+    expect(String(stateNote?.[0])).toContain("CRITICAL");
   });
 });
