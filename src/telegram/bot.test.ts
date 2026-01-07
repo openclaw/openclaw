@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
-import { createTelegramBot } from "./bot.js";
+import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
@@ -133,19 +133,17 @@ describe("createTelegramBot", () => {
     expect(middlewareUseSpy).toHaveBeenCalledWith(
       sequentializeSpy.mock.results[0]?.value,
     );
-    expect(sequentializeKey).toBeDefined();
+    expect(sequentializeKey).toBe(getTelegramSequentialKey);
+    expect(getTelegramSequentialKey({ message: { chat: { id: 123 } } })).toBe(
+      "telegram:123",
+    );
     expect(
-      sequentializeKey?.({
-        message: { chat: { id: 123 } },
-      }),
-    ).toBe("telegram:123");
-    expect(
-      sequentializeKey?.({
+      getTelegramSequentialKey({
         message: { chat: { id: 123 }, message_thread_id: 9 },
       }),
     ).toBe("telegram:123:topic:9");
     expect(
-      sequentializeKey?.({
+      getTelegramSequentialKey({
         update: { message: { chat: { id: 555 } } },
       }),
     ).toBe("telegram:555");

@@ -1,4 +1,5 @@
-import { run } from "@grammyjs/runner";
+import { type RunOptions, run } from "@grammyjs/runner";
+import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { createTelegramBot } from "./bot.js";
@@ -17,6 +18,22 @@ export type MonitorTelegramOpts = {
   proxyFetch?: typeof fetch;
   webhookUrl?: string;
 };
+
+export function createTelegramRunnerOptions(
+  cfg: ClawdbotConfig,
+): RunOptions<unknown> {
+  return {
+    sink: {
+      concurrency: cfg.agent?.maxConcurrent ?? 1,
+    },
+    runner: {
+      fetch: {
+        // Match grammY defaults
+        timeout: 30,
+      },
+    },
+  };
+}
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const cfg = loadConfig();
@@ -39,6 +56,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     token,
     runtime: opts.runtime,
     proxyFetch,
+    config: cfg,
   });
 
   if (opts.useWebhook) {
@@ -56,17 +74,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   }
 
   // Use grammyjs/runner for concurrent update processing
-  const runner = run(bot, {
-    sink: {
-      concurrency: cfg.agent?.maxConcurrent ?? 1,
-    },
-    runner: {
-      fetch: {
-        // Match grammY defaults
-        timeout: 30,
-      },
-    },
-  });
+  const runner = run(bot, createTelegramRunnerOptions(cfg));
 
   const stopOnAbort = () => {
     if (opts.abortSignal?.aborted) {
