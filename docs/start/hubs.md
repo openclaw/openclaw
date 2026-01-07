@@ -36,6 +36,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Agent loop](https://docs.clawd.bot/concepts/agent-loop)
 - [Streaming + chunking](/concepts/streaming)
 - [Multi-agent routing](https://docs.clawd.bot/concepts/multi-agent)
+- [Compaction](https://docs.clawd.bot/concepts/compaction)
 - [Sessions](https://docs.clawd.bot/concepts/session)
 - [Sessions (alias)](https://docs.clawd.bot/concepts/sessions)
 - [Session pruning](https://docs.clawd.bot/concepts/session-pruning)

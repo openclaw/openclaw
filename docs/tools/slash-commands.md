@@ -46,7 +46,7 @@ Text + native (when enabled):
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`)
 
 Text-only:
-- `/compact [instructions]`
+- `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
 
 ## Surface notes
 

@@ -337,7 +337,7 @@ See [Groups](/concepts/groups) for details.
 
 ### How much context can Clawdbot handle?
 
-Context window depends on the model. Clawdbot uses **autocompaction** — older conversation gets summarized to stay under the limit.
+Context window depends on the model. Clawdbot uses **autocompaction** — older conversation gets summarized to stay under the limit. See [/concepts/compaction](/concepts/compaction).
 
 Practical tips:
 - Keep `AGENTS.md` focused, not bloated.
