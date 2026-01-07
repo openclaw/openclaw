@@ -18,6 +18,7 @@
 - Auto-reply: removed `autoReply` from Discord/Slack/Telegram channel configs; use `requireMention` instead (Telegram topics now support `requireMention` overrides).
 
 ### Fixes
+- Signal: reconnect SSE monitor with abortable backoff; log stream errors. Thanks @nexty5870 for PR #430.
 - Discord/Telegram: add per-request retry policy with configurable delays and docs.
 - Telegram: run long polling via grammY runner with per-chat sequentialization and concurrency tied to `agent.maxConcurrent`. Thanks @mukhtharcm for PR #366.
 - macOS: prevent gateway launchd startup race where the app could kill a just-started gateway; avoid unnecessary `bootout` and ensure the job is enabled at login. Fixes #306. Thanks @gupsammy for PR #387.
