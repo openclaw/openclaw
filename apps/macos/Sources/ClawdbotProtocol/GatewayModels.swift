@@ -691,6 +691,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
+    public let reasoninglevel: AnyCodable?
     public let elevatedlevel: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
@@ -701,6 +702,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         key: String,
         thinkinglevel: AnyCodable?,
         verboselevel: AnyCodable?,
+        reasoninglevel: AnyCodable?,
         elevatedlevel: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
@@ -710,6 +712,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.key = key
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
+        self.reasoninglevel = reasoninglevel
         self.elevatedlevel = elevatedlevel
         self.model = model
         self.spawnedby = spawnedby
@@ -720,6 +723,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case key
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
+        case reasoninglevel = "reasoningLevel"
         case elevatedlevel = "elevatedLevel"
         case model
         case spawnedby = "spawnedBy"
