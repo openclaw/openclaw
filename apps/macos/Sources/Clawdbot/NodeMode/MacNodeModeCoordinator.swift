@@ -202,6 +202,19 @@ final class MacNodeModeCoordinator {
         return 18790
     }
 
+    static func remoteBridgePort() -> Int {
+        let fallback = Int(Self.loopbackBridgePort() ?? 18790)
+        let base = ClawdbotConfigFile.remoteGatewayPort() ?? GatewayEnvironment.gatewayPort()
+        guard base > 0 else { return fallback }
+        return Self.derivePort(base: base, offset: 1, fallback: fallback)
+    }
+
+    private static func derivePort(base: Int, offset: Int, fallback: Int) -> Int {
+        let derived = base + offset
+        guard derived > 0, derived <= Int(UInt16.max) else { return fallback }
+        return derived
+    }
+
     static func probeEndpoint(_ endpoint: NWEndpoint, timeoutSeconds: Double) async -> Bool {
         let connection = NWConnection(to: endpoint, using: .tcp)
         let stream = Self.makeStateStream(for: connection)
@@ -269,7 +282,10 @@ final class MacNodeModeCoordinator {
         if mode == .remote {
             do {
                 if self.tunnel == nil || self.tunnel?.process.isRunning == false {
-                    self.tunnel = try await RemotePortTunnel.create(remotePort: 18790)
+                    let remotePort = Self.remoteBridgePort()
+                    self.tunnel = try await RemotePortTunnel.create(
+                        remotePort: remotePort,
+                        allowRemoteUrlOverride: false)
                 }
                 if let localPort = self.tunnel?.localPort,
                    let port = NWEndpoint.Port(rawValue: localPort)

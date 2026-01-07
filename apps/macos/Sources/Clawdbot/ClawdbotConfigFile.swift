@@ -123,6 +123,35 @@ enum ClawdbotConfigFile {
         return nil
     }
 
+    static func remoteGatewayPort() -> Int? {
+        let root = self.loadDict()
+        guard let gateway = root["gateway"] as? [String: Any],
+              let remote = gateway["remote"] as? [String: Any],
+              let raw = remote["url"] as? String
+        else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed), let port = url.port, port > 0 else {
+            return nil
+        }
+        return port
+    }
+
+    static func setRemoteGatewayUrl(host: String, port: Int?) {
+        guard let port, port > 0 else { return }
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty else { return }
+        self.updateGatewayDict { gateway in
+            var remote = gateway["remote"] as? [String: Any] ?? [:]
+            let existingUrl = (remote["url"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let scheme = URL(string: existingUrl)?.scheme ?? "ws"
+            remote["url"] = "\(scheme)://\(trimmedHost):\(port)"
+            gateway["remote"] = remote
+        }
+    }
+
     private static func parseConfigData(_ data: Data) -> [String: Any]? {
         if let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             return root
