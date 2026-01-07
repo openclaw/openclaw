@@ -312,7 +312,12 @@ export async function getReplyFromConfig(
     rawDrop: undefined,
     hasQueueOptions: false,
   });
-  let parsedDirectives = parseInlineDirectives(rawBody);
+  const configuredAliases = Object.values(cfg.agent?.models ?? {})
+    .map((entry) => entry.alias)
+    .filter((alias): alias is string => Boolean(alias));
+  let parsedDirectives = parseInlineDirectives(rawBody, {
+    modelAliases: configuredAliases,
+  });
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
