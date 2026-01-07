@@ -295,8 +295,9 @@ export async function runOnboardingWizard(
       spin.stop("OAuth complete");
       if (oauthCreds) {
         await writeOAuthCredentials("anthropic", oauthCreds);
+        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
         nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId: "anthropic:default",
+          profileId,
           provider: "anthropic",
           mode: "oauth",
         });

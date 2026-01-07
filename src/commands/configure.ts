@@ -299,8 +299,9 @@ async function promptAuthConfig(
       spin.stop("OAuth complete");
       if (oauthCreds) {
         await writeOAuthCredentials("anthropic", oauthCreds);
+        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
         next = applyAuthProfileConfig(next, {
-          profileId: "anthropic:default",
+          profileId,
           provider: "anthropic",
           mode: "oauth",
         });
