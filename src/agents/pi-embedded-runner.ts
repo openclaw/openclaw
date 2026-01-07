@@ -1,7 +1,11 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 
-import type { AgentMessage, ThinkingLevel } from "@mariozechner/pi-agent-core";
+import type {
+  AgentMessage,
+  AgentTool,
+  ThinkingLevel,
+} from "@mariozechner/pi-agent-core";
 import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
 import {
   buildSystemPrompt,
@@ -12,6 +16,7 @@ import {
   SettingsManager,
   type Skill,
 } from "@mariozechner/pi-coding-agent";
+import type { TSchema } from "@sinclair/typebox";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type {
   ReasoningLevel,
@@ -246,6 +251,33 @@ export function buildEmbeddedSandboxInfo(
     workspaceDir: sandbox.workspaceDir,
     browserControlUrl: sandbox.browser?.controlUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
+  };
+}
+
+const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write"]);
+
+type AnyAgentTool = AgentTool<TSchema, unknown>;
+
+export function splitSdkTools(options: {
+  tools: AnyAgentTool[];
+  sandboxEnabled: boolean;
+}): {
+  builtInTools: AnyAgentTool[];
+  customTools: ReturnType<typeof toToolDefinitions>;
+} {
+  // SDK rebuilds built-ins from cwd; route sandboxed versions as custom tools.
+  const { tools, sandboxEnabled } = options;
+  if (sandboxEnabled) {
+    return {
+      builtInTools: [],
+      customTools: toToolDefinitions(tools),
+    };
+  }
+  return {
+    builtInTools: tools.filter((tool) => BUILT_IN_TOOL_NAMES.has(tool.name)),
+    customTools: toToolDefinitions(
+      tools.filter((tool) => !BUILT_IN_TOOL_NAMES.has(tool.name)),
+    ),
   };
 }
 
@@ -528,11 +560,10 @@ export async function compactEmbeddedPiSession(params: {
           agentDir,
         );
 
-        const builtInToolNames = new Set(["read", "bash", "edit", "write"]);
-        const builtInTools = tools.filter((t) => builtInToolNames.has(t.name));
-        const customTools = toToolDefinitions(
-          tools.filter((t) => !builtInToolNames.has(t.name)),
-        );
+        const { builtInTools, customTools } = splitSdkTools({
+          tools,
+          sandboxEnabled: !!sandbox?.enabled,
+        });
 
         const { session } = await createAgentSession({
           cwd: resolvedWorkspace,
@@ -829,14 +860,10 @@ export async function runEmbeddedPiAgent(params: {
             agentDir,
           );
 
-          // Split tools into built-in (recognized by pi-coding-agent SDK) and custom (clawdbot-specific)
-          const builtInToolNames = new Set(["read", "bash", "edit", "write"]);
-          const builtInTools = tools.filter((t) =>
-            builtInToolNames.has(t.name),
-          );
-          const customTools = toToolDefinitions(
-            tools.filter((t) => !builtInToolNames.has(t.name)),
-          );
+          const { builtInTools, customTools } = splitSdkTools({
+            tools,
+            sandboxEnabled: !!sandbox?.enabled,
+          });
 
           const { session } = await createAgentSession({
             cwd: resolvedWorkspace,
