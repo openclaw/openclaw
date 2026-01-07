@@ -32,6 +32,7 @@ import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { registerCronCli } from "./cron-cli.js";
+import { registerDaemonCli } from "./daemon-cli.js";
 import { createDefaultDeps } from "./deps.js";
 import { registerDnsCli } from "./dns-cli.js";
 import { registerDocsCli } from "./docs-cli.js";
@@ -624,6 +625,7 @@ Examples:
   });
 
   registerCanvasCli(program);
+  registerDaemonCli(program);
   registerGatewayCli(program);
   registerModelsCli(program);
   registerNodesCli(program);

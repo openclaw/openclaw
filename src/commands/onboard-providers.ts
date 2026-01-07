@@ -211,7 +211,7 @@ function setWhatsAppAllowFrom(
 function setMessagesResponsePrefix(
   cfg: ClawdbotConfig,
   responsePrefix?: string,
-) {
+): ClawdbotConfig {
   return {
     ...cfg,
     messages: {
