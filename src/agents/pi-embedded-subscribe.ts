@@ -511,8 +511,8 @@ export function subscribeEmbeddedPiSession(params: {
             : "";
           const text =
             baseText && formattedReasoning
-              ? `${baseText}\n\n${formattedReasoning}`
-              : baseText || formattedReasoning;
+              ? `${formattedReasoning}\n\n${baseText}`
+              : formattedReasoning || baseText;
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;

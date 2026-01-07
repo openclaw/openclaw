@@ -1102,7 +1102,7 @@ export async function runEmbeddedPiAgent(params: {
                   ? formatReasoningMarkdown(thinking)
                   : "";
                 if (!formatted) return base;
-                return base ? `${base}\n\n${formatted}` : formatted;
+                return base ? `${formatted}\n\n${base}` : formatted;
               })()
             : "";
           for (const text of assistantTexts.length
