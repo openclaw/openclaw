@@ -1,10 +1,12 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it } from "vitest";
 
 import {
   buildBootstrapContextFiles,
   formatAssistantErrorText,
   isContextOverflowError,
+  sanitizeGoogleTurnOrdering,
 } from "./pi-embedded-helpers.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -81,5 +83,28 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+});
+
+describe("sanitizeGoogleTurnOrdering", () => {
+  it("prepends a synthetic user turn when history starts with assistant", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "bash", arguments: {} },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeGoogleTurnOrdering(input);
+    expect(out[0]?.role).toBe("user");
+    expect(out[1]?.role).toBe("assistant");
+  });
+
+  it("is a no-op when history starts with user", () => {
+    const input = [{ role: "user", content: "hi" }] satisfies AgentMessage[];
+    const out = sanitizeGoogleTurnOrdering(input);
+    expect(out).toBe(input);
   });
 });

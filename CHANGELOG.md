@@ -136,6 +136,7 @@
 - Control UI: show a reading indicator bubble while the assistant is responding.
 - Control UI: animate reading indicator dots (honors reduced-motion).
 - Control UI: stabilize chat streaming during tool runs (no flicker/vanishing text; correct run scoping).
+- Google: recover from corrupted transcripts that start with an assistant tool call to avoid Cloud Code Assist 400 ordering errors. Thanks @jonasjancarik for PR #421. (#406)
 - Control UI: let config-form enums select empty-string values. Thanks @sreekaransrinath for PR #268.
 - Control UI: scroll chat to bottom on initial load. Thanks @kiranjd for PR #274.
 - Control UI: add Chat focus mode toggle to collapse header + sidebar.
