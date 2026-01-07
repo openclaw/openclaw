@@ -38,13 +38,13 @@ export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
   consoleLevel?:
-    | "silent"
-    | "fatal"
-    | "error"
-    | "warn"
-    | "info"
-    | "debug"
-    | "trace";
+  | "silent"
+  | "fatal"
+  | "error"
+  | "warn"
+  | "info"
+  | "debug"
+  | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */
   redactSensitive?: "off" | "tools";
@@ -185,13 +185,13 @@ export type HookMappingConfig = {
   textTemplate?: string;
   deliver?: boolean;
   provider?:
-    | "last"
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage";
+  | "last"
+  | "whatsapp"
+  | "telegram"
+  | "discord"
+  | "slack"
+  | "signal"
+  | "imessage";
   to?: string;
   thinking?: string;
   timeoutSeconds?: number;
@@ -839,6 +839,15 @@ export type AgentModelListConfig = {
   fallbacks?: string[];
 };
 
+export type ObservationMaskingConfig = {
+  /** Enable experimental observation masking for tool results in LLM context. */
+  enabled?: boolean;
+  /** Keep the most recent N tool result observations unmasked (default: 1). */
+  keepLast?: number;
+  /** Placeholder text used for masked observations. */
+  placeholder?: string;
+};
+
 export type ClawdbotConfig = {
   auth?: AuthConfig;
   env?: {
@@ -884,6 +893,8 @@ export type ClawdbotConfig = {
     userTimezone?: string;
     /** Optional display-only context window override (used for % in status UIs). */
     contextTokens?: number;
+    /** Experimental: mask older tool results in LLM context to reduce token use. */
+    observationMasking?: ObservationMaskingConfig;
     /** Default thinking level when no /think directive is present. */
     thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
     /** Default verbose level when no /verbose directive is present. */
@@ -916,14 +927,14 @@ export type ClawdbotConfig = {
       model?: string;
       /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|none). */
       target?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "none";
+      | "last"
+      | "whatsapp"
+      | "telegram"
+      | "discord"
+      | "slack"
+      | "signal"
+      | "imessage"
+      | "none";
       /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
       to?: string;
       /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time."). */
