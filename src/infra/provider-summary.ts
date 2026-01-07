@@ -1,7 +1,5 @@
-import chalk from "chalk";
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveTelegramToken } from "../telegram/token.js";
-import { normalizeE164 } from "../utils.js";
 import {
   getWebAuthAgeMs,
   readWebSelfId,
@@ -16,37 +14,33 @@ export async function buildProviderSummary(
 
   const webEnabled = effective.web?.enabled !== false;
   if (!webEnabled) {
-    lines.push(chalk.cyan("WhatsApp: disabled"));
+    lines.push("WhatsApp: disabled");
   } else {
     const webLinked = await webAuthExists();
     const authAgeMs = getWebAuthAgeMs();
-    const authAge = authAgeMs === null ? "unknown" : formatAge(authAgeMs);
+    const authAge = authAgeMs === null ? "" : ` auth ${formatAge(authAgeMs)}`;
     const { e164 } = readWebSelfId();
     lines.push(
       webLinked
-        ? chalk.green(
-            `WhatsApp: linked${e164 ? ` as ${e164}` : ""} (auth ${authAge})`,
-          )
-        : chalk.red("WhatsApp: not linked"),
+        ? `WhatsApp: linked${e164 ? ` ${e164}` : ""}${authAge}`
+        : "WhatsApp: not linked",
     );
   }
 
   const telegramEnabled = effective.telegram?.enabled !== false;
   if (!telegramEnabled) {
-    lines.push(chalk.cyan("Telegram: disabled"));
+    lines.push("Telegram: disabled");
   } else {
     const { token: telegramToken } = resolveTelegramToken(effective);
     const telegramConfigured = Boolean(telegramToken?.trim());
     lines.push(
-      telegramConfigured
-        ? chalk.green("Telegram: configured")
-        : chalk.cyan("Telegram: not configured"),
+      telegramConfigured ? "Telegram: configured" : "Telegram: not configured",
     );
   }
 
   const signalEnabled = effective.signal?.enabled !== false;
   if (!signalEnabled) {
-    lines.push(chalk.cyan("Signal: disabled"));
+    lines.push("Signal: disabled");
   } else {
     const signalConfigured =
       Boolean(effective.signal) &&
@@ -59,29 +53,18 @@ export async function buildProviderSummary(
           typeof effective.signal?.autoStart === "boolean",
       );
     lines.push(
-      signalConfigured
-        ? chalk.green("Signal: configured")
-        : chalk.cyan("Signal: not configured"),
+      signalConfigured ? "Signal: configured" : "Signal: not configured",
     );
   }
 
   const imessageEnabled = effective.imessage?.enabled !== false;
   if (!imessageEnabled) {
-    lines.push(chalk.cyan("iMessage: disabled"));
+    lines.push("iMessage: disabled");
   } else {
     const imessageConfigured = Boolean(effective.imessage);
     lines.push(
-      imessageConfigured
-        ? chalk.green("iMessage: configured")
-        : chalk.cyan("iMessage: not configured"),
+      imessageConfigured ? "iMessage: configured" : "iMessage: not configured",
     );
-  }
-
-  const allowFrom = effective.whatsapp?.allowFrom?.length
-    ? effective.whatsapp.allowFrom.map(normalizeE164).filter(Boolean)
-    : [];
-  if (allowFrom.length) {
-    lines.push(chalk.cyan(`AllowFrom: ${allowFrom.join(", ")}`));
   }
 
   return lines;

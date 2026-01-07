@@ -16,6 +16,25 @@ import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export type EmbeddedContextFile = { path: string; content: string };
 
+const MAX_BOOTSTRAP_CHARS = 4000;
+const BOOTSTRAP_HEAD_CHARS = 2800;
+const BOOTSTRAP_TAIL_CHARS = 800;
+
+function trimBootstrapContent(content: string, fileName: string): string {
+  const trimmed = content.trimEnd();
+  if (trimmed.length <= MAX_BOOTSTRAP_CHARS) return trimmed;
+
+  const head = trimmed.slice(0, BOOTSTRAP_HEAD_CHARS);
+  const tail = trimmed.slice(-BOOTSTRAP_TAIL_CHARS);
+  return [
+    head,
+    "",
+    `[...truncated, read ${fileName} for full content...]`,
+    "",
+    tail,
+  ].join("\n");
+}
+
 export async function ensureSessionHeader(params: {
   sessionFile: string;
   sessionId: string;
@@ -88,12 +107,18 @@ export async function sanitizeSessionMessagesImages(
 export function buildBootstrapContextFiles(
   files: WorkspaceBootstrapFile[],
 ): EmbeddedContextFile[] {
-  return files.map((file) => ({
-    path: file.name,
-    content: file.missing
-      ? `[MISSING] Expected at: ${file.path}`
-      : (file.content ?? ""),
-  }));
+  const result: EmbeddedContextFile[] = [];
+  for (const file of files) {
+    if (file.missing) continue;
+    const content = file.content ?? "";
+    const trimmed = content.trimEnd();
+    if (!trimmed) continue;
+    result.push({
+      path: file.name,
+      content: trimBootstrapContent(trimmed, file.name),
+    });
+  }
+  return result;
 }
 
 export function formatAssistantErrorText(

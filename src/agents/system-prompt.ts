@@ -85,7 +85,6 @@ export function buildAgentSystemPromptAppend(params: {
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
   );
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
-  const disabledTools = toolOrder.filter((tool) => !availableTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
     const summary = toolSummaries[tool];
     return summary ? `- ${tool}: ${summary}` : `- ${tool}`;
@@ -160,9 +159,6 @@ export function buildAgentSystemPromptAppend(params: {
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",
         ].join("\n"),
-    disabledTools.length > 0
-      ? `Unavailable tools (do not call): ${disabledTools.join(", ")}`
-      : "",
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "",
     params.modelAliasLines && params.modelAliasLines.length > 0

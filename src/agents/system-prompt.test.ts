@@ -34,7 +34,7 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
-  it("lists available and unavailable tools when provided", () => {
+  it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPromptAppend({
       workspaceDir: "/tmp/clawd",
       toolNames: ["bash", "sessions_list", "sessions_history", "sessions_send"],
@@ -44,7 +44,6 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
-    expect(prompt).toContain("Unavailable tools (do not call):");
   });
 
   it("includes user time when provided", () => {
