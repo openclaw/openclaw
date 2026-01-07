@@ -812,6 +812,149 @@ Initial recommendation: support this type first; treat other attachment types as
 
 ---
 
+## 9) Receiving All Messages Without @Mentions (RSC Permissions)
+
+By default, Teams bots only receive messages when:
+- The bot is directly messaged (1:1 chat)
+- The bot is @mentioned in a channel or group chat
+
+To receive **all messages** in channels and group chats without requiring @mentions, you must configure **Resource-Specific Consent (RSC)** permissions in your app manifest.
+
+### 9.1 Available RSC Permissions
+
+| Permission | Scope | What it enables |
+|------------|-------|-----------------|
+| `ChannelMessage.Read.Group` | Team | Receive all channel messages in teams where app is installed |
+| `ChatMessage.Read.Chat` | Chat | Receive all messages in group chats where app is installed |
+
+**Important:** These are RSC (app-level) permissions, not Graph API permissions. They enable real-time webhook delivery, not historical message retrieval.
+
+### 9.2 Manifest Configuration
+
+Add the `webApplicationInfo` and `authorization` sections to your `manifest.json`:
+
+```json
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.16/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.16",
+  "version": "1.0.0",
+  "id": "<your-app-id-guid>",
+  "packageName": "com.clawdbot.msteams",
+  "developer": {
+    "name": "Your Name",
+    "websiteUrl": "https://clawd.bot",
+    "privacyUrl": "https://clawd.bot/privacy",
+    "termsOfUseUrl": "https://clawd.bot/terms"
+  },
+  "name": { "short": "Clawdbot", "full": "Clawdbot MS Teams" },
+  "description": { "short": "AI assistant", "full": "Clawdbot AI assistant for Teams" },
+  "icons": { "outline": "outline.png", "color": "color.png" },
+  "accentColor": "#FF4500",
+  "bots": [
+    {
+      "botId": "<your-microsoft-app-id>",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": true,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": [],
+  "webApplicationInfo": {
+    "id": "<your-microsoft-app-id>",
+    "resource": "https://RscPermission"
+  },
+  "authorization": {
+    "permissions": {
+      "resourceSpecific": [
+        {
+          "name": "ChannelMessage.Read.Group",
+          "type": "Application"
+        },
+        {
+          "name": "ChatMessage.Read.Chat",
+          "type": "Application"
+        }
+      ]
+    }
+  }
+}
+```
+
+**Key points:**
+- `webApplicationInfo.id` must match your bot's Microsoft App ID
+- `webApplicationInfo.resource` should be `https://RscPermission`
+- Both permissions are `type: "Application"` (not delegated)
+
+### 9.3 Filtering @Mention Messages (If Needed)
+
+If you want to respond differently to @mentions vs. regular messages, check the `entities` array:
+
+```typescript
+// Check if the bot was mentioned in the activity
+function wasBotMentioned(activity: TeamsActivity): boolean {
+  const botId = activity.recipient?.id;
+  if (!botId) return false;
+  const entities = activity.entities ?? [];
+  return entities.some(
+    (e) => e.type === "mention" && e.mentioned?.id === botId,
+  );
+}
+
+// Usage in message handler
+const mentioned = wasBotMentioned(activity);
+if (mentioned) {
+  // Direct response to @mention
+} else {
+  // Background listening - perhaps log or conditionally respond
+}
+```
+
+### 9.4 Updating an Existing App
+
+To add RSC permissions to an already-installed app:
+
+1. Update your `manifest.json` with the `webApplicationInfo` and `authorization` sections
+2. Increment the `version` field (e.g., `1.0.0` → `1.1.0`)
+3. Re-zip the manifest with icons
+4. **Option A (Teams Admin Center):**
+   - Go to Teams Admin Center → Teams apps → Manage apps
+   - Find your app → Upload new version
+5. **Option B (Sideload):**
+   - In Teams → Apps → Manage your apps → Upload a custom app
+   - Upload the new zip (replaces existing installation)
+6. **For team channels:** Reinstall the app in each team for permissions to take effect
+
+### 9.5 RSC vs Graph API
+
+| Capability | RSC Permissions | Graph API |
+|------------|-----------------|-----------|
+| **Real-time messages** | ✅ Via webhook | ❌ Polling only |
+| **Historical messages** | ❌ No backfill | ✅ Can query history |
+| **Setup complexity** | App manifest only | Requires admin consent + token flow |
+| **Works offline** | ❌ Must be running | ✅ Query anytime |
+
+**Bottom line:** RSC is for real-time listening; Graph API is for historical backfill. For a bot that needs to catch up on missed messages while it was offline, you would need Graph API with `ChannelMessage.Read.All` (requires admin consent).
+
+### 9.6 Troubleshooting RSC
+
+1. **Not receiving messages:** Verify `webApplicationInfo.id` matches your bot's App ID exactly
+2. **Permissions not applied:** Re-upload the app and reinstall in the team/chat
+3. **Admin blocked:** Some orgs restrict RSC permissions; check with IT admin
+4. **Wrong scope:** `ChannelMessage.Read.Group` is for teams; `ChatMessage.Read.Chat` is for group chats
+5. **"Something went wrong" on upload:** Upload via https://admin.teams.microsoft.com instead, open browser DevTools (F12), go to Network tab, and check the response body for the actual error message
+6. **Icon file cannot be empty:** The manifest references icon files that are 0 bytes; create valid PNG icons (32x32 for outline, 192x192 for color)
+7. **webApplicationInfo.Id already in use:** The app is still installed in another team/chat; find and uninstall it first, or wait for propagation delay (5-10 min)
+8. **Sideload failing:** Try "Upload an app to your org's app catalog" instead of "Upload a custom app" - this uploads to the org catalog and often bypasses sideload restrictions
+
+### 9.7 Reference Links
+
+- [Receive all channel messages with RSC](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-messages-with-rsc)
+- [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
+- [Teams app manifest schema](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/schema/manifest-schema)
+
+---
+
 ## References (Current as of 2026-01)
 
 - Bot Framework (Node) CloudAdapter sample: https://raw.githubusercontent.com/microsoft/BotBuilder-Samples/main/samples/javascript_nodejs/02.echo-bot/index.js
@@ -886,3 +1029,4 @@ await dispatchReplyFromConfig({ ctx: ctxPayload, cfg, dispatcher, replyOptions }
 16. **Outbound CLI/gateway sends**: Implement `sendMessageMSTeams` properly; wire `clawdbot send --provider msteams`
 17. **Media**: Implement inbound attachment download and outbound strategy
 18. **Docs + UI + Onboard**: Write `docs/providers/msteams.md`, add UI config form, update `clawdbot onboard`
+19. ✅ **RSC documentation**: Added section 9 documenting how to receive all channel/chat messages without @mentions
