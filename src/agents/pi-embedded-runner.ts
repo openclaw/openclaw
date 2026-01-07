@@ -13,7 +13,11 @@ import {
   type Skill,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
-import type { ThinkLevel, VerboseLevel } from "../auto-reply/thinking.js";
+import type {
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
@@ -53,7 +57,11 @@ import {
   type BlockReplyChunking,
   subscribeEmbeddedPiSession,
 } from "./pi-embedded-subscribe.js";
-import { extractAssistantText } from "./pi-embedded-utils.js";
+import {
+  extractAssistantText,
+  extractAssistantThinking,
+  formatReasoningMarkdown,
+} from "./pi-embedded-utils.js";
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 import { resolveSandboxContext } from "./sandbox.js";
@@ -575,6 +583,7 @@ export async function runEmbeddedPiAgent(params: {
   authProfileId?: string;
   thinkLevel?: ThinkLevel;
   verboseLevel?: VerboseLevel;
+  reasoningLevel?: ReasoningLevel;
   bashElevated?: BashElevatedDefaults;
   timeoutMs: number;
   runId: string;
@@ -846,6 +855,7 @@ export async function runEmbeddedPiAgent(params: {
             session,
             runId: params.runId,
             verboseLevel: params.verboseLevel,
+            includeReasoning: params.reasoningLevel === "on",
             shouldEmitToolResult: params.shouldEmitToolResult,
             onToolResult: params.onToolResult,
             onBlockReply: params.onBlockReply,
@@ -1064,10 +1074,22 @@ export async function runEmbeddedPiAgent(params: {
             }
           }
 
+          const fallbackText = lastAssistant
+            ? (() => {
+                const base = extractAssistantText(lastAssistant);
+                if (params.reasoningLevel !== "on") return base;
+                const thinking = extractAssistantThinking(lastAssistant);
+                const formatted = thinking
+                  ? formatReasoningMarkdown(thinking)
+                  : "";
+                if (!formatted) return base;
+                return base ? `${base}\n\n${formatted}` : formatted;
+              })()
+            : "";
           for (const text of assistantTexts.length
             ? assistantTexts
-            : lastAssistant
-              ? [extractAssistantText(lastAssistant)]
+            : fallbackText
+              ? [fallbackText]
               : []) {
             const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
             if (!cleanedText && (!mediaUrls || mediaUrls.length === 0))

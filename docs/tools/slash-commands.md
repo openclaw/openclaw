@@ -40,6 +40,7 @@ Text + native (when enabled):
 - `/reset` or `/new`
 - `/think <level>` (aliases: `/thinking`, `/t`)
 - `/verbose on|off` (alias: `/v`)
+- `/reasoning on|off` (alias: `/reason`)
 - `/elevated on|off` (alias: `/elev`)
 - `/model <name>`
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`)

@@ -66,6 +66,7 @@ import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
   normalizeThinkLevel,
+  type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
@@ -75,6 +76,7 @@ import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export {
   extractElevatedDirective,
+  extractReasoningDirective,
   extractThinkDirective,
   extractVerboseDirective,
 } from "./reply/directives.js";
@@ -288,6 +290,9 @@ export async function getReplyFromConfig(
     hasVerboseDirective: false,
     verboseLevel: undefined,
     rawVerboseLevel: undefined,
+    hasReasoningDirective: false,
+    reasoningLevel: undefined,
+    rawReasoningLevel: undefined,
     hasElevatedDirective: false,
     elevatedLevel: undefined,
     rawElevatedLevel: undefined,
@@ -310,6 +315,7 @@ export async function getReplyFromConfig(
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
+    parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
     parsedDirectives.hasStatusDirective ||
     parsedDirectives.hasModelDirective ||
@@ -327,6 +333,7 @@ export async function getReplyFromConfig(
         ...parsedDirectives,
         hasThinkDirective: false,
         hasVerboseDirective: false,
+        hasReasoningDirective: false,
         hasStatusDirective: false,
         hasModelDirective: false,
         hasQueueDirective: false,
@@ -377,6 +384,10 @@ export async function getReplyFromConfig(
     (directives.verboseLevel as VerboseLevel | undefined) ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const resolvedReasoningLevel: ReasoningLevel =
+    (directives.reasoningLevel as ReasoningLevel | undefined) ??
+    (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    "off";
   const resolvedElevatedLevel = elevatedAllowed
     ? ((directives.elevatedLevel as ElevatedLevel | undefined) ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
@@ -542,6 +553,7 @@ export async function getReplyFromConfig(
     defaultGroupActivation: () => defaultActivation,
     resolvedThinkLevel,
     resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+    resolvedReasoningLevel,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
     provider,
@@ -734,6 +746,7 @@ export async function getReplyFromConfig(
       authProfileId,
       thinkLevel: resolvedThinkLevel,
       verboseLevel: resolvedVerboseLevel,
+      reasoningLevel: resolvedReasoningLevel,
       elevatedLevel: resolvedElevatedLevel,
       bashElevated: {
         enabled: elevatedEnabled,

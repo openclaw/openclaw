@@ -2,6 +2,7 @@ import type { SlashCommand } from "@mariozechner/pi-tui";
 
 const THINK_LEVELS = ["off", "minimal", "low", "medium", "high"];
 const VERBOSE_LEVELS = ["on", "off"];
+const REASONING_LEVELS = ["on", "off"];
 const ELEVATED_LEVELS = ["on", "off"];
 const ACTIVATION_LEVELS = ["mention", "always"];
 const TOGGLE = ["on", "off"];
@@ -50,6 +51,14 @@ export function getSlashCommands(): SlashCommand[] {
       description: "Set verbose on/off",
       getArgumentCompletions: (prefix) =>
         VERBOSE_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
+          (value) => ({ value, label: value }),
+        ),
+    },
+    {
+      name: "reasoning",
+      description: "Set reasoning on/off",
+      getArgumentCompletions: (prefix) =>
+        REASONING_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
           (value) => ({ value, label: value }),
         ),
     },
@@ -103,6 +112,7 @@ export function helpText(): string {
     "/model <provider/model> (or /models)",
     "/think <off|minimal|low|medium|high>",
     "/verbose <on|off>",
+    "/reasoning <on|off>",
     "/elevated <on|off>",
     "/elev <on|off>",
     "/activation <mention|always>",

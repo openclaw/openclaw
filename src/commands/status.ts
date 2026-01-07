@@ -33,6 +33,7 @@ export type SessionStatus = {
   age: number | null;
   thinkingLevel?: string;
   verboseLevel?: string;
+  reasoningLevel?: string;
   elevatedLevel?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
@@ -111,6 +112,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
         age,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
+        reasoningLevel: entry?.reasoningLevel,
         elevatedLevel: entry?.elevatedLevel,
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
@@ -198,6 +200,9 @@ const buildFlags = (entry: SessionEntry): string[] => {
   const verbose = entry?.verboseLevel;
   if (typeof verbose === "string" && verbose.length > 0)
     flags.push(`verbose:${verbose}`);
+  const reasoning = entry?.reasoningLevel;
+  if (typeof reasoning === "string" && reasoning.length > 0)
+    flags.push(`reasoning:${reasoning}`);
   const elevated = entry?.elevatedLevel;
   if (typeof elevated === "string" && elevated.length > 0)
     flags.push(`elevated:${elevated}`);

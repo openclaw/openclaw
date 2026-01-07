@@ -41,7 +41,12 @@ import {
   formatTokenCount,
 } from "../status.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -202,6 +207,7 @@ export async function handleCommands(params: {
   defaultGroupActivation: () => "always" | "mention";
   resolvedThinkLevel?: ThinkLevel;
   resolvedVerboseLevel: VerboseLevel;
+  resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel?: ElevatedLevel;
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
   provider: string;
@@ -226,6 +232,7 @@ export async function handleCommands(params: {
     defaultGroupActivation,
     resolvedThinkLevel,
     resolvedVerboseLevel,
+    resolvedReasoningLevel,
     resolvedElevatedLevel,
     resolveDefaultThinkingLevel,
     provider,
@@ -405,6 +412,7 @@ export async function handleCommands(params: {
       resolvedThink:
         resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
       resolvedVerbose: resolvedVerboseLevel,
+      resolvedReasoning: resolvedReasoningLevel,
       resolvedElevated: resolvedElevatedLevel,
       modelAuth: resolveModelAuthLabel(provider, cfg),
       webLinked,

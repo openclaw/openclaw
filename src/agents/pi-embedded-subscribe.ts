@@ -10,6 +10,8 @@ import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import {
   extractAssistantText,
+  extractAssistantThinking,
+  formatReasoningMarkdown,
   inferToolMetaFromArgs,
 } from "./pi-embedded-utils.js";
 
@@ -85,6 +87,7 @@ export function subscribeEmbeddedPiSession(params: {
   session: AgentSession;
   runId: string;
   verboseLevel?: "off" | "on";
+  includeReasoning?: boolean;
   shouldEmitToolResult?: () => boolean;
   onToolResult?: (payload: {
     text?: string;
@@ -120,6 +123,7 @@ export function subscribeEmbeddedPiSession(params: {
   let pendingCompactionRetry = 0;
   let compactionRetryResolve: (() => void) | undefined;
   let compactionRetryPromise: Promise<void> | null = null;
+  let lastReasoningSent: string | undefined;
 
   const ensureCompactionPromise = () => {
     if (!compactionRetryPromise) {
@@ -216,6 +220,24 @@ export function subscribeEmbeddedPiSession(params: {
     });
   };
 
+  const extractThinkingFromText = (text: string): string => {
+    if (!text || !THINKING_TAG_RE.test(text)) return "";
+    THINKING_TAG_RE.lastIndex = 0;
+    let result = "";
+    let lastIndex = 0;
+    let inThinking = false;
+    for (const match of text.matchAll(THINKING_TAG_RE)) {
+      const idx = match.index ?? 0;
+      if (inThinking) {
+        result += text.slice(lastIndex, idx);
+      }
+      const tag = match[0].toLowerCase();
+      inThinking = !tag.includes("/");
+      lastIndex = idx + match[0].length;
+    }
+    return result.trim();
+  };
+
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -244,6 +266,7 @@ export function subscribeEmbeddedPiSession(params: {
           blockChunker?.reset();
           lastStreamedAssistant = undefined;
           lastBlockReplyText = undefined;
+          lastReasoningSent = undefined;
           assistantTextBaseline = assistantTexts.length;
         }
       }
@@ -470,19 +493,26 @@ export function subscribeEmbeddedPiSession(params: {
       if (evt.type === "message_end") {
         const msg = (evt as AgentEvent & { message: AgentMessage }).message;
         if (msg?.role === "assistant") {
+          const assistantMessage = msg as AssistantMessage;
+          const rawText = extractAssistantText(assistantMessage);
           const cleaned = params.enforceFinalTag
-            ? stripThinkingSegments(
-                stripUnpairedThinkingTags(
-                  extractAssistantText(msg as AssistantMessage),
-                ),
-              )
-            : stripThinkingSegments(
-                extractAssistantText(msg as AssistantMessage),
-              );
-          const text =
+            ? stripThinkingSegments(stripUnpairedThinkingTags(rawText))
+            : stripThinkingSegments(rawText);
+          const baseText =
             params.enforceFinalTag && cleaned
               ? (extractFinalText(cleaned)?.trim() ?? cleaned)
               : cleaned;
+          const rawThinking = params.includeReasoning
+            ? extractAssistantThinking(assistantMessage) ||
+              extractThinkingFromText(rawText)
+            : "";
+          const formattedReasoning = rawThinking
+            ? formatReasoningMarkdown(rawThinking)
+            : "";
+          const text =
+            baseText && formattedReasoning
+              ? `${baseText}\n\n${formattedReasoning}`
+              : baseText || formattedReasoning;
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
@@ -515,6 +545,16 @@ export function subscribeEmbeddedPiSession(params: {
                 });
               }
             }
+          }
+          const onBlockReply = params.onBlockReply;
+          const shouldEmitReasoningBlock =
+            Boolean(formattedReasoning) &&
+            Boolean(onBlockReply) &&
+            formattedReasoning !== lastReasoningSent &&
+            (blockReplyBreak === "text_end" || Boolean(blockChunker));
+          if (shouldEmitReasoningBlock && formattedReasoning && onBlockReply) {
+            lastReasoningSent = formattedReasoning;
+            void onBlockReply({ text: formattedReasoning });
           }
           deltaBuffer = "";
           blockBuffer = "";

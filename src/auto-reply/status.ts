@@ -20,7 +20,12 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { shortenHomePath } from "../utils.js";
-import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "./thinking.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./thinking.js";
 
 type AgentConfig = NonNullable<ClawdbotConfig["agent"]>;
 
@@ -34,6 +39,7 @@ type StatusArgs = {
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
+  resolvedReasoning?: ReasoningLevel;
   resolvedElevated?: ElevatedLevel;
   modelAuth?: string;
   now?: number;
@@ -173,6 +179,7 @@ export function buildStatusMessage(args: StatusArgs): string {
   const thinkLevel = args.resolvedThink ?? args.agent?.thinkingDefault ?? "off";
   const verboseLevel =
     args.resolvedVerbose ?? args.agent?.verboseDefault ?? "off";
+  const reasoningLevel = args.resolvedReasoning ?? "off";
   const elevatedLevel =
     args.resolvedElevated ??
     args.sessionEntry?.elevatedLevel ??
@@ -241,8 +248,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   )}${entry?.abortedLastRun ? " • last run aborted" : ""}`;
 
   const optionsLine = runtime.sandboxed
-    ? `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | elevated=${elevatedLevel}`
-    : `Options: thinking=${thinkLevel} | verbose=${verboseLevel}`;
+    ? `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | reasoning=${reasoningLevel} | elevated=${elevatedLevel}`
+    : `Options: thinking=${thinkLevel} | verbose=${verboseLevel} | reasoning=${reasoningLevel}`;
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
 
@@ -273,6 +280,6 @@ export function buildHelpMessage(): string {
   return [
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink",
-    "Options: /think <level> | /verbose on|off | /elevated on|off | /model <id>",
+    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id>",
   ].join("\n");
 }
