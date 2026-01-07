@@ -278,14 +278,12 @@ export function pickFallbackThinkingLevel(params: {
  * Gemini requires strict alternating user→assistant→tool→user pattern.
  * This function:
  * 1. Detects consecutive messages from the same role
- * 2. Merges consecutive assistant/tool messages together
+ * 2. Merges consecutive assistant messages together
  * 3. Preserves metadata (usage, stopReason, etc.)
  *
  * This prevents the "function call turn comes immediately after a user turn or after a function response turn" error.
  */
-export function validateGeminiTurns(
-  messages: AgentMessage[],
-): AgentMessage[] {
+export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
   if (!Array.isArray(messages) || messages.length === 0) {
     return messages;
   }
@@ -299,9 +297,7 @@ export function validateGeminiTurns(
       continue;
     }
 
-    const msgRole = (msg as { role?: unknown }).role as
-      | string
-      | undefined;
+    const msgRole = (msg as { role?: unknown }).role as string | undefined;
     if (!msgRole) {
       result.push(msg);
       continue;
