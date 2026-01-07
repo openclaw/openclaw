@@ -1000,7 +1000,7 @@ export async function runEmbeddedPiAgent(params: {
           if (shouldRotate) {
             // Mark current profile for cooldown before rotating
             if (lastProfileId) {
-              markAuthProfileCooldown({
+              await markAuthProfileCooldown({
                 store: authStore,
                 profileId: lastProfileId,
               });
@@ -1091,13 +1091,16 @@ export async function runEmbeddedPiAgent(params: {
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           if (lastProfileId) {
-            markAuthProfileGood({
+            await markAuthProfileGood({
               store: authStore,
               provider,
               profileId: lastProfileId,
             });
             // Track usage for round-robin rotation
-            markAuthProfileUsed({ store: authStore, profileId: lastProfileId });
+            await markAuthProfileUsed({
+              store: authStore,
+              profileId: lastProfileId,
+            });
           }
           return {
             payloads: payloads.length ? payloads : undefined,

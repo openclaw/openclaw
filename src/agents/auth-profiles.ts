@@ -107,16 +107,16 @@ function syncAuthProfileStore(
   target.usageStats = source.usageStats;
 }
 
-function updateAuthProfileStoreWithLock(params: {
+async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   updater: (store: AuthProfileStore) => boolean;
-}): AuthProfileStore | null {
+}): Promise<AuthProfileStore | null> {
   const authPath = resolveAuthStorePath(params.agentDir);
   ensureAuthStoreFile(authPath);
 
-  let release: (() => void) | undefined;
+  let release: (() => Promise<void>) | undefined;
   try {
-    release = lockfile.lockSync(authPath, AUTH_STORE_LOCK_OPTIONS);
+    release = await lockfile.lock(authPath, AUTH_STORE_LOCK_OPTIONS);
     const store = ensureAuthProfileStore(params.agentDir);
     const shouldSave = params.updater(store);
     if (shouldSave) {
@@ -128,13 +128,9 @@ function updateAuthProfileStoreWithLock(params: {
   } finally {
     if (release) {
       try {
-        release();
+        await release();
       } catch {
-        try {
-          lockfile.unlockSync(authPath);
-        } catch {
-          // ignore unlock errors
-        }
+        // ignore unlock errors
       }
     }
   }
@@ -403,13 +399,13 @@ export function isProfileInCooldown(
  * Mark a profile as successfully used. Resets error count and updates lastUsed.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
-export function markAuthProfileUsed(params: {
+export async function markAuthProfileUsed(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
-}): void {
+}): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) return false;
@@ -452,13 +448,13 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
  * Cooldown times: 1min, 5min, 25min, max 1 hour.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
-export function markAuthProfileCooldown(params: {
+export async function markAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
-}): void {
+}): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) return false;
@@ -503,13 +499,13 @@ export function markAuthProfileCooldown(params: {
  * Clear cooldown for a profile (e.g., manual reset).
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
-export function clearAuthProfileCooldown(params: {
+export async function clearAuthProfileCooldown(params: {
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;
-}): void {
+}): Promise<void> {
   const { store, profileId, agentDir } = params;
-  const updated = updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.usageStats?.[profileId]) return false;
@@ -693,14 +689,14 @@ export async function resolveApiKeyForProfile(params: {
   }
 }
 
-export function markAuthProfileGood(params: {
+export async function markAuthProfileGood(params: {
   store: AuthProfileStore;
   provider: string;
   profileId: string;
   agentDir?: string;
-}): void {
+}): Promise<void> {
   const { store, provider, profileId, agentDir } = params;
-  const updated = updateAuthProfileStoreWithLock({
+  const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       const profile = freshStore.profiles[profileId];
