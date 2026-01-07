@@ -131,6 +131,7 @@ export function createFollowupRunner(params: {
               authProfileId: queued.run.authProfileId,
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
+              reasoningLevel: queued.run.reasoningLevel,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
               runId,

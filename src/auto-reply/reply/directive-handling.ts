@@ -32,9 +32,11 @@ import type { ReplyPayload } from "../types.js";
 import {
   type ElevatedLevel,
   extractElevatedDirective,
+  extractReasoningDirective,
   extractStatusDirective,
   extractThinkDirective,
   extractVerboseDirective,
+  type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
 } from "./directives.js";
@@ -155,6 +157,9 @@ export type InlineDirectives = {
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
+  hasReasoningDirective: boolean;
+  reasoningLevel?: ReasoningLevel;
+  rawReasoningLevel?: string;
   hasElevatedDirective: boolean;
   elevatedLevel?: ElevatedLevel;
   rawElevatedLevel?: string;
@@ -189,11 +194,17 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     hasDirective: hasVerboseDirective,
   } = extractVerboseDirective(thinkCleaned);
   const {
+    cleaned: reasoningCleaned,
+    reasoningLevel,
+    rawLevel: rawReasoningLevel,
+    hasDirective: hasReasoningDirective,
+  } = extractReasoningDirective(verboseCleaned);
+  const {
     cleaned: elevatedCleaned,
     elevatedLevel,
     rawLevel: rawElevatedLevel,
     hasDirective: hasElevatedDirective,
-  } = extractElevatedDirective(verboseCleaned);
+  } = extractElevatedDirective(reasoningCleaned);
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } =
     extractStatusDirective(elevatedCleaned);
   const {
@@ -225,6 +236,9 @@ export function parseInlineDirectives(body: string): InlineDirectives {
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
+    hasReasoningDirective,
+    reasoningLevel,
+    rawReasoningLevel,
     hasElevatedDirective,
     elevatedLevel,
     rawElevatedLevel,
@@ -257,6 +271,7 @@ export function isDirectiveOnly(params: {
   if (
     !directives.hasThinkDirective &&
     !directives.hasVerboseDirective &&
+    !directives.hasReasoningDirective &&
     !directives.hasElevatedDirective &&
     !directives.hasModelDirective &&
     !directives.hasQueueDirective
@@ -365,6 +380,11 @@ export async function handleDirectiveOnly(params: {
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
     return {
       text: `Unrecognized verbose level "${directives.rawVerboseLevel ?? ""}". Valid levels: off, on.`,
+    };
+  }
+  if (directives.hasReasoningDirective && !directives.reasoningLevel) {
+    return {
+      text: `Unrecognized reasoning level "${directives.rawReasoningLevel ?? ""}". Valid levels: on, off.`,
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
@@ -476,6 +496,11 @@ export async function handleDirectiveOnly(params: {
       if (directives.verboseLevel === "off") delete sessionEntry.verboseLevel;
       else sessionEntry.verboseLevel = directives.verboseLevel;
     }
+    if (directives.hasReasoningDirective && directives.reasoningLevel) {
+      if (directives.reasoningLevel === "off")
+        delete sessionEntry.reasoningLevel;
+      else sessionEntry.reasoningLevel = directives.reasoningLevel;
+    }
     if (directives.hasElevatedDirective && directives.elevatedLevel) {
       if (directives.elevatedLevel === "off") delete sessionEntry.elevatedLevel;
       else sessionEntry.elevatedLevel = directives.elevatedLevel;
@@ -531,6 +556,13 @@ export async function handleDirectiveOnly(params: {
       directives.verboseLevel === "off"
         ? `${SYSTEM_MARK} Verbose logging disabled.`
         : `${SYSTEM_MARK} Verbose logging enabled.`,
+    );
+  }
+  if (directives.hasReasoningDirective && directives.reasoningLevel) {
+    parts.push(
+      directives.reasoningLevel === "off"
+        ? `${SYSTEM_MARK} Reasoning visibility disabled.`
+        : `${SYSTEM_MARK} Reasoning visibility enabled.`,
     );
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
@@ -631,6 +663,14 @@ export async function persistInlineDirectives(params: {
         delete sessionEntry.verboseLevel;
       } else {
         sessionEntry.verboseLevel = directives.verboseLevel;
+      }
+      updated = true;
+    }
+    if (directives.hasReasoningDirective && directives.reasoningLevel) {
+      if (directives.reasoningLevel === "off") {
+        delete sessionEntry.reasoningLevel;
+      } else {
+        sessionEntry.reasoningLevel = directives.reasoningLevel;
       }
       updated = true;
     }

@@ -20,6 +20,7 @@ import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   normalizeElevatedLevel,
+  normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -434,6 +435,26 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             }
           }
 
+          if ("reasoningLevel" in p) {
+            const raw = p.reasoningLevel;
+            if (raw === null) {
+              delete next.reasoningLevel;
+            } else if (raw !== undefined) {
+              const normalized = normalizeReasoningLevel(String(raw));
+              if (!normalized) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: `invalid reasoningLevel: ${String(raw)}`,
+                  },
+                };
+              }
+              if (normalized === "off") delete next.reasoningLevel;
+              else next.reasoningLevel = normalized;
+            }
+          }
+
           if ("elevatedLevel" in p) {
             const raw = p.elevatedLevel;
             if (raw === null) {
@@ -602,6 +623,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             abortedLastRun: false,
             thinkingLevel: entry?.thinkingLevel,
             verboseLevel: entry?.verboseLevel,
+            reasoningLevel: entry?.reasoningLevel,
             model: entry?.model,
             contextTokens: entry?.contextTokens,
             sendPolicy: entry?.sendPolicy,
@@ -986,6 +1008,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             updatedAt: now,
             thinkingLevel: entry?.thinkingLevel,
             verboseLevel: entry?.verboseLevel,
+            reasoningLevel: entry?.reasoningLevel,
             systemSent: entry?.systemSent,
             lastProvider: entry?.lastProvider,
             lastTo: entry?.lastTo,
@@ -1125,6 +1148,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           updatedAt: now,
           thinkingLevel: entry?.thinkingLevel,
           verboseLevel: entry?.verboseLevel,
+          reasoningLevel: entry?.reasoningLevel,
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
           lastProvider: entry?.lastProvider,
@@ -1207,6 +1231,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           updatedAt: now,
           thinkingLevel: entry?.thinkingLevel,
           verboseLevel: entry?.verboseLevel,
+          reasoningLevel: entry?.reasoningLevel,
           systemSent: entry?.systemSent,
           sendPolicy: entry?.sendPolicy,
           lastProvider: entry?.lastProvider,

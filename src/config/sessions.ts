@@ -40,6 +40,7 @@ export type SessionEntry = {
   chatType?: SessionChatType;
   thinkingLevel?: string;
   verboseLevel?: string;
+  reasoningLevel?: string;
   elevatedLevel?: string;
   providerOverride?: string;
   modelOverride?: string;

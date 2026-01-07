@@ -80,6 +80,13 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     acceptsArgs: true,
   },
   {
+    key: "reasoning",
+    nativeName: "reasoning",
+    description: "Toggle reasoning visibility.",
+    textAliases: ["/reasoning", "/reason"],
+    acceptsArgs: true,
+  },
+  {
     key: "elevated",
     nativeName: "elevated",
     description: "Toggle elevated mode.",

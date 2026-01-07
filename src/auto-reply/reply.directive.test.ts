@@ -15,6 +15,7 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import {
   extractElevatedDirective,
   extractQueueDirective,
+  extractReasoningDirective,
   extractReplyToTag,
   extractThinkDirective,
   extractVerboseDirective,
@@ -97,6 +98,12 @@ describe("directive parsing", () => {
     const res = extractVerboseDirective(" please /verbose on now");
     expect(res.hasDirective).toBe(true);
     expect(res.verboseLevel).toBe("on");
+  });
+
+  it("matches reasoning directive", () => {
+    const res = extractReasoningDirective("/reasoning on please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.reasoningLevel).toBe("on");
   });
 
   it("matches elevated with leading space", () => {

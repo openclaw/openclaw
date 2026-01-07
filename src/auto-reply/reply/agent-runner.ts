@@ -221,6 +221,7 @@ export async function runReplyAgent(params: {
             authProfileId: followupRun.run.authProfileId,
             thinkLevel: followupRun.run.thinkLevel,
             verboseLevel: followupRun.run.verboseLevel,
+            reasoningLevel: followupRun.run.reasoningLevel,
             bashElevated: followupRun.run.bashElevated,
             timeoutMs: followupRun.run.timeoutMs,
             runId,

@@ -19,6 +19,32 @@ export function extractAssistantText(msg: AssistantMessage): string {
   return blocks.join("\n").trim();
 }
 
+export function extractAssistantThinking(msg: AssistantMessage): string {
+  if (!Array.isArray(msg.content)) return "";
+  const blocks = msg.content
+    .map((block) => {
+      if (!block || typeof block !== "object") return "";
+      const record = block as unknown as Record<string, unknown>;
+      if (record.type === "thinking" && typeof record.thinking === "string") {
+        return record.thinking.trim();
+      }
+      return "";
+    })
+    .filter(Boolean);
+  return blocks.join("\n").trim();
+}
+
+export function formatReasoningMarkdown(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const lines = trimmed.split(/\r?\n/);
+  const wrapped = lines
+    .map((line) => line.trim())
+    .map((line) => (line ? `_${line}_` : ""))
+    .filter((line) => line.length > 0);
+  return wrapped.length > 0 ? [`_Reasoning:_`, ...wrapped].join("\n") : "";
+}
+
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,

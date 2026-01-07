@@ -45,6 +45,7 @@ type AgentEvent = {
 type SessionInfo = {
   thinkingLevel?: string;
   verboseLevel?: string;
+  reasoningLevel?: string;
   model?: string;
   contextTokens?: number | null;
   totalTokens?: number | null;
@@ -167,10 +168,11 @@ export async function runTui(opts: TuiOptions) {
     );
     const think = sessionInfo.thinkingLevel ?? "off";
     const verbose = sessionInfo.verboseLevel ?? "off";
+    const reasoning = sessionInfo.reasoningLevel ?? "off";
     const deliver = deliverDefault ? "on" : "off";
     footer.setText(
       theme.dim(
-        `${connection} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose} | ${tokens} | deliver ${deliver}`,
+        `${connection} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose} | reasoning ${reasoning} | ${tokens} | deliver ${deliver}`,
       ),
     );
   };
@@ -198,6 +200,7 @@ export async function runTui(opts: TuiOptions) {
       sessionInfo = {
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
+        reasoningLevel: entry?.reasoningLevel,
         model: entry?.model ?? result.defaults?.model ?? undefined,
         contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
         totalTokens: entry?.totalTokens ?? null,
@@ -584,6 +587,22 @@ export async function runTui(opts: TuiOptions) {
           await refreshSessionInfo();
         } catch (err) {
           chatLog.addSystem(`verbose failed: ${String(err)}`);
+        }
+        break;
+      case "reasoning":
+        if (!args) {
+          chatLog.addSystem("usage: /reasoning <on|off>");
+          break;
+        }
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            reasoningLevel: args,
+          });
+          chatLog.addSystem(`reasoning set to ${args}`);
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`reasoning failed: ${String(err)}`);
         }
         break;
       case "elevated":

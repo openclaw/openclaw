@@ -4,7 +4,12 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OriginatingChannelType } from "../templating.js";
-import type { ElevatedLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type {
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./directives.js";
 import { isRoutableChannel } from "./route-reply.js";
 export type QueueMode =
   | "steer"
@@ -54,6 +59,7 @@ export type FollowupRun = {
     authProfileId?: string;
     thinkLevel?: ThinkLevel;
     verboseLevel?: VerboseLevel;
+    reasoningLevel?: ReasoningLevel;
     elevatedLevel?: ElevatedLevel;
     bashElevated?: {
       enabled: boolean;

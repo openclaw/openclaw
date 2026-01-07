@@ -82,6 +82,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         updatedAt: now,
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
+        reasoningLevel: entry?.reasoningLevel,
         systemSent: entry?.systemSent,
         sendPolicy: entry?.sendPolicy,
         skillsSnapshot: entry?.skillsSnapshot,

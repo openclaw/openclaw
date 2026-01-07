@@ -1,6 +1,8 @@
+import type { ReasoningLevel } from "../thinking.js";
 import {
   type ElevatedLevel,
   normalizeElevatedLevel,
+  normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
@@ -74,6 +76,28 @@ export function extractElevatedDirective(body?: string): {
   };
 }
 
+export function extractReasoningDirective(body?: string): {
+  cleaned: string;
+  reasoningLevel?: ReasoningLevel;
+  rawLevel?: string;
+  hasDirective: boolean;
+} {
+  if (!body) return { cleaned: "", hasDirective: false };
+  const match = body.match(
+    /(?:^|\s)\/(?:reasoning|reason)(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i,
+  );
+  const reasoningLevel = normalizeReasoningLevel(match?.[1]);
+  const cleaned = match
+    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    : body.trim();
+  return {
+    cleaned,
+    reasoningLevel,
+    rawLevel: match?.[1],
+    hasDirective: !!match,
+  };
+}
+
 export function extractStatusDirective(body?: string): {
   cleaned: string;
   hasDirective: boolean;
@@ -89,4 +113,4 @@ export function extractStatusDirective(body?: string): {
   };
 }
 
-export type { ElevatedLevel, ThinkLevel, VerboseLevel };
+export type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel };
