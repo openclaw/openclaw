@@ -102,11 +102,13 @@ export function createTypingController(params: {
   const startTypingLoop = async () => {
     if (sealed) return;
     if (runComplete) return;
+    // Always refresh TTL when called, even if loop already running.
+    // This keeps typing alive during long tool executions.
+    refreshTypingTtl();
     if (!onReplyStart) return;
     if (typingIntervalMs <= 0) return;
     if (typingTimer) return;
     await ensureStart();
-    refreshTypingTtl();
     typingTimer = setInterval(() => {
       void triggerTyping();
     }, typingIntervalMs);
