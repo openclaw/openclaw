@@ -18,7 +18,6 @@ import {
   SettingsManager,
   type Skill,
 } from "@mariozechner/pi-coding-agent";
-import type { TSchema } from "@sinclair/typebox";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type {
   ReasoningLevel,
@@ -358,7 +357,7 @@ export function buildEmbeddedSandboxInfo(
 
 const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write"]);
 
-type AnyAgentTool = AgentTool<TSchema, unknown>;
+type AnyAgentTool = AgentTool;
 
 export function splitSdkTools(options: {
   tools: AnyAgentTool[];
