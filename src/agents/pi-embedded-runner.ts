@@ -59,6 +59,7 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isAuthErrorMessage,
+  isContextOverflowError,
   isRateLimitAssistantError,
   isRateLimitErrorMessage,
   pickFallbackThinkingLevel,
@@ -1153,6 +1154,26 @@ export async function runEmbeddedPiAgent(params: {
           }
           if (promptError && !aborted) {
             const errorText = describeUnknownError(promptError);
+            if (isContextOverflowError(errorText)) {
+              return {
+                payloads: [
+                  {
+                    text:
+                      "Context overflow: the conversation history is too large for the model. " +
+                      "Use /new or /reset to start a fresh session, or try a model with a larger context window.",
+                    isError: true,
+                  },
+                ],
+                meta: {
+                  durationMs: Date.now() - started,
+                  agentMeta: {
+                    sessionId: sessionIdUsed,
+                    provider,
+                    model: model.id,
+                  },
+                },
+              };
+            }
             if (
               (isAuthErrorMessage(errorText) ||
                 isRateLimitErrorMessage(errorText)) &&
