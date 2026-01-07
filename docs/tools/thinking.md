@@ -35,9 +35,10 @@ read_when:
 - When verbose is on, agents that emit structured tool results (Pi, other JSON agents) send each tool result back as its own metadata-only message, prefixed with `<emoji> <tool-name>: <arg>` when available (path/command); the tool output itself is not forwarded. These tool summaries are sent as soon as each tool finishes (separate bubbles), not as streaming deltas. If you toggle `/verbose on|off` while a run is in-flight, subsequent tool bubbles honor the new setting.
 
 ## Reasoning visibility (/reasoning)
-- Levels: `on|off`.
+- Levels: `on|off|stream`.
 - Directive-only message toggles whether thinking blocks are shown as italic text in replies.
 - When enabled, any model-provided reasoning content is appended as a separate italic block.
+- `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
 
 ## Related

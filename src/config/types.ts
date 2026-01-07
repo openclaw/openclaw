@@ -270,6 +270,8 @@ export type TelegramConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
+  streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   proxy?: string;
   webhookUrl?: string;

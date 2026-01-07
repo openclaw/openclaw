@@ -17,4 +17,9 @@ describe("normalizeReasoningLevel", () => {
     expect(normalizeReasoningLevel("show")).toBe("on");
     expect(normalizeReasoningLevel("hide")).toBe("off");
   });
+
+  it("accepts stream", () => {
+    expect(normalizeReasoningLevel("stream")).toBe("stream");
+    expect(normalizeReasoningLevel("streaming")).toBe("stream");
+  });
 });

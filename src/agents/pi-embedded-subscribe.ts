@@ -1,7 +1,7 @@
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
-
+import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
@@ -18,6 +18,8 @@ import {
 const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
 const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
+const THINKING_OPEN_GLOBAL_RE = /<\s*think(?:ing)?\s*>/gi;
+const THINKING_CLOSE_GLOBAL_RE = /<\s*\/\s*think(?:ing)?\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
 
@@ -87,9 +89,13 @@ export function subscribeEmbeddedPiSession(params: {
   session: AgentSession;
   runId: string;
   verboseLevel?: "off" | "on";
-  includeReasoning?: boolean;
+  reasoningMode?: ReasoningLevel;
   shouldEmitToolResult?: () => boolean;
   onToolResult?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => void | Promise<void>;
+  onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];
   }) => void | Promise<void>;
@@ -114,9 +120,15 @@ export function subscribeEmbeddedPiSession(params: {
   const toolMetaById = new Map<string, string | undefined>();
   const toolSummaryById = new Set<string>();
   const blockReplyBreak = params.blockReplyBreak ?? "text_end";
+  const reasoningMode = params.reasoningMode ?? "off";
+  const includeReasoning = reasoningMode === "on";
+  const streamReasoning =
+    reasoningMode === "stream" &&
+    typeof params.onReasoningStream === "function";
   let deltaBuffer = "";
   let blockBuffer = "";
   let lastStreamedAssistant: string | undefined;
+  let lastStreamedReasoning: string | undefined;
   let lastBlockReplyText: string | undefined;
   let assistantTextBaseline = 0;
   let compactionInFlight = false;
@@ -238,6 +250,39 @@ export function subscribeEmbeddedPiSession(params: {
     return result.trim();
   };
 
+  const extractThinkingFromStream = (text: string): string => {
+    if (!text) return "";
+    const closed = extractThinkingFromText(text);
+    if (closed) return closed;
+    const openMatches = [...text.matchAll(THINKING_OPEN_GLOBAL_RE)];
+    if (openMatches.length === 0) return "";
+    const closeMatches = [...text.matchAll(THINKING_CLOSE_GLOBAL_RE)];
+    const lastOpen = openMatches[openMatches.length - 1];
+    const lastClose = closeMatches[closeMatches.length - 1];
+    if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
+      return closed;
+    }
+    const start = (lastOpen.index ?? 0) + lastOpen[0].length;
+    return text.slice(start).trim();
+  };
+
+  const formatReasoningDraft = (text: string): string => {
+    const trimmed = text.trim();
+    if (!trimmed) return "";
+    return `Reasoning:\n${trimmed}`;
+  };
+
+  const emitReasoningStream = (text: string) => {
+    if (!streamReasoning || !params.onReasoningStream) return;
+    const formatted = formatReasoningDraft(text);
+    if (!formatted) return;
+    if (formatted === lastStreamedReasoning) return;
+    lastStreamedReasoning = formatted;
+    void params.onReasoningStream({
+      text: formatted,
+    });
+  };
+
   const resetForCompactionRetry = () => {
     assistantTexts.length = 0;
     toolMetas.length = 0;
@@ -247,6 +292,7 @@ export function subscribeEmbeddedPiSession(params: {
     blockBuffer = "";
     blockChunker?.reset();
     lastStreamedAssistant = undefined;
+    lastStreamedReasoning = undefined;
     lastBlockReplyText = undefined;
     assistantTextBaseline = 0;
   };
@@ -266,6 +312,7 @@ export function subscribeEmbeddedPiSession(params: {
           blockChunker?.reset();
           lastStreamedAssistant = undefined;
           lastBlockReplyText = undefined;
+          lastStreamedReasoning = undefined;
           lastReasoningSent = undefined;
           assistantTextBaseline = assistantTexts.length;
         }
@@ -436,6 +483,11 @@ export function subscribeEmbeddedPiSession(params: {
               }
             }
 
+            if (streamReasoning) {
+              // Handle partial <think> tags: stream whatever reasoning is visible so far.
+              emitReasoningStream(extractThinkingFromStream(deltaBuffer));
+            }
+
             const cleaned = params.enforceFinalTag
               ? stripThinkingSegments(stripUnpairedThinkingTags(deltaBuffer))
               : stripThinkingSegments(deltaBuffer);
@@ -502,17 +554,19 @@ export function subscribeEmbeddedPiSession(params: {
             params.enforceFinalTag && cleaned
               ? (extractFinalText(cleaned)?.trim() ?? cleaned)
               : cleaned;
-          const rawThinking = params.includeReasoning
-            ? extractAssistantThinking(assistantMessage) ||
-              extractThinkingFromText(rawText)
-            : "";
+          const rawThinking =
+            includeReasoning || streamReasoning
+              ? extractAssistantThinking(assistantMessage) ||
+                extractThinkingFromText(rawText)
+              : "";
           const formattedReasoning = rawThinking
             ? formatReasoningMarkdown(rawThinking)
             : "";
-          const text =
-            baseText && formattedReasoning
+          const text = includeReasoning
+            ? baseText && formattedReasoning
               ? `${formattedReasoning}\n\n${baseText}`
-              : formattedReasoning || baseText;
+              : formattedReasoning || baseText
+            : baseText;
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
@@ -550,6 +604,7 @@ export function subscribeEmbeddedPiSession(params: {
           }
           const onBlockReply = params.onBlockReply;
           const shouldEmitReasoningBlock =
+            includeReasoning &&
             Boolean(formattedReasoning) &&
             Boolean(onBlockReply) &&
             formattedReasoning !== lastReasoningSent &&
@@ -557,6 +612,9 @@ export function subscribeEmbeddedPiSession(params: {
           if (shouldEmitReasoningBlock && formattedReasoning && onBlockReply) {
             lastReasoningSent = formattedReasoning;
             void onBlockReply({ text: formattedReasoning });
+          }
+          if (streamReasoning && rawThinking) {
+            emitReasoningStream(rawThinking);
           }
           deltaBuffer = "";
           blockBuffer = "";
