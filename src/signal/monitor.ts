@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
@@ -525,8 +526,9 @@ export async function monitorSignalProvider(
     };
 
     // Reconnection loop for SSE stream
-    const MAX_RETRY_DELAY = 30_000; // 30 seconds
+    const MAX_RETRY_DELAY = 10_000; // 10 seconds
     const INITIAL_RETRY_DELAY = 1_000; // 1 second
+    const RETRY_JITTER = 0.2;
     let retryDelay = INITIAL_RETRY_DELAY;
 
     while (!opts.abortSignal?.aborted) {
@@ -541,14 +543,41 @@ export async function monitorSignalProvider(
             });
           },
         });
-        // If streamSignalEvents returns normally, break (shouldn't happen normally)
-        break;
+        if (opts.abortSignal?.aborted) return;
+        runtime.log?.(
+          `Signal SSE stream ended, reconnecting in ${retryDelay / 1000}s...`,
+        );
+        const jitteredDelay = Math.max(
+          0,
+          Math.round(
+            retryDelay * (1 - RETRY_JITTER + Math.random() * 2 * RETRY_JITTER),
+          ),
+        );
+        try {
+          await delay(jitteredDelay, undefined, { signal: opts.abortSignal });
+        } catch (err) {
+          if (opts.abortSignal?.aborted) return;
+          throw err;
+        }
+        retryDelay = INITIAL_RETRY_DELAY;
       } catch (err) {
         if (opts.abortSignal?.aborted) return;
+        runtime.error?.(`Signal SSE stream error: ${String(err)}`);
         runtime.log?.(
           `Signal SSE connection lost, reconnecting in ${retryDelay / 1000}s...`,
         );
-        await new Promise((resolve) => setTimeout(resolve, retryDelay));
+        const jitteredDelay = Math.max(
+          0,
+          Math.round(
+            retryDelay * (1 - RETRY_JITTER + Math.random() * 2 * RETRY_JITTER),
+          ),
+        );
+        try {
+          await delay(jitteredDelay, undefined, { signal: opts.abortSignal });
+        } catch (err) {
+          if (opts.abortSignal?.aborted) return;
+          throw err;
+        }
         retryDelay = Math.min(retryDelay * 2, MAX_RETRY_DELAY);
       }
     }
