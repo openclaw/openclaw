@@ -277,15 +277,49 @@ describe("subagents", () => {
     });
   });
 
-  it("sessions_spawn fails when model override is invalid", async () => {
+  it("sessions_spawn skips invalid model overrides and continues", async () => {
     callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
+    let agentCallCount = 0;
+    let lastWaitedRunId: string | undefined;
+    const replyByRunId = new Map<string, string>();
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "sessions.patch") {
         throw new Error("invalid model: bad-model");
+      }
+      if (request.method === "agent") {
+        agentCallCount += 1;
+        const runId = `run-${agentCallCount}`;
+        const params = request.params as
+          | { message?: string; sessionKey?: string }
+          | undefined;
+        const message = params?.message ?? "";
+        const reply =
+          message === "Sub-agent announce step." ? "ANNOUNCE_SKIP" : "done";
+        replyByRunId.set(runId, reply);
+        return {
+          runId,
+          status: "accepted",
+          acceptedAt: 4000 + agentCallCount,
+        };
+      }
+      if (request.method === "agent.wait") {
+        const params = request.params as { runId?: string } | undefined;
+        lastWaitedRunId = params?.runId;
+        return { runId: params?.runId ?? "run-1", status: "ok" };
+      }
+      if (request.method === "chat.history") {
+        const text =
+          (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
+        return {
+          messages: [{ role: "assistant", content: [{ type: "text", text }] }],
+        };
+      }
+      if (request.method === "sessions.delete") {
+        return { ok: true };
       }
       return {};
     });
@@ -301,10 +335,13 @@ describe("subagents", () => {
       timeoutSeconds: 1,
       model: "bad-model",
     });
-    expect(result.details).toMatchObject({ status: "error" });
+    expect(result.details).toMatchObject({
+      status: "ok",
+      modelApplied: false,
+    });
     expect(
-      String((result.details as { error?: string }).error ?? ""),
+      String((result.details as { warning?: string }).warning ?? ""),
     ).toContain("invalid model");
-    expect(calls.some((call) => call.method === "agent")).toBe(false);
+    expect(calls.some((call) => call.method === "agent")).toBe(true);
   });
 });

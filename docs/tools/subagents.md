@@ -24,7 +24,7 @@ Use `sessions_spawn`:
 Tool params:
 - `task` (required)
 - `label?` (optional)
-- `model?` (optional; overrides the sub-agent model; invalid values error)
+- `model?` (optional; overrides the sub-agent model; invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result)
 - `timeoutSeconds?` (default `0`; `0` = fire-and-forget)
 - `cleanup?` (`delete|keep`, default `delete`)
 
