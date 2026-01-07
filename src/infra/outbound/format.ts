@@ -56,10 +56,18 @@ export function buildOutboundDeliveryJson(params: {
     mediaUrl: params.mediaUrl ?? null,
   };
 
-  if (result?.chatId !== undefined) payload.chatId = result.chatId;
-  if (result?.channelId !== undefined) payload.channelId = result.channelId;
-  if (result?.timestamp !== undefined) payload.timestamp = result.timestamp;
-  if (result?.toJid !== undefined) payload.toJid = result.toJid;
+  if (result && "chatId" in result && result.chatId !== undefined) {
+    payload.chatId = result.chatId;
+  }
+  if (result && "channelId" in result && result.channelId !== undefined) {
+    payload.channelId = result.channelId;
+  }
+  if (result && "timestamp" in result && result.timestamp !== undefined) {
+    payload.timestamp = result.timestamp;
+  }
+  if (result && "toJid" in result && result.toJid !== undefined) {
+    payload.toJid = result.toJid;
+  }
 
   return payload;
 }
