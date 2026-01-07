@@ -28,6 +28,7 @@
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
 - Tools: unify reaction removal semantics across Discord/Slack/Telegram/WhatsApp and allow WhatsApp reaction routing across accounts.
 - Android: fix APK output filename renaming after AGP updates. Thanks @Syhids for PR #410.
+- Android: rotate camera photos by EXIF orientation. Thanks @fcatuhe for PR #403.
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
