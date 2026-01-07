@@ -39,7 +39,7 @@ describe("initSessionState thread forking", () => {
     );
 
     const storePath = path.join(root, "sessions.json");
-    const parentSessionKey = "slack:channel:C1";
+    const parentSessionKey = "agent:main:slack:channel:C1";
     await saveSessionStore(storePath, {
       [parentSessionKey]: {
         sessionId: parentSessionId,
@@ -52,7 +52,7 @@ describe("initSessionState thread forking", () => {
       session: { store: storePath },
     } as ClawdbotConfig;
 
-    const threadSessionKey = "slack:thread:C1:123";
+    const threadSessionKey = "agent:main:slack:channel:C1:thread:123";
     const threadLabel = "Slack thread #general: starter";
     const result = await initSessionState({
       ctx: {
@@ -70,7 +70,10 @@ describe("initSessionState thread forking", () => {
     expect(result.sessionEntry.sessionFile).toBeTruthy();
     expect(result.sessionEntry.displayName).toBe(threadLabel);
 
-    const newSessionFile = result.sessionEntry.sessionFile!;
+    const newSessionFile = result.sessionEntry.sessionFile;
+    if (!newSessionFile) {
+      throw new Error("Missing session file for forked thread");
+    }
     const [headerLine] = (await fs.readFile(newSessionFile, "utf-8"))
       .split(/\r?\n/)
       .filter((line) => line.trim().length > 0);

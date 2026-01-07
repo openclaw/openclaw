@@ -33,6 +33,7 @@
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
+- Discord/Slack: fork thread sessions and inject thread starters for context. Thanks @thewilloftheshadow for PR #400.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
 - Agent: add opt-in session pruning for tool results to reduce context bloat. Thanks @maxsumrall for PR #381.
 - Agent: protect bootstrap prefix from context pruning. Thanks @maxsumrall for PR #381.

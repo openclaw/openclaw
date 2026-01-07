@@ -11,11 +11,6 @@ import {
   MessageReactionRemoveListener,
   MessageType,
   type RequestClient,
-  type PartialMessage,
-  type PartialMessageReaction,
-  Partials,
-  type ThreadChannel,
-  type PartialUser,
   type User,
 } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
@@ -56,7 +51,10 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
-import { resolveAgentRoute } from "../routing/resolve-route.js";
+import {
+  buildAgentSessionKey,
+  resolveAgentRoute,
+} from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { fetchDiscordApplicationId } from "./probe.js";
@@ -86,6 +84,12 @@ type DiscordHistoryEntry = {
 };
 
 type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
+type DiscordThreadChannel = {
+  id: string;
+  name?: string | null;
+  parentId?: string | null;
+  parent?: { id?: string; name?: string };
+};
 type DiscordThreadStarter = {
   text: string;
   author: string;
@@ -94,29 +98,46 @@ type DiscordThreadStarter = {
 
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
 
-async function resolveDiscordThreadStarter(
-  channel: ThreadChannel,
-): Promise<DiscordThreadStarter | null> {
-  const cacheKey = channel.id;
+async function resolveDiscordThreadStarter(params: {
+  channel: DiscordThreadChannel;
+  client: Client;
+  parentId?: string;
+}): Promise<DiscordThreadStarter | null> {
+  const cacheKey = params.channel.id;
   const cached = DISCORD_THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) return cached;
   try {
-    const starter = await channel.fetchStarterMessage();
+    if (!params.parentId) return null;
+    const starter = (await params.client.rest.get(
+      Routes.channelMessage(params.parentId, params.channel.id),
+    )) as {
+      content?: string | null;
+      embeds?: Array<{ description?: string | null }>;
+      member?: { nick?: string | null; displayName?: string | null };
+      author?: {
+        id?: string | null;
+        username?: string | null;
+        discriminator?: string | null;
+      };
+      timestamp?: string | null;
+    };
     if (!starter) return null;
     const text =
-      starter.content?.trim() ??
-      starter.embeds?.[0]?.description?.trim() ??
-      "";
+      starter.content?.trim() ?? starter.embeds?.[0]?.description?.trim() ?? "";
     if (!text) return null;
     const author =
+      starter.member?.nick ??
       starter.member?.displayName ??
-      starter.author?.tag ??
-      starter.author?.username ??
-      "Unknown";
+      (starter.author
+        ? starter.author.discriminator && starter.author.discriminator !== "0"
+          ? `${starter.author.username ?? "Unknown"}#${starter.author.discriminator}`
+          : (starter.author.username ?? starter.author.id ?? "Unknown")
+        : "Unknown");
+    const timestamp = resolveTimestampMs(starter.timestamp);
     const payload: DiscordThreadStarter = {
       text,
       author,
-      timestamp: starter.createdTimestamp ?? undefined,
+      timestamp: timestamp ?? undefined,
     };
     DISCORD_THREAD_STARTER_CACHE.set(cacheKey, payload);
     return payload;
@@ -554,15 +575,18 @@ export function createDiscordMessageHandler(params: {
 
       const channelName =
         channelInfo?.name ??
-        ((isGuildMessage || isGroupDm) && "name" in message.channel
+        ((isGuildMessage || isGroupDm) &&
+        message.channel &&
+        "name" in message.channel
           ? message.channel.name
           : undefined);
       const isThreadChannel =
         isGuildMessage &&
+        message.channel &&
         "isThread" in message.channel &&
         message.channel.isThread();
       const threadChannel = isThreadChannel
-        ? (message.channel as ThreadChannel)
+        ? (message.channel as DiscordThreadChannel)
         : null;
       const threadParentId =
         threadChannel?.parentId ?? threadChannel?.parent?.id ?? undefined;
@@ -576,7 +600,6 @@ export function createDiscordMessageHandler(params: {
       const displayChannelSlug = displayChannelName
         ? normalizeDiscordSlug(displayChannelName)
         : "";
-      const channelSlug = channelName ? normalizeDiscordSlug(channelName) : "";
       const guildSlug =
         guildInfo?.slug ||
         (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : "");
@@ -590,6 +613,7 @@ export function createDiscordMessageHandler(params: {
           id: isDirectMessage ? author.id : message.channelId,
         },
       });
+      const baseSessionKey = route.sessionKey;
       const channelConfig = isGuildMessage
         ? resolveDiscordChannelConfig({
             guildInfo,
@@ -831,13 +855,16 @@ export function createDiscordMessageHandler(params: {
 
       let threadStarterBody: string | undefined;
       let threadLabel: string | undefined;
-      let threadSessionKey: string | undefined;
       let parentSessionKey: string | undefined;
       if (threadChannel) {
-        const starter = await resolveDiscordThreadStarter(threadChannel);
+        const starter = await resolveDiscordThreadStarter({
+          channel: threadChannel,
+          client,
+          parentId: threadParentId,
+        });
         if (starter?.text) {
           const starterEnvelope = formatAgentEnvelope({
-            surface: "Discord",
+            provider: "Discord",
             from: starter.author,
             timestamp: starter.timestamp,
             body: starter.text,
@@ -848,20 +875,12 @@ export function createDiscordMessageHandler(params: {
         threadLabel = threadName
           ? `Discord thread #${normalizeDiscordSlug(parentName)} › ${threadName}`
           : `Discord thread #${normalizeDiscordSlug(parentName)}`;
-        threadSessionKey = `discord:thread:${message.channelId}`;
-        const sessionCfg = cfg.session;
-        const sessionScope = sessionCfg?.scope ?? "per-sender";
-        const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
         if (threadParentId) {
-          parentSessionKey = resolveSessionKey(
-            sessionScope,
-            {
-              From: `group:${threadParentId}`,
-              ChatType: "group",
-              Surface: "discord",
-            },
-            mainKey,
-          );
+          parentSessionKey = buildAgentSessionKey({
+            agentId: route.agentId,
+            provider: route.provider,
+            peer: { kind: "channel", id: threadParentId },
+          });
         }
       }
       const mediaPayload = buildDiscordMediaPayload(mediaList);
@@ -872,7 +891,7 @@ export function createDiscordMessageHandler(params: {
           ? `discord:${author.id}`
           : `group:${message.channelId}`,
         To: discordTo,
-        SessionKey: threadSessionKey ?? route.sessionKey,
+        SessionKey: baseSessionKey,
         AccountId: route.accountId,
         ChatType: isDirectMessage ? "direct" : "group",
         SenderName:
