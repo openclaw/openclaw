@@ -32,7 +32,7 @@ describe("buildSandboxCreateArgs", () => {
     const args = buildSandboxCreateArgs({
       name: "clawdbot-sbx-test",
       cfg,
-      sessionKey: "main",
+      scopeKey: "main",
       createdAtMs: 1700000000000,
       labels: { "clawdbot.sandboxBrowser": "1" },
     });

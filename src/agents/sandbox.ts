@@ -18,6 +18,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { STATE_DIR_CLAWDBOT } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveAgentIdFromSessionKey } from "./agent-scope.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   DEFAULT_AGENTS_FILENAME,
@@ -72,9 +73,11 @@ export type SandboxPruneConfig = {
   maxAgeDays: number;
 };
 
+export type SandboxScope = "session" | "agent" | "shared";
+
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
-  perSession: boolean;
+  scope: SandboxScope;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
   browser: SandboxBrowserConfig;
@@ -197,11 +200,33 @@ function isToolAllowed(policy: SandboxToolPolicy, name: string) {
   return allow.includes(name.toLowerCase());
 }
 
+function resolveSandboxScope(params: {
+  scope?: SandboxScope;
+  perSession?: boolean;
+}): SandboxScope {
+  if (params.scope) return params.scope;
+  if (typeof params.perSession === "boolean") {
+    return params.perSession ? "session" : "shared";
+  }
+  return "agent";
+}
+
+function resolveSandboxScopeKey(scope: SandboxScope, sessionKey: string) {
+  const trimmed = sessionKey.trim() || "main";
+  if (scope === "shared") return "shared";
+  if (scope === "session") return trimmed;
+  const agentId = resolveAgentIdFromSessionKey(trimmed);
+  return `agent:${agentId}`;
+}
+
 function defaultSandboxConfig(cfg?: ClawdbotConfig): SandboxConfig {
   const agent = cfg?.agent?.sandbox;
   return {
     mode: agent?.mode ?? "off",
-    perSession: agent?.perSession ?? true,
+    scope: resolveSandboxScope({
+      scope: agent?.scope,
+      perSession: agent?.perSession,
+    }),
     workspaceRoot: agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
     docker: {
       image: agent?.docker?.image ?? DEFAULT_SANDBOX_IMAGE,
@@ -502,14 +527,14 @@ function formatUlimitValue(
 export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
-  sessionKey: string;
+  scopeKey: string;
   createdAtMs?: number;
   labels?: Record<string, string>;
 }) {
   const createdAtMs = params.createdAtMs ?? Date.now();
   const args = ["create", "--name", params.name];
   args.push("--label", "clawdbot.sandbox=1");
-  args.push("--label", `clawdbot.sessionKey=${params.sessionKey}`);
+  args.push("--label", `clawdbot.sessionKey=${params.scopeKey}`);
   args.push("--label", `clawdbot.createdAtMs=${createdAtMs}`);
   for (const [key, value] of Object.entries(params.labels ?? {})) {
     if (key && value) args.push("--label", `${key}=${value}`);
@@ -557,15 +582,15 @@ async function createSandboxContainer(params: {
   name: string;
   cfg: SandboxDockerConfig;
   workspaceDir: string;
-  sessionKey: string;
+  scopeKey: string;
 }) {
-  const { name, cfg, workspaceDir, sessionKey } = params;
+  const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
 
   const args = buildSandboxCreateArgs({
     name,
     cfg,
-    sessionKey,
+    scopeKey,
   });
   args.push("--workdir", cfg.workdir);
   args.push("-v", `${workspaceDir}:${cfg.workdir}`);
@@ -584,9 +609,9 @@ async function ensureSandboxContainer(params: {
   workspaceDir: string;
   cfg: SandboxConfig;
 }) {
-  const slug = params.cfg.perSession
-    ? slugifySessionKey(params.sessionKey)
-    : "shared";
+  const scopeKey = resolveSandboxScopeKey(params.cfg.scope, params.sessionKey);
+  const slug =
+    params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
@@ -595,7 +620,7 @@ async function ensureSandboxContainer(params: {
       name: containerName,
       cfg: params.cfg.docker,
       workspaceDir: params.workspaceDir,
-      sessionKey: params.sessionKey,
+      scopeKey,
     });
   } else if (!state.running) {
     await execDocker(["start", containerName]);
@@ -603,7 +628,7 @@ async function ensureSandboxContainer(params: {
   const now = Date.now();
   await updateRegistry({
     containerName,
-    sessionKey: params.sessionKey,
+    sessionKey: scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.docker.image,
@@ -648,16 +673,15 @@ function buildSandboxBrowserResolvedConfig(params: {
 }
 
 async function ensureSandboxBrowser(params: {
-  sessionKey: string;
+  scopeKey: string;
   workspaceDir: string;
   cfg: SandboxConfig;
 }): Promise<SandboxBrowserContext | null> {
   if (!params.cfg.browser.enabled) return null;
   if (!isToolAllowed(params.cfg.tools, "browser")) return null;
 
-  const slug = params.cfg.perSession
-    ? slugifySessionKey(params.sessionKey)
-    : "shared";
+  const slug =
+    params.cfg.scope === "shared" ? "shared" : slugifySessionKey(params.scopeKey);
   const name = `${params.cfg.browser.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
   const state = await dockerContainerState(containerName);
@@ -666,7 +690,7 @@ async function ensureSandboxBrowser(params: {
     const args = buildSandboxCreateArgs({
       name: containerName,
       cfg: params.cfg.docker,
-      sessionKey: params.sessionKey,
+      scopeKey: params.scopeKey,
       labels: { "clawdbot.sandboxBrowser": "1" },
     });
     args.push("-v", `${params.workspaceDir}:${params.cfg.docker.workdir}`);
@@ -710,7 +734,7 @@ async function ensureSandboxBrowser(params: {
       ? await readDockerPort(containerName, params.cfg.browser.noVncPort)
       : null;
 
-  const existing = BROWSER_BRIDGES.get(params.sessionKey);
+  const existing = BROWSER_BRIDGES.get(params.scopeKey);
   const existingProfile = existing
     ? resolveProfile(existing.bridge.state.resolved, "clawd")
     : null;
@@ -722,7 +746,7 @@ async function ensureSandboxBrowser(params: {
     await stopBrowserBridgeServer(existing.bridge.server).catch(
       () => undefined,
     );
-    BROWSER_BRIDGES.delete(params.sessionKey);
+    BROWSER_BRIDGES.delete(params.scopeKey);
   }
   let bridge: BrowserBridge;
   if (shouldReuse && existing) {
@@ -737,13 +761,13 @@ async function ensureSandboxBrowser(params: {
     });
   }
   if (!shouldReuse) {
-    BROWSER_BRIDGES.set(params.sessionKey, { bridge, containerName });
+    BROWSER_BRIDGES.set(params.scopeKey, { bridge, containerName });
   }
 
   const now = Date.now();
   await updateBrowserRegistry({
     containerName,
-    sessionKey: params.sessionKey,
+    sessionKey: params.scopeKey,
     createdAtMs: now,
     lastUsedAtMs: now,
     image: params.cfg.browser.image,
@@ -858,9 +882,11 @@ export async function resolveSandboxContext(params: {
   await maybePruneSandboxes(cfg);
 
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
-  const workspaceDir = cfg.perSession
-    ? resolveSandboxWorkspaceDir(workspaceRoot, rawSessionKey)
-    : workspaceRoot;
+  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
+  const workspaceDir =
+    cfg.scope === "shared"
+      ? workspaceRoot
+      : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const seedWorkspace =
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
   await ensureSandboxWorkspace(
@@ -876,7 +902,7 @@ export async function resolveSandboxContext(params: {
   });
 
   const browser = await ensureSandboxBrowser({
-    sessionKey: rawSessionKey,
+    scopeKey,
     workspaceDir,
     cfg,
   });
@@ -905,9 +931,11 @@ export async function ensureSandboxWorkspaceForSession(params: {
   if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
 
   const workspaceRoot = resolveUserPath(cfg.workspaceRoot);
-  const workspaceDir = cfg.perSession
-    ? resolveSandboxWorkspaceDir(workspaceRoot, rawSessionKey)
-    : workspaceRoot;
+  const scopeKey = resolveSandboxScopeKey(cfg.scope, rawSessionKey);
+  const workspaceDir =
+    cfg.scope === "shared"
+      ? workspaceRoot
+      : resolveSandboxWorkspaceDir(workspaceRoot, scopeKey);
   const seedWorkspace =
     params.workspaceDir?.trim() || DEFAULT_AGENT_WORKSPACE_DIR;
   await ensureSandboxWorkspace(

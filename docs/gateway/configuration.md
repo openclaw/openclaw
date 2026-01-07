@@ -629,7 +629,7 @@ Default: `~/clawd`.
 ```
 
 If `agent.sandbox` is enabled, non-main sessions can override this with their
-own per-session workspaces under `agent.sandbox.workspaceRoot`.
+own per-scope workspaces under `agent.sandbox.workspaceRoot`.
 
 ### `agent.skipBootstrap`
 
@@ -847,27 +847,30 @@ per session key at a time). Default: 1.
 
 ### `agent.sandbox`
 
-Optional per-session **Docker sandboxing** for the embedded agent. Intended for
-non-main sessions so they cannot access your host system.
+Optional **Docker sandboxing** for the embedded agent. Intended for non-main
+sessions so they cannot access your host system.
 
 Defaults (if enabled):
-- one container per session
+- scope: `"agent"` (one container + workspace per agent)
 - Debian bookworm-slim based image
-- workspace per session under `~/.clawdbot/sandboxes`
+- workspace per agent under `~/.clawdbot/sandboxes`
 - auto-prune: idle > 24h OR age > 7d
 - tools: allow only `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn` (deny wins)
 - optional sandboxed browser (Chromium + CDP, noVNC observer)
 - hardening knobs: `network`, `user`, `pidsLimit`, `memory`, `cpus`, `ulimits`, `seccompProfile`, `apparmorProfile`
 
-Warning: `perSession: false` means a shared container and shared workspace. No
-cross-session isolation.
+Warning: `scope: "shared"` means a shared container and shared workspace. No
+cross-session isolation. Use `scope: "session"` for per-session isolation.
+
+Legacy: `perSession` is still supported (`true` → `scope: "session"`,
+`false` → `scope: "shared"`).
 
 ```json5
 {
   agent: {
     sandbox: {
       mode: "non-main", // off | non-main | all
-      perSession: true, // recommended for isolation (false = shared container/workspace)
+      scope: "agent", // session | agent | shared (agent is default)
       workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
         image: "clawdbot-sandbox:bookworm-slim",

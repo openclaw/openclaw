@@ -70,25 +70,26 @@ pnpm test:docker:qr
 - Gateway bind defaults to `lan` for container use.
 - The gateway container is the source of truth for sessions (`~/.clawdbot/agents/<agentId>/sessions/`).
 
-## Per-session Agent Sandbox (host gateway + Docker tools)
+## Agent Sandbox (host gateway + Docker tools)
 
 ### What it does
 
 When `agent.sandbox` is enabled, **non-main sessions** run tools inside a Docker
 container. The gateway stays on your host, but the tool execution is isolated:
-- one container per session (hard wall)
-- per-session workspace folder mounted at `/workspace`
+- scope: `"agent"` by default (one container + workspace per agent)
+- scope: `"session"` for per-session isolation
+- per-scope workspace folder mounted at `/workspace`
 - allow/deny tool policy (deny wins)
 - inbound media is copied into the sandbox workspace (`media/inbound/*`) so tools can read it
 
-Warning: setting `perSession: false` disables per-session isolation. All sessions
-share one container and one workspace, so there is no cross-session isolation.
+Warning: `scope: "shared"` disables cross-session isolation. All sessions share
+one container and one workspace.
 
 ### Default behavior
 
 - Image: `clawdbot-sandbox:bookworm-slim`
-- One container per session
-- Workspace per session under `~/.clawdbot/sandboxes`
+- One container per agent
+- Workspace per agent under `~/.clawdbot/sandboxes`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
 - Default allow: `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`
@@ -101,7 +102,7 @@ share one container and one workspace, so there is no cross-session isolation.
   agent: {
     sandbox: {
       mode: "non-main", // off | non-main | all
-      perSession: true,
+      scope: "agent", // session | agent | shared (agent is default)
       workspaceRoot: "~/.clawdbot/sandboxes",
       docker: {
         image: "clawdbot-sandbox:bookworm-slim",

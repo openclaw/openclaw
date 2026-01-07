@@ -235,6 +235,13 @@ const RoutingSchema = z
                     z.literal("all"),
                   ])
                   .optional(),
+                scope: z
+                  .union([
+                    z.literal("session"),
+                    z.literal("agent"),
+                    z.literal("shared"),
+                  ])
+                  .optional(),
                 perSession: z.boolean().optional(),
                 workspaceRoot: z.string().optional(),
               })
@@ -572,6 +579,13 @@ export const ClawdbotSchema = z.object({
             .optional(),
           sessionToolsVisibility: z
             .union([z.literal("spawned"), z.literal("all")])
+            .optional(),
+          scope: z
+            .union([
+              z.literal("session"),
+              z.literal("agent"),
+              z.literal("shared"),
+            ])
             .optional(),
           perSession: z.boolean().optional(),
           workspaceRoot: z.string().optional(),

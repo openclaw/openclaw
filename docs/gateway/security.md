@@ -140,10 +140,11 @@ We're considering a `readOnlyMode` flag that prevents the AI from:
 Two complementary approaches:
 
 - **Run the full Gateway in Docker** (container boundary): [Docker](/install/docker)
-- **Per-session tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): [Configuration](/gateway/configuration)
+- **Tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): [Configuration](/gateway/configuration)
 
-Note: to prevent cross-agent access, keep `perSession: true` so each session gets
-its own container + workspace. `perSession: false` shares a single container.
+Note: to prevent cross-agent access, keep `sandbox.scope` at `"agent"` (default)
+or `"session"` for stricter per-session isolation. `scope: "shared"` uses a
+single container/workspace.
 
 Important: `agent.elevated` is an explicit escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
 
