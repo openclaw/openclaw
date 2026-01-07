@@ -305,6 +305,18 @@ export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
   if (shouldWrite) {
     saveJsonFile(authPath, store);
   }
+
+  // Delete legacy auth.json after successful migration to prevent stale tokens
+  // from being re-migrated and overwriting fresh credentials (fixes #363)
+  if (legacy !== null) {
+    const legacyPath = resolveLegacyAuthStorePath(agentDir);
+    try {
+      fs.unlinkSync(legacyPath);
+    } catch {
+      // Ignore if already deleted or permission issues
+    }
+  }
+
   return store;
 }
 
