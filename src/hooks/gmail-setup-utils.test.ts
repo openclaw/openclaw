@@ -45,3 +45,79 @@ describe("resolvePythonExecutablePath", () => {
     }
   }, 60_000);
 });
+
+describe("ensureTailscaleEndpoint", () => {
+  it("includes stdout and exit code when tailscale serve fails", async () => {
+    vi.doMock("../process/exec.js", () => ({
+      runCommandWithTimeout: vi.fn(),
+    }));
+
+    const { ensureTailscaleEndpoint } = await import("./gmail-setup-utils.js");
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const runCommand = vi.mocked(runCommandWithTimeout);
+
+    runCommand
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "tailscale output",
+        stderr: "Warning: client version mismatch",
+        code: 1,
+        signal: null,
+        killed: false,
+      });
+
+    let message = "";
+    try {
+      await ensureTailscaleEndpoint({
+        mode: "serve",
+        path: "/gmail-pubsub",
+        port: 8788,
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("code=1");
+    expect(message).toContain("stderr: Warning: client version mismatch");
+    expect(message).toContain("stdout: tailscale output");
+  });
+
+  it("includes JSON parse failure details with stdout", async () => {
+    vi.doMock("../process/exec.js", () => ({
+      runCommandWithTimeout: vi.fn(),
+    }));
+
+    const { ensureTailscaleEndpoint } = await import("./gmail-setup-utils.js");
+    const { runCommandWithTimeout } = await import("../process/exec.js");
+    const runCommand = vi.mocked(runCommandWithTimeout);
+
+    runCommand.mockResolvedValueOnce({
+      stdout: "not-json",
+      stderr: "",
+      code: 0,
+      signal: null,
+      killed: false,
+    });
+
+    let message = "";
+    try {
+      await ensureTailscaleEndpoint({
+        mode: "funnel",
+        path: "/gmail-pubsub",
+        port: 8788,
+      });
+    } catch (err) {
+      message = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(message).toContain("returned invalid JSON");
+    expect(message).toContain("stdout: not-json");
+    expect(message).toContain("code=0");
+  });
+});
