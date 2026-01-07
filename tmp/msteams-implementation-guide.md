@@ -102,14 +102,23 @@ If we add `msteams`, the UI must be updated alongside backend config/types.
 
 ## 2) 2025/2026 Microsoft Guidance (What Changed)
 
-### 2.1 Bot Framework SDK v4 “modern” baseline (Node)
+### 2.1 Microsoft 365 Agents SDK (Recommended)
 
-For Node bots, Microsoft’s maintained samples now use:
+**UPDATE (2026-01):** The Bot Framework SDK (`botbuilder`) was deprecated in December 2025. We now use the **Microsoft 365 Agents SDK** which is the official replacement:
 
-- `CloudAdapter` + `ConfigurationBotFrameworkAuthentication` (instead of older adapter patterns)
-- Express/Restify middleware to parse JSON into `req.body` before `adapter.process(...)`
+```bash
+pnpm add @microsoft/agents-hosting @microsoft/agents-hosting-express @microsoft/agents-hosting-extensions-teams
+```
 
-CloudAdapter’s request processing explicitly requires parsed JSON bodies (it will 400 if `req.body` isn’t an object).
+The new SDK uses:
+- `ActivityHandler` with fluent API for handling activities
+- `startServer()` from `@microsoft/agents-hosting-express` for Express integration
+- `AuthConfiguration` with `clientId`, `clientSecret`, `tenantId` (new naming)
+
+Package sizes (for reference):
+- `@microsoft/agents-hosting`: ~1.4 MB
+- `@microsoft/agents-hosting-express`: ~12 KB
+- `@microsoft/agents-hosting-extensions-teams`: ~537 KB (optional, for Teams-specific features)
 
 ### 2.2 Proactive messaging is required for “slow” work
 
@@ -125,14 +134,11 @@ Best practice for long-running work is:
 - **return quickly**,
 - then send replies later via proactive messaging (`continueConversationAsync` in CloudAdapter).
 
-### 2.3 Microsoft 365 Agents SDK exists (potential future path)
+### 2.3 SDK Migration Complete
 
-Microsoft is actively building the **Microsoft 365 Agents SDK** (Node/TS) which positions itself as a replacement for parts of Bot Framework (`botbuilder`) for Teams and other channels.
+We are using the **Microsoft 365 Agents SDK** (`@microsoft/agents-hosting` v1.1.1+) as the primary SDK. The deprecated Bot Framework SDK (`botbuilder`) is NOT used.
 
-Practical implication for Clawdbot:
-
-- **Ship v1 with Bot Framework** (most stable, most docs, matches Teams docs),
-- but structure our MS Teams provider so it can be swapped to Agents SDK later (thin adapter boundary around “receive activity” + “send activity”).
+GitHub: https://github.com/Microsoft/Agents-for-js
 
 ### 2.4 Deprecations / platform shifts to note
 
@@ -784,15 +790,20 @@ Initial recommendation: support this type first; treat other attachment types as
 
 ## Next Steps (Actionable Implementation Order)
 
-1. **Pick SDK + add deps**: start with Bot Framework (`botbuilder`) unless you’re ready to bet on Agents SDK; add packages + types in `package.json`.
-2. **Config plumbing**: add `msteams` types + zod schema + schema metadata (`src/config/types.ts`, `src/config/zod-schema.ts`, `src/config/schema.ts`).
-3. **Provider skeleton**: add `src/msteams/index.ts`, `token.ts`, and a stub `monitor.ts` that starts/stops cleanly (abortSignal).
-4. **Webhook + echo**: implement `webhook.ts` + minimal activity handler that logs inbound text and sends a fast “ok” reply (no agent yet).
-5. **Conversation store**: persist `ConversationReference` by `conversation.id` and include tenant/serviceUrl; add a small unit test.
-6. **Agent dispatch (async)**: wire inbound messages to `dispatchReplyFromConfig()` using proactive sends (`continueConversationAsync`) to avoid webhook timeouts.
-7. **Access control**: implement DM policy + pairing (reuse existing pairing store) + mention gating in channels.
-8. **Gateway integration**: add provider manager start/stop/status wiring + config reload rules + hook provider allowlist; ensure gateway status UI reflects it.
-9. **Outbound CLI/gateway sends**: add `sendMessageMSTeams` that targets stored conversation IDs; wire `clawdbot send --provider msteams`.
-10. **Media**: implement inbound attachment download for `file.download.info` and a safe outbound strategy (link-only first, cards later).
-11. **Docs + UI + Onboard**: write `docs/providers/msteams.md`, add a minimal UI config form (appId/secret/tenant + webhook port/path), and update `clawdbot onboard` provider selection.
-12. **Hardening**: add dedupe TTL tuning, better error reporting, probe/health endpoints, and integration tests (`monitor.tool-result.test.ts`).
+### Completed (2026-01-07)
+
+1. ✅ **Add SDK packages**: Microsoft 365 Agents SDK (`@microsoft/agents-hosting`, `@microsoft/agents-hosting-express`, `@microsoft/agents-hosting-extensions-teams`)
+2. ✅ **Config plumbing**: `MSTeamsConfig` type + zod schema (`src/config/types.ts`, `src/config/zod-schema.ts`)
+3. ✅ **Provider skeleton**: `src/msteams/` with `index.ts`, `token.ts`, `probe.ts`, `send.ts`, `monitor.ts`
+4. ✅ **Gateway integration**: Provider manager start/stop wiring in `server-providers.ts` and `server.ts`
+
+### Remaining
+
+5. **Test echo bot**: Run gateway with msteams enabled, verify Teams can reach the webhook and receive echo replies.
+6. **Conversation store**: Persist `ConversationReference` by `conversation.id` for proactive messaging.
+7. **Agent dispatch (async)**: Wire inbound messages to `dispatchReplyFromConfig()` using proactive sends.
+8. **Access control**: Implement DM policy + pairing (reuse existing pairing store) + mention gating in channels.
+9. **Config reload**: Add msteams to `config-reload.ts` restart rules.
+10. **Outbound CLI/gateway sends**: Implement `sendMessageMSTeams` properly; wire `clawdbot send --provider msteams`.
+11. **Media**: Implement inbound attachment download and outbound strategy.
+12. **Docs + UI + Onboard**: Write `docs/providers/msteams.md`, add UI config form, update `clawdbot onboard`.
