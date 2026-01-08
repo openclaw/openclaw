@@ -102,6 +102,72 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
   return null;
 }
 
+export function findChromeExecutableWindows(): BrowserExecutable | null {
+  const localAppData = process.env.LOCALAPPDATA ?? "";
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
+  // Must use bracket notation: variable name contains parentheses
+  const programFilesX86 =
+    process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+
+  const candidates: Array<BrowserExecutable> = [
+    // Chrome Canary (user install)
+    {
+      kind: "canary",
+      path: path.join(
+        localAppData,
+        "Google",
+        "Chrome SxS",
+        "Application",
+        "chrome.exe",
+      ),
+    },
+    // Chromium (user install)
+    {
+      kind: "chromium",
+      path: path.join(localAppData, "Chromium", "Application", "chrome.exe"),
+    },
+    // Chrome (user install)
+    {
+      kind: "chrome",
+      path: path.join(
+        localAppData,
+        "Google",
+        "Chrome",
+        "Application",
+        "chrome.exe",
+      ),
+    },
+    // Chrome (system install, 64-bit)
+    {
+      kind: "chrome",
+      path: path.join(
+        programFiles,
+        "Google",
+        "Chrome",
+        "Application",
+        "chrome.exe",
+      ),
+    },
+    // Chrome (system install, 32-bit on 64-bit Windows)
+    {
+      kind: "chrome",
+      path: path.join(
+        programFilesX86,
+        "Google",
+        "Chrome",
+        "Application",
+        "chrome.exe",
+      ),
+    },
+  ];
+
+  for (const candidate of candidates) {
+    if (exists(candidate.path)) return candidate;
+  }
+
+  return null;
+}
+
 function resolveBrowserExecutable(
   resolved: ResolvedBrowserConfig,
 ): BrowserExecutable | null {
@@ -116,6 +182,7 @@ function resolveBrowserExecutable(
 
   if (process.platform === "darwin") return findChromeExecutableMac();
   if (process.platform === "linux") return findChromeExecutableLinux();
+  if (process.platform === "win32") return findChromeExecutableWindows();
   return null;
 }
 
@@ -445,7 +512,7 @@ export async function launchClawdChrome(
   const exe = resolveBrowserExecutable(resolved);
   if (!exe) {
     throw new Error(
-      "No supported browser found (Chrome/Chromium on macOS or Linux).",
+      "No supported browser found (Chrome/Chromium on macOS, Linux, or Windows).",
     );
   }
 
