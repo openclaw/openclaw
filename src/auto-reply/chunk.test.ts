@@ -184,4 +184,29 @@ describe("chunkMarkdownText", () => {
       expect(nonFenceLines.join("\n").trim()).not.toBe("");
     }
   });
+
+  it("keeps parenthetical phrases together", () => {
+    const text = "Heads up now (Though now I'm curious)ok";
+    const chunks = chunkMarkdownText(text, 35);
+    expect(chunks).toEqual(["Heads up now", "(Though now I'm curious)ok"]);
+  });
+
+  it("handles nested parentheses", () => {
+    const text = "Hello (outer (inner) end) world";
+    const chunks = chunkMarkdownText(text, 26);
+    expect(chunks).toEqual(["Hello (outer (inner) end)", "world"]);
+  });
+
+  it("hard-breaks when a parenthetical exceeds the limit", () => {
+    const text = `(${"a".repeat(80)})`;
+    const chunks = chunkMarkdownText(text, 20);
+    expect(chunks[0]?.length).toBe(20);
+    expect(chunks.join("")).toBe(text);
+  });
+
+  it("ignores unmatched closing parentheses", () => {
+    const text = "Hello) world (ok)";
+    const chunks = chunkMarkdownText(text, 12);
+    expect(chunks).toEqual(["Hello)", "world (ok)"]);
+  });
 });
