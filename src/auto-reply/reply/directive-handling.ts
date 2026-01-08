@@ -348,6 +348,7 @@ export async function handleDirectiveOnly(params: {
       }
       const agentDir = resolveClawdbotAgentDir();
       const modelsPath = `${agentDir}/models.json`;
+      const formatPath = (value: string) => shortenHomePath(value);
       const authByProvider = new Map<string, string>();
       for (const entry of allowedModelCatalog) {
         if (authByProvider.has(entry.provider)) continue;
@@ -360,26 +361,40 @@ export async function handleDirectiveOnly(params: {
       }
       const current = `${params.provider}/${params.model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
-      const header =
-        current === defaultLabel
-          ? `Models (current: ${current}):`
-          : `Models (current: ${current}, default: ${defaultLabel}):`;
-      const lines = [header];
+      const lines = [
+        `Current: ${current}`,
+        `Default: ${defaultLabel}`,
+        `Auth file: ${formatPath(resolveAuthStorePathForDisplay())}`,
+      ];
       if (resetModelOverride) {
         lines.push(`(previous selection reset to default)`);
       }
+
+      // Group models by provider
+      const byProvider = new Map<string, typeof allowedModelCatalog>();
       for (const entry of allowedModelCatalog) {
-        const label = `${entry.provider}/${entry.id}`;
-        const aliases = aliasIndex.byKey.get(label);
-        const aliasSuffix =
-          aliases && aliases.length > 0
-            ? ` (alias: ${aliases.join(", ")})`
-            : "";
-        const nameSuffix =
-          entry.name && entry.name !== entry.id ? ` — ${entry.name}` : "";
-        const authLabel = authByProvider.get(entry.provider) ?? "missing";
-        const authSuffix = ` — auth: ${authLabel}`;
-        lines.push(`- ${label}${aliasSuffix}${nameSuffix}${authSuffix}`);
+        const models = byProvider.get(entry.provider);
+        if (models) {
+          models.push(entry);
+          continue;
+        }
+        byProvider.set(entry.provider, [entry]);
+      }
+
+      // Iterate over provider groups
+      for (const provider of byProvider.keys()) {
+        const models = byProvider.get(provider);
+        if (!models) continue;
+        const authLabel = authByProvider.get(provider) ?? "missing";
+        lines.push("");
+        lines.push(`[${provider}] auth: ${authLabel}`);
+        for (const entry of models) {
+          const label = `${entry.provider}/${entry.id}`;
+          const aliases = aliasIndex.byKey.get(label);
+          const aliasSuffix =
+            aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
+          lines.push(`  • ${label}${aliasSuffix}`);
+        }
       }
       return { text: lines.join("\n") };
     }

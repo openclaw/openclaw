@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- (nothing yet)
+- WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 
 ## 2026.1.8
 
