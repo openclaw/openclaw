@@ -10,6 +10,7 @@ import {
   parseCameraSnapPayload,
   writeBase64ToFile,
 } from "../../cli/nodes-camera.js";
+import { parseEnvPairs, parseTimeoutMs } from "../../cli/nodes-run.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
@@ -513,33 +514,9 @@ export function createNodesTool(): AnyAgentTool {
             typeof params.cwd === "string" && params.cwd.trim()
               ? params.cwd.trim()
               : undefined;
-          const envRaw = params.env;
-          const env: Record<string, string> | undefined =
-            Array.isArray(envRaw) && envRaw.length > 0
-              ? (() => {
-                  const parsed: Record<string, string> = {};
-                  for (const pair of envRaw) {
-                    if (typeof pair !== "string") continue;
-                    const idx = pair.indexOf("=");
-                    if (idx <= 0) continue;
-                    const key = pair.slice(0, idx).trim();
-                    const value = pair.slice(idx + 1);
-                    if (!key) continue;
-                    parsed[key] = value;
-                  }
-                  return Object.keys(parsed).length > 0 ? parsed : undefined;
-                })()
-              : undefined;
-          const commandTimeoutMs =
-            typeof params.commandTimeoutMs === "number" &&
-            Number.isFinite(params.commandTimeoutMs)
-              ? params.commandTimeoutMs
-              : undefined;
-          const invokeTimeoutMs =
-            typeof params.invokeTimeoutMs === "number" &&
-            Number.isFinite(params.invokeTimeoutMs)
-              ? params.invokeTimeoutMs
-              : undefined;
+          const env = parseEnvPairs(params.env);
+          const commandTimeoutMs = parseTimeoutMs(params.commandTimeoutMs);
+          const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
           const needsScreenRecording =
             typeof params.needsScreenRecording === "boolean"
               ? params.needsScreenRecording

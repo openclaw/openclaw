@@ -12,6 +12,7 @@ import {
   canvasSnapshotTempPath,
   parseCanvasSnapshotPayload,
 } from "./nodes-canvas.js";
+import { parseEnvPairs, parseTimeoutMs } from "./nodes-run.js";
 import {
   parseScreenRecordPayload,
   screenRecordTempPath,
@@ -192,20 +193,6 @@ function normalizeNodeKey(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+/, "")
     .replace(/-+$/, "");
-}
-
-function parseEnvPairs(pairs: string[] | undefined) {
-  if (!Array.isArray(pairs) || pairs.length === 0) return undefined;
-  const env: Record<string, string> = {};
-  for (const pair of pairs) {
-    const idx = pair.indexOf("=");
-    if (idx <= 0) continue;
-    const key = pair.slice(0, idx).trim();
-    const value = pair.slice(idx + 1);
-    if (!key) continue;
-    env[key] = value;
-  }
-  return Object.keys(env).length > 0 ? env : undefined;
 }
 
 async function resolveNodeId(opts: NodesRpcOpts, query: string) {
@@ -598,12 +585,8 @@ export function registerNodesCli(program: Command) {
             throw new Error("command required");
           }
           const env = parseEnvPairs(opts.env);
-          const timeoutMs = opts.commandTimeout
-            ? Number.parseInt(String(opts.commandTimeout), 10)
-            : undefined;
-          const invokeTimeout = opts.invokeTimeout
-            ? Number.parseInt(String(opts.invokeTimeout), 10)
-            : undefined;
+          const timeoutMs = parseTimeoutMs(opts.commandTimeout);
+          const invokeTimeout = parseTimeoutMs(opts.invokeTimeout);
 
           const invokeParams: Record<string, unknown> = {
             nodeId,
@@ -612,17 +595,14 @@ export function registerNodesCli(program: Command) {
               command,
               cwd: opts.cwd,
               env,
-              timeoutMs: Number.isFinite(timeoutMs) ? timeoutMs : undefined,
+              timeoutMs,
               needsScreenRecording: opts.needsScreenRecording === true,
             },
             idempotencyKey: String(
               opts.idempotencyKey ?? randomIdempotencyKey(),
             ),
           };
-          if (
-            typeof invokeTimeout === "number" &&
-            Number.isFinite(invokeTimeout)
-          ) {
+          if (invokeTimeout !== undefined) {
             invokeParams.timeoutMs = invokeTimeout;
           }
 
