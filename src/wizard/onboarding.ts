@@ -112,12 +112,14 @@ export async function runOnboardingWizard(
     }
   }
 
-  const flowHint = "Configure details later via clawdbot configure.";
+  const quickstartHint = "Configure details later via clawdbot configure.";
+  const advancedHint =
+    "Configure anything via the Clawdbot configuration wizard anytime.";
   let flow = (await prompter.select({
     message: "Onboarding mode",
     options: [
-      { value: "quickstart", label: "QuickStart", hint: flowHint },
-      { value: "advanced", label: "Advanced", hint: flowHint },
+      { value: "quickstart", label: "QuickStart", hint: quickstartHint },
+      { value: "advanced", label: "Advanced", hint: advancedHint },
     ],
     initialValue: "quickstart",
   })) as "quickstart" | "advanced";
