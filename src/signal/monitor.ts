@@ -9,6 +9,7 @@ import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
@@ -20,15 +21,14 @@ import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
 import {
+  formatSignalPairingIdLine,
   formatSignalSenderDisplay,
   formatSignalSenderId,
-  formatSignalPairingIdLine,
   isSignalSenderAllowed,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
 } from "./identity.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
