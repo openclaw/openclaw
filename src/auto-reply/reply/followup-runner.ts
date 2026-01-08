@@ -17,6 +17,7 @@ import type { FollowupRun } from "./queue.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
+  shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import {
   createReplyToModeFilter,
@@ -136,6 +137,7 @@ export function createFollowupRunner(params: {
               sessionId: queued.run.sessionId,
               sessionKey: queued.run.sessionKey,
               messageProvider: queued.run.messageProvider,
+              agentAccountId: queued.run.agentAccountId,
               sessionFile: queued.run.sessionFile,
               workspaceDir: queued.run.workspaceDir,
               config: queued.run.config,
@@ -205,8 +207,15 @@ export function createFollowupRunner(params: {
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
       });
+      const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
+        messageProvider: queued.run.messageProvider,
+        messagingToolSentTargets: runResult.messagingToolSentTargets,
+        originatingTo: queued.originatingTo,
+        accountId: queued.run.agentAccountId,
+      });
+      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
 
-      if (dedupedPayloads.length === 0) return;
+      if (finalPayloads.length === 0) return;
 
       if (autoCompactionCompleted) {
         const count = await incrementCompactionCount({
@@ -217,7 +226,7 @@ export function createFollowupRunner(params: {
         });
         if (queued.run.verboseLevel === "on") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";
-          replyTaggedPayloads.unshift({
+          finalPayloads.unshift({
             text: `🧹 Auto-compaction complete${suffix}.`,
           });
         }
@@ -271,7 +280,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(dedupedPayloads, queued);
+      await sendFollowupPayloads(finalPayloads, queued);
     } finally {
       typing.markRunComplete();
     }

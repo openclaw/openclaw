@@ -791,6 +791,7 @@ export async function getReplyFromConfig(
       sessionId: sessionIdFinal,
       sessionKey,
       messageProvider: sessionCtx.Provider?.trim().toLowerCase() || undefined,
+      agentAccountId: sessionCtx.AccountId,
       sessionFile,
       workspaceDir,
       config: cfg,

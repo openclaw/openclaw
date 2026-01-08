@@ -309,6 +309,7 @@ const SlackChannelSchema = z.object({
   enabled: z.boolean().optional(),
   allow: z.boolean().optional(),
   requireMention: z.boolean().optional(),
+  allowBots: z.boolean().optional(),
   users: z.array(z.union([z.string(), z.number()])).optional(),
   skills: z.array(z.string()).optional(),
   systemPrompt: z.string().optional(),
@@ -319,11 +320,13 @@ const SlackAccountSchema = z.object({
   enabled: z.boolean().optional(),
   botToken: z.string().optional(),
   appToken: z.string().optional(),
+  allowBots: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
   mediaMaxMb: z.number().positive().optional(),
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
+  replyToMode: ReplyToModeSchema.optional(),
   actions: z
     .object({
       reactions: z.boolean().optional(),
@@ -1188,7 +1191,6 @@ export const ClawdbotSchema = z.object({
       });
     })
     .optional(),
-
   telegram: TelegramConfigSchema.optional(),
   discord: DiscordConfigSchema.optional(),
   slack: SlackConfigSchema.optional(),

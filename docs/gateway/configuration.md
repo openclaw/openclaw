@@ -733,15 +733,17 @@ Slack runs in Socket Mode and requires both a bot token and app token:
       groupChannels: ["G123"]
     },
     channels: {
-      C123: { allow: true, requireMention: true },
+      C123: { allow: true, requireMention: true, allowBots: false },
       "#general": {
         allow: true,
         requireMention: true,
+        allowBots: false,
         users: ["U123"],
         skills: ["docs"],
         systemPrompt: "Short answers only."
       }
     },
+    allowBots: false,
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
     replyToMode: "off",           // off | first | all
@@ -767,6 +769,8 @@ Slack runs in Socket Mode and requires both a bot token and app token:
 Multi-account support lives under `slack.accounts` (see the multi-account section above). Env tokens only apply to the default account.
 
 Clawdbot starts Slack when the provider is enabled and both tokens are set (via config or `SLACK_BOT_TOKEN` + `SLACK_APP_TOKEN`). Use `user:<id>` (DM) or `channel:<id>` when specifying delivery targets for cron/CLI commands.
+
+Bot-authored messages are ignored by default. Enable with `slack.allowBots` or `slack.channels.<id>.allowBots`.
 
 Reaction notification modes:
 - `off`: no reaction events.

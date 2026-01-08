@@ -5,7 +5,9 @@ import {
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
+import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { resolveSlackBotToken } from "./token.js";
 
@@ -38,11 +40,17 @@ function resolveToken(params: {
   explicit?: string;
   accountId: string;
   fallbackToken?: string;
+  fallbackSource?: SlackTokenSource;
 }) {
   const explicit = resolveSlackBotToken(params.explicit);
   if (explicit) return explicit;
   const fallback = resolveSlackBotToken(params.fallbackToken);
   if (!fallback) {
+    logVerbose(
+      `slack send: missing bot token for account=${params.accountId} explicit=${Boolean(
+        params.explicit,
+      )} source=${params.fallbackSource ?? "unknown"}`,
+    );
     throw new Error(
       `Slack bot token missing for account "${params.accountId}" (set slack.accounts.${params.accountId}.botToken or SLACK_BOT_TOKEN for default).`,
     );
@@ -154,6 +162,7 @@ export async function sendMessageSlack(
     explicit: opts.token,
     accountId: account.accountId,
     fallbackToken: account.botToken,
+    fallbackSource: account.botTokenSource,
   });
   const client = opts.client ?? new WebClient(token);
   const recipient = parseRecipient(to);
