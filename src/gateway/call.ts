@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { GatewayClient } from "./client.js";
@@ -21,15 +22,20 @@ export type CallGatewayOptions = {
   maxProtocol?: number;
 };
 
-export async function callGateway<T = unknown>(
-  opts: CallGatewayOptions,
-): Promise<T> {
-  const timeoutMs = opts.timeoutMs ?? 10_000;
-  const config = loadConfig();
+export type GatewayConnectionDetails = {
+  url: string;
+  urlSource: string;
+  bindDetail?: string;
+  remoteFallbackNote?: string;
+  message: string;
+};
+
+export function buildGatewayConnectionDetails(
+  options: { config?: ClawdbotConfig; url?: string } = {},
+): GatewayConnectionDetails {
+  const config = options.config ?? loadConfig();
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
-  const authToken = config.gateway?.auth?.token;
-  const authPassword = config.gateway?.auth?.password;
   const localPort = resolveGatewayPort(config);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
@@ -40,14 +46,59 @@ export async function callGateway<T = unknown>(
       ? `ws://${tailnetIPv4}:${localPort}`
       : `ws://127.0.0.1:${localPort}`;
   const urlOverride =
-    typeof opts.url === "string" && opts.url.trim().length > 0
-      ? opts.url.trim()
+    typeof options.url === "string" && options.url.trim().length > 0
+      ? options.url.trim()
       : undefined;
   const remoteUrl =
     typeof remote?.url === "string" && remote.url.trim().length > 0
       ? remote.url.trim()
       : undefined;
   const url = urlOverride || remoteUrl || localUrl;
+  const urlSource = urlOverride
+    ? "cli --url"
+    : remoteUrl
+      ? "config gateway.remote.url"
+      : preferTailnet && tailnetIPv4
+        ? `local tailnet ${tailnetIPv4}`
+        : "local loopback";
+  const remoteFallbackNote =
+    isRemoteMode && !urlOverride && !remoteUrl
+      ? "Note: gateway.mode=remote but gateway.remote.url is missing; using local URL."
+      : undefined;
+  const bindDetail =
+    !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
+  const message = [
+    `Gateway target: ${url}`,
+    `Source: ${urlSource}`,
+    bindDetail,
+    remoteFallbackNote,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  return {
+    url,
+    urlSource,
+    bindDetail,
+    remoteFallbackNote,
+    message,
+  };
+}
+
+export async function callGateway<T = unknown>(
+  opts: CallGatewayOptions,
+): Promise<T> {
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+  const config = loadConfig();
+  const isRemoteMode = config.gateway?.mode === "remote";
+  const remote = isRemoteMode ? config.gateway?.remote : undefined;
+  const authToken = config.gateway?.auth?.token;
+  const authPassword = config.gateway?.auth?.password;
+  const connectionDetails = buildGatewayConnectionDetails({
+    config,
+    url: opts.url,
+  });
+  const url = connectionDetails.url;
   const token =
     (typeof opts.token === "string" && opts.token.trim().length > 0
       ? opts.token.trim()
@@ -72,27 +123,6 @@ export async function callGateway<T = unknown>(
       : typeof authPassword === "string" && authPassword.trim().length > 0
         ? authPassword.trim()
         : undefined);
-  const urlSource = urlOverride
-    ? "cli --url"
-    : remoteUrl
-      ? "config gateway.remote.url"
-      : preferTailnet && tailnetIPv4
-        ? `local tailnet ${tailnetIPv4}`
-        : "local loopback";
-  const remoteFallbackNote =
-    isRemoteMode && !urlOverride && !remoteUrl
-      ? "Note: gateway.mode=remote but gateway.remote.url is missing; using local URL."
-      : undefined;
-  const bindDetail =
-    !urlOverride && !remoteUrl ? `Bind: ${bindMode}` : undefined;
-  const connectionDetails = [
-    `Gateway target: ${url}`,
-    `Source: ${urlSource}`,
-    bindDetail,
-    remoteFallbackNote,
-  ]
-    .filter(Boolean)
-    .join("\n");
 
   const formatCloseError = (code: number, reason: string) => {
     const reasonText = reason?.trim() || "no close reason";
@@ -103,10 +133,10 @@ export async function callGateway<T = unknown>(
           ? "normal closure"
           : "";
     const suffix = hint ? ` ${hint}` : "";
-    return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails}`;
+    return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails.message}`;
   };
   const formatTimeoutError = () =>
-    `gateway timeout after ${timeoutMs}ms\n${connectionDetails}`;
+    `gateway timeout after ${timeoutMs}ms\n${connectionDetails.message}`;
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
