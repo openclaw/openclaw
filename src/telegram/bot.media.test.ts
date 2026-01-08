@@ -225,8 +225,14 @@ describe("telegram inbound media", () => {
 });
 
 describe("telegram media groups", () => {
-  const waitForMediaGroupProcessing = () =>
-    new Promise((resolve) => setTimeout(resolve, 600));
+  const waitForMediaGroupProcessing = async (
+    replySpy: ReturnType<typeof vi.fn>,
+    expectedCalls: number,
+  ) => {
+    await expect
+      .poll(() => replySpy.mock.calls.length, { timeout: 2000 })
+      .toBe(expectedCalls);
+  };
 
   it("buffers messages with same media_group_id and processes them together", async () => {
     const { createTelegramBot } = await import("./bot.js");
@@ -287,7 +293,7 @@ describe("telegram media groups", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    await waitForMediaGroupProcessing();
+    await waitForMediaGroupProcessing(replySpy, 1);
 
     expect(runtimeError).not.toHaveBeenCalled();
     expect(replySpy).toHaveBeenCalledTimes(1);
@@ -348,7 +354,7 @@ describe("telegram media groups", () => {
     });
 
     expect(replySpy).not.toHaveBeenCalled();
-    await waitForMediaGroupProcessing();
+    await waitForMediaGroupProcessing(replySpy, 2);
 
     expect(replySpy).toHaveBeenCalledTimes(2);
 
