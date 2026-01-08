@@ -437,7 +437,8 @@ export function subscribeEmbeddedPiSession(params: {
     lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
     if (!params.onBlockReply) return;
-    const { text: cleanedText, mediaUrls, audioAsVoice } = splitMediaFromOutput(chunk);
+    const splitResult = splitMediaFromOutput(chunk);
+    const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) return;
     void params.onBlockReply({
