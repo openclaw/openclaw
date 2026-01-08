@@ -167,7 +167,7 @@ If set, CLAWDBOT derives defaults (only when you haven’t set them explicitly):
 
 ### `wizard`
 
-Metadata written by CLI wizards (`onboard`, `configure`, `doctor`, `update`).
+Metadata written by CLI wizards (`onboard`, `configure`, `doctor`).
 
 ```json5
 {

@@ -42,7 +42,6 @@ clawdbot [--dev] [--profile <name>] <command>
   setup
   onboard
   configure (alias: config)
-  update
   doctor
   login
   logout
@@ -65,12 +64,6 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
-    wake
-    send
-    agent
-    stop
-    restart
-  gateway-daemon
   models
     list
     status
@@ -106,13 +99,6 @@ clawdbot [--dev] [--profile <name>] <command>
     canvas snapshot
     screen record
     location get
-  canvas
-    snapshot
-    present
-    hide
-    navigate
-    eval
-    a2ui push|reset
   browser
     status
     start
@@ -198,9 +184,6 @@ Options:
 ### `configure` / `config`
 Interactive configuration wizard (models, providers, skills, gateway).
 
-### `update`
-Audit and modernize the local configuration.
-
 ### `doctor`
 Health checks + quick fixes (config + gateway + legacy services).
 
@@ -260,13 +243,6 @@ Approve DM pairing requests across providers.
 Subcommands:
 - `pairing list --provider <telegram|signal|imessage|discord|slack|whatsapp> [--json]`
 - `pairing approve --provider <...> <code> [--notify]`
-
-### `telegram pairing`
-Telegram-only pairing helper.
-
-Subcommands:
-- `telegram pairing list [--json]`
-- `telegram pairing approve <code> [--no-notify]`
 
 ### `hooks gmail`
 Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
@@ -415,9 +391,6 @@ Options:
 - `--ws-log <auto|full|compact>`
 - `--compact` (alias for `--ws-log compact`)
 
-### `gateway-daemon`
-Run the Gateway as a long-lived daemon (same options as `gateway`, minus `--allow-unconfigured` and `--force`).
-
 ### `daemon`
 Manage the Gateway service (launchd/systemd/schtasks).
 
@@ -435,7 +408,6 @@ Notes:
 - `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans).
 - `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
 - `daemon install` options: `--port`, `--runtime`, `--token`.
-- `gateway install|uninstall|start|stop|restart` remain as service aliases; `daemon` is the dedicated manager.
 
 ### `gateway <subcommand>`
 Gateway RPC helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for each).
@@ -444,15 +416,6 @@ Subcommands:
 - `gateway call <method> [--params <json>]`
 - `gateway health`
 - `gateway status`
-- `gateway wake --text <text> [--mode now|next-heartbeat]`
-- `gateway send --to <jidOrPhone> --message <text> [--media-url <url>] [--gif-playback] [--idempotency-key <key>]`
-- `gateway agent --message <text> [--to <jidOrPhone>] [--session-id <id>] [--thinking <level>] [--deliver] [--timeout-seconds <n>] [--idempotency-key <key>]`
-- `gateway install`
-- `gateway uninstall`
-- `gateway start`
-- `gateway stop`
-- `gateway restart`
-- `gateway daemon status` (alias for `clawdbot daemon status`)
 
 Common RPCs:
 - `config.apply` (validate + write config + restart + wake)
@@ -573,26 +536,16 @@ Camera:
 
 Canvas + screen:
 - `nodes canvas snapshot --node <id|name|ip> [--format png|jpg|jpeg] [--max-width <px>] [--quality <0-1>] [--invoke-timeout <ms>]`
+- `nodes canvas present --node <id|name|ip> [--target <urlOrPath>] [--x <px>] [--y <px>] [--width <px>] [--height <px>] [--invoke-timeout <ms>]`
+- `nodes canvas hide --node <id|name|ip> [--invoke-timeout <ms>]`
+- `nodes canvas navigate <url> --node <id|name|ip> [--invoke-timeout <ms>]`
+- `nodes canvas eval [<js>] --node <id|name|ip> [--js <code>] [--invoke-timeout <ms>]`
+- `nodes canvas a2ui push --node <id|name|ip> (--jsonl <path> | --text <text>) [--invoke-timeout <ms>]`
+- `nodes canvas a2ui reset --node <id|name|ip> [--invoke-timeout <ms>]`
 - `nodes screen record --node <id|name|ip> [--screen <index>] [--duration <ms|10s>] [--fps <n>] [--no-audio] [--out <path>] [--invoke-timeout <ms>]`
 
 Location:
 - `nodes location get --node <id|name|ip> [--max-age <ms>] [--accuracy <coarse|balanced|precise>] [--location-timeout <ms>] [--invoke-timeout <ms>]`
-
-## Canvas
-
-Canvas RPC helper (top-level wrapper for `node.invoke`). See [/platforms/mac/canvas](/platforms/mac/canvas).
-
-Common options:
-- `--url`, `--token`, `--timeout`, `--json`
-
-Subcommands:
-- `canvas snapshot [--node <id|name|ip>] [--format png|jpg] [--max-width <px>] [--quality <0-1>]`
-- `canvas present [--node <id|name|ip>] [--target <urlOrPath>] [--x <px>] [--y <px>] [--width <px>] [--height <px>]`
-- `canvas hide [--node <id|name|ip>]`
-- `canvas navigate <url> [--node <id|name|ip>]`
-- `canvas eval [<js>] [--js <code>] [--node <id|name|ip>]`
-- `canvas a2ui push (--jsonl <path> | --text <text>) [--node <id|name|ip>]`
-- `canvas a2ui reset [--node <id|name|ip>]`
 
 ## Browser
 

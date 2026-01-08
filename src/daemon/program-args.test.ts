@@ -43,7 +43,7 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.programArguments).toEqual([
       process.execPath,
       entryPath,
-      "gateway-daemon",
+      "gateway",
       "--port",
       "18789",
     ]);
@@ -70,7 +70,7 @@ describe("resolveGatewayProgramArguments", () => {
     expect(result.programArguments).toEqual([
       process.execPath,
       indexPath,
-      "gateway-daemon",
+      "gateway",
       "--port",
       "18789",
     ]);

@@ -202,7 +202,7 @@ kill -9 <PID>
 If the gateway is supervised by launchd, killing the PID will just respawn it.
 Stop the supervisor instead:
 ```bash
-clawdbot gateway stop
+clawdbot daemon stop
 # Or: launchctl bootout gui/$UID/com.clawdbot.gateway
 ```
 

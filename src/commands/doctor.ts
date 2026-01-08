@@ -244,7 +244,7 @@ export async function doctorCommand(
       }
       if (process.platform === "darwin") {
         note(
-          `LaunchAgent loaded; stopping requires "clawdbot gateway stop" or launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}.`,
+          `LaunchAgent loaded; stopping requires "clawdbot daemon stop" or launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}.`,
           "Gateway",
         );
       }

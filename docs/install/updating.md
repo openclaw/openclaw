@@ -34,12 +34,12 @@ Then:
 
 ```bash
 clawdbot doctor
-clawdbot gateway restart
+clawdbot daemon restart
 clawdbot health
 ```
 
 Notes:
-- If your Gateway runs as a service, `clawdbot gateway restart` is preferred over killing PIDs.
+- If your Gateway runs as a service, `clawdbot daemon restart` is preferred over killing PIDs.
 - If you’re pinned to a specific version, see “Rollback / pinning” below.
 
 ## Update (Control UI / RPC)
@@ -87,8 +87,8 @@ Details: [Doctor](/gateway/doctor)
 CLI (works regardless of OS):
 
 ```bash
-clawdbot gateway stop
-clawdbot gateway restart
+clawdbot daemon stop
+clawdbot daemon restart
 clawdbot gateway --port 18789
 ```
 
@@ -113,7 +113,7 @@ Then restart + re-run doctor:
 
 ```bash
 clawdbot doctor
-clawdbot gateway restart
+clawdbot daemon restart
 ```
 
 ### Pin (source) by date
@@ -130,7 +130,7 @@ Then reinstall deps + restart:
 ```bash
 pnpm install
 pnpm build
-clawdbot gateway restart
+clawdbot daemon restart
 ```
 
 If you want to go back to latest later:

@@ -14,7 +14,6 @@ import { sendCommand } from "../commands/send.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
 import { statusCommand } from "../commands/status.js";
-import { updateCommand } from "../commands/update.js";
 import {
   isNixMode,
   loadConfig,
@@ -31,7 +30,6 @@ import { VERSION } from "../version.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { emitCliBanner, formatCliBannerLine } from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
-import { registerCanvasCli } from "./canvas-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { registerCronCli } from "./cron-cli.js";
 import { registerDaemonCli } from "./daemon-cli.js";
@@ -45,7 +43,6 @@ import { registerNodesCli } from "./nodes-cli.js";
 import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
 import { registerProvidersCli } from "./providers-cli.js";
-import { registerTelegramCli } from "./telegram-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
 
 export { forceFreePort };
@@ -345,17 +342,6 @@ export function buildProgram() {
     });
 
   program
-    .command("update")
-    .description("Audit and modernize the local configuration")
-    .action(async () => {
-      try {
-        await updateCommand(defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
-
   program
     .command("login")
     .description("Link your personal WhatsApp via QR (web provider)")
@@ -633,7 +619,6 @@ Examples:
     }
   });
 
-  registerCanvasCli(program);
   registerDaemonCli(program);
   registerGatewayCli(program);
   registerModelsCli(program);
@@ -645,7 +630,6 @@ Examples:
   registerHooksCli(program);
   registerPairingCli(program);
   registerProvidersCli(program);
-  registerTelegramCli(program);
 
   program
     .command("status")

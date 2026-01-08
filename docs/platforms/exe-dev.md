@@ -167,7 +167,7 @@ More: [Linux](/platforms/linux)
 ```bash
 npm i -g clawdbot@latest
 clawdbot doctor
-clawdbot gateway restart
+clawdbot daemon restart
 clawdbot health
 ```
 

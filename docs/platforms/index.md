@@ -31,7 +31,7 @@ Linux companion apps are planned, but the core Gateway is fully supported today.
 Use one of these (all supported):
 
 - Wizard (recommended): `clawdbot onboard --install-daemon`
-- Direct: `clawdbot daemon install` (alias: `clawdbot gateway install`)
+- Direct: `clawdbot daemon install`
 - Configure flow: `clawdbot configure` → select **Gateway daemon**
 - Repair/migrate: `clawdbot doctor` (offers to install or fix the service)
 
