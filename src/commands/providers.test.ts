@@ -7,6 +7,10 @@ const configMocks = vi.hoisted(() => ({
   writeConfigFile: vi.fn().mockResolvedValue(undefined),
 }));
 
+const authMocks = vi.hoisted(() => ({
+  loadAuthProfileStore: vi.fn(),
+}));
+
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
@@ -16,9 +20,19 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../agents/auth-profiles.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/auth-profiles.js")>();
+  return {
+    ...actual,
+    loadAuthProfileStore: authMocks.loadAuthProfileStore,
+  };
+});
+
 import {
   formatGatewayProvidersStatusLines,
   providersAddCommand,
+  providersListCommand,
   providersRemoveCommand,
 } from "./providers.js";
 
@@ -43,9 +57,14 @@ describe("providers command", () => {
   beforeEach(() => {
     configMocks.readConfigFileSnapshot.mockReset();
     configMocks.writeConfigFile.mockClear();
+    authMocks.loadAuthProfileStore.mockReset();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
+    authMocks.loadAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    });
   });
 
   it("adds a non-default telegram account", async () => {
@@ -114,6 +133,116 @@ describe("providers command", () => {
     };
     expect(next.discord?.accounts?.work).toBeUndefined();
     expect(next.discord?.accounts?.default?.token).toBe("d0");
+  });
+
+  it("adds a named WhatsApp account", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
+    await providersAddCommand(
+      { provider: "whatsapp", account: "family", name: "Family Phone" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      whatsapp?: { accounts?: Record<string, { name?: string }> };
+    };
+    expect(next.whatsapp?.accounts?.family?.name).toBe("Family Phone");
+  });
+
+  it("adds a second signal account with a distinct name", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: {
+        signal: {
+          accounts: {
+            default: { account: "+15555550111", name: "Primary" },
+          },
+        },
+      },
+    });
+
+    await providersAddCommand(
+      {
+        provider: "signal",
+        account: "lab",
+        name: "Lab",
+        signalNumber: "+15555550123",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      signal?: {
+        accounts?: Record<string, { account?: string; name?: string }>;
+      };
+    };
+    expect(next.signal?.accounts?.lab?.account).toBe("+15555550123");
+    expect(next.signal?.accounts?.lab?.name).toBe("Lab");
+    expect(next.signal?.accounts?.default?.name).toBe("Primary");
+  });
+
+  it("disables a default provider account when remove has no delete flag", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: {
+        discord: { token: "d0", enabled: true },
+      },
+    });
+
+    const prompt = { confirm: vi.fn().mockResolvedValue(true) };
+    const prompterModule = await import("../wizard/clack-prompter.js");
+    const promptSpy = vi
+      .spyOn(prompterModule, "createClackPrompter")
+      .mockReturnValue(prompt as never);
+
+    await providersRemoveCommand(
+      { provider: "discord", account: "default" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      discord?: { enabled?: boolean };
+    };
+    expect(next.discord?.enabled).toBe(false);
+    promptSpy.mockRestore();
+  });
+
+  it("includes external auth profiles in JSON output", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: {},
+    });
+    authMocks.loadAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "token",
+          refresh: "refresh",
+          expires: 0,
+          created: 0,
+        },
+        "openai-codex:codex-cli": {
+          type: "oauth",
+          provider: "openai",
+          access: "token",
+          refresh: "refresh",
+          expires: 0,
+          created: 0,
+        },
+      },
+    });
+
+    await providersListCommand({ json: true, usage: false }, runtime);
+    const payload = JSON.parse(
+      String(runtime.log.mock.calls[0]?.[0] ?? "{}"),
+    ) as { auth?: Array<{ id: string }> };
+    const ids = payload.auth?.map((entry) => entry.id) ?? [];
+    expect(ids).toContain("anthropic:claude-cli");
+    expect(ids).toContain("openai-codex:codex-cli");
   });
 
   it("stores default account names in accounts when multiple accounts exist", async () => {
