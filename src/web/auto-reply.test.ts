@@ -1151,7 +1151,10 @@ describe("web auto-reply", () => {
         bindings: [
           {
             agentId: "work",
-            match: { provider: "whatsapp", peer: { kind: "group", id: "[redacted-email]" } },
+            match: {
+              provider: "whatsapp",
+              peer: { kind: "group", id: "[redacted-email]" },
+            },
           },
         ],
       },
