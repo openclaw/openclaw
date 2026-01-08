@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { CLAUDE_CLI_PROFILE_ID, type AuthProfileStore } from "../agents/auth-profiles.js";
+import {
+  type AuthProfileStore,
+  CLAUDE_CLI_PROFILE_ID,
+} from "../agents/auth-profiles.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 
 describe("buildAuthChoiceOptions", () => {
