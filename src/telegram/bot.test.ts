@@ -285,6 +285,9 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
     expect(sendMessageSpy.mock.calls[0]?.[0]).toBe(1234);
     expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain(
+      "Your Telegram user id: 999",
+    );
+    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain(
       "Pairing code:",
     );
     expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("PAIRME12");
