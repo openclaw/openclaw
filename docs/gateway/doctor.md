@@ -47,8 +47,11 @@ cat ~/.clawdbot/clawdbot.json
 - Legacy config migration and normalization.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
+- Legacy workspace dir detection (`~/clawdis`, `~/clawdbot`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
+- Gateway runtime checks (service installed but not running; cached launchd label).
+- Gateway port collision diagnostics (default `18789`).
 - Security warnings for open DM policies.
 - systemd linger check on Linux.
 - Writes updated config + wizard metadata.
@@ -140,11 +143,17 @@ workspace.
 Doctor runs a health check and offers to restart the gateway when it looks
 unhealthy.
 
-### 11) Config write + wizard metadata
+### 11) Gateway runtime + port diagnostics
+Doctor inspects the daemon runtime (PID, last exit status) and warns when the
+service is installed but not actually running. It also checks for port collisions
+on the gateway port (default `18789`) and reports likely causes (gateway already
+running, SSH tunnel).
+
+### 12) Config write + wizard metadata
 Doctor persists any config changes and stamps wizard metadata to record the
 doctor run.
 
-### 12) Workspace tips (backup + memory system)
+### 13) Workspace tips (backup + memory system)
 Doctor suggests a workspace memory system when missing and prints a backup tip
 if the workspace is not already under git.
 
