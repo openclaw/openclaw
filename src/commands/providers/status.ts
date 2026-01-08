@@ -1,31 +1,35 @@
 import { withProgress } from "../../cli/progress.js";
-import { callGateway } from "../../gateway/call.js";
-import { listChatProviders } from "../../providers/registry.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import {
-  type ChatProvider,
-  formatProviderAccountLabel,
-  requireValidConfig,
-} from "./shared.js";
+  type ClawdbotConfig,
+  readConfigFileSnapshot,
+} from "../../config/config.js";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
 } from "../../discord/accounts.js";
+import { callGateway } from "../../gateway/call.js";
 import {
   listIMessageAccountIds,
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
+import { formatAge } from "../../infra/provider-summary.js";
+import { listChatProviders } from "../../providers/registry.js";
+import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
   listSignalAccountIds,
   resolveSignalAccount,
 } from "../../signal/accounts.js";
-import { listSlackAccountIds, resolveSlackAccount } from "../../slack/accounts.js";
+import {
+  listSlackAccountIds,
+  resolveSlackAccount,
+} from "../../slack/accounts.js";
 import {
   listTelegramAccountIds,
   resolveTelegramAccount,
 } from "../../telegram/accounts.js";
+import { formatDocsLink } from "../../terminal/links.js";
+import { theme } from "../../terminal/theme.js";
+import { normalizeE164 } from "../../utils.js";
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAccount,
@@ -35,9 +39,11 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../../web/session.js";
-import { formatAge } from "../../infra/provider-summary.js";
-import { normalizeE164 } from "../../utils.js";
-import { readConfigFileSnapshot, type ClawdbotConfig } from "../../config/config.js";
+import {
+  type ChatProvider,
+  formatProviderAccountLabel,
+  requireValidConfig,
+} from "./shared.js";
 
 export type ProvidersStatusOptions = {
   json?: boolean;
@@ -80,10 +86,16 @@ export function formatGatewayProvidersStatusLines(
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
       }
-      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
+      if (
+        typeof account.botTokenSource === "string" &&
+        account.botTokenSource
+      ) {
         bits.push(`bot:${account.botTokenSource}`);
       }
-      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
+      if (
+        typeof account.appTokenSource === "string" &&
+        account.appTokenSource
+      ) {
         bits.push(`app:${account.appTokenSource}`);
       }
       if (typeof account.baseUrl === "string" && account.baseUrl) {
@@ -176,10 +188,16 @@ async function formatConfigProvidersStatusLines(
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
       }
-      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
+      if (
+        typeof account.botTokenSource === "string" &&
+        account.botTokenSource
+      ) {
         bits.push(`bot:${account.botTokenSource}`);
       }
-      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
+      if (
+        typeof account.appTokenSource === "string" &&
+        account.appTokenSource
+      ) {
         bits.push(`app:${account.appTokenSource}`);
       }
       if (typeof account.baseUrl === "string" && account.baseUrl) {
@@ -242,7 +260,8 @@ async function formatConfigProvidersStatusLines(
         name: account.name,
         enabled: account.enabled,
         configured:
-          Boolean(account.botToken?.trim()) && Boolean(account.appToken?.trim()),
+          Boolean(account.botToken?.trim()) &&
+          Boolean(account.appToken?.trim()),
         botTokenSource: account.botTokenSource,
         appTokenSource: account.appTokenSource,
       };
@@ -259,11 +278,18 @@ async function formatConfigProvidersStatusLines(
     }),
     imessage: listIMessageAccountIds(cfg).map((accountId) => {
       const account = resolveIMessageAccount({ cfg, accountId });
+      const imsgConfigured = Boolean(
+        account.config.cliPath ||
+          account.config.dbPath ||
+          account.config.allowFrom ||
+          account.config.service ||
+          account.config.region,
+      );
       return {
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
-        configured: account.configured,
+        configured: imsgConfigured,
       };
     }),
   } satisfies Partial<Record<ChatProvider, Array<Record<string, unknown>>>>;

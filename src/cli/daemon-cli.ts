@@ -5,6 +5,7 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../commands/daemon-runtime.js";
+import { resolveControlUiLinks } from "../commands/onboard-helpers.js";
 import {
   createConfigIO,
   loadConfig,
@@ -30,7 +31,6 @@ import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
-import { resolveControlUiLinks } from "../commands/onboard-helpers.js";
 import {
   formatPortDiagnostics,
   inspectPortUsage,
@@ -48,10 +48,14 @@ type ConfigSummary = {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
+  controlUi?: {
+    enabled?: boolean;
+    basePath?: string;
+  };
 };
 
 type GatewayStatusSummary = {
-  bindMode: string;
+  bindMode: "auto" | "lan" | "tailnet" | "loopback";
   bindHost: string | null;
   port: number;
   portSource: "service args" | "env/config";
@@ -372,6 +376,9 @@ async function gatherDaemonStatus(opts: {
     exists: cliSnapshot?.exists ?? false,
     valid: cliSnapshot?.valid ?? true,
     ...(cliSnapshot?.issues?.length ? { issues: cliSnapshot.issues } : {}),
+    ...(cliCfg.gateway?.controlUi
+      ? { controlUi: cliCfg.gateway.controlUi }
+      : {}),
   };
   const daemonConfigSummary: ConfigSummary = {
     path: daemonSnapshot?.path ?? daemonConfigPath,
@@ -379,6 +386,9 @@ async function gatherDaemonStatus(opts: {
     valid: daemonSnapshot?.valid ?? true,
     ...(daemonSnapshot?.issues?.length
       ? { issues: daemonSnapshot.issues }
+      : {}),
+    ...(daemonCfg.gateway?.controlUi
+      ? { controlUi: daemonCfg.gateway.controlUi }
       : {}),
   };
   const configMismatch = cliConfigSummary.path !== daemonConfigSummary.path;
@@ -390,7 +400,11 @@ async function gatherDaemonStatus(opts: {
     ? "service args"
     : "env/config";
 
-  const bindMode = daemonCfg.gateway?.bind ?? "loopback";
+  const bindMode = (daemonCfg.gateway?.bind ?? "loopback") as
+    | "auto"
+    | "lan"
+    | "tailnet"
+    | "loopback";
   const bindHost = resolveGatewayBindHost(bindMode);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4);
@@ -587,7 +601,12 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (runtimeLine) {
     defaultRuntime.log(`Runtime: ${runtimeLine}`);
   }
-  if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
+  if (
+    rpc &&
+    !rpc.ok &&
+    service.loaded &&
+    service.runtime?.status === "running"
+  ) {
     defaultRuntime.log(
       "Warm-up: launch agents can take a few seconds. Try again shortly.",
     );

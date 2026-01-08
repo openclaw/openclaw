@@ -11,12 +11,18 @@ import {
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
+import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  GATEWAY_DAEMON_RUNTIME_OPTIONS,
+  type GatewayDaemonRuntime,
+} from "./daemon-runtime.js";
 import { maybeRepairAnthropicOAuthProfileId } from "./doctor-auth.js";
 import {
   buildGatewayRuntimeHints,
@@ -56,13 +62,7 @@ import {
   DEFAULT_WORKSPACE,
   printWizardHeader,
 } from "./onboard-helpers.js";
-import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
-import {
-  DEFAULT_GATEWAY_DAEMON_RUNTIME,
-  GATEWAY_DAEMON_RUNTIME_OPTIONS,
-  type GatewayDaemonRuntime,
-} from "./daemon-runtime.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
