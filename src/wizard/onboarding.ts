@@ -433,17 +433,29 @@ export async function runOnboardingWizard(
     requireConfirm: false,
   });
 
-  const installDaemon = await prompter.confirm({
-    message: "Install Gateway daemon (recommended)",
-    initialValue: true,
-  });
+  const installDaemon =
+    flow === "quickstart"
+      ? true
+      : await prompter.confirm({
+          message: "Install Gateway daemon (recommended)",
+          initialValue: true,
+        });
 
   if (installDaemon) {
-    const daemonRuntime = (await prompter.select({
-      message: "Gateway daemon runtime",
-      options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
-      initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
-    })) as GatewayDaemonRuntime;
+    const daemonRuntime =
+      flow === "quickstart"
+        ? (DEFAULT_GATEWAY_DAEMON_RUNTIME as GatewayDaemonRuntime)
+        : ((await prompter.select({
+            message: "Gateway daemon runtime",
+            options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+            initialValue: opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME,
+          })) as GatewayDaemonRuntime);
+    if (flow === "quickstart") {
+      await prompter.note(
+        "QuickStart uses Node for the Gateway daemon (stable + supported).",
+        "Gateway daemon runtime",
+      );
+    }
     const service = resolveGatewayService();
     const loaded = await service.isLoaded({ env: process.env });
     if (loaded) {
