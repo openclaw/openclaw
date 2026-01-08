@@ -24,6 +24,7 @@ import { runSignalSseLoop } from "./sse-reconnect.js";
 
 type SignalEnvelope = {
   sourceNumber?: string | null;
+  sourceUuid?: string | null;
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
@@ -319,9 +320,9 @@ export async function monitorSignalProvider(
         envelope.dataMessage ?? envelope.editMessage?.dataMessage;
       if (!dataMessage) return;
 
-      const sender = envelope.sourceNumber?.trim();
+      const sender = envelope.sourceNumber?.trim() || envelope.sourceUuid?.trim();
       if (!sender) return;
-      if (account && normalizeE164(sender) === normalizeE164(account)) {
+      if (account && envelope.sourceNumber && normalizeE164(envelope.sourceNumber) === normalizeE164(account)) {
         return;
       }
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
