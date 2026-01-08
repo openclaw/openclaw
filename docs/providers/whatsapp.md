@@ -188,3 +188,16 @@ Recommended for personal numbers:
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
 - Troubleshooting guide: [`docs/troubleshooting.md`](/gateway/troubleshooting).
+
+## Troubleshooting (quick)
+
+**Not linked / QR login required**
+- Symptom: `providers status` shows `linked: false` or warns “Not linked”.
+- Fix: run `clawdbot providers login` on the gateway host and scan the QR (WhatsApp → Settings → Linked Devices).
+
+**Linked but disconnected / reconnect loop**
+- Symptom: `providers status` shows `running, disconnected` or warns “Linked but disconnected”.
+- Fix: `clawdbot doctor` (or restart the gateway). If it persists, relink via `providers login` and inspect `clawdbot logs --follow`.
+
+**Bun runtime**
+- WhatsApp uses Baileys; run the gateway with **Node** for WhatsApp. (See Getting Started runtime note.)

@@ -97,6 +97,17 @@ export const providersHandlers: GatewayRequestHandlers = {
           );
           lastProbeAt = Date.now();
         }
+        const groups =
+          cfg.telegram?.accounts?.[account.accountId]?.groups ?? cfg.telegram?.groups;
+        const allowUnmentionedGroups =
+          Boolean(groups?.["*"] && (groups["*"] as { requireMention?: boolean }).requireMention === false) ||
+          Object.entries(groups ?? {}).some(
+            ([key, value]) =>
+              key !== "*" &&
+              Boolean(value) &&
+              typeof value === "object" &&
+              (value as { requireMention?: boolean }).requireMention === false,
+          );
         return {
           accountId: account.accountId,
           name: account.name,
@@ -110,6 +121,7 @@ export const providersHandlers: GatewayRequestHandlers = {
           lastError: rt?.lastError ?? null,
           probe: telegramProbe,
           lastProbeAt,
+          allowUnmentionedGroups,
         };
       }),
     );

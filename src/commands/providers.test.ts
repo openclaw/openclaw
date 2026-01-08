@@ -339,4 +339,42 @@ describe("providers command", () => {
     expect(lines.join("\n")).toMatch(/Message Content Intent is limited/i);
     expect(lines.join("\n")).toMatch(/Run: clawdbot doctor/);
   });
+
+  it("surfaces Telegram privacy-mode hints when allowUnmentionedGroups is enabled", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      telegramAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          allowUnmentionedGroups: true,
+        },
+      ],
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/Telegram Bot API privacy mode/i);
+  });
+
+  it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
+    const unlinked = formatGatewayProvidersStatusLines({
+      whatsappAccounts: [{ accountId: "default", enabled: true, linked: false }],
+    });
+    expect(unlinked.join("\n")).toMatch(/WhatsApp/i);
+    expect(unlinked.join("\n")).toMatch(/Not linked/i);
+
+    const disconnected = formatGatewayProvidersStatusLines({
+      whatsappAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          linked: true,
+          running: true,
+          connected: false,
+          reconnectAttempts: 5,
+          lastError: "connection closed",
+        },
+      ],
+    });
+    expect(disconnected.join("\n")).toMatch(/disconnected/i);
+  });
 });

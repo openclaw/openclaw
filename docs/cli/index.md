@@ -203,6 +203,7 @@ Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
 Subcommands:
 - `providers list`: show configured chat providers and auth profiles (Claude Code + Codex CLI OAuth sync included).
 - `providers status`: check gateway reachability and provider health (`--probe` to verify credentials; use `status --deep` for local-only probes).
+- Tip: `providers status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `clawdbot doctor`).
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `providers login`: interactive provider login (WhatsApp Web only).

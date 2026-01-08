@@ -228,10 +228,11 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 
 ## Troubleshooting
 
-**Bot doesn't respond to non-mention messages in group:**
-- Check if group is in `telegram.groups` with `requireMention: false`
-- Or use `"*": { "requireMention": false }` to enable for all groups
-- Test with `/activation always` command (requires config change to persist)
+**Bot doesn’t respond to non-mention messages in a group:**
+- If you set `telegram.groups.*.requireMention=false`, Telegram’s Bot API **privacy mode** must be disabled.
+  - BotFather: `/setprivacy` → **Disable** (then remove + re-add the bot to the group)
+- `clawdbot providers status` shows a warning when config expects unmentioned group messages.
+- Quick test: `/activation always` (session-only; use config for persistence)
 
 **Bot not seeing group messages at all:**
 - If `telegram.groups` is set, the group must be listed or use `"*"`

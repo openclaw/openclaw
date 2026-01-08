@@ -75,6 +75,9 @@ export function formatGatewayProvidersStatusLines(
       if (typeof account.running === "boolean") {
         bits.push(account.running ? "running" : "stopped");
       }
+      if (typeof account.connected === "boolean") {
+        bits.push(account.connected ? "connected" : "disconnected");
+      }
       if (typeof account.mode === "string" && account.mode.length > 0) {
         bits.push(`mode:${account.mode}`);
       }
@@ -109,6 +112,9 @@ export function formatGatewayProvidersStatusLines(
         messageContent !== "enabled"
       ) {
         bits.push(`intents:content=${messageContent}`);
+      }
+      if (account.allowUnmentionedGroups === true) {
+        bits.push("groups:unmentioned");
       }
       if (typeof account.baseUrl === "string" && account.baseUrl) {
         bits.push(`url:${account.baseUrl}`);
