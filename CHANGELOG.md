@@ -21,6 +21,7 @@
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
+- Control UI: show skill install progress + per-skill results, hide install once binaries present. (#445) — thanks @pkrmf
 
 ## 2026.1.8
 
