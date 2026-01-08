@@ -14,27 +14,24 @@ import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { maybeRepairAnthropicOAuthProfileId } from "./doctor-auth.js";
 import {
-  maybeMigrateLegacyConfigFile,
-  normalizeLegacyConfigValues,
-} from "./doctor-legacy-config.js";
-import {
   maybeMigrateLegacyGatewayService,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import {
-  createDoctorPrompter,
-  type DoctorOptions,
-} from "./doctor-prompter.js";
+  maybeMigrateLegacyConfigFile,
+  normalizeLegacyConfigValues,
+} from "./doctor-legacy-config.js";
+import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages } from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
-import {
-  detectLegacyStateMigrations,
-  runLegacyStateMigrations,
-} from "./doctor-state-migrations.js";
 import {
   noteStateIntegrity,
   noteWorkspaceBackupTip,
 } from "./doctor-state-integrity.js";
+import {
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+} from "./doctor-state-migrations.js";
 import {
   MEMORY_SYSTEM_PROMPT,
   shouldSuggestMemorySystem,

@@ -129,6 +129,8 @@ export type WhatsAppConfig = {
 };
 
 export type WhatsAppAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
   /** If false, do not start this WhatsApp account provider. Default: true. */
   enabled?: boolean;
   /** Override auth directory (Baileys multi-file auth state). */
@@ -258,33 +260,9 @@ export type TelegramActionConfig = {
   sendMessage?: boolean;
 };
 
-export type TelegramTopicConfig = {
-  requireMention?: boolean;
-  /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
-  skills?: string[];
-  /** If false, disable the bot for this topic. */
-  enabled?: boolean;
-  /** Optional allowlist for topic senders (ids or usernames). */
-  allowFrom?: Array<string | number>;
-  /** Optional system prompt snippet for this topic. */
-  systemPrompt?: string;
-};
-
-export type TelegramGroupConfig = {
-  requireMention?: boolean;
-  /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
-  skills?: string[];
-  /** Per-topic configuration (key is message_thread_id as string) */
-  topics?: Record<string, TelegramTopicConfig>;
-  /** If false, disable the bot for this group (and its topics). */
-  enabled?: boolean;
-  /** Optional allowlist for group senders (ids or usernames). */
-  allowFrom?: Array<string | number>;
-  /** Optional system prompt snippet for this group. */
-  systemPrompt?: string;
-};
-
-export type TelegramConfig = {
+export type TelegramAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
   /**
    * Controls how Telegram direct chats (DMs) are handled:
    * - "pairing" (default): unknown senders get a pairing code; owner must approve
@@ -293,10 +271,10 @@ export type TelegramConfig = {
    * - "disabled": ignore all inbound DMs
    */
   dmPolicy?: DmPolicy;
-  /** If false, do not start the Telegram provider. Default: true. */
+  /** If false, do not start this Telegram account. Default: true. */
   enabled?: boolean;
   botToken?: string;
-  /** Path to file containing bot token (for secret managers like agenix) */
+  /** Path to file containing bot token (for secret managers like agenix). */
   tokenFile?: string;
   /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
@@ -325,6 +303,37 @@ export type TelegramConfig = {
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
 };
+
+export type TelegramTopicConfig = {
+  requireMention?: boolean;
+  /** If specified, only load these skills for this topic. Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** If false, disable the bot for this topic. */
+  enabled?: boolean;
+  /** Optional allowlist for topic senders (ids or usernames). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this topic. */
+  systemPrompt?: string;
+};
+
+export type TelegramGroupConfig = {
+  requireMention?: boolean;
+  /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
+  skills?: string[];
+  /** Per-topic configuration (key is message_thread_id as string) */
+  topics?: Record<string, TelegramTopicConfig>;
+  /** If false, disable the bot for this group (and its topics). */
+  enabled?: boolean;
+  /** Optional allowlist for group senders (ids or usernames). */
+  allowFrom?: Array<string | number>;
+  /** Optional system prompt snippet for this group. */
+  systemPrompt?: string;
+};
+
+export type TelegramConfig = {
+  /** Optional per-account Telegram configuration (multi-account). */
+  accounts?: Record<string, TelegramAccountConfig>;
+} & TelegramAccountConfig;
 
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
@@ -387,8 +396,10 @@ export type DiscordActionConfig = {
   stickerUploads?: boolean;
 };
 
-export type DiscordConfig = {
-  /** If false, do not start the Discord provider. Default: true. */
+export type DiscordAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
   /**
@@ -412,6 +423,11 @@ export type DiscordConfig = {
   /** New per-guild config keyed by guild id or slug. */
   guilds?: Record<string, DiscordGuildEntry>;
 };
+
+export type DiscordConfig = {
+  /** Optional per-account Discord configuration (multi-account). */
+  accounts?: Record<string, DiscordAccountConfig>;
+} & DiscordAccountConfig;
 
 export type SlackDmConfig = {
   /** If false, ignore all incoming Slack DMs. Default: true. */
@@ -465,8 +481,10 @@ export type SlackSlashCommandConfig = {
   ephemeral?: boolean;
 };
 
-export type SlackConfig = {
-  /** If false, do not start the Slack provider. Default: true. */
+export type SlackAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this Slack account. Default: true. */
   enabled?: boolean;
   botToken?: string;
   appToken?: string;
@@ -491,8 +509,15 @@ export type SlackConfig = {
   channels?: Record<string, SlackChannelConfig>;
 };
 
-export type SignalConfig = {
-  /** If false, do not start the Signal provider. Default: true. */
+export type SlackConfig = {
+  /** Optional per-account Slack configuration (multi-account). */
+  accounts?: Record<string, SlackAccountConfig>;
+} & SlackAccountConfig;
+
+export type SignalAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this Signal account. Default: true. */
   enabled?: boolean;
   /** Optional explicit E.164 account for signal-cli. */
   account?: string;
@@ -527,8 +552,15 @@ export type SignalConfig = {
   mediaMaxMb?: number;
 };
 
-export type IMessageConfig = {
-  /** If false, do not start the iMessage provider. Default: true. */
+export type SignalConfig = {
+  /** Optional per-account Signal configuration (multi-account). */
+  accounts?: Record<string, SignalAccountConfig>;
+} & SignalAccountConfig;
+
+export type IMessageAccountConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
+  /** If false, do not start this iMessage account. Default: true. */
   enabled?: boolean;
   /** imsg CLI binary path (default: imsg). */
   cliPath?: string;
@@ -564,6 +596,11 @@ export type IMessageConfig = {
     }
   >;
 };
+
+export type IMessageConfig = {
+  /** Optional per-account iMessage configuration (multi-account). */
+  accounts?: Record<string, IMessageAccountConfig>;
+} & IMessageAccountConfig;
 
 export type QueueMode =
   | "steer"
