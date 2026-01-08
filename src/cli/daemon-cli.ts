@@ -30,6 +30,7 @@ import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
+import { resolveControlUiLinks } from "../commands/onboard-helpers.js";
 import {
   formatPortDiagnostics,
   inspectPortUsage,
@@ -562,6 +563,17 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       `Gateway: bind=${status.gateway.bindMode} (${bindHost}), port=${status.gateway.port} (${status.gateway.portSource})`,
     );
     defaultRuntime.log(`Probe target: ${status.gateway.probeUrl}`);
+    const controlUiEnabled = status.config?.daemon?.controlUi?.enabled ?? true;
+    if (!controlUiEnabled) {
+      defaultRuntime.log("Dashboard: disabled");
+    } else {
+      const links = resolveControlUiLinks({
+        port: status.gateway.port,
+        bind: status.gateway.bindMode,
+        basePath: status.config?.daemon?.controlUi?.basePath,
+      });
+      defaultRuntime.log(`Dashboard: ${links.httpUrl}`);
+    }
     if (status.gateway.probeNote) {
       defaultRuntime.log(`Probe note: ${status.gateway.probeNote}`);
     }
