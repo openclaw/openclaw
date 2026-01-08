@@ -13,29 +13,29 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    ```
    Repairs/migrates config/state + runs health checks. See [Doctor](/gateway/doctor).
 
-2) **Local probes**
+2) **Daemon + port state**
+   ```bash
+   clawdbot daemon status
+   ```
+   Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the daemon likely used.
+
+3) **Local probes**
    ```bash
    clawdbot status --deep
    ```
    Checks provider connectivity and local health. See [Health](/gateway/health).
 
-3) **Gateway snapshot**
+4) **Gateway snapshot**
    ```bash
    clawdbot health --json
    ```
    Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
 
-4) **Tail the latest log**
+5) **Tail the latest log**
    ```bash
    tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)"
    ```
    File logs are separate from service logs; see [Logging](/gateway/logging) and [Troubleshooting](/gateway/troubleshooting).
-
-5) **Daemon + port state**
-   ```bash
-   clawdbot daemon status
-   ```
-   Shows service runtime, port listeners, and last gateway error if it refused to bind.
 
 ## What is Clawdbot?
 
@@ -92,18 +92,18 @@ Bun is supported for faster TypeScript execution, but **WhatsApp requires Node**
 
 ### Where does Clawdbot store its data?
 
-Everything lives under `~/.clawdbot/` (or `$CLAWDBOT_STATE_DIR` if you override the state dir):
+Everything lives under `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`):
 
 | Path | Purpose |
 |------|---------|
-| `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
-| `~/.clawdbot/credentials/oauth.json` | Legacy OAuth import (copied into auth profiles on first use) |
-| `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
-| `~/.clawdbot/agents/<agentId>/agent/auth.json` | Runtime auth cache (managed automatically) |
-| `~/.clawdbot/credentials/` | Provider state (e.g. `whatsapp/<accountId>/creds.json`) |
-| `~/.clawdbot/agents/` | Per‑agent state (agentDir + sessions) |
-| `~/.clawdbot/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
-| `~/.clawdbot/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
+| `$CLAWDBOT_STATE_DIR/clawdbot.json` | Main config (JSON5) |
+| `$CLAWDBOT_STATE_DIR/credentials/oauth.json` | Legacy OAuth import (copied into auth profiles on first use) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/agent/auth.json` | Runtime auth cache (managed automatically) |
+| `$CLAWDBOT_STATE_DIR/credentials/` | Provider state (e.g. `whatsapp/<accountId>/creds.json`) |
+| `$CLAWDBOT_STATE_DIR/agents/` | Per‑agent state (agentDir + sessions) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
 
 Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`).
 
@@ -117,10 +117,10 @@ Session state is owned by the **gateway host**. If you’re in remote mode, the 
 
 ### What format is the config? Where is it?
 
-Clawdbot reads an optional **JSON5** config from:
+Clawdbot reads an optional **JSON5** config from `$CLAWDBOT_CONFIG_PATH` (default: `~/.clawdbot/clawdbot.json`):
 
 ```
-~/.clawdbot/clawdbot.json
+$CLAWDBOT_CONFIG_PATH
 ```
 
 If the file is missing, it uses safe‑ish defaults (including a default workspace of `~/clawd`).
@@ -436,7 +436,7 @@ clawdbot logs --follow
 ```
 
 Service/supervisor logs (when the gateway runs via launchd/systemd):
-- macOS: `~/.clawdbot/logs/gateway.log` and `gateway.err.log` (profiles use `~/.clawdbot-<profile>/logs/...`)
+- macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)
 - Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
 

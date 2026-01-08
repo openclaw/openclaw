@@ -5,7 +5,7 @@ read_when:
 ---
 # Troubleshooting 🔧
 
-When your CLAWDBOT misbehaves, here's how to fix it.
+When Clawdbot misbehaves, here's how to fix it.
 
 Start with the FAQ’s [First 60 seconds](/start/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
 
@@ -35,6 +35,11 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 
 If the service reports **running** but nothing is listening on the gateway port,
 the Gateway likely refused to bind.
+
+**What "running" means here**
+- `Runtime: running` means your supervisor (launchd/systemd/schtasks) thinks the process is alive.
+- `RPC probe` means the CLI could actually connect to the gateway WebSocket and call `status`.
+- Always trust `Probe target:` + `Config (daemon):` as the “what did we actually try?” lines.
 
 **Check:**
 - `gateway.mode` must be `local` for `clawdbot gateway` and the daemon.
@@ -81,13 +86,13 @@ The agent was interrupted mid-response.
 
 **Check 1:** Is the sender in `whatsapp.allowFrom`?
 ```bash
-cat ~/.clawdbot/clawdbot.json | jq '.whatsapp.allowFrom'
+cat "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}" | jq '.whatsapp.allowFrom'
 ```
 
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
-cat ~/.clawdbot/clawdbot.json | jq '.routing.groupChat, .whatsapp.groups, .telegram.groups, .imessage.groups, .discord.guilds'
+cat "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}" | jq '.routing.groupChat, .whatsapp.groups, .telegram.groups, .imessage.groups, .discord.guilds'
 ```
 
 **Check 3:** Check the logs
@@ -159,7 +164,7 @@ If you’re logged out / unlinked:
 
 ```bash
 clawdbot providers logout
-trash ~/.clawdbot/credentials # if logout can't cleanly remove everything
+trash "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}/credentials" # if logout can't cleanly remove everything
 clawdbot providers login --verbose       # re-scan QR
 ```
 
@@ -211,22 +216,27 @@ If resetting doesn't work, change the `BUNDLE_ID` in [`scripts/package-mac-app.s
 
 The app connects to a local gateway on port `18789`. If it stays stuck:
 
-**Fix 1: Kill Zombie Processes**
-Another process might be holding the port.
+**Fix 1: Stop the supervisor (preferred)**
+If the gateway is supervised by launchd, killing the PID will just respawn it. Stop the supervisor first:
 ```bash
-lsof -nP -i :18789
-# Kill any matching PIDs
-kill -9 <PID>
-```
-
-If the gateway is supervised by launchd, killing the PID will just respawn it.
-Stop the supervisor instead:
-```bash
+clawdbot daemon status
 clawdbot daemon stop
 # Or: launchctl bootout gui/$UID/com.clawdbot.gateway
 ```
 
-**Fix 2: Check embedded gateway**
+**Fix 2: Port is busy (find the listener)**
+```bash
+lsof -nP -iTCP:18789 -sTCP:LISTEN
+```
+
+If it’s an unsupervised process, try a graceful stop first, then escalate:
+```bash
+kill -TERM <PID>
+sleep 1
+kill -9 <PID> # last resort
+```
+
+**Fix 3: Check embedded gateway**
 Ensure the gateway relay was properly bundled. Run [`./scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) and ensure `bun` is installed.
 
 ## Debug Mode
@@ -235,7 +245,7 @@ Get verbose logging:
 
 ```bash
 # Turn on trace logging in config:
-#   ~/.clawdbot/clawdbot.json -> { logging: { level: "trace" } }
+#   ${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json} -> { logging: { level: "trace" } }
 #
 # Then run verbose commands to mirror debug output to stdout:
 clawdbot gateway --verbose
@@ -247,10 +257,10 @@ clawdbot providers login --verbose
 | Log | Location |
 |-----|----------|
 | Gateway file logs (structured) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or `logging.file`) |
-| Gateway service logs (supervisor) | macOS: `~/.clawdbot/logs/gateway.log` + `gateway.err.log` (profiles use `~/.clawdbot-<profile>/logs/...`)<br>Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br>Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
-| Session files | `~/.clawdbot/agents/<agentId>/sessions/` |
-| Media cache | `~/.clawdbot/media/` |
-| Credentials | `~/.clawdbot/credentials/` |
+| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br>Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br>Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
+| Session files | `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/` |
+| Media cache | `$CLAWDBOT_STATE_DIR/media/` |
+| Credentials | `$CLAWDBOT_STATE_DIR/credentials/` |
 
 ## Health Check
 
@@ -270,7 +280,7 @@ tail -20 /tmp/clawdbot/clawdbot-*.log
 Nuclear option:
 
 ```bash
-trash ~/.clawdbot
+trash "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}"
 clawdbot providers login         # re-pair WhatsApp
 clawdbot gateway        # start the Gateway again
 ```

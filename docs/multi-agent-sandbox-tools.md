@@ -262,7 +262,7 @@ After configuring multi-agent sandbox and tools:
 
 4. **Monitor logs:**
    ```bash
-   tail -f ~/.clawdbot/logs/gateway.log | grep -E "routing|sandbox|tools"
+   tail -f "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}/logs/gateway.log" | grep -E "routing|sandbox|tools"
    ```
 
 ---
