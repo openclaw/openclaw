@@ -662,7 +662,8 @@ Examples:
   clawdbot status --json            # machine-readable output
   clawdbot status --usage           # show provider usage/quota snapshots
   clawdbot status --deep            # run provider probes (WA + Telegram + Discord + Slack + Signal)
-  clawdbot status --deep --timeout 5000 # tighten probe timeout`,
+  clawdbot status --deep --timeout 5000 # tighten probe timeout
+  clawdbot providers status         # gateway provider runtime + probes`,
     )
     .action(async (opts) => {
       const verbose = Boolean(opts.verbose || opts.debug);

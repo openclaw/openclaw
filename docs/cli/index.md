@@ -211,7 +211,7 @@ Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
 
 Subcommands:
 - `providers list`: show configured chat providers and auth profiles (Claude CLI + Codex CLI sync included).
-- `providers status`: check gateway reachability and provider health (`--probe` to verify credentials).
+- `providers status`: check gateway reachability and provider health (`--probe` to verify credentials; use `status --deep` for local-only probes).
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
 
@@ -223,6 +223,15 @@ Common options:
 `providers list` options:
 - `--no-usage`: skip provider usage/quota snapshots (OAuth/API-backed only).
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
+
+Examples:
+```bash
+clawdbot providers add --provider telegram --account alerts --name "Alerts Bot" --token $TELEGRAM_BOT_TOKEN
+clawdbot providers add --provider discord --account work --name "Work Bot" --token $DISCORD_BOT_TOKEN
+clawdbot providers remove --provider discord --account work --delete
+clawdbot providers status --probe
+clawdbot status --deep
+```
 
 ### `pairing`
 Approve DM pairing requests across providers.

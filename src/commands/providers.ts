@@ -59,6 +59,11 @@ const CHAT_PROVIDERS = [
 
 type ChatProvider = (typeof CHAT_PROVIDERS)[number];
 
+function docsLink(path: string, label?: string): string {
+  const url = `${DOCS_ROOT}${path}`;
+  return formatTerminalLink(url, label ?? url);
+}
+
 type ProvidersListOptions = {
   json?: boolean;
   usage?: boolean;
@@ -691,7 +696,12 @@ export async function providersStatusCommand(
         }
         const accountId =
           typeof account.accountId === "string" ? account.accountId : "default";
-        const labelText = `${label} ${accountId}`;
+        const name =
+          typeof account.name === "string" ? account.name.trim() : "";
+        const labelText = `${label} ${formatAccountLabel({
+          accountId,
+          name: name || undefined,
+        })}`;
         return `- ${labelText}: ${bits.join(", ")}`;
       });
 
@@ -744,6 +754,10 @@ export async function providersStatusCommand(
       );
     }
 
+    lines.push("");
+    lines.push(
+      `Tip: ${docsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
+    );
     runtime.log(lines.join("\n"));
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
