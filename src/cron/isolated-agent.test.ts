@@ -725,11 +725,11 @@ describe("parseTelegramTarget", () => {
   });
 
   it("strips internal telegram + group prefixes before parsing topic", () => {
-    expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual(
-      {
-        chatId: "-1001234567890",
-        topicId: 456,
-      },
-    );
+    expect(
+      parseTelegramTarget("telegram:group:-1001234567890:topic:456"),
+    ).toEqual({
+      chatId: "-1001234567890",
+      topicId: 456,
+    });
   });
 });
