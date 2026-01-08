@@ -33,10 +33,7 @@ export function formatCliBannerLine(
   return `${title} ${version} (${commitLabel}) — ${tagline}`;
 }
 
-export function emitCliBanner(
-  version: string,
-  options: BannerOptions = {},
-) {
+export function emitCliBanner(version: string, options: BannerOptions = {}) {
   if (bannerEmitted) return;
   const argv = options.argv ?? process.argv;
   if (!process.stdout.isTTY) return;

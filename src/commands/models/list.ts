@@ -35,7 +35,11 @@ import {
   shouldEnableShellEnvFallback,
 } from "../../infra/shell-env.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { colorize, isRich as isRichTerminal, theme } from "../../terminal/theme.js";
+import {
+  colorize,
+  isRich as isRichTerminal,
+  theme,
+} from "../../terminal/theme.js";
 import { shortenHomePath } from "../../utils.js";
 import {
   DEFAULT_MODEL,
@@ -69,8 +73,7 @@ const formatKeyValue = (
   valueColor: (value: string) => string = theme.info,
 ) => `${formatKey(key, rich)}=${colorize(rich, valueColor, value)}`;
 
-const formatSeparator = (rich: boolean) =>
-  colorize(rich, theme.muted, " | ");
+const formatSeparator = (rich: boolean) => colorize(rich, theme.muted, " | ");
 
 const formatTag = (tag: string, rich: boolean) => {
   if (!rich) return tag;
@@ -468,7 +471,11 @@ function printModelTable(
     );
     const coloredLocal = colorize(
       rich,
-      row.local === null ? theme.muted : row.local ? theme.success : theme.muted,
+      row.local === null
+        ? theme.muted
+        : row.local
+          ? theme.success
+          : theme.muted,
       localLabel,
     );
     const coloredAuth = colorize(

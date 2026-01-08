@@ -37,10 +37,9 @@ const resolveGitHead = (startDir: string) => {
 
 let cachedCommit: string | null | undefined;
 
-export const resolveCommitHash = (options: {
-  cwd?: string;
-  env?: NodeJS.ProcessEnv;
-} = {}) => {
+export const resolveCommitHash = (
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
+) => {
   if (cachedCommit !== undefined) return cachedCommit;
   const env = options.env ?? process.env;
   const envCommit = env.GIT_COMMIT?.trim() || env.GIT_SHA?.trim();

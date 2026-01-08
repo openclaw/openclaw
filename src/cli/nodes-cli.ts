@@ -1,7 +1,6 @@
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
-import { withProgress } from "./progress.js";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -20,6 +19,7 @@ import {
   writeScreenRecordToFile,
 } from "./nodes-screen.js";
 import { parseDurationMs } from "./parse-duration.js";
+import { withProgress } from "./progress.js";
 
 type NodesRpcOpts = {
   url?: string;

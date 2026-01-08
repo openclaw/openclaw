@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
+import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
@@ -11,7 +12,6 @@ import {
 } from "../infra/outbound/format.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withProgress } from "../cli/progress.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 
 export async function sendCommand(

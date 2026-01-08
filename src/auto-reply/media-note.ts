@@ -18,16 +18,15 @@ function formatMediaAttachedLine(params: {
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  const hasPathsArray =
-    Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const pathsFromArray = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths
     : undefined;
-  const paths = pathsFromArray && pathsFromArray.length > 0
-    ? pathsFromArray
-    : ctx.MediaPath?.trim()
-      ? [ctx.MediaPath.trim()]
-      : [];
+  const paths =
+    pathsFromArray && pathsFromArray.length > 0
+      ? pathsFromArray
+      : ctx.MediaPath?.trim()
+        ? [ctx.MediaPath.trim()]
+        : [];
   if (paths.length === 0) return undefined;
 
   const urls =

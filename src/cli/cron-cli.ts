@@ -160,8 +160,7 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
 
     const coloredStatus = (() => {
-      if (statusRaw === "ok")
-        return colorize(rich, theme.success, statusLabel);
+      if (statusRaw === "ok") return colorize(rich, theme.success, statusLabel);
       if (statusRaw === "error")
         return colorize(rich, theme.error, statusLabel);
       if (statusRaw === "running")

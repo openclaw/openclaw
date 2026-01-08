@@ -92,7 +92,6 @@ export const formatContextUsageShort = (
   contextTokens: number | null | undefined,
 ) => `Context ${formatTokens(total, contextTokens ?? null)}`;
 
-
 const formatQueueDetails = (queue?: QueueStatus) => {
   if (!queue) return "";
   const depth = typeof queue.depth === "number" ? `depth ${queue.depth}` : null;

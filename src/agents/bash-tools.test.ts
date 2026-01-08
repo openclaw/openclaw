@@ -6,6 +6,7 @@ import {
   createProcessTool,
   processTool,
 } from "./bash-tools.js";
+import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const shortDelayCmd = isWin ? "ping -n 2 127.0.0.1 > nul" : "sleep 0.05";
@@ -17,10 +18,9 @@ const echoAfterDelay = (message: string) =>
 const echoLines = (lines: string[]) =>
   joinCommands(lines.map((line) => `echo ${line}`));
 const normalizeText = (value?: string) =>
-  (value ?? "")
+  sanitizeBinaryOutput(value ?? "")
     .replace(/\r\n/g, "\n")
     .replace(/\r/g, "\n")
-    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
     .split("\n")
     .map((line) => line.replace(/\s+$/u, ""))
     .join("\n")

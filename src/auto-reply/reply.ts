@@ -35,6 +35,7 @@ import {
   listChatCommands,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
+import { buildInboundMediaNote } from "./media-note.js";
 import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
@@ -80,7 +81,6 @@ import {
 import { SILENT_REPLY_TOKEN } from "./tokens.js";
 import { isAudio, transcribeInboundAudio } from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
-import { buildInboundMediaNote } from "./media-note.js";
 
 export {
   extractElevatedDirective,
@@ -856,15 +856,17 @@ async function stageSandboxMedia(params: {
   workspaceDir: string;
 }) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
-  const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
+  const hasPathsArray =
+    Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
   const pathsFromArray = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths
     : undefined;
-  const rawPaths = pathsFromArray && pathsFromArray.length > 0
-    ? pathsFromArray
-    : ctx.MediaPath?.trim()
-      ? [ctx.MediaPath.trim()]
-      : [];
+  const rawPaths =
+    pathsFromArray && pathsFromArray.length > 0
+      ? pathsFromArray
+      : ctx.MediaPath?.trim()
+        ? [ctx.MediaPath.trim()]
+        : [];
   if (rawPaths.length === 0 || !sessionKey) return;
 
   const sandbox = await ensureSandboxWorkspaceForSession({

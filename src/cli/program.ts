@@ -26,8 +26,10 @@ import { danger, setVerbose } from "../globals.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime } from "../runtime.js";
+import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
+import { emitCliBanner, formatCliBannerLine } from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
@@ -45,8 +47,6 @@ import { forceFreePort } from "./ports.js";
 import { registerProvidersCli } from "./providers-cli.js";
 import { registerTelegramCli } from "./telegram-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
-import { emitCliBanner, formatCliBannerLine } from "./banner.js";
-import { isRich, theme } from "../terminal/theme.js";
 
 export { forceFreePort };
 

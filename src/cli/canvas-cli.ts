@@ -3,12 +3,12 @@ import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
-import { withProgress } from "./progress.js";
 import { writeBase64ToFile } from "./nodes-camera.js";
 import {
   canvasSnapshotTempPath,
   parseCanvasSnapshotPayload,
 } from "./nodes-canvas.js";
+import { withProgress } from "./progress.js";
 
 type CanvasOpts = {
   url?: string;

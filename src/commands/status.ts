@@ -5,6 +5,7 @@ import {
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -18,7 +19,6 @@ import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
-import { withProgress } from "../cli/progress.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";

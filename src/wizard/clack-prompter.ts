@@ -11,11 +11,10 @@ import {
   spinner,
   text,
 } from "@clack/prompts";
-
-import type { WizardProgress, WizardPrompter } from "./prompts.js";
-import { WizardCancelledError } from "./prompts.js";
 import { createCliProgress } from "../cli/progress.js";
 import { theme } from "../terminal/theme.js";
+import type { WizardProgress, WizardPrompter } from "./prompts.js";
+import { WizardCancelledError } from "./prompts.js";
 
 function guardCancel<T>(value: T | symbol): T {
   if (isCancel(value)) {

@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
+import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -7,7 +8,6 @@ import {
 } from "../config/sessions.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withProgress } from "../cli/progress.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { agentCommand } from "./agent.js";
 

@@ -1,4 +1,5 @@
 import type { CliDeps } from "../cli/deps.js";
+import { withProgress } from "../cli/progress.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { success } from "../globals.js";
 import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
@@ -8,7 +9,6 @@ import {
 } from "../infra/outbound/format.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withProgress } from "../cli/progress.js";
 
 function parseIntOption(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) return undefined;

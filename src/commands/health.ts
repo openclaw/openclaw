@@ -1,10 +1,10 @@
+import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { withProgress } from "../cli/progress.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
