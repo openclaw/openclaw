@@ -2,12 +2,15 @@
 
 ## Unreleased
 
-- Doctor/Daemon: audit supervisor configs, recommend doctor from daemon status, and document user vs system services. (#?) — thanks @steipete
+- Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
+- Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
+- Cron: parse Telegram topic targets for isolated delivery. (#478) — thanks @nachoiacovino
 - Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos
 - Cron: allow Telegram delivery targets with topic/thread IDs (e.g. `-100…:topic:123`). (#474) — thanks @mitschabaude-bot
 - Heartbeat: resolve Telegram account IDs from config-only tokens; cron tool accepts canonical `jobId` and legacy `id` for job actions. (#516) — thanks @YuriNachos
 - Discord: stop provider when gateway reconnects are exhausted and surface errors. (#514) — thanks @joshp123
+- Agents: strip empty assistant text blocks from session history to avoid Claude API 400s. (#210)
 - Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
 - Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
@@ -19,6 +22,7 @@
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
+- WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.

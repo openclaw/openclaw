@@ -95,6 +95,14 @@ This is social engineering 101. Create distrust, encourage snooping.
 
 ## Configuration Hardening (examples)
 
+### 0) File permissions
+
+Keep config + state private on the gateway host:
+- `~/.clawdbot/clawdbot.json`: `600` (user read/write only)
+- `~/.clawdbot`: `700` (user only)
+
+`clawdbot doctor` can warn and offer to tighten these permissions.
+
 ### 1) DMs: pairing by default
 
 ```json5
@@ -138,10 +146,12 @@ We may add a single `readOnlyMode` flag later to simplify this configuration.
 
 ## Sandboxing (recommended)
 
+Dedicated doc: [Sandboxing](/gateway/sandboxing)
+
 Two complementary approaches:
 
 - **Run the full Gateway in Docker** (container boundary): [Docker](/install/docker)
-- **Tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): [Configuration](/gateway/configuration)
+- **Tool sandbox** (`agent.sandbox`, host gateway + Docker-isolated tools): [Sandboxing](/gateway/sandboxing)
 
 Note: to prevent cross-agent access, keep `sandbox.scope` at `"agent"` (default)
 or `"session"` for stricter per-session isolation. `scope: "shared"` uses a

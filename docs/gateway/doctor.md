@@ -24,10 +24,23 @@ clawdbot doctor --yes
 Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
 ```bash
+clawdbot doctor --repair
+```
+
+Apply recommended repairs without prompting (repairs + restarts where safe).
+
+```bash
+clawdbot doctor --repair --force
+```
+
+Apply aggressive repairs too (overwrites custom supervisor configs).
+
+```bash
 clawdbot doctor --non-interactive
 ```
 
 Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
+Legacy state migrations run automatically when detected.
 
 ```bash
 clawdbot doctor --deep
@@ -47,6 +60,7 @@ cat ~/.clawdbot/clawdbot.json
 - Legacy config migration and normalization.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
+- Config file permission checks (chmod 600) when running locally.
 - Legacy workspace dir detection (`~/clawdis`, `~/clawdbot`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
@@ -117,6 +131,8 @@ Doctor checks:
   split between installs).
 - **Remote mode reminder**: if `gateway.mode=remote`, doctor reminds you to run
   it on the remote host (the state lives there).
+- **Config file permissions**: warns if `~/.clawdbot/clawdbot.json` is
+  group/world readable and offers to tighten to `600`.
 
 ### 5) Sandbox image repair
 When sandboxing is enabled, doctor checks Docker images and offers to build or
@@ -149,6 +165,13 @@ Doctor checks the installed supervisor config (launchd/systemd/schtasks) for
 missing or outdated defaults (e.g., systemd network-online dependencies and
 restart delay). When it finds a mismatch, it recommends an update and can
 rewrite the service file/task to the current defaults.
+
+Notes:
+- `clawdbot doctor` prompts before rewriting supervisor config.
+- `clawdbot doctor --yes` accepts the default repair prompts.
+- `clawdbot doctor --repair` applies recommended fixes without prompts.
+- `clawdbot doctor --repair --force` overwrites custom supervisor configs.
+- You can always force a full rewrite via `clawdbot daemon install --force`.
 
 ### 12) Gateway runtime + port diagnostics
 Doctor inspects the daemon runtime (PID, last exit status) and warns when the

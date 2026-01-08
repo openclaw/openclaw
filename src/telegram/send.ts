@@ -11,6 +11,10 @@ import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
+import {
+  parseTelegramTarget,
+  stripTelegramInternalPrefixes,
+} from "./targets.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -65,7 +69,7 @@ function normalizeChatId(to: string): string {
   // Common internal prefixes that sometimes leak into outbound sends.
   // - ctx.To uses `telegram:<id>`
   // - group sessions often use `telegram:group:<id>`
-  let normalized = trimmed.replace(/^(telegram|tg|group):/i, "").trim();
+  let normalized = stripTelegramInternalPrefixes(trimmed);
 
   // Accept t.me links for public chats/channels.
   // (Invite links like `t.me/+...` are not resolvable via Bot API.)
@@ -110,7 +114,8 @@ export async function sendMessageTelegram(
     accountId: opts.accountId,
   });
   const token = resolveToken(opts.token, account);
-  const chatId = normalizeChatId(to);
+  const target = parseTelegramTarget(to);
+  const chatId = normalizeChatId(target.chatId);
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
   const fetchImpl = resolveTelegramFetch();
@@ -123,8 +128,12 @@ export async function sendMessageTelegram(
   // Build optional params for forum topics and reply threading.
   // Only include these if actually provided to keep API calls clean.
   const threadParams: Record<string, number> = {};
-  if (opts.messageThreadId != null) {
-    threadParams.message_thread_id = Math.trunc(opts.messageThreadId);
+  const messageThreadId =
+    opts.messageThreadId != null
+      ? opts.messageThreadId
+      : target.messageThreadId;
+  if (messageThreadId != null) {
+    threadParams.message_thread_id = Math.trunc(messageThreadId);
   }
   if (opts.replyToMessageId != null) {
     threadParams.reply_to_message_id = Math.trunc(opts.replyToMessageId);

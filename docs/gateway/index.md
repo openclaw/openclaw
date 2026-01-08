@@ -156,6 +156,8 @@ See also: [`docs/presence.md`](/concepts/presence) for how presence is produced/
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
+  - `clawdbot daemon install` writes `~/Library/LaunchAgents/com.clawdbot.gateway.plist`.
+  - `clawdbot doctor` audits the LaunchAgent config and can update it to current defaults.
 
 ## Daemon management (CLI)
 

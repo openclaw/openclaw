@@ -80,6 +80,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Heartbeat](https://docs.clawd.bot/gateway/heartbeat)
 - [Doctor](https://docs.clawd.bot/gateway/doctor)
 - [Logging](https://docs.clawd.bot/gateway/logging)
+- [Sandboxing](https://docs.clawd.bot/gateway/sandboxing)
 - [Dashboard](https://docs.clawd.bot/web/dashboard)
 - [Control UI](https://docs.clawd.bot/web/control-ui)
 - [Remote access](https://docs.clawd.bot/gateway/remote)

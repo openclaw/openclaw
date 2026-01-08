@@ -118,6 +118,25 @@ export async function monitorWebInbox(options: {
     { subject?: string; participants?: string[]; expires: number }
   >();
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  const lidLookup = sock.signalRepository?.lidMapping;
+
+  const resolveJidToE164 = async (
+    jid: string | null | undefined,
+  ): Promise<string | null> => {
+    if (!jid) return null;
+    const direct = jidToE164(jid);
+    if (direct) return direct;
+    if (!/(@lid|@hosted\.lid)$/.test(jid)) return null;
+    if (!lidLookup?.getPNForLID) return null;
+    try {
+      const pnJid = await lidLookup.getPNForLID(jid);
+      if (!pnJid) return null;
+      return jidToE164(pnJid);
+    } catch (err) {
+      logVerbose(`LID mapping lookup failed for ${jid}: ${String(err)}`);
+      return null;
+    }
+  };
 
   const getGroupMeta = async (jid: string) => {
     const cached = groupMetaCache.get(jid);
@@ -125,9 +144,14 @@ export async function monitorWebInbox(options: {
     try {
       const meta = await sock.groupMetadata(jid);
       const participants =
-        meta.participants
-          ?.map((p) => jidToE164(p.id) ?? p.id)
-          .filter(Boolean) ?? [];
+        (
+          await Promise.all(
+            meta.participants?.map(async (p) => {
+              const mapped = await resolveJidToE164(p.id);
+              return mapped ?? p.id;
+            }) ?? [],
+          )
+        ).filter(Boolean) ?? [];
       const entry = {
         subject: meta.subject,
         participants,
@@ -159,12 +183,12 @@ export async function monitorWebInbox(options: {
         continue;
       const group = isJidGroup(remoteJid);
       const participantJid = msg.key?.participant ?? undefined;
-      const from = group ? remoteJid : jidToE164(remoteJid);
+      const from = group ? remoteJid : await resolveJidToE164(remoteJid);
       // Skip if we still can't resolve an id to key conversation
       if (!from) continue;
       const senderE164 = group
         ? participantJid
-          ? jidToE164(participantJid)
+          ? await resolveJidToE164(participantJid)
           : null
         : from;
       let groupSubject: string | undefined;

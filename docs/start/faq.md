@@ -89,6 +89,10 @@ It also warns if your configured model is unknown or missing auth.
 
 Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
 
+### Is there a dedicated sandboxing doc?
+
+Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).
+
 ## Where things live on disk
 
 ### Where does Clawdbot store its data?
