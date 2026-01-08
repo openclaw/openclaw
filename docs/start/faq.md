@@ -185,6 +185,19 @@ Clawdbot reads env vars from the parent process (shell, launchd/systemd, CI, etc
 
 Neither `.env` file overrides existing env vars.
 
+You can also define inline env vars in config (applied only if missing from the process env):
+
+```json5
+{
+  env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: { GROQ_API_KEY: "gsk-..." }
+  }
+}
+```
+
+See [/environment](/environment) for full precedence and sources.
+
 ### “I started the Gateway via a daemon and my env vars disappeared.” What now?
 
 Two common fixes:
