@@ -358,6 +358,7 @@ export function renderApp(state: AppViewState) {
               limit: state.sessionsFilterLimit,
               includeGlobal: state.sessionsIncludeGlobal,
               includeUnknown: state.sessionsIncludeUnknown,
+              basePath: state.basePath,
               onFiltersChange: (next) => {
                 state.sessionsFilterActive = next.activeMinutes;
                 state.sessionsFilterLimit = next.limit;
