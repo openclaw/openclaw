@@ -9,36 +9,14 @@
     "jdrhyne": "Jonathan D. Rhyne (DJ-D)"
   },
   "nameToLogin": {
-    "peter steinberger": "steipete",
-    "azade": "azade-c",
     "eng. juan combetto": "omniwired",
     "mariano belinky": "mbelinky",
-    "kit": "kitze",
     "vasanth rao naik sabavat": "vsabavat",
-    "tobias bischoff": "tobiasbischoff",
     "tu nombre real": "nachx639",
-    "william stock": "wstock",
-    "abhisekbasu1": "AbhisekBasu1",
-    "manuelhettich": "manuelhettich",
-    "iamadig": "Iamadig",
-    "django navarro": "djangonavarro220",
-    "erik": "erikpr1994",
-    "jonathan d. rhyne": "jdrhyne",
-    "jonathan rhyne": "jdrhyne",
-    "manuel maly": "manmal",
-    "manuel mali": "manmal"
+    "django navarro": "djangonavarro220"
   },
   "emailToLogin": {
-    "steipete@gmail.com": "steipete",
-    "manuel.maly@gmail.com": "manmal",
-    "omniwired@gmail.com": "omniwired",
-    "mbelinky@gmail.com": "mbelinky",
-    "vsabavat@nvidia.com": "vsabavat",
-    "nacho639@gmail.com": "nachx639",
-    "w.stock@yahoo.com": "wstock",
     "rltorres26+github@gmail.com": "RandyVentures",
-    "hixvac@gmail.com": "VACInc",
-    "djangonavarro220@gmail.com": "djangonavarro220",
-    "erikpastorrios1994@gmail.com": "erikpr1994"
+    "hixvac@gmail.com": "VACInc"
   }
 }
