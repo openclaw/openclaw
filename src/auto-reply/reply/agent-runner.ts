@@ -36,6 +36,7 @@ import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
   isRenderablePayload,
+  shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import {
   createReplyToModeFilter,
@@ -240,6 +241,7 @@ export async function runReplyAgent(params: {
             sessionKey,
             messageProvider:
               sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            agentAccountId: sessionCtx.AccountId,
             sessionFile: followupRun.run.sessionFile,
             workspaceDir: followupRun.run.workspaceDir,
             agentDir: followupRun.run.agentDir,
@@ -549,6 +551,13 @@ export async function runReplyAgent(params: {
     const shouldDropFinalPayloads =
       blockStreamingEnabled && didStreamBlockReply;
     const messagingToolSentTexts = runResult.messagingToolSentTexts ?? [];
+    const messagingToolSentTargets = runResult.messagingToolSentTargets ?? [];
+    const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
+      messageProvider: followupRun.run.messageProvider,
+      messagingToolSentTargets,
+      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      accountId: sessionCtx.AccountId,
+    });
     const dedupedPayloads = filterMessagingToolDuplicates({
       payloads: replyTaggedPayloads,
       sentTexts: messagingToolSentTexts,
@@ -560,10 +569,11 @@ export async function runReplyAgent(params: {
             (payload) => !streamedPayloadKeys.has(buildPayloadKey(payload)),
           )
         : dedupedPayloads;
+    const replyPayloads = suppressMessagingToolReplies ? [] : filteredPayloads;
 
-    if (filteredPayloads.length === 0) return finalizeWithFollowup(undefined);
+    if (replyPayloads.length === 0) return finalizeWithFollowup(undefined);
 
-    const shouldSignalTyping = filteredPayloads.some((payload) => {
+    const shouldSignalTyping = replyPayloads.some((payload) => {
       const trimmed = payload.text?.trim();
       if (trimmed && trimmed !== SILENT_REPLY_TOKEN) return true;
       if (payload.mediaUrl) return true;
@@ -628,7 +638,7 @@ export async function runReplyAgent(params: {
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.
-    let finalPayloads = filteredPayloads;
+    let finalPayloads = replyPayloads;
     if (autoCompactionCompleted) {
       const count = await incrementCompactionCount({
         sessionEntry,

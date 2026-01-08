@@ -20,6 +20,7 @@ export function createClawdbotTools(options?: {
   browserControlUrl?: string;
   agentSessionKey?: string;
   agentProvider?: string;
+  agentAccountId?: string;
   agentDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
@@ -34,7 +35,10 @@ export function createClawdbotTools(options?: {
     createNodesTool(),
     createCronTool(),
     createDiscordTool(),
-    createSlackTool(),
+    createSlackTool({
+      agentAccountId: options?.agentAccountId,
+      config: options?.config,
+    }),
     createTelegramTool(),
     createWhatsAppTool(),
     createGatewayTool({ agentSessionKey: options?.agentSessionKey }),

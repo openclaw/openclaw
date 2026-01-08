@@ -17,6 +17,16 @@ export type ResolvedSlackAccount = {
   botTokenSource: SlackTokenSource;
   appTokenSource: SlackTokenSource;
   config: SlackAccountConfig;
+  groupPolicy?: SlackAccountConfig["groupPolicy"];
+  textChunkLimit?: SlackAccountConfig["textChunkLimit"];
+  mediaMaxMb?: SlackAccountConfig["mediaMaxMb"];
+  reactionNotifications?: SlackAccountConfig["reactionNotifications"];
+  reactionAllowlist?: SlackAccountConfig["reactionAllowlist"];
+  replyToMode?: SlackAccountConfig["replyToMode"];
+  actions?: SlackAccountConfig["actions"];
+  slashCommand?: SlackAccountConfig["slashCommand"];
+  dm?: SlackAccountConfig["dm"];
+  channels?: SlackAccountConfig["channels"];
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
@@ -66,31 +76,26 @@ export function resolveSlackAccount(params: {
   const accountEnabled = merged.enabled !== false;
   const enabled = baseEnabled && accountEnabled;
   const allowEnv = accountId === DEFAULT_ACCOUNT_ID;
-
-  const botToken = resolveSlackBotToken(
-    merged.botToken ??
-      (allowEnv ? process.env.SLACK_BOT_TOKEN : undefined) ??
-      (allowEnv ? params.cfg.slack?.botToken : undefined),
-  );
-  const appToken = resolveSlackAppToken(
-    merged.appToken ??
-      (allowEnv ? process.env.SLACK_APP_TOKEN : undefined) ??
-      (allowEnv ? params.cfg.slack?.appToken : undefined),
-  );
-  const botTokenSource: SlackTokenSource = merged.botToken
+  const envBot = allowEnv
+    ? resolveSlackBotToken(process.env.SLACK_BOT_TOKEN)
+    : undefined;
+  const envApp = allowEnv
+    ? resolveSlackAppToken(process.env.SLACK_APP_TOKEN)
+    : undefined;
+  const configBot = resolveSlackBotToken(merged.botToken);
+  const configApp = resolveSlackAppToken(merged.appToken);
+  const botToken = configBot ?? envBot;
+  const appToken = configApp ?? envApp;
+  const botTokenSource: SlackTokenSource = configBot
     ? "config"
-    : allowEnv && process.env.SLACK_BOT_TOKEN
+    : envBot
       ? "env"
-      : allowEnv && params.cfg.slack?.botToken
-        ? "config"
-        : "none";
-  const appTokenSource: SlackTokenSource = merged.appToken
+      : "none";
+  const appTokenSource: SlackTokenSource = configApp
     ? "config"
-    : allowEnv && process.env.SLACK_APP_TOKEN
+    : envApp
       ? "env"
-      : allowEnv && params.cfg.slack?.appToken
-        ? "config"
-        : "none";
+      : "none";
 
   return {
     accountId,
@@ -101,6 +106,16 @@ export function resolveSlackAccount(params: {
     botTokenSource,
     appTokenSource,
     config: merged,
+    groupPolicy: merged.groupPolicy,
+    textChunkLimit: merged.textChunkLimit,
+    mediaMaxMb: merged.mediaMaxMb,
+    reactionNotifications: merged.reactionNotifications,
+    reactionAllowlist: merged.reactionAllowlist,
+    replyToMode: merged.replyToMode,
+    actions: merged.actions,
+    slashCommand: merged.slashCommand,
+    dm: merged.dm,
+    channels: merged.channels,
   };
 }
 

@@ -74,6 +74,7 @@
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
 - CLI: add non-interactive flags for `agents add`, support `agents list --bindings`, and keep JSON output clean for scripting.
 - Discord/Slack: fork thread sessions (agent-scoped) and inject thread starters for context. Thanks @thewilloftheshadow for PR #400.
+- Slack: route tool actions per account and suppress duplicate follow-ups per provider/target/account. Thanks @adam91holt for PR #457.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
 - Agent: add opt-in session pruning for tool results to reduce context bloat. Thanks @maxsumrall for PR #381.
 - Agent: protect bootstrap prefix from context pruning. Thanks @maxsumrall for PR #381.

@@ -276,6 +276,13 @@ type ApiKeyInfo = {
   source: string;
 };
 
+export type MessagingToolSend = {
+  tool: string;
+  provider: string;
+  accountId?: string;
+  to?: string;
+};
+
 export type EmbeddedPiRunResult = {
   payloads?: Array<{
     text?: string;
@@ -290,6 +297,8 @@ export type EmbeddedPiRunResult = {
   didSendViaMessagingTool?: boolean;
   // Texts successfully sent via messaging tools during the run.
   messagingToolSentTexts?: string[];
+  // Messaging tool targets that successfully sent a message during the run.
+  messagingToolSentTargets?: MessagingToolSend[];
 };
 
 export type EmbeddedPiCompactResult = {
@@ -737,6 +746,7 @@ export async function compactEmbeddedPiSession(params: {
   sessionId: string;
   sessionKey?: string;
   messageProvider?: string;
+  agentAccountId?: string;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -842,6 +852,7 @@ export async function compactEmbeddedPiSession(params: {
           },
           sandbox,
           messageProvider: params.messageProvider,
+          agentAccountId: params.agentAccountId,
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           config: params.config,
@@ -962,6 +973,7 @@ export async function runEmbeddedPiAgent(params: {
   sessionId: string;
   sessionKey?: string;
   messageProvider?: string;
+  agentAccountId?: string;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -1153,6 +1165,7 @@ export async function runEmbeddedPiAgent(params: {
             },
             sandbox,
             messageProvider: params.messageProvider,
+            agentAccountId: params.agentAccountId,
             sessionKey: params.sessionKey ?? params.sessionId,
             agentDir,
             config: params.config,
@@ -1283,6 +1296,7 @@ export async function runEmbeddedPiAgent(params: {
             unsubscribe,
             waitForCompactionRetry,
             getMessagingToolSentTexts,
+            getMessagingToolSentTargets,
             didSendViaMessagingTool,
           } = subscription;
 
@@ -1567,6 +1581,7 @@ export async function runEmbeddedPiAgent(params: {
             },
             didSendViaMessagingTool: didSendViaMessagingTool(),
             messagingToolSentTexts: getMessagingToolSentTexts(),
+            messagingToolSentTargets: getMessagingToolSentTargets(),
           };
         } finally {
           restoreSkillEnv?.();

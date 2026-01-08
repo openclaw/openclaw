@@ -26,6 +26,13 @@ const log = createSubsystemLogger("agent/embedded");
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
+type MessagingToolSend = {
+  tool: string;
+  provider: string;
+  accountId?: string;
+  to?: string;
+};
+
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
   return `${text.slice(0, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
@@ -84,6 +91,127 @@ function stripUnpairedThinkingTags(text: string): string {
   if (!hasOpen) return text.replace(THINKING_CLOSE_RE, "");
   if (!hasClose) return text.replace(THINKING_OPEN_RE, "");
   return text;
+}
+
+function normalizeSlackTarget(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const mentionMatch = trimmed.match(/^<@([A-Z0-9]+)>$/i);
+  if (mentionMatch) return `user:${mentionMatch[1]}`;
+  if (trimmed.startsWith("user:")) {
+    const id = trimmed.slice(5).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  if (trimmed.startsWith("channel:")) {
+    const id = trimmed.slice(8).trim();
+    return id ? `channel:${id}` : undefined;
+  }
+  if (trimmed.startsWith("slack:")) {
+    const id = trimmed.slice(6).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  if (trimmed.startsWith("@")) {
+    const id = trimmed.slice(1).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  if (trimmed.startsWith("#")) {
+    const id = trimmed.slice(1).trim();
+    return id ? `channel:${id}` : undefined;
+  }
+  return `channel:${trimmed}`;
+}
+
+function normalizeDiscordTarget(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const mentionMatch = trimmed.match(/^<@!?(\d+)>$/);
+  if (mentionMatch) return `user:${mentionMatch[1]}`;
+  if (trimmed.startsWith("user:")) {
+    const id = trimmed.slice(5).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  if (trimmed.startsWith("channel:")) {
+    const id = trimmed.slice(8).trim();
+    return id ? `channel:${id}` : undefined;
+  }
+  if (trimmed.startsWith("discord:")) {
+    const id = trimmed.slice(8).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  if (trimmed.startsWith("@")) {
+    const id = trimmed.slice(1).trim();
+    return id ? `user:${id}` : undefined;
+  }
+  return `channel:${trimmed}`;
+}
+
+function normalizeTelegramTarget(raw: string): string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  let normalized = trimmed;
+  if (normalized.startsWith("telegram:")) {
+    normalized = normalized.slice("telegram:".length).trim();
+  } else if (normalized.startsWith("tg:")) {
+    normalized = normalized.slice("tg:".length).trim();
+  } else if (normalized.startsWith("group:")) {
+    normalized = normalized.slice("group:".length).trim();
+  }
+  if (!normalized) return undefined;
+  const tmeMatch =
+    /^https?:\/\/t\.me\/([A-Za-z0-9_]+)$/i.exec(normalized) ??
+    /^t\.me\/([A-Za-z0-9_]+)$/i.exec(normalized);
+  if (tmeMatch?.[1]) normalized = `@${tmeMatch[1]}`;
+  if (!normalized) return undefined;
+  return `telegram:${normalized}`;
+}
+
+function extractMessagingToolSend(
+  toolName: string,
+  args: Record<string, unknown>,
+): MessagingToolSend | undefined {
+  const action = typeof args.action === "string" ? args.action.trim() : "";
+  const accountIdRaw =
+    typeof args.accountId === "string" ? args.accountId.trim() : undefined;
+  const accountId = accountIdRaw ? accountIdRaw : undefined;
+  if (toolName === "slack") {
+    if (action !== "sendMessage") return undefined;
+    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    if (!toRaw) return undefined;
+    const to = normalizeSlackTarget(toRaw);
+    return to
+      ? { tool: toolName, provider: "slack", accountId, to }
+      : undefined;
+  }
+  if (toolName === "discord") {
+    if (action === "sendMessage") {
+      const toRaw = typeof args.to === "string" ? args.to : undefined;
+      if (!toRaw) return undefined;
+      const to = normalizeDiscordTarget(toRaw);
+      return to
+        ? { tool: toolName, provider: "discord", accountId, to }
+        : undefined;
+    }
+    if (action === "threadReply") {
+      const channelId =
+        typeof args.channelId === "string" ? args.channelId.trim() : "";
+      if (!channelId) return undefined;
+      const to = normalizeDiscordTarget(`channel:${channelId}`);
+      return to
+        ? { tool: toolName, provider: "discord", accountId, to }
+        : undefined;
+    }
+    return undefined;
+  }
+  if (toolName === "telegram") {
+    if (action !== "sendMessage") return undefined;
+    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    if (!toRaw) return undefined;
+    const to = normalizeTelegramTarget(toRaw);
+    return to
+      ? { tool: toolName, provider: "telegram", accountId, to }
+      : undefined;
+  }
+  return undefined;
 }
 
 export function subscribeEmbeddedPiSession(params: {
@@ -151,7 +279,9 @@ export function subscribeEmbeddedPiSession(params: {
     "sessions_send",
   ]);
   const messagingToolSentTexts: string[] = [];
+  const messagingToolSentTargets: MessagingToolSend[] = [];
   const pendingMessagingTexts = new Map<string, string>();
+  const pendingMessagingTargets = new Map<string, MessagingToolSend>();
 
   const ensureCompactionPromise = () => {
     if (!compactionRetryPromise) {
@@ -315,7 +445,9 @@ export function subscribeEmbeddedPiSession(params: {
     toolMetaById.clear();
     toolSummaryById.clear();
     messagingToolSentTexts.length = 0;
+    messagingToolSentTargets.length = 0;
     pendingMessagingTexts.clear();
+    pendingMessagingTargets.clear();
     deltaBuffer = "";
     blockBuffer = "";
     blockChunker?.reset();
@@ -398,6 +530,10 @@ export function subscribeEmbeddedPiSession(params: {
             action === "threadReply" ||
             toolName === "sessions_send"
           ) {
+            const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+            if (sendTarget) {
+              pendingMessagingTargets.set(toolCallId, sendTarget);
+            }
             // Field names vary by tool: Discord/Slack use "content", sessions_send uses "message"
             const text =
               (argsRecord.content as string) ?? (argsRecord.message as string);
@@ -460,6 +596,7 @@ export function subscribeEmbeddedPiSession(params: {
 
         // Commit messaging tool text on success, discard on error
         const pendingText = pendingMessagingTexts.get(toolCallId);
+        const pendingTarget = pendingMessagingTargets.get(toolCallId);
         if (pendingText) {
           pendingMessagingTexts.delete(toolCallId);
           if (!isError) {
@@ -467,6 +604,12 @@ export function subscribeEmbeddedPiSession(params: {
             log.debug(
               `Committed messaging text: tool=${toolName} len=${pendingText.length}`,
             );
+          }
+        }
+        if (pendingTarget) {
+          pendingMessagingTargets.delete(toolCallId);
+          if (!isError) {
+            messagingToolSentTargets.push(pendingTarget);
           }
         }
 
@@ -779,6 +922,7 @@ export function subscribeEmbeddedPiSession(params: {
     unsubscribe,
     isCompacting: () => compactionInFlight || pendingCompactionRetry > 0,
     getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
+    getMessagingToolSentTargets: () => messagingToolSentTargets.slice(),
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.

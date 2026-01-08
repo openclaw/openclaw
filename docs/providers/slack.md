@@ -227,6 +227,7 @@ Controlled by `slack.replyToMode`:
 Channel options (`slack.channels.<id>` or `slack.channels.<name>`):
 - `allow`: allow/deny the channel when `groupPolicy="allowlist"`.
 - `requireMention`: mention gating for the channel.
+- `allowBots`: allow bot-authored messages in this channel (default: false).
 - `users`: optional per-channel user allowlist.
 - `skills`: skill filter (omit = all skills, empty = none).
 - `systemPrompt`: extra system prompt for the channel (combined with topic/purpose).
@@ -251,5 +252,6 @@ Slack tool actions can be gated with `slack.actions.*`:
 ## Notes
 - Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
+- Bot-authored messages are ignored by default; enable via `slack.allowBots` or `slack.channels.<id>.allowBots`.
 - For the Slack tool, reaction removal semantics are in [/tools/reactions](/tools/reactions).
 - Attachments are downloaded to the media store when permitted and under the size limit.

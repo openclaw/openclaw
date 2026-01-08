@@ -625,6 +625,7 @@ function shouldIncludeWhatsAppTool(messageProvider?: string): boolean {
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
+  agentAccountId?: string;
   sandbox?: SandboxContext | null;
   sessionKey?: string;
   agentDir?: string;
@@ -695,6 +696,7 @@ export function createClawdbotCodingTools(options?: {
       browserControlUrl: sandbox?.browser?.controlUrl,
       agentSessionKey: options?.sessionKey,
       agentProvider: options?.messageProvider,
+      agentAccountId: options?.agentAccountId,
       agentDir: options?.agentDir,
       sandboxed: !!sandbox,
       config: options?.config,

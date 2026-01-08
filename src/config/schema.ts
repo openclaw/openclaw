@@ -123,6 +123,7 @@ const FIELD_LABELS: Record<string, string> = {
   "discord.retry.jitter": "Discord Retry Jitter",
   "discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "slack.dm.policy": "Slack DM Policy",
+  "slack.allowBots": "Slack Allow Bot Messages",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
   "slack.appToken": "Slack App Token",
@@ -141,6 +142,8 @@ const FIELD_HELP: Record<string, string> = {
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
     "Debounce window (ms) before applying config changes.",
+  "slack.allowBots":
+    "Allow bot-authored messages to trigger Slack replies (default: false).",
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order":
     "Ordered auth profile IDs per provider (used for automatic failover).",

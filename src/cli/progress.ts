@@ -65,7 +65,7 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     ? createOscProgressController({
         env: process.env,
         isTty: stream.isTTY,
-        write: (chunk) => stream.write(chunk),
+        write: (chunk: string) => stream.write(chunk),
       })
     : null;
 
