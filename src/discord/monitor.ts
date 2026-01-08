@@ -46,6 +46,7 @@ import type { ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
+import { formatDurationSeconds } from "../infra/format-duration.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
@@ -101,6 +102,22 @@ type DiscordThreadStarter = {
 };
 
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
+const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 1000;
+
+function logSlowDiscordListener(params: {
+  logger: ReturnType<typeof getChildLogger> | undefined;
+  listener: string;
+  event: string;
+  durationMs: number;
+}) {
+  if (params.durationMs < DISCORD_SLOW_LISTENER_THRESHOLD_MS) return;
+  const duration = formatDurationSeconds(params.durationMs, {
+    decimals: 1,
+    unit: "seconds",
+  });
+  const message = `[EventQueue] Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
+  params.logger?.warn ? params.logger.warn(message) : console.warn(message);
+}
 
 async function resolveDiscordThreadStarter(params: {
   channel: DiscordThreadChannel;
@@ -295,6 +312,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       publicKey: "a",
       token,
       autoDeploy: nativeEnabled,
+      eventQueue: { logSlowListeners: false },
     },
     {
       commands,
@@ -352,7 +370,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     guildEntries,
   });
 
-  client.listeners.push(new DiscordMessageListener(messageHandler));
+  client.listeners.push(new DiscordMessageListener(messageHandler, logger));
   client.listeners.push(
     new DiscordReactionListener({
       runtime,
@@ -1021,12 +1039,25 @@ export function createDiscordMessageHandler(params: {
 }
 
 class DiscordMessageListener extends MessageCreateListener {
-  constructor(private handler: DiscordMessageHandler) {
+  constructor(
+    private handler: DiscordMessageHandler,
+    private logger?: ReturnType<typeof getChildLogger>,
+  ) {
     super();
   }
 
   async handle(data: DiscordMessageEvent, client: Client) {
-    await this.handler(data, client);
+    const startedAt = Date.now();
+    try {
+      await this.handler(data, client);
+    } finally {
+      logSlowDiscordListener({
+        logger: this.logger,
+        listener: this.constructor.name,
+        event: this.type,
+        durationMs: Date.now() - startedAt,
+      });
+    }
   }
 }
 
@@ -1043,14 +1074,24 @@ class DiscordReactionListener extends MessageReactionAddListener {
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
-    await handleDiscordReactionEvent({
-      data,
-      client,
-      action: "added",
-      botUserId: this.params.botUserId,
-      guildEntries: this.params.guildEntries,
-      logger: this.params.logger,
-    });
+    const startedAt = Date.now();
+    try {
+      await handleDiscordReactionEvent({
+        data,
+        client,
+        action: "added",
+        botUserId: this.params.botUserId,
+        guildEntries: this.params.guildEntries,
+        logger: this.params.logger,
+      });
+    } finally {
+      logSlowDiscordListener({
+        logger: this.params.logger,
+        listener: this.constructor.name,
+        event: this.type,
+        durationMs: Date.now() - startedAt,
+      });
+    }
   }
 }
 
@@ -1067,14 +1108,24 @@ class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
   }
 
   async handle(data: DiscordReactionEvent, client: Client) {
-    await handleDiscordReactionEvent({
-      data,
-      client,
-      action: "removed",
-      botUserId: this.params.botUserId,
-      guildEntries: this.params.guildEntries,
-      logger: this.params.logger,
-    });
+    const startedAt = Date.now();
+    try {
+      await handleDiscordReactionEvent({
+        data,
+        client,
+        action: "removed",
+        botUserId: this.params.botUserId,
+        guildEntries: this.params.guildEntries,
+        logger: this.params.logger,
+      });
+    } finally {
+      logSlowDiscordListener({
+        logger: this.params.logger,
+        listener: this.constructor.name,
+        event: this.type,
+        durationMs: Date.now() - startedAt,
+      });
+    }
   }
 }
 
