@@ -165,6 +165,7 @@ export function applyContextPruningDefaults(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
   const agent = cfg.agent;
+  if (!agent) return cfg;
   const contextPruning = agent?.contextPruning;
   if (contextPruning?.mode) return cfg;
 
