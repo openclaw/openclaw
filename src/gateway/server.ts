@@ -102,8 +102,8 @@ import type { WizardSession } from "../wizard/session.js";
 import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
-  resolveGatewayAuth,
   type ResolvedGatewayAuth,
+  resolveGatewayAuth,
 } from "./auth.js";
 import {
   type GatewayReloadPlan,

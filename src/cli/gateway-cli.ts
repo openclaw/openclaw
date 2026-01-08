@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import {
   CONFIG_PATH_CLAWDBOT,
+  type GatewayAuthMode,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
@@ -13,8 +14,8 @@ import {
   GATEWAY_WINDOWS_TASK_NAME,
 } from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { callGateway } from "../gateway/call.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
+import { callGateway } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
   type GatewayWsLogStyle,
@@ -358,7 +359,7 @@ export function registerGatewayCli(program: Command) {
         process.env.CLAWDBOT_GATEWAY_TOKEN = String(opts.token);
       }
       const authModeRaw = opts.auth ? String(opts.auth) : undefined;
-      const authMode =
+      const authMode: GatewayAuthMode | null =
         authModeRaw === "token" || authModeRaw === "password"
           ? authModeRaw
           : null;
@@ -584,5 +585,4 @@ export function registerGatewayCli(program: Command) {
         }
       }),
   );
-
 }
