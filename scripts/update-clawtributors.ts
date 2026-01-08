@@ -367,6 +367,13 @@ function resolveLogin(
     return emailToLogin[email];
   }
 
+  if (email && name) {
+    const guessed = guessLoginFromEmailName(name, email, apiByLogin);
+    if (guessed) {
+      return guessed;
+    }
+  }
+
   if (email && email.endsWith("@users.noreply.github.com")) {
     const local = email.split("@", 1)[0];
     const login = local.includes("+") ? local.split("+")[1] : local;
@@ -399,6 +406,39 @@ function resolveLogin(
   }
 
   return null;
+}
+
+function guessLoginFromEmailName(
+  name: string,
+  email: string,
+  apiByLogin: Map<string, User>
+): string | null {
+  const local = email.split("@", 1)[0]?.trim();
+  if (!local) {
+    return null;
+  }
+  const normalizedName = normalizeIdentifier(name);
+  if (!normalizedName) {
+    return null;
+  }
+  const candidates = new Set([local, local.replace(/[._-]/g, "")]);
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (normalizeIdentifier(candidate) !== normalizedName) {
+      continue;
+    }
+    const key = candidate.toLowerCase();
+    if (apiByLogin.has(key)) {
+      return key;
+    }
+  }
+  return null;
+}
+
+function normalizeIdentifier(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
 }
 
 function parseReadmeEntries(
