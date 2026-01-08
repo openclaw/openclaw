@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { waitForDiscordGatewayStop } from "./monitor.js";
+import { waitForDiscordGatewayStop } from "./monitor.gateway.js";
 
 describe("waitForDiscordGatewayStop", () => {
   it("resolves on abort and disconnects gateway", async () => {
@@ -45,5 +45,17 @@ describe("waitForDiscordGatewayStop", () => {
 
     abort.abort();
     expect(disconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves on abort without a gateway", async () => {
+    const abort = new AbortController();
+
+    const promise = waitForDiscordGatewayStop({
+      abortSignal: abort.signal,
+    });
+
+    abort.abort();
+
+    await expect(promise).resolves.toBeUndefined();
   });
 });
