@@ -13,11 +13,11 @@ import {
   findDuplicateAgentDirs,
 } from "./agent-dirs.js";
 import {
+  applyContextPruningDefaults,
   applyIdentityDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
-  applyContextPruningDefaults,
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
@@ -79,10 +79,7 @@ function warnOnConfigMiskeys(
   }
 }
 
-function applyConfigEnv(
-  cfg: ClawdbotConfig,
-  env: NodeJS.ProcessEnv,
-): void {
+function applyConfigEnv(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): void {
   const envConfig = cfg.env;
   if (!envConfig) return;
 

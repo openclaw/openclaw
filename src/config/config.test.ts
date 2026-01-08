@@ -368,11 +368,14 @@ describe("config env vars", () => {
         "utf-8",
       );
 
-      await withEnvOverride({ OPENROUTER_API_KEY: "existing-key" }, async () => {
-        const { loadConfig } = await import("./config.js");
-        loadConfig();
-        expect(process.env.OPENROUTER_API_KEY).toBe("existing-key");
-      });
+      await withEnvOverride(
+        { OPENROUTER_API_KEY: "existing-key" },
+        async () => {
+          const { loadConfig } = await import("./config.js");
+          loadConfig();
+          expect(process.env.OPENROUTER_API_KEY).toBe("existing-key");
+        },
+      );
     });
   });
 
@@ -426,11 +429,7 @@ describe("config pruning defaults", () => {
       await fs.mkdir(configDir, { recursive: true });
       await fs.writeFile(
         path.join(configDir, "clawdbot.json"),
-        JSON.stringify(
-          { agent: { contextPruning: { mode: "off" } } },
-          null,
-          2,
-        ),
+        JSON.stringify({ agent: { contextPruning: { mode: "off" } } }, null, 2),
         "utf-8",
       );
 
