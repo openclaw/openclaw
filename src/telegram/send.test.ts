@@ -70,8 +70,10 @@ describe("sendMessageTelegram", () => {
 
   it("uses native fetch for BAN compatibility when api is omitted", async () => {
     const originalFetch = globalThis.fetch;
+    const originalBun = (globalThis as { Bun?: unknown }).Bun;
     const fetchSpy = vi.fn() as unknown as typeof fetch;
     globalThis.fetch = fetchSpy;
+    (globalThis as { Bun?: unknown }).Bun = {};
     botApi.sendMessage.mockResolvedValue({
       message_id: 1,
       chat: { id: "123" },
@@ -86,6 +88,11 @@ describe("sendMessageTelegram", () => {
       );
     } finally {
       globalThis.fetch = originalFetch;
+      if (originalBun === undefined) {
+        delete (globalThis as { Bun?: unknown }).Bun;
+      } else {
+        (globalThis as { Bun?: unknown }).Bun = originalBun;
+      }
     }
   });
 
