@@ -145,6 +145,25 @@ describe("applyConfigSnapshot", () => {
     expect(state.slackForm.botToken).toBe("");
     expect(state.slackForm.actions).toEqual(defaultSlackActions);
   });
+
+  it("does not clobber form edits while dirty", () => {
+    const state = createState();
+    state.configFormMode = "form";
+    state.configFormDirty = true;
+    state.configForm = { gateway: { mode: "local", port: 18789 } };
+    state.configRaw = "{\n}\n";
+
+    applyConfigSnapshot(state, {
+      config: { gateway: { mode: "remote", port: 9999 } },
+      valid: true,
+      issues: [],
+      raw: "{\n  \"gateway\": { \"mode\": \"remote\", \"port\": 9999 }\n}\n",
+    });
+
+    expect(state.configRaw).toBe(
+      "{\n  \"gateway\": {\n    \"mode\": \"local\",\n    \"port\": 18789\n  }\n}\n",
+    );
+  });
 });
 
 describe("updateConfigFormValue", () => {
@@ -164,6 +183,22 @@ describe("updateConfigFormValue", () => {
       telegram: { botToken: "t" },
       gateway: { mode: "local", port: 18789 },
     });
+  });
+
+  it("keeps raw in sync while editing the form", () => {
+    const state = createState();
+    state.configSnapshot = {
+      config: { gateway: { mode: "local" } },
+      valid: true,
+      issues: [],
+      raw: "{\n}\n",
+    };
+
+    updateConfigFormValue(state, ["gateway", "port"], 18789);
+
+    expect(state.configRaw).toBe(
+      "{\n  \"gateway\": {\n    \"mode\": \"local\",\n    \"port\": 18789\n  }\n}\n",
+    );
   });
 });
 

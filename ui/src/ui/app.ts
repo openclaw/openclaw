@@ -17,6 +17,7 @@ import {
   type ResolvedTheme,
   type ThemeMode,
 } from "./theme";
+import { truncateText } from "./format";
 import {
   startThemeTransition,
   type ThemeTransitionContext,
@@ -88,6 +89,7 @@ type EventLogEntry = {
 };
 
 const TOOL_STREAM_LIMIT = 50;
+const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   trace: true,
   debug: true,
@@ -138,17 +140,25 @@ function extractToolOutputText(value: unknown): string | null {
 
 function formatToolOutput(value: unknown): string | null {
   if (value === null || value === undefined) return null;
-  if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);
   }
   const contentText = extractToolOutputText(value);
-  if (contentText) return contentText;
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
+  let text: string;
+  if (typeof value === "string") {
+    text = value;
+  } else if (contentText) {
+    text = contentText;
+  } else {
+    try {
+      text = JSON.stringify(value, null, 2);
+    } catch {
+      text = String(value);
+    }
   }
+  const truncated = truncateText(text, TOOL_OUTPUT_CHAR_LIMIT);
+  if (!truncated.truncated) return truncated.text;
+  return `${truncated.text}\n\n… truncated (${truncated.total} chars, showing first ${truncated.text.length}).`;
 }
 
 declare global {
