@@ -7,6 +7,7 @@ import {
   GATEWAY_WINDOWS_TASK_NAME,
   LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
 } from "./constants.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
@@ -110,23 +111,14 @@ export type ScheduledTaskInfo = {
 };
 
 export function parseSchtasksQuery(output: string): ScheduledTaskInfo {
+  const entries = parseKeyValueOutput(output, ":");
   const info: ScheduledTaskInfo = {};
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const idx = line.indexOf(":");
-    if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim().toLowerCase();
-    const value = line.slice(idx + 1).trim();
-    if (!value) continue;
-    if (key === "status") {
-      info.status = value;
-    } else if (key === "last run time") {
-      info.lastRunTime = value;
-    } else if (key === "last run result") {
-      info.lastRunResult = value;
-    }
-  }
+  const status = entries.status;
+  if (status) info.status = status;
+  const lastRunTime = entries["last run time"];
+  if (lastRunTime) info.lastRunTime = lastRunTime;
+  const lastRunResult = entries["last run result"];
+  if (lastRunResult) info.lastRunResult = lastRunResult;
   return info;
 }
 

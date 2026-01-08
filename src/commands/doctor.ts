@@ -9,14 +9,16 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
-import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { maybeRepairAnthropicOAuthProfileId } from "./doctor-auth.js";
+import {
+  buildGatewayRuntimeHints,
+  formatGatewayRuntimeSummary,
+} from "./doctor-format.js";
 import {
   maybeMigrateLegacyGatewayService,
   maybeScanExtraGatewayServices,
@@ -55,62 +57,6 @@ import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
-}
-
-function formatRuntimeSummary(
-  runtime: GatewayServiceRuntime | undefined,
-): string | null {
-  if (!runtime) return null;
-  const status = runtime.status ?? "unknown";
-  const details: string[] = [];
-  if (runtime.pid) details.push(`pid ${runtime.pid}`);
-  if (runtime.state && runtime.state.toLowerCase() !== status) {
-    details.push(`state ${runtime.state}`);
-  }
-  if (runtime.subState) details.push(`sub ${runtime.subState}`);
-  if (runtime.lastExitStatus !== undefined) {
-    details.push(`last exit ${runtime.lastExitStatus}`);
-  }
-  if (runtime.lastExitReason) {
-    details.push(`reason ${runtime.lastExitReason}`);
-  }
-  if (runtime.lastRunResult) {
-    details.push(`last run ${runtime.lastRunResult}`);
-  }
-  if (runtime.lastRunTime) {
-    details.push(`last run time ${runtime.lastRunTime}`);
-  }
-  if (runtime.detail) details.push(runtime.detail);
-  return details.length > 0 ? `${status} (${details.join(", ")})` : status;
-}
-
-function buildGatewayRuntimeHints(
-  runtime: GatewayServiceRuntime | undefined,
-): string[] {
-  const hints: string[] = [];
-  if (!runtime) return hints;
-  if (runtime.cachedLabel && process.platform === "darwin") {
-    hints.push(
-      `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
-    );
-  }
-  if (runtime.status === "stopped") {
-    hints.push(
-      "Service is loaded but not running (likely exited immediately).",
-    );
-    if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(process.env);
-      hints.push(`Logs: ${logs.stdoutPath}`);
-      hints.push(`Errors: ${logs.stderrPath}`);
-    } else if (process.platform === "linux") {
-      hints.push(
-        "Logs: journalctl --user -u clawdbot-gateway.service -n 200 --no-pager",
-      );
-    } else if (process.platform === "win32") {
-      hints.push('Logs: schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST');
-    }
-  }
-  return hints;
 }
 
 export async function doctorCommand(
@@ -279,8 +225,11 @@ export async function doctorCommand(
       const serviceRuntime = await service
         .readRuntime(process.env)
         .catch(() => undefined);
-      const summary = formatRuntimeSummary(serviceRuntime);
-      const hints = buildGatewayRuntimeHints(serviceRuntime);
+      const summary = formatGatewayRuntimeSummary(serviceRuntime);
+      const hints = buildGatewayRuntimeHints(serviceRuntime, {
+        platform: process.platform,
+        env: process.env,
+      });
       if (summary || hints.length > 0) {
         const lines = [];
         if (summary) lines.push(`Runtime: ${summary}`);

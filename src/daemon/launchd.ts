@@ -7,6 +7,7 @@ import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
 } from "./constants.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
@@ -205,27 +206,22 @@ export type LaunchctlPrintInfo = {
 };
 
 export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
+  const entries = parseKeyValueOutput(output, "=");
   const info: LaunchctlPrintInfo = {};
-  for (const rawLine of output.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const match = line.match(/^([a-zA-Z\s]+?)\s*=\s*(.+)$/);
-    if (!match) continue;
-    const key = match[1]?.trim().toLowerCase();
-    const value = match[2]?.trim();
-    if (!key || value === undefined) continue;
-    if (key === "state") {
-      info.state = value;
-    } else if (key === "pid") {
-      const pid = Number.parseInt(value, 10);
-      if (Number.isFinite(pid)) info.pid = pid;
-    } else if (key === "last exit status") {
-      const status = Number.parseInt(value, 10);
-      if (Number.isFinite(status)) info.lastExitStatus = status;
-    } else if (key === "last exit reason") {
-      info.lastExitReason = value;
-    }
+  const state = entries.state;
+  if (state) info.state = state;
+  const pidValue = entries.pid;
+  if (pidValue) {
+    const pid = Number.parseInt(pidValue, 10);
+    if (Number.isFinite(pid)) info.pid = pid;
   }
+  const exitStatusValue = entries["last exit status"];
+  if (exitStatusValue) {
+    const status = Number.parseInt(exitStatusValue, 10);
+    if (Number.isFinite(status)) info.lastExitStatus = status;
+  }
+  const exitReason = entries["last exit reason"];
+  if (exitReason) info.lastExitReason = exitReason;
   return info;
 }
 

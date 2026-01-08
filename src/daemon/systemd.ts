@@ -8,6 +8,7 @@ import {
   GATEWAY_SYSTEMD_SERVICE_NAME,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
 } from "./constants.js";
+import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
@@ -225,27 +226,24 @@ export type SystemdServiceInfo = {
 };
 
 export function parseSystemdShow(output: string): SystemdServiceInfo {
+  const entries = parseKeyValueOutput(output, "=");
   const info: SystemdServiceInfo = {};
-  for (const rawLine of output.split("\n")) {
-    const line = rawLine.trim();
-    if (!line || !line.includes("=")) continue;
-    const [key, ...rest] = line.split("=");
-    const value = rest.join("=").trim();
-    if (!key) continue;
-    if (key === "ActiveState") {
-      info.activeState = value;
-    } else if (key === "SubState") {
-      info.subState = value;
-    } else if (key === "MainPID") {
-      const pid = Number.parseInt(value, 10);
-      if (Number.isFinite(pid) && pid > 0) info.mainPid = pid;
-    } else if (key === "ExecMainStatus") {
-      const status = Number.parseInt(value, 10);
-      if (Number.isFinite(status)) info.execMainStatus = status;
-    } else if (key === "ExecMainCode") {
-      info.execMainCode = value;
-    }
+  const activeState = entries.activestate;
+  if (activeState) info.activeState = activeState;
+  const subState = entries.substate;
+  if (subState) info.subState = subState;
+  const mainPidValue = entries.mainpid;
+  if (mainPidValue) {
+    const pid = Number.parseInt(mainPidValue, 10);
+    if (Number.isFinite(pid) && pid > 0) info.mainPid = pid;
   }
+  const execMainStatusValue = entries.execmainstatus;
+  if (execMainStatusValue) {
+    const status = Number.parseInt(execMainStatusValue, 10);
+    if (Number.isFinite(status)) info.execMainStatus = status;
+  }
+  const execMainCode = entries.execmaincode;
+  if (execMainCode) info.execMainCode = execMainCode;
   return info;
 }
 
