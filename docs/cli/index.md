@@ -22,6 +22,19 @@ If you change the CLI code, update this doc.
 - `--json` (and `--plain` where supported) disables styling for clean output.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
+## Color palette
+
+Clawdbot uses a lobster palette for CLI output. Source of truth: `src/terminal/theme.ts`.
+
+- `accent` (#FF5A2D): headings, provider labels, primary highlights.
+- `accentBright` (#FF7A3D): command names, emphasis.
+- `accentDim` (#D14A22): secondary highlight text.
+- `info` (#FF8A5B): informational values.
+- `success` (#2FBF71): success states.
+- `warn` (#FFB020): warnings, fallbacks, attention.
+- `error` (#E23D2D): errors, failures.
+- `muted` (#8B7F77): de-emphasis, metadata.
+
 ## Command tree
 
 ```
@@ -154,6 +167,8 @@ Options:
 - `--mode <local|remote>`: wizard mode.
 - `--remote-url <url>`: remote Gateway URL.
 - `--remote-token <token>`: remote Gateway token.
+
+Wizard auto-runs when any wizard flags are present (`--non-interactive`, `--mode`, `--remote-url`, `--remote-token`).
 
 ### `onboard`
 Interactive wizard to set up gateway, workspace, and skills.
