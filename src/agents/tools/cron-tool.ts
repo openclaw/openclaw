@@ -47,7 +47,8 @@ const CronToolSchema = Type.Union([
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
     patch: Type.Object({}, { additionalProperties: true }),
   }),
   Type.Object({
@@ -55,21 +56,24 @@ const CronToolSchema = Type.Union([
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
   }),
   Type.Object({
     action: Type.Literal("run"),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
   }),
   Type.Object({
     action: Type.Literal("runs"),
     gatewayUrl: Type.Optional(Type.String()),
     gatewayToken: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Number()),
-    jobId: Type.String(),
+    jobId: Type.Optional(Type.String()),
+    id: Type.Optional(Type.String()),
   }),
   Type.Object({
     action: Type.Literal("wake"),
@@ -88,7 +92,7 @@ export function createCronTool(): AnyAgentTool {
     label: "Cron",
     name: "cron",
     description:
-      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events.",
+      "Manage Gateway cron jobs (status/list/add/update/remove/run/runs) and send wake events. Use `jobId` as the canonical identifier; `id` is accepted for compatibility.",
     parameters: CronToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -121,7 +125,13 @@ export function createCronTool(): AnyAgentTool {
           );
         }
         case "update": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          if (!id) {
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
+          }
           if (!params.patch || typeof params.patch !== "object") {
             throw new Error("patch required");
           }
@@ -134,19 +144,37 @@ export function createCronTool(): AnyAgentTool {
           );
         }
         case "remove": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          if (!id) {
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
+          }
           return jsonResult(
             await callGatewayTool("cron.remove", gatewayOpts, { id }),
           );
         }
         case "run": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          if (!id) {
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
+          }
           return jsonResult(
             await callGatewayTool("cron.run", gatewayOpts, { id }),
           );
         }
         case "runs": {
-          const id = readStringParam(params, "jobId", { required: true });
+          const id =
+            readStringParam(params, "jobId") ?? readStringParam(params, "id");
+          if (!id) {
+            throw new Error(
+              "jobId required (id accepted for backward compatibility)",
+            );
+          }
           return jsonResult(
             await callGatewayTool("cron.runs", gatewayOpts, { id }),
           );
