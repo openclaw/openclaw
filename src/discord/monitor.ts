@@ -116,7 +116,11 @@ function logSlowDiscordListener(params: {
     unit: "seconds",
   });
   const message = `[EventQueue] Slow listener detected: ${params.listener} took ${duration} for event ${params.event}`;
-  params.logger?.warn ? params.logger.warn(message) : console.warn(message);
+  if (params.logger?.warn) {
+    params.logger.warn(message);
+  } else {
+    console.warn(message);
+  }
 }
 
 async function resolveDiscordThreadStarter(params: {
