@@ -184,22 +184,6 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
     }
   },
 
-  signal: {
-    enabled: true,
-    account: "+15555550123",
-    httpUrl: "http://localhost:8080",
-    allowFrom: ["+15555550123"]
-  },
-
-  imessage: {
-    enabled: true,
-    cliPath: "imsg",
-    dbPath: "~/Library/Messages/chat.db",
-    service: "auto",
-    allowFrom: ["+15555550123"],
-    groups: { "*": { requireMention: true } }
-  },
-
   // Agent runtime
   agent: {
     workspace: "~/clawd",
@@ -350,37 +334,6 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
     }
   },
 
-  // Web client
-  web: {
-    enabled: true,
-    heartbeatSeconds: 60,
-    reconnect: {
-      initialMs: 2000,
-      maxMs: 120000,
-      factor: 1.4,
-      jitter: 0.2,
-      maxAttempts: 0
-    }
-  },
-
-  // Browser automation
-  browser: {
-    enabled: true,
-    controlUrl: "http://127.0.0.1:18791",
-    cdpUrl: "http://127.0.0.1:9222",
-    headless: false,
-    defaultProfile: "clawd",
-    profiles: {
-      clawd: { cdpPort: 18800, color: "#FF4500" },
-      work: { cdpPort: 18801, color: "#0066CC" }
-    }
-  },
-
-  // UI tweaks
-  ui: {
-    seamColor: "#FF4500"
-  },
-
   // Gateway + networking
   gateway: {
     mode: "local",
@@ -395,32 +348,6 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
     tailscale: { mode: "serve", resetOnExit: false },
     remote: { url: "ws://gateway.tailnet:18789", token: "remote-token" },
     reload: { mode: "hybrid", debounceMs: 300 }
-  },
-
-  bridge: {
-    enabled: true,
-    port: 18790,
-    bind: "tailnet"
-  },
-
-  discovery: {
-    wideArea: { enabled: true }
-  },
-
-  canvasHost: {
-    enabled: true,
-    root: "~/clawd/canvas",
-    port: 18793,
-    liveReload: true
-  },
-
-  talk: {
-    voiceId: "elevenlabs_voice_id",
-    voiceAliases: { Clawd: "EXAVITQu4vr4xnSDxMaL" },
-    modelId: "eleven_v3",
-    outputFormat: "mp3_44100_128",
-    apiKey: "ELEVENLABS_API_KEY",
-    interruptOnSpeech: true
   },
 
   skills: {
@@ -550,4 +477,5 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
+- Optional sections to add later: `web`, `browser`, `ui`, `bridge`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
 - See [Providers](/providers/whatsapp) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.

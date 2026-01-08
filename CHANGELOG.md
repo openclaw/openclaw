@@ -85,6 +85,7 @@
 - Docs: add FAQ for PNPM/Bun lockfile migration warning; link AgentSkills spec + ClawdHub guide (`/clawdhub`) from skills docs.
 - Docs: add showcase projects (xuezh, gohome, roborock, padel-cli). Thanks @joshp123.
 - Docs: add Couch Potato Dev Mode showcase entry. Thanks @dbhurley for PR #442.
+- Docs: add schema-accurate configuration examples guide. Thanks @daveonkels for PR #277.
 - Build: import tool-display JSON as a module instead of runtime file reads. Thanks @mukhtharcm for PR #312.
 - Status: add provider usage snapshots to `/status`, `clawdbot status --usage`, and the macOS menu bar.
 - Build: fix macOS packaging QR smoke test for the bun-compiled relay. Thanks @dbhurley for PR #358.
