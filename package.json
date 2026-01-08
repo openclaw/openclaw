@@ -113,6 +113,7 @@
     "grammy": "^1.39.2",
     "json5": "^2.2.3",
     "long": "5.3.2",
+    "osc-progress": "^0.2.0",
     "playwright-core": "1.57.0",
     "proper-lockfile": "^4.1.2",
     "qrcode-terminal": "^0.12.0",

@@ -16,6 +16,12 @@ If you change the CLI code, update this doc.
 - `--profile <name>`: isolate state under `~/.clawdbot-<name>`.
 - `-V`, `--version`, `-v`: print version and exit.
 
+## Output styling
+
+- ANSI colors and progress indicators only render in TTY sessions.
+- `--json` (and `--plain` where supported) disables styling for clean output.
+- Long-running commands show a progress indicator (OSC 9;4 when supported).
+
 ## Command tree
 
 ```
@@ -321,7 +327,7 @@ Options:
 - `--json`
 
 #### `agents add [name]`
-Add a new isolated agent. If `--workspace` is omitted, runs the guided wizard.
+Add a new isolated agent. Runs the guided wizard unless flags are passed; `--workspace` is required in non-interactive mode.
 
 Options:
 - `--workspace <dir>`

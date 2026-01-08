@@ -1,11 +1,9 @@
-import { spinner } from "@clack/prompts";
-import chalk from "chalk";
-
 import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   loadAuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { withProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
 import {
@@ -36,6 +34,7 @@ import {
   listTelegramAccountIds,
   resolveTelegramAccount,
 } from "../telegram/accounts.js";
+import { theme } from "../terminal/theme.js";
 import { formatTerminalLink } from "../utils.js";
 import {
   listWhatsAppAccountIds,
@@ -61,7 +60,7 @@ type ChatProvider = (typeof CHAT_PROVIDERS)[number];
 
 function docsLink(path: string, label?: string): string {
   const url = `${DOCS_ROOT}${path}`;
-  return formatTerminalLink(url, label ?? url);
+  return formatTerminalLink(label ?? url, url, { fallback: url });
 }
 
 type ProvidersListOptions = {
@@ -136,17 +135,17 @@ function formatAccountLabel(params: { accountId: string; name?: string }) {
 }
 
 const colorValue = (value: string) => {
-  if (value === "none") return chalk.red(value);
-  if (value === "env") return chalk.cyan(value);
-  return chalk.green(value);
+  if (value === "none") return theme.error(value);
+  if (value === "env") return theme.accent(value);
+  return theme.success(value);
 };
 
 function formatEnabled(value: boolean | undefined): string {
-  return value === false ? chalk.red("disabled") : chalk.green("enabled");
+  return value === false ? theme.error("disabled") : theme.success("enabled");
 }
 
 function formatConfigured(value: boolean): string {
-  return value ? chalk.green("configured") : chalk.yellow("not configured");
+  return value ? theme.success("configured") : theme.warn("not configured");
 }
 
 function formatTokenSource(source?: string): string {
@@ -160,7 +159,7 @@ function formatSource(label: string, source?: string): string {
 }
 
 function formatLinked(value: boolean): string {
-  return value ? chalk.green("linked") : chalk.yellow("not linked");
+  return value ? theme.success("linked") : theme.warn("not linked");
 }
 
 function applyAccountName(params: {
@@ -501,14 +500,14 @@ export async function providersListCommand(
   }
 
   const lines: string[] = [];
-  lines.push(chalk.bold("Chat providers:"));
+  lines.push(theme.heading("Chat providers:"));
 
   for (const accountId of whatsappAccounts) {
     const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
     const linked = await webAuthExists(authDir);
     const name = cfg.whatsapp?.accounts?.[accountId]?.name;
     lines.push(
-      `- ${chalk.cyan("WhatsApp")} ${chalk.bold(
+      `- ${theme.accent("WhatsApp")} ${theme.heading(
         formatAccountLabel({
           accountId,
           name,
@@ -524,7 +523,7 @@ export async function providersListCommand(
   for (const accountId of telegramAccounts) {
     const account = resolveTelegramAccount({ cfg, accountId });
     lines.push(
-      `- ${chalk.cyan("Telegram")} ${chalk.bold(
+      `- ${theme.accent("Telegram")} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -538,7 +537,7 @@ export async function providersListCommand(
   for (const accountId of discordAccounts) {
     const account = resolveDiscordAccount({ cfg, accountId });
     lines.push(
-      `- ${chalk.cyan("Discord")} ${chalk.bold(
+      `- ${theme.accent("Discord")} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -553,7 +552,7 @@ export async function providersListCommand(
     const account = resolveSlackAccount({ cfg, accountId });
     const configured = Boolean(account.botToken && account.appToken);
     lines.push(
-      `- ${chalk.cyan("Slack")} ${chalk.bold(
+      `- ${theme.accent("Slack")} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -570,12 +569,12 @@ export async function providersListCommand(
   for (const accountId of signalAccounts) {
     const account = resolveSignalAccount({ cfg, accountId });
     lines.push(
-      `- ${chalk.cyan("Signal")} ${chalk.bold(
+      `- ${theme.accent("Signal")} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
         }),
-      )}: ${formatConfigured(account.configured)}, base=${chalk.dim(
+      )}: ${formatConfigured(account.configured)}, base=${theme.muted(
         account.baseUrl,
       )}, ${formatEnabled(account.enabled)}`,
     );
@@ -584,7 +583,7 @@ export async function providersListCommand(
   for (const accountId of imessageAccounts) {
     const account = resolveIMessageAccount({ cfg, accountId });
     lines.push(
-      `- ${chalk.cyan("iMessage")} ${chalk.bold(
+      `- ${theme.accent("iMessage")} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -594,14 +593,14 @@ export async function providersListCommand(
   }
 
   lines.push("");
-  lines.push(chalk.bold("Auth providers (OAuth + API keys):"));
+  lines.push(theme.heading("Auth providers (OAuth + API keys):"));
   if (authProfiles.length === 0) {
-    lines.push(chalk.dim("- none"));
+    lines.push(theme.muted("- none"));
   } else {
     for (const profile of authProfiles) {
-      const external = profile.isExternal ? chalk.dim(" (synced)") : "";
+      const external = profile.isExternal ? theme.muted(" (synced)") : "";
       lines.push(
-        `- ${chalk.cyan(profile.id)} (${chalk.green(profile.type)}${external})`,
+        `- ${theme.accent(profile.id)} (${theme.success(profile.type)}${external})`,
       );
     }
   }
@@ -610,11 +609,11 @@ export async function providersListCommand(
 
   if (includeUsage) {
     runtime.log("");
-    const usage = await loadUsageWithSpinner(runtime);
+    const usage = await loadUsageWithProgress(runtime);
     if (usage) {
       const usageLines = formatUsageReportLines(usage);
       if (usageLines.length > 0) {
-        usageLines[0] = chalk.cyan(usageLines[0]);
+        usageLines[0] = theme.accent(usageLines[0]);
         runtime.log(usageLines.join("\n"));
       }
     }
@@ -628,27 +627,15 @@ export async function providersListCommand(
   );
 }
 
-async function loadUsageWithSpinner(
+async function loadUsageWithProgress(
   runtime: RuntimeEnv,
 ): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
-  const rich = Boolean(process.stdout.isTTY);
-  if (!rich) {
-    try {
-      return await loadProviderUsageSummary();
-    } catch (err) {
-      runtime.error(String(err));
-      return null;
-    }
-  }
-
-  const spin = spinner();
-  spin.start(chalk.cyan("Fetching usage snapshot…"));
   try {
-    const usage = await loadProviderUsageSummary();
-    spin.stop(chalk.green("Usage snapshot ready"));
-    return usage;
+    return await withProgress(
+      { label: "Fetching usage snapshot…", indeterminate: true, enabled: true },
+      async () => await loadProviderUsageSummary(),
+    );
   } catch (err) {
-    spin.stop(chalk.red("Usage snapshot failed"));
     runtime.error(String(err));
     return null;
   }
@@ -660,18 +647,26 @@ export async function providersStatusCommand(
 ) {
   const timeoutMs = Number(opts.timeout ?? 10_000);
   try {
-    const payload = await callGateway({
-      method: "providers.status",
-      params: { probe: Boolean(opts.probe), timeoutMs },
-      timeoutMs,
-    });
+    const payload = await withProgress(
+      {
+        label: "Checking provider status…",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway({
+          method: "providers.status",
+          params: { probe: Boolean(opts.probe), timeoutMs },
+          timeoutMs,
+        }),
+    );
     if (opts.json) {
       runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
     const data = payload as Record<string, unknown>;
     const lines: string[] = [];
-    lines.push(chalk.green("Gateway reachable."));
+    lines.push(theme.success("Gateway reachable."));
     const accountLines = (
       label: string,
       accounts: Array<Record<string, unknown>>,

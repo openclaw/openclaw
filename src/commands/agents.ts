@@ -343,12 +343,22 @@ function buildProviderBindings(params: {
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
+  params?: { hasFlags?: boolean },
 ) {
   const cfg = await requireValidConfig(runtime);
   if (!cfg) return;
 
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
+  const hasFlags = params?.hasFlags === true;
+
+  if (hasFlags && !workspaceFlag) {
+    runtime.error(
+      "Non-interactive mode requires --workspace. Re-run without flags to use the wizard.",
+    );
+    runtime.exit(1);
+    return;
+  }
 
   if (workspaceFlag) {
     if (!nameInput) {

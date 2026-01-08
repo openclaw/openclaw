@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import { defaultRuntime } from "../runtime.js";
+import { withProgress } from "./progress.js";
 import {
   type CameraFacing,
   cameraTempPath,
@@ -117,15 +118,23 @@ const callGatewayCli = async (
   opts: NodesRpcOpts,
   params?: unknown,
 ) =>
-  callGateway({
-    url: opts.url,
-    token: opts.token,
-    method,
-    params,
-    timeoutMs: Number(opts.timeout ?? 10_000),
-    clientName: "cli",
-    mode: "cli",
-  });
+  withProgress(
+    {
+      label: `Nodes ${method}`,
+      indeterminate: true,
+      enabled: opts.json !== true,
+    },
+    async () =>
+      await callGateway({
+        url: opts.url,
+        token: opts.token,
+        method,
+        params,
+        timeoutMs: Number(opts.timeout ?? 10_000),
+        clientName: "cli",
+        mode: "cli",
+      }),
+  );
 
 function formatAge(msAgo: number) {
   const s = Math.max(0, Math.floor(msAgo / 1000));

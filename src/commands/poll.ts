@@ -8,6 +8,7 @@ import {
 } from "../infra/outbound/format.js";
 import { normalizePollInput, type PollInput } from "../polls.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withProgress } from "../cli/progress.js";
 
 function parseIntOption(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) return undefined;
@@ -57,25 +58,33 @@ export async function pollCommand(
     return;
   }
 
-  const result = await callGateway<{
-    messageId: string;
-    toJid?: string;
-    channelId?: string;
-  }>({
-    method: "poll",
-    params: {
-      to: opts.to,
-      question: normalized.question,
-      options: normalized.options,
-      maxSelections: normalized.maxSelections,
-      durationHours: normalized.durationHours,
-      provider,
-      idempotencyKey: randomIdempotencyKey(),
+  const result = await withProgress(
+    {
+      label: `Sending poll via ${provider}…`,
+      indeterminate: true,
+      enabled: opts.json !== true,
     },
-    timeoutMs: 10_000,
-    clientName: "cli",
-    mode: "cli",
-  });
+    async () =>
+      await callGateway<{
+        messageId: string;
+        toJid?: string;
+        channelId?: string;
+      }>({
+        method: "poll",
+        params: {
+          to: opts.to,
+          question: normalized.question,
+          options: normalized.options,
+          maxSelections: normalized.maxSelections,
+          durationHours: normalized.durationHours,
+          provider,
+          idempotencyKey: randomIdempotencyKey(),
+        },
+        timeoutMs: 10_000,
+        clientName: "cli",
+        mode: "cli",
+      }),
+  );
 
   runtime.log(
     success(

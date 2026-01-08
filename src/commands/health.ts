@@ -4,6 +4,7 @@ import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withProgress } from "../cli/progress.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
@@ -114,10 +115,18 @@ export async function healthCommand(
   runtime: RuntimeEnv,
 ) {
   // Always query the running gateway; do not open a direct Baileys socket here.
-  const summary = await callGateway<HealthSummary>({
-    method: "health",
-    timeoutMs: opts.timeoutMs,
-  });
+  const summary = await withProgress(
+    {
+      label: "Checking gateway health…",
+      indeterminate: true,
+      enabled: opts.json !== true,
+    },
+    async () =>
+      await callGateway<HealthSummary>({
+        method: "health",
+        timeoutMs: opts.timeoutMs,
+      }),
+  );
   // Gateway reachability defines success; provider issues are reported but not fatal here.
   const fatal = false;
 

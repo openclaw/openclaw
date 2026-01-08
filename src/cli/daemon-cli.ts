@@ -30,6 +30,7 @@ import {
 } from "../infra/ports.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDefaultDeps } from "./deps.js";
+import { withProgress } from "./progress.js";
 
 type DaemonStatus = {
   service: {
@@ -74,6 +75,7 @@ export type GatewayRpcOpts = {
   token?: string;
   password?: string;
   timeout?: string;
+  json?: boolean;
 };
 
 export type DaemonStatusOptions = {
@@ -104,15 +106,23 @@ function parsePort(raw: unknown): number | null {
 
 async function probeGatewayStatus(opts: GatewayRpcOpts) {
   try {
-    await callGateway({
-      url: opts.url,
-      token: opts.token,
-      password: opts.password,
-      method: "status",
-      timeoutMs: Number(opts.timeout ?? 10_000),
-      clientName: "cli",
-      mode: "cli",
-    });
+    await withProgress(
+      {
+        label: "Checking gateway status...",
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await callGateway({
+          url: opts.url,
+          token: opts.token,
+          password: opts.password,
+          method: "status",
+          timeoutMs: Number(opts.timeout ?? 10_000),
+          clientName: "cli",
+          mode: "cli",
+        }),
+    );
     return { ok: true } as const;
   } catch (err) {
     return {
