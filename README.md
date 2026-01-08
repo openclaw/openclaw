@@ -132,6 +132,12 @@ Run `clawdbot doctor` to surface risky/misconfigured DM policies.
 - [Cron + wakeups](https://docs.clawd.bot/cron); [webhooks](https://docs.clawd.bot/webhook); [Gmail Pub/Sub](https://docs.clawd.bot/gmail-pubsub).
 - [Skills platform](https://docs.clawd.bot/skills): bundled, managed, and workspace skills with install gating + UI.
 
+### Runtime + safety
+- [Provider routing](https://docs.clawd.bot/provider-routing), [retry policy](https://docs.clawd.bot/retry), and [streaming/chunking](https://docs.clawd.bot/streaming).
+- [Presence](https://docs.clawd.bot/presence), [typing indicators](https://docs.clawd.bot/typing-indicators), and [usage tracking](https://docs.clawd.bot/usage-tracking).
+- [Models](https://docs.clawd.bot/models), [model failover](https://docs.clawd.bot/model-failover), and [session pruning](https://docs.clawd.bot/session-pruning).
+- [Security](https://docs.clawd.bot/security) and [troubleshooting](https://docs.clawd.bot/troubleshooting).
+
 ### Ops + packaging
 - [Control UI](https://docs.clawd.bot/web) + [WebChat](https://docs.clawd.bot/webchat) served directly from the Gateway.
 - [Tailscale Serve/Funnel](https://docs.clawd.bot/tailscale) or [SSH tunnels](https://docs.clawd.bot/remote) with token/password auth.
@@ -421,23 +427,16 @@ Use these when you’re past the onboarding flow and want the deeper reference.
 
 ## Email hooks (Gmail)
 
-[Gmail Pub/Sub wiring (gcloud + gogcli), hook tokens, and auto-watch behavior are documented here.](https://docs.clawd.bot/gmail-pubsub)
-
-Gateway auto-starts the watcher when `hooks.enabled=true` and `hooks.gmail.account` is set; `clawdbot hooks gmail run` is the manual daemon wrapper if you don’t want auto-start.
-
-```bash
-clawdbot hooks gmail setup --account you@gmail.com
-clawdbot hooks gmail run
-```
+- [docs.clawd.bot/gmail-pubsub](https://docs.clawd.bot/gmail-pubsub)
 
 ## Clawd
 
 Clawdbot was built for **Clawd**, a space lobster AI assistant. 🦞  
 by Peter Steinberger and the community.
 
-- [Clawd](https://clawd.me)
-- [SOUL](https://soul.md)
-- [Peter](https://steipete.me)
+- [clawd.me](https://clawd.me)
+- [soul.md](https://soul.md)
+- [steipete.me](https://steipete.me)
 
 ## Community
 
