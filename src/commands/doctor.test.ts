@@ -532,7 +532,7 @@ describe("doctor", () => {
         ([message, title]) =>
           title === "Legacy workspace" &&
           typeof message === "string" &&
-          message.includes(path.join("/Users/steipete", "clawdis")),
+          message.includes(path.resolve("/Users/steipete/clawdis")),
       ),
     ).toBe(true);
 

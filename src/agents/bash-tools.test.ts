@@ -17,7 +17,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function waitForCompletion(sessionId: string) {
   let status = "running";
-  const deadline = Date.now() + 2000;
+  const deadline = Date.now() + (process.platform === "win32" ? 8000 : 2000);
   while (Date.now() < deadline && status === "running") {
     const poll = await processTool.execute("call-wait", {
       action: "poll",
@@ -47,7 +47,7 @@ describe("bash tool backgrounding", () => {
 
     let status = "running";
     let output = "";
-    const deadline = Date.now() + 2000;
+    const deadline = Date.now() + (process.platform === "win32" ? 8000 : 2000);
 
     while (Date.now() < deadline && status === "running") {
       const poll = await processTool.execute("call2", {

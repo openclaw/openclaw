@@ -901,13 +901,6 @@ export async function compactEmbeddedPiSession(params: {
           sandboxEnabled: !!sandbox?.enabled,
         });
 
-        const extraParams = resolveExtraParams({
-          cfg: params.config,
-          provider,
-          modelId,
-          thinkLevel: params.thinkLevel,
-        });
-
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
         ({ session } = await createAgentSession({
           cwd: resolvedWorkspace,
@@ -924,7 +917,6 @@ export async function compactEmbeddedPiSession(params: {
           skills: [],
           contextFiles: [],
           additionalExtensionPaths,
-          extraParams,
         }));
 
         try {
@@ -1220,13 +1212,6 @@ export async function runEmbeddedPiAgent(params: {
             sandboxEnabled: !!sandbox?.enabled,
           });
 
-          const extraParams = resolveExtraParams({
-            cfg: params.config,
-            provider,
-            modelId,
-            thinkLevel,
-          });
-
           let session: Awaited<
             ReturnType<typeof createAgentSession>
           >["session"];
@@ -1247,7 +1232,6 @@ export async function runEmbeddedPiAgent(params: {
             skills: [],
             contextFiles: [],
             additionalExtensionPaths,
-            extraParams,
           }));
 
           try {
