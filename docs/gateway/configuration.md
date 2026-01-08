@@ -340,6 +340,8 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
     - `scope`: `"session"` | `"agent"` | `"shared"`
     - `workspaceRoot`: custom sandbox workspace root
     - `docker`: per-agent docker overrides (e.g. `image`, `network`, `env`, `setupCommand`, limits; ignored when `scope: "shared"`)
+    - `browser`: per-agent sandboxed browser overrides (ignored when `scope: "shared"`)
+    - `prune`: per-agent sandbox pruning overrides (ignored when `scope: "shared"`)
     - `tools`: per-agent sandbox tool policy (deny wins; overrides `agent.sandbox.tools`)
   - `tools`: per-agent tool restrictions (overrides `agent.tools`; applied before sandbox tool policy).
     - `allow`: array of allowed tool names

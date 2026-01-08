@@ -150,11 +150,12 @@ routing.agents[id].sandbox.scope > agent.sandbox.scope
 routing.agents[id].sandbox.workspaceRoot > agent.sandbox.workspaceRoot
 routing.agents[id].sandbox.workspaceAccess > agent.sandbox.workspaceAccess
 routing.agents[id].sandbox.docker.* > agent.sandbox.docker.*
+routing.agents[id].sandbox.browser.* > agent.sandbox.browser.*
+routing.agents[id].sandbox.prune.* > agent.sandbox.prune.*
 ```
 
 **Notes:**
-- `routing.agents[id].sandbox.docker.*` overrides `agent.sandbox.docker.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
-- `browser` and `prune` settings under `agent.sandbox` are still **global** and apply to all sandboxed agents.
+- `routing.agents[id].sandbox.{docker,browser,prune}.*` overrides `agent.sandbox.{docker,browser,prune}.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
 
 ### Tool Restrictions
 The filtering order is:
