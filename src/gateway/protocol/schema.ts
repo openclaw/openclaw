@@ -664,6 +664,7 @@ export const CronPayloadSchema = Type.Union([
     {
       kind: Type.Literal("agentTurn"),
       message: NonEmptyString,
+      model: Type.Optional(Type.String()),
       thinking: Type.Optional(Type.String()),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 1 })),
       deliver: Type.Optional(Type.Boolean()),
