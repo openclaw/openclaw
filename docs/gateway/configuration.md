@@ -392,6 +392,8 @@ Run multiple isolated agents (separate workspace, `agentDir`, sessions) inside o
     - `browser`: per-agent sandboxed browser overrides (ignored when `scope: "shared"`)
     - `prune`: per-agent sandbox pruning overrides (ignored when `scope: "shared"`)
     - `tools`: per-agent sandbox tool policy (deny wins; overrides `agent.sandbox.tools`)
+  - `subagents`: per-agent sub-agent defaults.
+    - `allowAgents`: allowlist of agent ids for `sessions_spawn` from this agent (`["*"]` = allow any; default: only same agent)
   - `tools`: per-agent tool restrictions (overrides `agent.tools`; applied before sandbox tool policy).
     - `allow`: array of allowed tool names
     - `deny`: array of denied tool names (deny wins)

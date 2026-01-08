@@ -79,6 +79,7 @@
 - Agent: return a friendly context overflow response (413/request_too_large). Thanks @alejandroOPI for PR #395.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
 - Sub-agents: skip invalid model overrides with a warning and keep the run alive; tool exceptions now return tool errors instead of crashing the agent.
+- Sub-agents: allow `sessions_spawn` to target other agents via per-agent allowlists (`routing.agents.<agentId>.subagents.allowAgents`).
 - Sessions: forward explicit sessionKey through gateway/chat/node bridge to avoid sub-agent sessionId mixups.
 - Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.

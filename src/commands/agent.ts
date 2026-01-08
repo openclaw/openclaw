@@ -19,7 +19,10 @@ import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { hasNonzeroUsage } from "../agents/usage.js";
 import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
+import {
   ensureAgentWorkspace,
 } from "../agents/workspace.js";
 import type { MsgContext } from "../auto-reply/templating.js";
@@ -180,7 +183,11 @@ export async function agentCommand(
 
   const cfg = loadConfig();
   const agentCfg = cfg.agent;
-  const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const sessionAgentId = resolveAgentIdFromSessionKey(
+    opts.sessionKey?.trim(),
+  );
+  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
@@ -427,6 +434,7 @@ export async function agentCommand(
           lane: opts.lane,
           abortSignal: opts.abortSignal,
           extraSystemPrompt: opts.extraSystemPrompt,
+          agentDir,
           onAgentEvent: (evt) => {
             if (
               evt.stream === "lifecycle" &&

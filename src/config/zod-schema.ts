@@ -638,6 +638,11 @@ const RoutingSchema = z
             workspace: z.string().optional(),
             agentDir: z.string().optional(),
             model: z.string().optional(),
+            subagents: z
+              .object({
+                allowAgents: z.array(z.string()).optional(),
+              })
+              .optional(),
             sandbox: z
               .object({
                 mode: z

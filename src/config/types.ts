@@ -717,6 +717,10 @@ export type RoutingConfig = {
       workspace?: string;
       agentDir?: string;
       model?: string;
+      subagents?: {
+        /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
+        allowAgents?: string[];
+      };
       sandbox?: {
         mode?: "off" | "non-main" | "all";
         /** Agent workspace access inside the sandbox. */

@@ -177,7 +177,7 @@ Core parameters:
 - `sessions_list`: `kinds?`, `limit?`, `activeMinutes?`, `messageLimit?` (0 = none)
 - `sessions_history`: `sessionKey`, `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey`, `message`, `timeoutSeconds?` (0 = fire-and-forget)
-- `sessions_spawn`: `task`, `label?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
+- `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
 
 Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.

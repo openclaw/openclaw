@@ -126,9 +126,13 @@ Spawn a sub-agent run in an isolated session and announce the result back to the
 Parameters:
 - `task` (required)
 - `label?` (optional; used for logs/UI)
+- `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values error)
 - `runTimeoutSeconds?` (default 0; when set, aborts the sub-agent run after N seconds)
 - `cleanup?` (`delete|keep`, default `keep`)
+
+Allowlist:
+- `routing.agents.<agentId>.subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
 Behavior:
 - Starts a new `agent:<agentId>:subagent:<uuid>` session with `deliver: false`.
