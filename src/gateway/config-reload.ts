@@ -360,13 +360,18 @@ export function startGatewayConfigReloader(opts: {
   const watcher = chokidar.watch(opts.watchPath, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+    usePolling: Boolean(process.env.VITEST),
   });
 
   watcher.on("add", schedule);
   watcher.on("change", schedule);
   watcher.on("unlink", schedule);
+  let watcherClosed = false;
   watcher.on("error", (err) => {
+    if (watcherClosed) return;
+    watcherClosed = true;
     opts.log.warn(`config watcher error: ${String(err)}`);
+    void watcher.close().catch(() => {});
   });
 
   return {
@@ -374,6 +379,7 @@ export function startGatewayConfigReloader(opts: {
       stopped = true;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = null;
+      watcherClosed = true;
       await watcher.close().catch(() => {});
     },
   };
