@@ -61,7 +61,16 @@ export function parseTelegramTarget(to: string): {
   chatId: string;
   topicId: number | undefined;
 } {
-  const trimmed = to.trim();
+  let trimmed = to.trim();
+
+  // Cron "lastTo" values can include internal prefixes like `telegram:...` or
+  // `telegram:group:...` (see normalizeChatId in telegram/send.ts).
+  // Strip these before parsing `:topic:` / `:<topicId>` suffixes.
+  while (true) {
+    const next = trimmed.replace(/^(telegram|tg|group):/i, "").trim();
+    if (next === trimmed) break;
+    trimmed = next;
+  }
 
   // Try format: chatId:topic:topicId
   const topicMatch = /^(.+?):topic:(\d+)$/.exec(trimmed);
