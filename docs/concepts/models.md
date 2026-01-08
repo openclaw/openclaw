@@ -97,7 +97,6 @@ Scan results are ranked by:
 3) Context size
 4) Parameter count
 
-<<<<<<< HEAD
 Input
 - OpenRouter `/models` list (filter `:free`)
 - Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/environment))
