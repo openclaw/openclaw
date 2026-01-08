@@ -274,7 +274,7 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 | messages | enabled | Read/send/edit/delete |
 | threads | enabled | Create/list/reply |
 | pins | enabled | Pin/unpin/list |
-| search | enabled | Message search (preview spec) |
+| search | enabled | Message search (preview feature) |
 | memberInfo | enabled | Member info |
 | roleInfo | enabled | Role list |
 | channelInfo | enabled | Channel info + list |

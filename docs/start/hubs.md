@@ -18,7 +18,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [FAQ](https://docs.clawd.bot/start/faq)
 - [Configuration](https://docs.clawd.bot/gateway/configuration)
 - [Configuration examples](https://docs.clawd.bot/gateway/configuration-examples)
-- [Clawd (personal assistant)](https://docs.clawd.bot/start/clawd)
+- [Clawdbot assistant (Clawd)](https://docs.clawd.bot/start/clawd)
 - [Showcase](https://docs.clawd.bot/start/showcase)
 - [Lore](https://docs.clawd.bot/start/lore)
 

@@ -128,5 +128,5 @@ user service (no lingering needed). See [`docs/gateway.md`](/gateway) for the sy
 - [`docs/gateway.md`](/gateway) (Gateway runbook; flags, supervision, ports)
 - [`docs/configuration.md`](/gateway/configuration) (config schema + examples)
 - [`docs/discord.md`](/providers/discord) and [`docs/telegram.md`](/providers/telegram) (reply tags + replyToMode settings)
-- [`docs/clawd.md`](/start/clawd) (personal assistant setup)
+- [`docs/clawd.md`](/start/clawd) (Clawdbot assistant setup)
 - [`docs/macos.md`](/platforms/macos) (macOS app behavior; gateway lifecycle + “Attach only”)

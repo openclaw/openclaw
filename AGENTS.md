@@ -28,6 +28,7 @@
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
+- Naming: use **Clawdbot** for product/app/docs headings; use `clawdbot` for CLI command, package/binary, paths, and config keys.
 
 ## Testing Guidelines
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).

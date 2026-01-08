@@ -22,7 +22,7 @@ defaults:
 nav:
   - title: "Home"
     url: "/"
-  - title: "Clawd Setup"
+  - title: "Clawdbot Assistant"
     url: "/start/clawd/"
   - title: "Gateway"
     url: "/gateway/"

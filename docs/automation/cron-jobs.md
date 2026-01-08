@@ -80,7 +80,7 @@ the topic/thread into the `to` field:
 - `-1001234567890:topic:123` (preferred: explicit topic marker)
 - `-1001234567890:123` (shorthand: numeric suffix)
 
-Internal prefixes like `telegram:...` / `telegram:group:...` are also accepted:
+Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
 - `telegram:group:-1001234567890:topic:123`
 
 ## Storage & history

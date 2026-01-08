@@ -1,9 +1,9 @@
 ---
 summary: "Schema-accurate configuration examples for common Clawdbot setups"
 read_when:
-  - Learning how to configure clawdbot
+  - Learning how to configure Clawdbot
   - Looking for configuration examples
-  - Setting up clawdbot for the first time
+  - Setting up Clawdbot for the first time
 ---
 # Configuration Examples
 

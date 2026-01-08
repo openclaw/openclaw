@@ -520,7 +520,7 @@ Start the Gateway with `--verbose` to get more console detail. Then inspect the 
 
 ### My skill generated an image/PDF, but nothing was sent
 
-Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [Clawd setup](/start/clawd) and [Agent send](/tools/agent-send).
+Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [Clawdbot assistant setup](/start/clawd) and [Agent send](/tools/agent-send).
 
 CLI sending:
 
