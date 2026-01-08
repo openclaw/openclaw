@@ -130,6 +130,7 @@
 - Build: install Bun in the Dockerfile so `pnpm build` can run Bun scripts. Thanks @loukotal for PR #284.
 - Typing indicators: stop typing once the reply dispatcher drains to prevent stuck typing across Discord/Telegram/WhatsApp.
 - Typing indicators: fix a race that could keep the typing indicator stuck after quick replies. Thanks @thewilloftheshadow for PR #270.
+- Typing indicators: refresh typing TTL on every loop start to keep long tool runs alive. Thanks @thesash for PR #448.
 - Google: merge consecutive messages to satisfy strict role alternation for Google provider models. Thanks @Asleep123 for PR #266.
 - Postinstall: handle targetDir symlinks in the install script. Thanks @obviyus for PR #272.
 - Status: show configured model in `/status` (override-aware). Thanks @azade-c for PR #396.
