@@ -472,6 +472,14 @@ export async function getReplyFromConfig(
     const currentThinkLevel =
       (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
       (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+    const currentVerboseLevel =
+      (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+      (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    const currentReasoningLevel =
+      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    const currentElevatedLevel =
+      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
     const directiveReply = await handleDirectiveOnly({
       cfg,
       directives,
@@ -492,6 +500,9 @@ export async function getReplyFromConfig(
       initialModelLabel,
       formatModelSwitchEvent,
       currentThinkLevel,
+      currentVerboseLevel,
+      currentReasoningLevel,
+      currentElevatedLevel,
     });
     typing.cleanup();
     return directiveReply;

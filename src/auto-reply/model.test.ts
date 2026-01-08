@@ -40,6 +40,15 @@ describe("extractModelDirective", () => {
       expect(result.cleaned).toBe("");
     });
 
+    it("recognizes /gpt: as model directive when alias is configured", () => {
+      const result = extractModelDirective("/gpt:", {
+        aliases: ["gpt", "sonnet", "opus"],
+      });
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt");
+      expect(result.cleaned).toBe("");
+    });
+
     it("recognizes /sonnet as model directive", () => {
       const result = extractModelDirective("/sonnet", {
         aliases: ["gpt", "sonnet", "opus"],

@@ -48,6 +48,9 @@ Text + native (when enabled):
 Text-only:
 - `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
 
+Notes:
+- Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
+
 ## Surface notes
 
 - **Text commands** run in the normal chat session (DMs share `main`, groups have their own session).

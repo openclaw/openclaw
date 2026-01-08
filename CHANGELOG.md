@@ -94,6 +94,7 @@
 - iMessage: ignore disconnect errors during shutdown (avoid unhandled promise rejections). Thanks @antons for PR #359.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
+- Commands: accept optional `:` in slash commands and show current levels for /think, /verbose, /reasoning, and /elevated when no args are provided. Thanks @lutr0 for PR #382.
 - Auto-reply: add `/reasoning on|off` to expose model reasoning blocks (italic).
 - Auto-reply: place reasoning blocks before the final reply text when appended.
 - Auto-reply: flag error payloads and improve Bun socket error messaging. Thanks @emanuelst for PR #331.

@@ -25,7 +25,7 @@ export function extractModelDirective(
       ? null
       : body.match(
           new RegExp(
-            `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)`,
+            `(?:^|\\s)\\/(${aliases.map(escapeRegExp).join("|")})(?=$|\\s|:)(?:\\s*:\\s*)?`,
             "i",
           ),
         );

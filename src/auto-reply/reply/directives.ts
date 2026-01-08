@@ -18,7 +18,7 @@ export function extractThinkDirective(body?: string): {
   if (!body) return { cleaned: "", hasDirective: false };
   // Match with optional argument - require word boundary via lookahead after keyword
   const match = body.match(
-    /(?:^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:?\s*([a-zA-Z-]+)\b)?/i,
+    /(?:^|\s)\/(?:thinking|think|t)(?=$|\s|:)(?:\s*:?\s*(?:([a-zA-Z-]+)\b)?)?/i,
   );
   const thinkLevel = normalizeThinkLevel(match?.[1]);
   const cleaned = match
@@ -40,7 +40,7 @@ export function extractVerboseDirective(body?: string): {
 } {
   if (!body) return { cleaned: "", hasDirective: false };
   const match = body.match(
-    /(?:^|\s)\/(?:verbose|v)(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i,
+    /(?:^|\s)\/(?:verbose|v)(?=$|\s|:)(?:\s*:?\s*(?:([a-zA-Z-]+)\b)?)?/i,
   );
   const verboseLevel = normalizeVerboseLevel(match?.[1]);
   const cleaned = match
@@ -62,7 +62,7 @@ export function extractElevatedDirective(body?: string): {
 } {
   if (!body) return { cleaned: "", hasDirective: false };
   const match = body.match(
-    /(?:^|\s)\/(?:elevated|elev)(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i,
+    /(?:^|\s)\/(?:elevated|elev)(?=$|\s|:)(?:\s*:?\s*(?:([a-zA-Z-]+)\b)?)?/i,
   );
   const elevatedLevel = normalizeElevatedLevel(match?.[1]);
   const cleaned = match
@@ -84,7 +84,7 @@ export function extractReasoningDirective(body?: string): {
 } {
   if (!body) return { cleaned: "", hasDirective: false };
   const match = body.match(
-    /(?:^|\s)\/(?:reasoning|reason)(?=$|\s|:)\s*:?\s*([a-zA-Z-]+)\b/i,
+    /(?:^|\s)\/(?:reasoning|reason)(?=$|\s|:)(?:\s*:?\s*(?:([a-zA-Z-]+)\b)?)?/i,
   );
   const reasoningLevel = normalizeReasoningLevel(match?.[1]);
   const cleaned = match
@@ -103,7 +103,7 @@ export function extractStatusDirective(body?: string): {
   hasDirective: boolean;
 } {
   if (!body) return { cleaned: "", hasDirective: false };
-  const match = body.match(/(?:^|\s)\/status(?=$|\s|:)\b/i);
+  const match = body.match(/(?:^|\s)\/status(?=$|\s|:)(?:\s*:\s*)?/i);
   const cleaned = match
     ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
     : body.trim();

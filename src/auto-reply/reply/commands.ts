@@ -30,7 +30,10 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
-import { shouldHandleTextCommands } from "../commands-registry.js";
+import {
+  normalizeCommandBody,
+  shouldHandleTextCommands,
+} from "../commands-registry.js";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -154,9 +157,9 @@ export function buildCommandContext(params: {
   const abortKey =
     sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
-  const commandBodyNormalized = isGroup
-    ? stripMentions(rawBodyNormalized, ctx, cfg)
-    : rawBodyNormalized;
+  const commandBodyNormalized = normalizeCommandBody(
+    isGroup ? stripMentions(rawBodyNormalized, ctx, cfg) : rawBodyNormalized,
+  );
 
   return {
     surface,

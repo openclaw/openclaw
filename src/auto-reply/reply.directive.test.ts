@@ -143,6 +143,38 @@ describe("directive parsing", () => {
     expect(res.thinkLevel).toBeUndefined();
   });
 
+  it("matches think with no argument and consumes colon", () => {
+    const res = extractThinkDirective("/think:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.thinkLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches verbose with no argument", () => {
+    const res = extractVerboseDirective("/verbose:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.verboseLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches reasoning with no argument", () => {
+    const res = extractReasoningDirective("/reasoning:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.reasoningLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
+  it("matches elevated with no argument", () => {
+    const res = extractElevatedDirective("/elevated:");
+    expect(res.hasDirective).toBe(true);
+    expect(res.elevatedLevel).toBeUndefined();
+    expect(res.rawLevel).toBeUndefined();
+    expect(res.cleaned).toBe("");
+  });
+
   it("matches queue directive", () => {
     const res = extractQueueDirective("please /queue interrupt now");
     expect(res.hasDirective).toBe(true);
@@ -415,6 +447,84 @@ describe("directive parsing", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: off");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current verbose level when /verbose has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/verbose", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            verboseDefault: "on",
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current verbose level: on");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current reasoning level when /reasoning has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/reasoning", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current reasoning level: off");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows current elevated level when /elevated has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            elevatedDefault: "on",
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current elevated level: on");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

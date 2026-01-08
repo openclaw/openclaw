@@ -17,9 +17,11 @@ export function parseSendPolicyCommand(raw?: string): {
   if (!raw) return { hasCommand: false };
   const trimmed = raw.trim();
   if (!trimmed) return { hasCommand: false };
-  const match = trimmed.match(/^\/send(?:\s+([a-zA-Z]+))?\s*$/i);
+  const match = trimmed.match(
+    /^\/send(?:\s*:\s*([a-zA-Z]+)?\s*|\s+([a-zA-Z]+)\s*)?$/i,
+  );
   if (!match) return { hasCommand: false };
-  const token = match[1]?.trim().toLowerCase();
+  const token = (match[1] ?? match[2])?.trim().toLowerCase();
   if (!token) return { hasCommand: true };
   if (token === "inherit" || token === "default" || token === "reset") {
     return { hasCommand: true, mode: "inherit" };

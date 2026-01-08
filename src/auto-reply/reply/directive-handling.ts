@@ -310,6 +310,9 @@ export async function handleDirectiveOnly(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   currentThinkLevel?: ThinkLevel;
+  currentVerboseLevel?: VerboseLevel;
+  currentReasoningLevel?: ReasoningLevel;
+  currentElevatedLevel?: ElevatedLevel;
 }): Promise<ReplyPayload | undefined> {
   const {
     directives,
@@ -328,6 +331,9 @@ export async function handleDirectiveOnly(params: {
     initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
+    currentVerboseLevel,
+    currentReasoningLevel,
+    currentElevatedLevel,
   } = params;
 
   if (directives.hasModelDirective) {
@@ -391,18 +397,33 @@ export async function handleDirectiveOnly(params: {
     };
   }
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
+    if (!directives.rawVerboseLevel) {
+      const level = currentVerboseLevel ?? "off";
+      return { text: `Current verbose level: ${level}.` };
+    }
     return {
-      text: `Unrecognized verbose level "${directives.rawVerboseLevel ?? ""}". Valid levels: off, on.`,
+      text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on.`,
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
+    if (!directives.rawReasoningLevel) {
+      const level = currentReasoningLevel ?? "off";
+      return { text: `Current reasoning level: ${level}.` };
+    }
     return {
-      text: `Unrecognized reasoning level "${directives.rawReasoningLevel ?? ""}". Valid levels: on, off, stream.`,
+      text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
     };
   }
   if (directives.hasElevatedDirective && !directives.elevatedLevel) {
+    if (!directives.rawElevatedLevel) {
+      if (!elevatedEnabled || !elevatedAllowed) {
+        return { text: "elevated is not available right now." };
+      }
+      const level = currentElevatedLevel ?? "off";
+      return { text: `Current elevated level: ${level}.` };
+    }
     return {
-      text: `Unrecognized elevated level "${directives.rawElevatedLevel ?? ""}". Valid levels: off, on.`,
+      text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on.`,
     };
   }
   if (
