@@ -300,12 +300,22 @@ export async function runReplyAgent(params: {
                   }
                 : undefined,
             onAgentEvent: (evt) => {
-              if (evt.stream !== "compaction") return;
-              const phase =
-                typeof evt.data.phase === "string" ? evt.data.phase : "";
-              const willRetry = Boolean(evt.data.willRetry);
-              if (phase === "end" && !willRetry) {
-                autoCompactionCompleted = true;
+              // Trigger typing when tools start executing
+              if (evt.stream === "tool") {
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                if (phase === "start") {
+                  void typingSignals.signalToolStart();
+                }
+              }
+              // Track auto-compaction completion
+              if (evt.stream === "compaction") {
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const willRetry = Boolean(evt.data.willRetry);
+                if (phase === "end" && !willRetry) {
+                  autoCompactionCompleted = true;
+                }
               }
             },
             onBlockReply:
