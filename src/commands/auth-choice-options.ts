@@ -12,7 +12,10 @@ export type AuthChoiceOption = {
   hint?: string;
 };
 
-function formatOAuthHint(expires?: number): string {
+function formatOAuthHint(
+  expires?: number,
+  opts?: { allowStale?: boolean },
+): string {
   const rich = isRich();
   if (!expires) {
     return colorize(rich, theme.muted, "token unavailable");
@@ -20,6 +23,9 @@ function formatOAuthHint(expires?: number): string {
   const now = Date.now();
   const remaining = expires - now;
   if (remaining <= 0) {
+    if (opts?.allowStale) {
+      return colorize(rich, theme.warn, "token present · refresh on use");
+    }
     return colorize(rich, theme.error, "token expired");
   }
   const minutes = Math.round(remaining / (60 * 1000));
@@ -47,7 +53,7 @@ export function buildAuthChoiceOptions(params: {
     options.push({
       value: "codex-cli",
       label: "OpenAI Codex OAuth (Codex CLI)",
-      hint: formatOAuthHint(codexCli.expires),
+      hint: formatOAuthHint(codexCli.expires, { allowStale: true }),
     });
   }
 

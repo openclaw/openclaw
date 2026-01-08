@@ -9,6 +9,7 @@
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
+- Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
 
 ## 2026.1.8
 
