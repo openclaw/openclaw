@@ -1127,7 +1127,9 @@ export function registerNodesCli(program: Command) {
             defaultRuntime.log("canvas a2ui reset ok");
           }
         } catch (err) {
-          defaultRuntime.error(`nodes canvas a2ui reset failed: ${String(err)}`);
+          defaultRuntime.error(
+            `nodes canvas a2ui reset failed: ${String(err)}`,
+          );
           defaultRuntime.exit(1);
         }
       }),

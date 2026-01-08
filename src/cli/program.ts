@@ -23,7 +23,6 @@ import {
 } from "../config/config.js";
 import { danger, setVerbose } from "../globals.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
-import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { defaultRuntime } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
@@ -42,6 +41,7 @@ import { registerModelsCli } from "./models-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
+import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { registerProvidersCli } from "./providers-cli.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
@@ -576,7 +576,12 @@ Examples:
     .option("--workspace <dir>", "Workspace directory for the new agent")
     .option("--model <id>", "Model id for this agent")
     .option("--agent-dir <dir>", "Agent state directory for this agent")
-    .option("--bind <provider[:accountId]>", "Route provider binding (repeatable)", collectOption, [])
+    .option(
+      "--bind <provider[:accountId]>",
+      "Route provider binding (repeatable)",
+      collectOption,
+      [],
+    )
     .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
@@ -594,7 +599,9 @@ Examples:
             workspace: opts.workspace as string | undefined,
             model: opts.model as string | undefined,
             agentDir: opts.agentDir as string | undefined,
-            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            bind: Array.isArray(opts.bind)
+              ? (opts.bind as string[])
+              : undefined,
             nonInteractive: Boolean(opts.nonInteractive),
             json: Boolean(opts.json),
           },

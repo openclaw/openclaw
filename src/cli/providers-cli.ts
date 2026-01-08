@@ -6,11 +6,11 @@ import {
   providersRemoveCommand,
   providersStatusCommand,
 } from "../commands/providers.js";
-import { listChatProviders } from "../providers/registry.js";
 import { danger } from "../globals.js";
+import { listChatProviders } from "../providers/registry.js";
 import { defaultRuntime } from "../runtime.js";
-import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { hasExplicitOptions } from "./command-options.js";
+import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 
 const optionNamesAdd = [
   "provider",

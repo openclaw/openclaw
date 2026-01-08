@@ -87,7 +87,7 @@ const uninstallLegacyGatewayServices = vi.fn().mockResolvedValue([]);
 const findExtraGatewayServices = vi.fn().mockResolvedValue([]);
 const renderGatewayServiceCleanupHints = vi.fn().mockReturnValue(["cleanup"]);
 const resolveGatewayProgramArguments = vi.fn().mockResolvedValue({
-      programArguments: ["node", "cli", "gateway", "--port", "18789"],
+  programArguments: ["node", "cli", "gateway", "--port", "18789"],
 });
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceIsLoaded = vi.fn().mockResolvedValue(false);

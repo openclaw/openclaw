@@ -158,8 +158,7 @@ function buildSkillStatus(
 
   const missingBins = requiredBins.filter((bin) => !hasBinary(bin));
   const missingAnyBins =
-    requiredAnyBins.length > 0 &&
-    !requiredAnyBins.some((bin) => hasBinary(bin))
+    requiredAnyBins.length > 0 && !requiredAnyBins.some((bin) => hasBinary(bin))
       ? requiredAnyBins
       : [];
   const missingOs =

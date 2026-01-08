@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
-import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { loginWeb, logoutWeb } from "../provider-web.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 
 type ProviderAuthOptions = {
@@ -11,7 +11,9 @@ type ProviderAuthOptions = {
 };
 
 function normalizeProvider(raw?: string): "whatsapp" | "web" {
-  const value = String(raw ?? "whatsapp").trim().toLowerCase();
+  const value = String(raw ?? "whatsapp")
+    .trim()
+    .toLowerCase();
   if (value === "whatsapp" || value === "web") return value;
   throw new Error(`Unsupported provider: ${value}`);
 }
@@ -36,7 +38,7 @@ export async function runProviderLogout(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const provider = normalizeProvider(opts.provider);
+  const _provider = normalizeProvider(opts.provider);
   // Auth-only flow: resolve account + clear session state only.
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({

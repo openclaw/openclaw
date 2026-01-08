@@ -59,11 +59,9 @@ describe("agents add command", () => {
   it("requires --workspace in non-interactive mode", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseSnapshot });
 
-    await agentsAddCommand(
-      { name: "Work", nonInteractive: true },
-      runtime,
-      { hasFlags: false },
-    );
+    await agentsAddCommand({ name: "Work", nonInteractive: true }, runtime, {
+      hasFlags: false,
+    });
 
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("--workspace"),
