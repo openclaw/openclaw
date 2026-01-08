@@ -736,6 +736,9 @@ type SetupProvidersOptions = {
   onWhatsAppAccountId?: (accountId: string) => void;
   forceAllowFromProviders?: ProviderChoice[];
   skipDmPolicyPrompt?: boolean;
+  skipConfirm?: boolean;
+  quickstartDefaults?: boolean;
+  initialSelection?: ProviderChoice[];
 };
 
 export async function setupProviders(
@@ -801,10 +804,12 @@ export async function setupProviders(
     "Provider status",
   );
 
-  const shouldConfigure = await prompter.confirm({
-    message: "Configure chat providers now?",
-    initialValue: true,
-  });
+  const shouldConfigure = options?.skipConfirm
+    ? true
+    : await prompter.confirm({
+        message: "Configure chat providers now?",
+        initialValue: true,
+      });
   if (!shouldConfigure) return cfg;
 
   await noteProviderPrimer(prompter);
@@ -857,9 +862,13 @@ export async function setupProviders(
     }
   });
 
+  const initialSelection =
+    options?.initialSelection ??
+    (options?.quickstartDefaults && !telegramConfigured ? ["telegram"] : []);
   const selection = (await prompter.multiselect({
     message: "Select providers",
     options: selectionOptions,
+    initialValues: initialSelection.length ? initialSelection : undefined,
   })) as ProviderChoice[];
 
   options?.onSelection?.(selection);

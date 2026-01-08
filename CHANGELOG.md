@@ -10,6 +10,7 @@
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
+- Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 
 ## 2026.1.8
 
