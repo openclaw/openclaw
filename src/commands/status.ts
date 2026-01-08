@@ -319,6 +319,7 @@ export async function statusCommand(
     const account = resolveWhatsAppAccount({ cfg });
     logWebSelfId(account.authDir, runtime, true);
   }
+  runtime.log("");
   runtime.log(info("System:"));
   for (const line of summary.providerSummary) {
     runtime.log(`  ${line}`);
@@ -327,6 +328,7 @@ export async function statusCommand(
   if (daemonLine) {
     runtime.log(info(daemonLine));
   }
+  runtime.log("");
   if (health) {
     runtime.log(info("Gateway health: reachable"));
 
@@ -353,6 +355,7 @@ export async function statusCommand(
   } else {
     runtime.log(info("Provider probes: skipped (use --deep)"));
   }
+  runtime.log("");
   if (summary.queuedSystemEvents.length > 0) {
     const preview = summary.queuedSystemEvents.slice(0, 3).join(" | ");
     runtime.log(
@@ -381,6 +384,7 @@ export async function statusCommand(
   } else {
     runtime.log("No session activity yet.");
   }
+  runtime.log("");
 
   if (usage) {
     for (const line of formatUsageReportLines(usage)) {
