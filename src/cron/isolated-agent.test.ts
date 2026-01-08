@@ -20,7 +20,10 @@ vi.mock("../agents/model-catalog.js", () => ({
 
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
+import {
+  parseTelegramTarget,
+  runCronIsolatedAgentTurn,
+} from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-cron-"));
@@ -667,6 +670,50 @@ describe("runCronIsolatedAgentTurn", () => {
 
       expect(res.status).toBe("ok");
       expect(deps.sendMessageTelegram).toHaveBeenCalled();
+    });
+  });
+});
+
+describe("parseTelegramTarget", () => {
+  it("parses plain chatId", () => {
+    expect(parseTelegramTarget("-1001234567890")).toEqual({
+      chatId: "-1001234567890",
+      topicId: undefined,
+    });
+  });
+
+  it("parses @username", () => {
+    expect(parseTelegramTarget("@mychannel")).toEqual({
+      chatId: "@mychannel",
+      topicId: undefined,
+    });
+  });
+
+  it("parses chatId:topicId format", () => {
+    expect(parseTelegramTarget("-1001234567890:123")).toEqual({
+      chatId: "-1001234567890",
+      topicId: 123,
+    });
+  });
+
+  it("parses chatId:topic:topicId format", () => {
+    expect(parseTelegramTarget("-1001234567890:topic:456")).toEqual({
+      chatId: "-1001234567890",
+      topicId: 456,
+    });
+  });
+
+  it("trims whitespace", () => {
+    expect(parseTelegramTarget("  -1001234567890:99  ")).toEqual({
+      chatId: "-1001234567890",
+      topicId: 99,
+    });
+  });
+
+  it("does not treat non-numeric suffix as topicId", () => {
+    expect(parseTelegramTarget("-1001234567890:abc")).toEqual({
+      chatId: "-1001234567890:abc",
+      topicId: undefined,
     });
   });
 });
