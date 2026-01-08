@@ -37,6 +37,7 @@
 - Control UI: show skill install progress + per-skill results, hide install once binaries present. (#445) — thanks @pkrmf
 - Providers/Doctor: surface Discord privileged intent (Message Content) misconfiguration with actionable warnings.
 - Providers/Doctor: warn when Telegram config expects unmentioned group messages but Bot API privacy mode is likely enabled; surface WhatsApp login/disconnect hints.
+- Apps: refresh iOS/Android/macOS app icons for Clawdbot branding. (#521) — thanks @fishfisher
 
 ## 2026.1.8
 
