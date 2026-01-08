@@ -327,14 +327,14 @@ export async function handleDirectiveOnly(params: {
     aliasIndex,
     allowedModelKeys,
     allowedModelCatalog,
-  resetModelOverride,
-  initialModelLabel,
-  formatModelSwitchEvent,
-  currentThinkLevel,
-  currentVerboseLevel,
-  currentReasoningLevel,
-  currentElevatedLevel,
-} = params;
+    resetModelOverride,
+    initialModelLabel,
+    formatModelSwitchEvent,
+    currentThinkLevel,
+    currentVerboseLevel,
+    currentReasoningLevel,
+    currentElevatedLevel,
+  } = params;
 
   if (directives.hasModelDirective) {
     const modelDirective = directives.rawModelDirective?.trim().toLowerCase();
