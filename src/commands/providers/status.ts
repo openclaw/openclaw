@@ -4,7 +4,7 @@ import { listChatProviders } from "../../providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { type ChatProvider, formatAccountLabel } from "./shared.js";
+import { type ChatProvider, formatProviderAccountLabel } from "./shared.js";
 
 export type ProvidersStatusOptions = {
   json?: boolean;
@@ -18,7 +18,7 @@ export function formatGatewayProvidersStatusLines(
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
   const accountLines = (
-    label: string,
+    provider: ChatProvider,
     accounts: Array<Record<string, unknown>>,
   ) =>
     accounts.map((account) => {
@@ -42,10 +42,11 @@ export function formatGatewayProvidersStatusLines(
       const accountId =
         typeof account.accountId === "string" ? account.accountId : "default";
       const name = typeof account.name === "string" ? account.name.trim() : "";
-      const labelText = `${label} ${formatAccountLabel({
+      const labelText = formatProviderAccountLabel({
+        provider,
         accountId,
         name: name || undefined,
-      })}`;
+      });
       return `- ${labelText}: ${bits.join(", ")}`;
     });
 
@@ -75,7 +76,7 @@ export function formatGatewayProvidersStatusLines(
   for (const meta of listChatProviders()) {
     const accounts = accountPayloads[meta.id];
     if (accounts && accounts.length > 0) {
-      lines.push(...accountLines(meta.label, accounts));
+      lines.push(...accountLines(meta.id, accounts));
     }
   }
 
