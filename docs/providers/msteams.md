@@ -5,6 +5,9 @@ read_when:
 ---
 # Microsoft Teams (Bot Framework)
 
+> "Abandon all hope, ye who enter here."
+
+
 Updated: 2026-01-08
 
 Status: text + DM attachments are supported; channel/group attachments require Microsoft Graph permissions.
@@ -36,8 +39,10 @@ Before configuring Clawdbot, you need to create an Azure Bot resource.
    | **Subscription** | Select your Azure subscription |
    | **Resource group** | Create new or use existing |
    | **Pricing tier** | **Free** for dev/testing |
-   | **Type of App** | **Single Tenant** (recommended) |
+   | **Type of App** | **Single Tenant** (recommended - see note below) |
    | **Creation type** | **Create new Microsoft App ID** |
+
+> **Deprecation notice:** Creation of new multi-tenant bots was deprecated after 2025-07-31. Use **Single Tenant** for new bots.
 
 3. Click **Review + create** → **Create** (wait ~1-2 minutes)
 
@@ -117,6 +122,8 @@ This is often easier than hand-editing JSON manifests.
    - Scopes: `personal`, `team`, `groupChat`.
    - `supportsFiles: true` (required for personal scope file handling).
    - Add RSC permissions (below).
+   - Create icons: `outline.png` (32x32) and `color.png` (192x192).
+   - Zip all three files together: `manifest.json`, `outline.png`, `color.png`.
 
 3. **Configure Clawdbot**
    ```json
@@ -213,7 +220,19 @@ Minimal, valid example with the required fields. Replace IDs and URLs.
 - `bots[].scopes` must include the surfaces you plan to use (`personal`, `team`, `groupChat`).
 - `bots[].supportsFiles: true` is required for file handling in personal scope.
 - `authorization.permissions.resourceSpecific` must include channel read/send if you want channel traffic.
-- Reinstall the app after manifest changes; Teams caches app metadata.
+
+### Updating an existing app
+
+To update an already-installed Teams app (e.g., to add RSC permissions):
+
+1. Update your `manifest.json` with the new settings
+2. **Increment the `version` field** (e.g., `1.0.0` → `1.1.0`)
+3. **Re-zip** the manifest with icons (`manifest.json`, `outline.png`, `color.png`)
+4. Upload the new zip:
+   - **Option A (Teams Admin Center):** Teams Admin Center → Teams apps → Manage apps → find your app → Upload new version
+   - **Option B (Sideload):** In Teams → Apps → Manage your apps → Upload a custom app
+5. **For team channels:** Reinstall the app in each team for new permissions to take effect
+6. **Fully quit and relaunch Teams** (not just close the window) to clear cached app metadata
 
 ## Capabilities: RSC only vs Graph
 
@@ -234,6 +253,17 @@ Adds:
 - Downloading file attachments stored in SharePoint/OneDrive.
 - Reading channel/chat message history via Graph.
 
+### RSC vs Graph API
+
+| Capability | RSC Permissions | Graph API |
+|------------|-----------------|-----------|
+| **Real-time messages** | Yes (via webhook) | No (polling only) |
+| **Historical messages** | No | Yes (can query history) |
+| **Setup complexity** | App manifest only | Requires admin consent + token flow |
+| **Works offline** | No (must be running) | Yes (query anytime) |
+
+**Bottom line:** RSC is for real-time listening; Graph API is for historical access. For catching up on missed messages while offline, you need Graph API with `ChannelMessage.Read.All` (requires admin consent).
+
 ## Graph-enabled media + history (required for channels)
 If you need images/files in **channels** or want to fetch **message history**, you must enable Microsoft Graph permissions and grant admin consent.
 
@@ -243,6 +273,22 @@ If you need images/files in **channels** or want to fetch **message history**, y
 2. **Grant admin consent** for the tenant.
 3. Bump the Teams app **manifest version**, re-upload, and **reinstall the app in Teams**.
 4. **Fully quit and relaunch Teams** to clear cached app metadata.
+
+## Known Limitations
+
+### Webhook timeouts
+Teams delivers messages via HTTP webhook. If processing takes too long (e.g., slow LLM responses), you may see:
+- Gateway timeouts
+- Teams retrying the message (causing duplicates)
+- Dropped replies
+
+Clawdbot handles this by returning quickly and sending replies proactively, but very slow responses may still cause issues.
+
+### Formatting
+Teams markdown is more limited than Slack or Discord:
+- Basic formatting works: **bold**, *italic*, `code`, links
+- Complex markdown (tables, nested lists) may not render correctly
+- Adaptive Cards are not yet supported (plain text + links for now)
 
 ## Configuration
 Key settings (see `/gateway/configuration` for shared provider patterns):
