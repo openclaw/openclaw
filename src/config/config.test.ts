@@ -500,6 +500,43 @@ describe("config discord", () => {
   });
 });
 
+describe("config msteams", () => {
+  it("accepts replyStyle at global/team/channel levels", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      msteams: {
+        replyStyle: "top-level",
+        teams: {
+          team123: {
+            replyStyle: "thread",
+            channels: {
+              chan456: { replyStyle: "top-level" },
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.msteams?.replyStyle).toBe("top-level");
+      expect(res.config.msteams?.teams?.team123?.replyStyle).toBe("thread");
+      expect(
+        res.config.msteams?.teams?.team123?.channels?.chan456?.replyStyle,
+      ).toBe("top-level");
+    }
+  });
+
+  it("rejects invalid replyStyle", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      msteams: { replyStyle: "nope" },
+    });
+    expect(res.ok).toBe(false);
+  });
+});
+
 describe("Nix integration (U3, U5, U9)", () => {
   describe("U3: isNixMode env var detection", () => {
     it("isNixMode is false when CLAWDBOT_NIX_MODE is not set", async () => {

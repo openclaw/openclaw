@@ -1,23 +1,23 @@
 import type { ClawdbotConfig } from "../config/types.js";
 import type { getChildLogger as getChildLoggerFn } from "../logging.js";
-import {
-  getConversationReference,
-  listConversationReferences,
-  type StoredConversationReference,
+import type {
+  MSTeamsConversationStore,
+  StoredConversationReference,
 } from "./conversation-store.js";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import {
+  classifyMSTeamsSendError,
+  formatMSTeamsSendErrorHint,
+  formatUnknownError,
+} from "./errors.js";
+import { type MSTeamsAdapter, sendMSTeamsMessages } from "./messenger.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-// Lazy logger to avoid initialization order issues in tests
 let _log: ReturnType<typeof getChildLoggerFn> | undefined;
-const getLog = (): ReturnType<typeof getChildLoggerFn> => {
-  if (!_log) {
-    // Dynamic import to defer initialization
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getChildLogger } = require("../logging.js") as {
-      getChildLogger: typeof getChildLoggerFn;
-    };
-    _log = getChildLogger({ name: "msteams:send" });
-  }
+const getLog = async (): Promise<ReturnType<typeof getChildLoggerFn>> => {
+  if (_log) return _log;
+  const { getChildLogger } = await import("../logging.js");
+  _log = getChildLogger({ name: "msteams:send" });
   return _log;
 };
 
@@ -66,63 +66,23 @@ function parseRecipient(to: string): {
 /**
  * Find a stored conversation reference for the given recipient.
  */
-async function findConversationReference(
-  recipient: { type: "conversation" | "user"; id: string },
-): Promise<{ conversationId: string; ref: StoredConversationReference } | null> {
+async function findConversationReference(recipient: {
+  type: "conversation" | "user";
+  id: string;
+  store: MSTeamsConversationStore;
+}): Promise<{
+  conversationId: string;
+  ref: StoredConversationReference;
+} | null> {
   if (recipient.type === "conversation") {
-    const ref = await getConversationReference(recipient.id);
+    const ref = await recipient.store.get(recipient.id);
     if (ref) return { conversationId: recipient.id, ref };
     return null;
   }
 
-  // Search by user AAD object ID
-  const all = await listConversationReferences();
-  for (const { conversationId, reference } of all) {
-    if (reference.user?.aadObjectId === recipient.id) {
-      return { conversationId, ref: reference };
-    }
-    if (reference.user?.id === recipient.id) {
-      return { conversationId, ref: reference };
-    }
-  }
-  return null;
-}
-
-// Type matching @microsoft/agents-activity ConversationReference
-type ConversationReferenceShape = {
-  activityId?: string;
-  user?: { id: string; name?: string };
-  bot?: { id: string; name?: string };
-  conversation: { id: string; conversationType?: string; tenantId?: string };
-  channelId: string;
-  serviceUrl?: string;
-  locale?: string;
-};
-
-/**
- * Build a Bot Framework ConversationReference from our stored format.
- * Note: activityId is intentionally omitted so proactive messages post as
- * top-level messages rather than replies/threads.
- */
-function buildConversationReference(
-  ref: StoredConversationReference,
-): ConversationReferenceShape {
-  if (!ref.conversation?.id) {
-    throw new Error("Invalid stored reference: missing conversation.id");
-  }
-  return {
-    // activityId omitted to avoid creating reply threads
-    user: ref.user?.id ? { id: ref.user.id, name: ref.user.name } : undefined,
-    bot: ref.bot?.id ? { id: ref.bot.id, name: ref.bot.name } : undefined,
-    conversation: {
-      id: ref.conversation.id,
-      conversationType: ref.conversation.conversationType,
-      tenantId: ref.conversation.tenantId,
-    },
-    channelId: ref.channelId ?? "msteams",
-    serviceUrl: ref.serviceUrl,
-    locale: ref.locale,
-  };
+  const found = await recipient.store.findByUserId(recipient.id);
+  if (!found) return null;
+  return { conversationId: found.conversationId, ref: found.reference };
 }
 
 /**
@@ -147,9 +107,11 @@ export async function sendMessageMSTeams(
     throw new Error("msteams credentials not configured");
   }
 
+  const store = createMSTeamsConversationStoreFs();
+
   // Parse recipient and find conversation reference
   const recipient = parseRecipient(to);
-  const found = await findConversationReference(recipient);
+  const found = await findConversationReference({ ...recipient, store });
 
   if (!found) {
     throw new Error(
@@ -159,9 +121,10 @@ export async function sendMessageMSTeams(
   }
 
   const { conversationId, ref } = found;
-  const conversationRef = buildConversationReference(ref);
 
-  getLog().debug("sending proactive message", {
+  const log = await getLog();
+
+  log.debug("sending proactive message", {
     conversationId,
     textLength: text.length,
     hasMedia: Boolean(mediaUrl),
@@ -179,27 +142,38 @@ export async function sendMessageMSTeams(
 
   const adapter = new CloudAdapter(authConfig);
 
-  let messageId = "unknown";
+  const message = mediaUrl
+    ? text
+      ? `${text}\n\n${mediaUrl}`
+      : mediaUrl
+    : text;
+  let messageIds: string[];
+  try {
+    messageIds = await sendMSTeamsMessages({
+      replyStyle: "top-level",
+      adapter: adapter as unknown as MSTeamsAdapter,
+      appId: creds.appId,
+      conversationRef: ref,
+      messages: [message],
+      // Enable default retry/backoff for throttling/transient failures.
+      retry: {},
+      onRetry: (event) => {
+        log.debug("retrying send", { conversationId, ...event });
+      },
+    });
+  } catch (err) {
+    const classification = classifyMSTeamsSendError(err);
+    const hint = formatMSTeamsSendErrorHint(classification);
+    const status = classification.statusCode
+      ? ` (HTTP ${classification.statusCode})`
+      : "";
+    throw new Error(
+      `msteams send failed${status}: ${formatUnknownError(err)}${hint ? ` (${hint})` : ""}`,
+    );
+  }
+  const messageId = messageIds[0] ?? "unknown";
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  await (adapter as any).continueConversation(
-    creds.appId,
-    conversationRef,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    async (context: any) => {
-      // Build the activity
-      const activity = {
-        type: "message",
-        text: mediaUrl ? (text ? `${text}\n\n${mediaUrl}` : mediaUrl) : text,
-      };
-      const response = await context.sendActivity(activity);
-      if (response?.id) {
-        messageId = response.id;
-      }
-    },
-  );
-
-  getLog().info("sent proactive message", { conversationId, messageId });
+  log.info("sent proactive message", { conversationId, messageId });
 
   return {
     messageId,
@@ -217,7 +191,8 @@ export async function listMSTeamsConversations(): Promise<
     conversationType?: string;
   }>
 > {
-  const all = await listConversationReferences();
+  const store = createMSTeamsConversationStoreFs();
+  const all = await store.list();
   return all.map(({ conversationId, reference }) => ({
     conversationId,
     userName: reference.user?.name,

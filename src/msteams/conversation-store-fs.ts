@@ -1,0 +1,268 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import lockfile from "proper-lockfile";
+
+import { resolveStateDir } from "../config/paths.js";
+import type {
+  MSTeamsConversationStore,
+  MSTeamsConversationStoreEntry,
+  StoredConversationReference,
+} from "./conversation-store.js";
+
+type ConversationStoreData = {
+  version: 1;
+  conversations: Record<
+    string,
+    StoredConversationReference & { lastSeenAt?: string }
+  >;
+};
+
+const STORE_FILENAME = "msteams-conversations.json";
+const MAX_CONVERSATIONS = 1000;
+const CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
+const STORE_LOCK_OPTIONS = {
+  retries: {
+    retries: 10,
+    factor: 2,
+    minTimeout: 100,
+    maxTimeout: 10_000,
+    randomize: true,
+  },
+  stale: 30_000,
+} as const;
+
+function resolveStorePath(
+  env: NodeJS.ProcessEnv = process.env,
+  homedir?: () => string,
+): string {
+  const stateDir = homedir
+    ? resolveStateDir(env, homedir)
+    : resolveStateDir(env);
+  return path.join(stateDir, STORE_FILENAME);
+}
+
+function safeParseJson<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
+
+async function readJsonFile<T>(
+  filePath: string,
+  fallback: T,
+): Promise<{ value: T; exists: boolean }> {
+  try {
+    const raw = await fs.promises.readFile(filePath, "utf-8");
+    const parsed = safeParseJson<T>(raw);
+    if (parsed == null) return { value: fallback, exists: true };
+    return { value: parsed, exists: true };
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") return { value: fallback, exists: false };
+    return { value: fallback, exists: false };
+  }
+}
+
+async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
+  const dir = path.dirname(filePath);
+  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(
+    dir,
+    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
+  );
+  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: "utf-8",
+  });
+  await fs.promises.chmod(tmp, 0o600);
+  await fs.promises.rename(tmp, filePath);
+}
+
+async function ensureJsonFile(filePath: string, fallback: unknown) {
+  try {
+    await fs.promises.access(filePath);
+  } catch {
+    await writeJsonFile(filePath, fallback);
+  }
+}
+
+async function withFileLock<T>(
+  filePath: string,
+  fallback: unknown,
+  fn: () => Promise<T>,
+): Promise<T> {
+  await ensureJsonFile(filePath, fallback);
+  let release: (() => Promise<void>) | undefined;
+  try {
+    release = await lockfile.lock(filePath, STORE_LOCK_OPTIONS);
+    return await fn();
+  } finally {
+    if (release) {
+      try {
+        await release();
+      } catch {
+        // ignore unlock errors
+      }
+    }
+  }
+}
+
+function parseTimestamp(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed;
+}
+
+function pruneToLimit(
+  conversations: Record<
+    string,
+    StoredConversationReference & { lastSeenAt?: string }
+  >,
+) {
+  const entries = Object.entries(conversations);
+  if (entries.length <= MAX_CONVERSATIONS) return conversations;
+
+  entries.sort((a, b) => {
+    const aTs = parseTimestamp(a[1].lastSeenAt) ?? 0;
+    const bTs = parseTimestamp(b[1].lastSeenAt) ?? 0;
+    return aTs - bTs;
+  });
+
+  const keep = entries.slice(entries.length - MAX_CONVERSATIONS);
+  return Object.fromEntries(keep);
+}
+
+function pruneExpired(
+  conversations: Record<
+    string,
+    StoredConversationReference & { lastSeenAt?: string }
+  >,
+  nowMs: number,
+  ttlMs: number,
+) {
+  let removed = false;
+  const kept: typeof conversations = {};
+  for (const [conversationId, reference] of Object.entries(conversations)) {
+    const lastSeenAt = parseTimestamp(reference.lastSeenAt);
+    // Preserve legacy entries that have no lastSeenAt until they're seen again.
+    if (lastSeenAt != null && nowMs - lastSeenAt > ttlMs) {
+      removed = true;
+      continue;
+    }
+    kept[conversationId] = reference;
+  }
+  return { conversations: kept, removed };
+}
+
+function normalizeConversationId(raw: string): string {
+  return raw.split(";")[0] ?? raw;
+}
+
+export function createMSTeamsConversationStoreFs(params?: {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  ttlMs?: number;
+}): MSTeamsConversationStore {
+  const env = params?.env ?? process.env;
+  const homedir = params?.homedir ?? os.homedir;
+  const ttlMs = params?.ttlMs ?? CONVERSATION_TTL_MS;
+  const filePath = resolveStorePath(env, homedir);
+
+  const empty: ConversationStoreData = { version: 1, conversations: {} };
+
+  const readStore = async (): Promise<ConversationStoreData> => {
+    const { value } = await readJsonFile<ConversationStoreData>(
+      filePath,
+      empty,
+    );
+    if (
+      value.version !== 1 ||
+      !value.conversations ||
+      typeof value.conversations !== "object" ||
+      Array.isArray(value.conversations)
+    ) {
+      return empty;
+    }
+    const nowMs = Date.now();
+    const pruned = pruneExpired(
+      value.conversations,
+      nowMs,
+      ttlMs,
+    ).conversations;
+    return { version: 1, conversations: pruneToLimit(pruned) };
+  };
+
+  const list = async (): Promise<MSTeamsConversationStoreEntry[]> => {
+    const store = await readStore();
+    return Object.entries(store.conversations).map(
+      ([conversationId, reference]) => ({
+        conversationId,
+        reference,
+      }),
+    );
+  };
+
+  const get = async (
+    conversationId: string,
+  ): Promise<StoredConversationReference | null> => {
+    const store = await readStore();
+    return store.conversations[normalizeConversationId(conversationId)] ?? null;
+  };
+
+  const findByUserId = async (
+    id: string,
+  ): Promise<MSTeamsConversationStoreEntry | null> => {
+    const target = id.trim();
+    if (!target) return null;
+    for (const entry of await list()) {
+      const { conversationId, reference } = entry;
+      if (reference.user?.aadObjectId === target) {
+        return { conversationId, reference };
+      }
+      if (reference.user?.id === target) {
+        return { conversationId, reference };
+      }
+    }
+    return null;
+  };
+
+  const upsert = async (
+    conversationId: string,
+    reference: StoredConversationReference,
+  ): Promise<void> => {
+    const normalizedId = normalizeConversationId(conversationId);
+    await withFileLock(filePath, empty, async () => {
+      const store = await readStore();
+      store.conversations[normalizedId] = {
+        ...reference,
+        lastSeenAt: new Date().toISOString(),
+      };
+      const nowMs = Date.now();
+      store.conversations = pruneExpired(
+        store.conversations,
+        nowMs,
+        ttlMs,
+      ).conversations;
+      store.conversations = pruneToLimit(store.conversations);
+      await writeJsonFile(filePath, store);
+    });
+  };
+
+  const remove = async (conversationId: string): Promise<boolean> => {
+    const normalizedId = normalizeConversationId(conversationId);
+    return await withFileLock(filePath, empty, async () => {
+      const store = await readStore();
+      if (!(normalizedId in store.conversations)) return false;
+      delete store.conversations[normalizedId];
+      await writeJsonFile(filePath, store);
+      return true;
+    });
+  };
+
+  return { upsert, get, list, remove, findByUserId };
+}
