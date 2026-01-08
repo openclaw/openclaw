@@ -135,25 +135,52 @@ describe("createTelegramBot", () => {
     expect(useSpy).toHaveBeenCalledWith("throttler");
   });
 
-  it("forces native fetch for BAN compatibility", () => {
+  it("forces native fetch only under Bun", () => {
     const originalFetch = globalThis.fetch;
+    const originalBun = (globalThis as { Bun?: unknown }).Bun;
     const fetchSpy = vi.fn() as unknown as typeof fetch;
     globalThis.fetch = fetchSpy;
     try {
+      (globalThis as { Bun?: unknown }).Bun = {};
       createTelegramBot({ token: "tok" });
       const fetchImpl = resolveTelegramFetch();
-      if (fetchImpl) {
-        expect(botCtorSpy).toHaveBeenCalledWith(
-          "tok",
-          expect.objectContaining({
-            client: expect.objectContaining({ fetch: fetchSpy }),
-          }),
-        );
-      } else {
-        expect(botCtorSpy).toHaveBeenCalledWith("tok", undefined);
-      }
+      expect(fetchImpl).toBe(fetchSpy);
+      expect(botCtorSpy).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({
+          client: expect.objectContaining({ fetch: fetchSpy }),
+        }),
+      );
     } finally {
       globalThis.fetch = originalFetch;
+      if (originalBun === undefined) {
+        delete (globalThis as { Bun?: unknown }).Bun;
+      } else {
+        (globalThis as { Bun?: unknown }).Bun = originalBun;
+      }
+    }
+  });
+
+  it("does not force native fetch on Node", () => {
+    const originalFetch = globalThis.fetch;
+    const originalBun = (globalThis as { Bun?: unknown }).Bun;
+    const fetchSpy = vi.fn() as unknown as typeof fetch;
+    globalThis.fetch = fetchSpy;
+    try {
+      if (originalBun !== undefined) {
+        delete (globalThis as { Bun?: unknown }).Bun;
+      }
+      createTelegramBot({ token: "tok" });
+      const fetchImpl = resolveTelegramFetch();
+      expect(fetchImpl).toBeUndefined();
+      expect(botCtorSpy).toHaveBeenCalledWith("tok", undefined);
+    } finally {
+      globalThis.fetch = originalFetch;
+      if (originalBun === undefined) {
+        delete (globalThis as { Bun?: unknown }).Bun;
+      } else {
+        (globalThis as { Bun?: unknown }).Bun = originalBun;
+      }
     }
   });
 
