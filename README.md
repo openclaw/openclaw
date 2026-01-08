@@ -247,7 +247,7 @@ Send these in WhatsApp/Telegram/Slack/Microsoft Teams/WebChat (group commands ar
 - `/status` — compact session status (model + tokens, cost when available)
 - `/new` or `/reset` — reset the session
 - `/compact` — compact session context (summary)
-- `/think <level>` — off|minimal|low|medium|high
+- `/think <level>` — off|minimal|low|medium|high|xhigh (GPT-5.2 + Codex models only)
 - `/verbose on|off`
 - `/cost on|off` — append per-response token/cost usage lines
 - `/restart` — restart the gateway (owner-only in groups)

@@ -105,7 +105,7 @@ Isolation options (only for `session=isolated`):
 ### Model and thinking overrides
 Isolated jobs (`agentTurn`) can override the model and thinking level:
 - `model`: Provider/model string (e.g., `anthropic/claude-sonnet-4-20250514`) or alias (e.g., `opus`)
-- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`)
+- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`, `xhigh`; GPT-5.2 + Codex models only)
 
 Note: You can set `model` on main-session jobs too, but it changes the shared main
 session model. We recommend model overrides only for isolated jobs to avoid

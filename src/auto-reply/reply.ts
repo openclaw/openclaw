@@ -94,8 +94,10 @@ import {
 import type { MsgContext, TemplateContext } from "./templating.js";
 import {
   type ElevatedLevel,
+  formatXHighModelHint,
   normalizeThinkLevel,
   type ReasoningLevel,
+  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "./thinking.js";
@@ -1187,13 +1189,43 @@ export async function getReplyFromConfig(
   if (!resolvedThinkLevel && prefixedCommandBody) {
     const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
-    if (maybeLevel) {
+    if (
+      maybeLevel &&
+      (maybeLevel !== "xhigh" || supportsXHighThinking(provider, model))
+    ) {
       resolvedThinkLevel = maybeLevel;
       prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
   if (!resolvedThinkLevel) {
     resolvedThinkLevel = await modelState.resolveDefaultThinkingLevel();
+  }
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    const explicitThink =
+      directives.hasThinkDirective && directives.thinkLevel !== undefined;
+    if (explicitThink) {
+      typing.cleanup();
+      return {
+        text: `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}. Use /think high or switch to one of those models.`,
+      };
+    }
+    resolvedThinkLevel = "high";
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
+      sessionEntry.thinkingLevel = "high";
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      if (storePath) {
+        await saveSessionStore(storePath, sessionStore);
+      }
+    }
   }
   const sessionIdFinal = sessionId ?? crypto.randomUUID();
   const sessionFile = resolveSessionFilePath(sessionIdFinal, sessionEntry);

@@ -1242,6 +1242,7 @@ const AgentDefaultsSchema = z
         z.literal("low"),
         z.literal("medium"),
         z.literal("high"),
+        z.literal("xhigh"),
       ])
       .optional(),
     verboseDefault: z.union([z.literal("off"), z.literal("on")]).optional(),
