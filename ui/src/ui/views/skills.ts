@@ -17,7 +17,7 @@ export type SkillsProps = {
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
-  onInstall: (name: string, installId: string) => void;
+  onInstall: (skillKey: string, name: string, installId: string) => void;
 };
 
 export function renderSkills(props: SkillsProps) {
@@ -73,10 +73,9 @@ export function renderSkills(props: SkillsProps) {
 }
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
-  const busy = props.busyKey === skill.skillKey || props.busyKey === skill.name;
+  const busy = props.busyKey === skill.skillKey;
   const apiKey = props.edits[skill.skillKey] ?? "";
-  const message =
-    props.messages[skill.skillKey] ?? props.messages[skill.name] ?? null;
+  const message = props.messages[skill.skillKey] ?? null;
   const canInstall =
     skill.install.length > 0 && skill.missing.bins.length > 0;
   const missing = [
@@ -130,7 +129,8 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
             ? html`<button
                 class="btn"
                 ?disabled=${busy}
-                @click=${() => props.onInstall(skill.name, skill.install[0].id)}
+                @click=${() =>
+                  props.onInstall(skill.skillKey, skill.name, skill.install[0].id)}
               >
                 ${busy ? "Installing…" : skill.install[0].label}
               </button>`
