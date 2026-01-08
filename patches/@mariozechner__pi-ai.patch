@@ -1,28 +1,57 @@
+diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
+index b1d6a340e1817b6f5404c2a23efa49139249f754..9dd692688fd73d378802af9600e459abbce6a17e 100644
+--- a/dist/providers/google-gemini-cli.js
++++ b/dist/providers/google-gemini-cli.js
+@@ -168,7 +168,12 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+                         break; // Success, exit retry loop
+                     }
+                     const errorText = await response.text();
+-                    // Check if retryable
++                    // PATCH: Fail immediately on 429 to let caller rotate accounts
++                    if (response.status === 429) {
++                        console.log(`[pi-ai] 429 rate limit - failing fast to rotate account`);
++                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
++                    }
++                    // Check if retryable (non-429 errors)
+                     if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
+                         // Use server-provided delay or exponential backoff
+                         const serverDelay = extractRetryDelay(errorText);
+@@ -183,6 +188,10 @@ export const streamGoogleGeminiCli = (model, context, options) => {
+                     if (error instanceof Error && error.message === "Request was aborted") {
+                         throw error;
+                     }
++                    // PATCH: Don't retry 429 errors - let caller rotate accounts
++                    if (error instanceof Error && error.message.includes("429")) {
++                        throw error;
++                    }
+                     lastError = error instanceof Error ? error : new Error(String(error));
+                     // Network errors are retryable
+                     if (attempt < MAX_RETRIES) {
 diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
-index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce582363124 100644
+index dbb9c0e263919c9184a5f1c7dfde47d1c3a37ff4..f1866f423f30a4dfbe812d052679abd1f011769f 100644
 --- a/dist/providers/google-shared.js
 +++ b/dist/providers/google-shared.js
-@@ -10,13 +10,27 @@ import { transformMessages } from "./transorm-messages.js";
+@@ -41,13 +41,27 @@ export function retainThoughtSignature(existing, incoming) {
  export function convertMessages(model, context) {
      const contents = [];
      const transformedMessages = transformMessages(context.messages, model);
-+    
 +    /**
 +     * Helper to add content while merging consecutive messages of the same role.
 +     * Gemini/Cloud Code Assist requires strict role alternation (user/model/user/model).
 +     * Consecutive messages of the same role cause "function call turn" errors.
 +     */
 +    function addContent(role, parts) {
-+        if (parts.length === 0) return;
++        if (parts.length === 0)
++            return;
 +        const lastContent = contents[contents.length - 1];
 +        if (lastContent?.role === role) {
 +            // Merge into existing message of same role
 +            lastContent.parts.push(...parts);
-+        } else {
++        }
++        else {
 +            contents.push({ role, parts });
 +        }
 +    }
-+    
      for (const msg of transformedMessages) {
          if (msg.role === "user") {
              if (typeof msg.content === "string") {
@@ -34,7 +63,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
              }
              else {
                  const parts = msg.content.map((item) => {
-@@ -35,10 +49,7 @@ export function convertMessages(model, context) {
+@@ -66,10 +80,7 @@ export function convertMessages(model, context) {
                  const filteredParts = !model.input.includes("image") ? parts.filter((p) => p.text !== undefined) : parts;
                  if (filteredParts.length === 0)
                      continue;
@@ -46,7 +75,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
              }
          }
          else if (msg.role === "assistant") {
-@@ -51,9 +62,19 @@ export function convertMessages(model, context) {
+@@ -82,9 +93,19 @@ export function convertMessages(model, context) {
                      parts.push({ text: sanitizeSurrogates(block.text) });
                  }
                  else if (block.type === "thinking") {
@@ -64,12 +93,12 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
 +                        // and will mimic <thinking> tags if we convert to text
 +                        continue;
 +                    }
-+                    else if (block.thinkingSignature && isClaude) {
++                    if (block.thinkingSignature && isClaude) {
 +                        // Claude via Antigravity requires the signature
                          parts.push({
                              thought: true,
                              text: sanitizeSurrogates(block.thinking),
-@@ -61,6 +82,7 @@ export function convertMessages(model, context) {
+@@ -92,6 +113,7 @@ export function convertMessages(model, context) {
                          });
                      }
                      else {
@@ -77,7 +106,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
                          parts.push({
                              text: `<thinking>\n${sanitizeSurrogates(block.thinking)}\n</thinking>`,
                          });
-@@ -85,10 +107,7 @@ export function convertMessages(model, context) {
+@@ -116,10 +138,7 @@ export function convertMessages(model, context) {
              }
              if (parts.length === 0)
                  continue;
@@ -89,7 +118,7 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
          }
          else if (msg.role === "toolResult") {
              // Extract text and image content
-@@ -125,27 +144,94 @@ export function convertMessages(model, context) {
+@@ -156,27 +175,97 @@ export function convertMessages(model, context) {
              }
              // Cloud Code Assist API requires all function responses to be in a single user turn.
              // Check if the last content is already a user turn with function responses and merge.
@@ -124,43 +153,43 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
 + * and converts to a format compatible with Google's function declarations.
 + */
 +function sanitizeSchemaForGoogle(schema) {
-+    if (!schema || typeof schema !== 'object') {
++    if (!schema || typeof schema !== "object") {
 +        return schema;
 +    }
 +    // If it's an array, sanitize each element
 +    if (Array.isArray(schema)) {
-+        return schema.map(item => sanitizeSchemaForGoogle(item));
++        return schema.map((item) => sanitizeSchemaForGoogle(item));
 +    }
 +    const sanitized = {};
 +    // List of unsupported JSON Schema keywords that Google's API doesn't understand
 +    const unsupportedKeywords = [
-+        'patternProperties',
-+        'const',
-+        'anyOf',
-+        'oneOf',
-+        'allOf',
-+        'not',
-+        '$schema',
-+        '$id',
-+        '$ref',
-+        '$defs',
-+        'definitions',
-+        'if',
-+        'then',
-+        'else',
-+        'dependentSchemas',
-+        'dependentRequired',
-+        'unevaluatedProperties',
-+        'unevaluatedItems',
-+        'contentEncoding',
-+        'contentMediaType',
-+        'contentSchema',
-+        'deprecated',
-+        'readOnly',
-+        'writeOnly',
-+        'examples',
-+        '$comment',
-+        'additionalProperties',
++        "patternProperties",
++        "const",
++        "anyOf",
++        "oneOf",
++        "allOf",
++        "not",
++        "$schema",
++        "$id",
++        "$ref",
++        "$defs",
++        "definitions",
++        "if",
++        "then",
++        "else",
++        "dependentSchemas",
++        "dependentRequired",
++        "unevaluatedProperties",
++        "unevaluatedItems",
++        "contentEncoding",
++        "contentMediaType",
++        "contentSchema",
++        "deprecated",
++        "readOnly",
++        "writeOnly",
++        "examples",
++        "$comment",
++        "additionalProperties",
 +    ];
 +    // TODO(steipete): lossy schema scrub; revisit when Google supports these keywords.
 +    for (const [key, value] of Object.entries(schema)) {
@@ -169,30 +198,33 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
 +            continue;
 +        }
 +        // Recursively sanitize nested objects
-+        if (key === 'properties' && typeof value === 'object' && value !== null) {
++        if (key === "properties" && typeof value === "object" && value !== null) {
 +            sanitized[key] = {};
 +            for (const [propKey, propValue] of Object.entries(value)) {
 +                sanitized[key][propKey] = sanitizeSchemaForGoogle(propValue);
 +            }
-+        } else if (key === 'items' && typeof value === 'object') {
++        }
++        else if (key === "items" && typeof value === "object") {
 +            sanitized[key] = sanitizeSchemaForGoogle(value);
-+        } else if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
++        }
++        else if (typeof value === "object" && value !== null && !Array.isArray(value)) {
 +            sanitized[key] = sanitizeSchemaForGoogle(value);
-+        } else {
++        }
++        else {
 +            sanitized[key] = value;
 +        }
 +    }
 +    // Ensure type: "object" is present when properties or required exist
 +    // Google API requires type to be set when these fields are present
-+    if (('properties' in sanitized || 'required' in sanitized) && !('type' in sanitized)) {
-+        sanitized.type = 'object';
++    if (("properties" in sanitized || "required" in sanitized) && !("type" in sanitized)) {
++        sanitized.type = "object";
 +    }
 +    return sanitized;
 +}
  /**
   * Convert tools to Gemini function declarations format.
   */
-@@ -157,7 +243,7 @@ export function convertTools(tools) {
+@@ -188,7 +277,7 @@ export function convertTools(tools) {
              functionDeclarations: tools.map((tool) => ({
                  name: tool.name,
                  description: tool.description,
@@ -201,8 +233,37 @@ index 7bc0a9f5d6241f191cd607ecb37b3acac8d58267..56866774e47444b5d333961c9b20fce5
              })),
          },
      ];
+diff --git a/dist/providers/openai-completions.d.ts b/dist/providers/openai-completions.d.ts
+index 723addf341696b5d69c079202e571e9917685ce4..a1d0584a70a7d1fad1332026e301e56ef4f700a8 100644
+--- a/dist/providers/openai-completions.d.ts
++++ b/dist/providers/openai-completions.d.ts
+@@ -7,6 +7,8 @@ export interface OpenAICompletionsOptions extends StreamOptions {
+         };
+     };
+     reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
++    /** Extra params to pass directly to the API (e.g., Z.AI GLM thinking mode params) */
++    extraParams?: Record<string, unknown>;
+ }
+ export declare const streamOpenAICompletions: StreamFunction<"openai-completions">;
+ //# sourceMappingURL=openai-completions.d.ts.map
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+index 2590381cc5544c4e73c24c1c9a5853202f31361b..b76e1087dd31ccf099e02b1214b9e12d371b9b2d 100644
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -335,6 +335,11 @@ function buildParams(model, context, options) {
+     if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+         params.reasoning_effort = options.reasoningEffort;
+     }
++    // PATCH: Support arbitrary extra params for provider-specific features
++    // (e.g., Z.AI GLM-4.7 thinking: { type: "enabled", clear_thinking: boolean })
++    if (options?.extraParams && typeof options.extraParams === "object") {
++        Object.assign(params, options.extraParams);
++    }
+     return params;
+ }
+ function convertMessages(model, context, compat) {
 diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
-index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6ed334863e 100644
+index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..c2bc63f483f3285b00755901ba97db810221cea6 100644
 --- a/dist/providers/openai-responses.js
 +++ b/dist/providers/openai-responses.js
 @@ -486,7 +486,6 @@ function convertTools(tools) {
@@ -213,69 +274,16 @@ index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..31bae0aface1319487ce62d35f1f3b6e
      }));
  }
  function mapStopReason(status) {
-diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
---- a/dist/providers/google-gemini-cli.js
-+++ b/dist/providers/google-gemini-cli.js
-@@ -168,7 +168,12 @@ async function* streamCompletion(params, options) {
-                         break; // Success, exit retry loop
-                     }
-                     const errorText = await response.text();
--                    // Check if retryable
-+                    // PATCH: Fail immediately on 429 to let caller rotate accounts
-+                    if (response.status === 429) {
-+                        console.log(`[pi-ai] 429 rate limit - failing fast to rotate account`);
-+                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
-+                    }
-+                    // Check if retryable (non-429 errors)
-                     if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
-                         // Use server-provided delay or exponential backoff
-                         const serverDelay = extractRetryDelay(errorText);
-@@ -183,6 +188,10 @@ async function* streamCompletion(params, options) {
-                     if (error instanceof Error && error.message === "Request was aborted") {
-                         throw error;
-                     }
-+                    // PATCH: Don't retry 429 errors - let caller rotate accounts
-+                    if (error instanceof Error && error.message.includes("429")) {
-+                        throw error;
-+                    }
-                     lastError = error instanceof Error ? error : new Error(String(error));
-                     // Network errors are retryable
-                     if (attempt < MAX_RETRIES) {
 diff --git a/dist/stream.js b/dist/stream.js
+index da54f4270e9b8d9e9cf1f902af976cc239601d4c..7ed71597c3369f8e3c1a3da0eb870a68215b714d 100644
 --- a/dist/stream.js
 +++ b/dist/stream.js
-@@ -105,6 +105,8 @@ function mapOptionsForApi(model, options, apiKey) {
-         maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32000),
+@@ -108,6 +108,8 @@ function mapOptionsForApi(model, options, apiKey) {
          signal: options?.signal,
          apiKey: apiKey || options?.apiKey,
+         sessionId: options?.sessionId,
 +        // PATCH: Pass extraParams through to provider-specific API handlers
 +        extraParams: options?.extraParams,
      };
      // Helper to clamp xhigh to high for providers that don't support it
      const clampReasoning = (effort) => (effort === "xhigh" ? "high" : effort);
-diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
---- a/dist/providers/openai-completions.js
-+++ b/dist/providers/openai-completions.js
-@@ -333,6 +333,11 @@ function buildParams(model, context, options) {
-     if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
-         params.reasoning_effort = options.reasoningEffort;
-     }
-+    // PATCH: Support arbitrary extra params for provider-specific features
-+    // (e.g., Z.AI GLM-4.7 thinking: { type: "enabled", clear_thinking: boolean })
-+    if (options?.extraParams && typeof options.extraParams === 'object') {
-+        Object.assign(params, options.extraParams);
-+    }
-     return params;
- }
- function convertMessages(model, context, compat) {
-diff --git a/dist/providers/openai-completions.d.ts b/dist/providers/openai-completions.d.ts
---- a/dist/providers/openai-completions.d.ts
-+++ b/dist/providers/openai-completions.d.ts
-@@ -7,5 +7,7 @@ export interface OpenAICompletionsOptions extends StreamOptions {
-         };
-     };
-     reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
-+    /** Extra params to pass directly to the API (e.g., Z.AI GLM thinking mode params) */
-+    extraParams?: Record<string, unknown>;
- }
- export declare const streamOpenAICompletions: StreamFunction<"openai-completions">;
