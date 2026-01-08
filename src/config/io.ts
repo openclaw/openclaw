@@ -9,6 +9,10 @@ import {
   shouldEnableShellEnvFallback,
 } from "../infra/shell-env.js";
 import {
+  DuplicateAgentDirError,
+  findDuplicateAgentDirs,
+} from "./agent-dirs.js";
+import {
   applyIdentityDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
@@ -140,6 +144,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         ),
       );
 
+      const duplicates = findDuplicateAgentDirs(cfg, {
+        env: deps.env,
+        homedir: deps.homedir,
+      });
+      if (duplicates.length > 0) {
+        throw new DuplicateAgentDirError(duplicates);
+      }
+
       const enabled =
         shouldEnableShellEnvFallback(deps.env) ||
         cfg.env?.shellEnv?.enabled === true;
@@ -157,6 +169,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       return cfg;
     } catch (err) {
+      if (err instanceof DuplicateAgentDirError) {
+        deps.logger.error(err.message);
+        throw err;
+      }
       deps.logger.error(`Failed to read config at ${configPath}`, err);
       return {};
     }

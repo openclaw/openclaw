@@ -981,3 +981,55 @@ describe("legacy config detection", () => {
     });
   });
 });
+
+describe("multi-agent agentDir validation", () => {
+  it("rejects shared routing.agents.*.agentDir", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const shared = path.join(os.tmpdir(), "clawdbot-shared-agentdir");
+    const res = validateConfigObject({
+      routing: {
+        agents: {
+          a: { agentDir: shared },
+          b: { agentDir: shared },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((i) => i.path === "routing.agents")).toBe(true);
+      expect(res.issues[0]?.message).toContain("Duplicate agentDir");
+    }
+  });
+
+  it("throws on shared agentDir during loadConfig()", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            routing: {
+              agents: {
+                a: { agentDir: "~/.clawdbot/agents/shared/agent" },
+                b: { agentDir: "~/.clawdbot/agents/shared/agent" },
+              },
+              bindings: [{ agentId: "a", match: { provider: "telegram" } }],
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+      const { loadConfig } = await import("./config.js");
+      expect(() => loadConfig()).toThrow(/duplicate agentDir/i);
+      expect(spy.mock.calls.flat().join(" ")).toMatch(/Duplicate agentDir/i);
+      spy.mockRestore();
+    });
+  });
+});
