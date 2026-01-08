@@ -5,7 +5,6 @@ read_when:
 ---
 # Telegram (Bot API)
 
-Updated: 2026-01-08
 
 Status: production-ready for bot DMs + groups via grammY. Long-polling by default; webhook optional.
 

@@ -5,7 +5,6 @@ read_when:
 ---
 # Discord (Bot API)
 
-Updated: 2026-01-07
 
 Status: ready for DM and guild text channels via the official Discord bot gateway.
 

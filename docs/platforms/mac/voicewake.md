@@ -5,7 +5,6 @@ read_when:
 ---
 # Voice Wake & Push-to-Talk
 
-Updated: 2026-01-08 · Owners: mac app
 
 ## Modes
 - **Wake-word mode** (default): always-on Speech recognizer waits for trigger tokens (`swabbleTriggerWords`). On match it starts capture, shows the overlay with partial text, and auto-sends after silence.

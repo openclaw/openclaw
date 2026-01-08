@@ -6,7 +6,6 @@ read_when:
 ---
 # Polls
 
-Updated: 2026-01-06
 
 ## Supported providers
 - WhatsApp (web provider)

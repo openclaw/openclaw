@@ -6,7 +6,6 @@ read_when:
 ---
 # iMessage (imsg)
 
-Updated: 2026-01-08
 
 Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 

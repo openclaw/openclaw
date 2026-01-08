@@ -5,7 +5,6 @@ read_when:
 ---
 # Providers & routing
 
-Updated: 2026-01-06
 
 Clawdbot routes replies **back to the provider where a message came from**. The
 model does not choose a provider; routing is deterministic and controlled by the

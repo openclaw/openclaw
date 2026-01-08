@@ -5,7 +5,6 @@ read_when:
 ---
 # WhatsApp (web provider)
 
-Updated: 2026-01-08
 
 Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 

@@ -6,7 +6,6 @@ read_when:
 ---
 # TUI (Gateway chat client)
 
-Updated: 2026-01-07
 
 ## What it is
 - A terminal UI that connects to the Gateway WebSocket and speaks the same chat APIs as WebChat.
