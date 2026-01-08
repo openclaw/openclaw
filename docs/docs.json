@@ -576,6 +576,7 @@
           "gateway/gateway-lock",
           "gateway/configuration",
           "gateway/configuration-examples",
+          "gateway/authentication",
           "gateway/background-process",
           "gateway/health",
           "gateway/heartbeat",
