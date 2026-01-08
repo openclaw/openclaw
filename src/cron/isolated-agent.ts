@@ -50,45 +50,6 @@ import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import type { CronJob } from "./types.js";
 
-/**
- * Parse a Telegram delivery target into chatId and optional topicId.
- * Supports formats:
- * - `chatId` (plain chat ID or @username)
- * - `chatId:topicId` (chat ID with topic/thread ID)
- * - `chatId:topic:topicId` (alternative format with explicit "topic" marker)
- */
-export function parseTelegramTarget(to: string): {
-  chatId: string;
-  topicId: number | undefined;
-} {
-  let trimmed = to.trim();
-
-  // Cron "lastTo" values can include internal prefixes like `telegram:...` or
-  // `telegram:group:...` (see normalizeChatId in telegram/send.ts).
-  // Strip these before parsing `:topic:` / `:<topicId>` suffixes.
-  while (true) {
-    const next = trimmed.replace(/^(telegram|tg|group):/i, "").trim();
-    if (next === trimmed) break;
-    trimmed = next;
-  }
-
-  // Try format: chatId:topic:topicId
-  const topicMatch = /^(.+?):topic:(\d+)$/.exec(trimmed);
-  if (topicMatch) {
-    return { chatId: topicMatch[1], topicId: parseInt(topicMatch[2], 10) };
-  }
-
-  // Try format: chatId:topicId (where topicId is numeric)
-  // Be careful not to match @username or other non-numeric suffixes
-  const colonMatch = /^(.+):(\d+)$/.exec(trimmed);
-  if (colonMatch) {
-    return { chatId: colonMatch[1], topicId: parseInt(colonMatch[2], 10) };
-  }
-
-  // Plain chatId, no topic
-  return { chatId: trimmed, topicId: undefined };
-}
-
 export type RunCronAgentTurnResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
@@ -526,7 +487,6 @@ export async function runCronIsolatedAgentTurn(params: {
           summary: "Delivery skipped (no Telegram chatId).",
         };
       }
-      const { chatId, topicId } = parseTelegramTarget(resolvedDelivery.to);
       const textLimit = resolveTextChunkLimit(params.cfg, "telegram");
       try {
         for (const payload of payloads) {
@@ -537,23 +497,29 @@ export async function runCronIsolatedAgentTurn(params: {
               payload.text ?? "",
               textLimit,
             )) {
-              await params.deps.sendMessageTelegram(chatId, chunk, {
-                verbose: false,
-                token: telegramToken || undefined,
-                messageThreadId: topicId,
-              });
+              await params.deps.sendMessageTelegram(
+                resolvedDelivery.to,
+                chunk,
+                {
+                  verbose: false,
+                  token: telegramToken || undefined,
+                },
+              );
             }
           } else {
             let first = true;
             for (const url of mediaList) {
               const caption = first ? (payload.text ?? "") : "";
               first = false;
-              await params.deps.sendMessageTelegram(chatId, caption, {
-                verbose: false,
-                mediaUrl: url,
-                token: telegramToken || undefined,
-                messageThreadId: topicId,
-              });
+              await params.deps.sendMessageTelegram(
+                resolvedDelivery.to,
+                caption,
+                {
+                  verbose: false,
+                  mediaUrl: url,
+                  token: telegramToken || undefined,
+                },
+              );
             }
           }
         }
