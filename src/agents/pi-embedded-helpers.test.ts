@@ -8,6 +8,7 @@ import {
   isMessagingToolDuplicate,
   normalizeTextForComparison,
   sanitizeGoogleTurnOrdering,
+  sanitizeSessionMessagesImages,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
@@ -247,6 +248,77 @@ describe("sanitizeGoogleTurnOrdering", () => {
     const input = [{ role: "user", content: "hi" }] satisfies AgentMessage[];
     const out = sanitizeGoogleTurnOrdering(input);
     expect(out).toBe(input);
+  });
+});
+
+describe("sanitizeSessionMessagesImages", () => {
+  it("removes empty assistant text blocks but preserves tool calls", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    const content = (out[0] as { content?: unknown }).content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toHaveLength(1);
+    expect((content as Array<{ type?: string }>)[0]?.type).toBe("toolCall");
+  });
+
+  it("filters whitespace-only assistant text blocks", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "   " },
+          { type: "text", text: "ok" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    const content = (out[0] as { content?: unknown }).content;
+    expect(Array.isArray(content)).toBe(true);
+    expect(content).toHaveLength(1);
+    expect((content as Array<{ text?: string }>)[0]?.text).toBe("ok");
+  });
+
+  it("drops assistant messages that only contain empty text", async () => {
+    const input = [
+      { role: "user", content: "hello" },
+      { role: "assistant", content: [{ type: "text", text: "" }] },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("user");
+  });
+
+  it("leaves non-assistant messages unchanged", async () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "toolResult",
+        toolUseId: "tool-1",
+        content: [{ type: "text", text: "result" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(2);
+    expect(out[0]?.role).toBe("user");
+    expect(out[1]?.role).toBe("toolResult");
   });
 });
 
