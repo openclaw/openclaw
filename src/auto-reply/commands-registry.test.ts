@@ -17,13 +17,17 @@ describe("commands registry", () => {
     const specs = listNativeCommandSpecs();
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "compact")).toBeFalsy();
   });
 
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/help")).toBe(true);
+    expect(detection.exact.has("/commands")).toBe(true);
     expect(detection.regex.test("/status")).toBe(true);
     expect(detection.regex.test("/status:")).toBe(true);
+    expect(detection.regex.test("/compact")).toBe(true);
+    expect(detection.regex.test("/compact:")).toBe(true);
     expect(detection.regex.test("/stop")).toBe(true);
     expect(detection.regex.test("/send:")).toBe(true);
     expect(detection.regex.test("try /status")).toBe(false);
