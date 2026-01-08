@@ -17,11 +17,11 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
-import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   formatLocationText,
   type NormalizedLocation,

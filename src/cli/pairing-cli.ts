@@ -3,12 +3,12 @@ import type { Command } from "commander";
 import { loadConfig } from "../config/config.js";
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
+import { PROVIDER_ID_LABELS } from "../pairing/pairing-labels.js";
 import {
   approveProviderPairingCode,
   listProviderPairingRequests,
   type PairingProvider,
 } from "../pairing/pairing-store.js";
-import { PROVIDER_ID_LABELS } from "../pairing/pairing-labels.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageTelegram } from "../telegram/send.js";
