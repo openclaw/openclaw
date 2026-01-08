@@ -67,6 +67,12 @@ describe("chunkText", () => {
     const chunks = chunkText(text, 10);
     expect(chunks).toEqual(["Supercalif", "ragilistic", "expialidoc", "ious"]);
   });
+
+  it("keeps parenthetical phrases together", () => {
+    const text = "Heads up now (Though now I'm curious)ok";
+    const chunks = chunkText(text, 35);
+    expect(chunks).toEqual(["Heads up now", "(Though now I'm curious)ok"]);
+  });
 });
 
 describe("resolveTextChunkLimit", () => {
