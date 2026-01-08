@@ -22,6 +22,15 @@ const PROVIDERS: PairingProvider[] = [
   "whatsapp",
 ];
 
+const PROVIDER_ID_LABELS: Record<PairingProvider, string> = {
+  telegram: "telegramUserId",
+  discord: "discordUserId",
+  slack: "slackUserId",
+  signal: "signalNumber",
+  imessage: "imessageSenderId",
+  whatsapp: "whatsappSenderId",
+};
+
 function parseProvider(raw: unknown): PairingProvider {
   const value = (
     typeof raw === "string"
@@ -93,7 +102,7 @@ export function registerPairingCli(program: Command) {
       }
       for (const r of requests) {
         const meta = r.meta ? JSON.stringify(r.meta) : "";
-        const idLabel = provider === "telegram" ? "telegramUserId" : "id";
+        const idLabel = PROVIDER_ID_LABELS[provider];
         console.log(
           `${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
         );

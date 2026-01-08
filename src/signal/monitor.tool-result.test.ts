@@ -147,6 +147,9 @@ describe("monitorSignalProvider tool results", () => {
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Your Signal number: +15550001111",
+    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
       "Pairing code: PAIRCODE",
     );
   });
@@ -237,6 +240,9 @@ describe("monitorSignalProvider tool results", () => {
     );
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      `Your Signal sender id: uuid:${uuid}`,
+    );
   });
 
   it("reconnects after stream errors until aborted", async () => {

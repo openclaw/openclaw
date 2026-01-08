@@ -594,6 +594,8 @@ export function createDiscordMessageHandler(params: {
                     [
                       "Clawdbot: access not configured.",
                       "",
+                      `Your Discord user id: ${author.id}`,
+                      "",
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",
@@ -1435,6 +1437,8 @@ function createDiscordNativeCommand(params: {
                 await interaction.reply({
                   content: [
                     "Clawdbot: access not configured.",
+                    "",
+                    `Your Discord user id: ${user.id}`,
                     "",
                     `Pairing code: ${code}`,
                     "",

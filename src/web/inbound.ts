@@ -313,6 +313,8 @@ export async function monitorWebInbox(options: {
                     text: [
                       "Clawdbot: access not configured.",
                       "",
+                      `Your WhatsApp sender id: ${candidate}`,
+                      "",
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",

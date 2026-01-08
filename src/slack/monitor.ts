@@ -827,6 +827,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                   [
                     "Clawdbot: access not configured.",
                     "",
+                    `Your Slack user id: ${directUserId}`,
+                    "",
                     `Pairing code: ${code}`,
                     "",
                     "Ask the bot owner to approve with:",
@@ -1719,6 +1721,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
                 await respond({
                   text: [
                     "Clawdbot: access not configured.",
+                    "",
+                    `Your Slack user id: ${command.user_id}`,
                     "",
                     `Pairing code: ${code}`,
                     "",
