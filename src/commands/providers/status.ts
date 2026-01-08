@@ -105,6 +105,9 @@ export function formatGatewayProvidersStatusLines(
       if (probe && typeof probe.ok === "boolean") {
         bits.push(probe.ok ? "works" : "probe failed");
       }
+      if (typeof account.lastError === "string" && account.lastError) {
+        bits.push(`error:${account.lastError}`);
+      }
       const accountId =
         typeof account.accountId === "string" ? account.accountId : "default";
       const name = typeof account.name === "string" ? account.name.trim() : "";

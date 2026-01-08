@@ -3,6 +3,7 @@ import type { Command } from "commander";
 import {
   providersAddCommand,
   providersListCommand,
+  providersLogsCommand,
   providersRemoveCommand,
   providersStatusCommand,
 } from "../commands/providers.js";
@@ -67,6 +68,21 @@ export function registerProvidersCli(program: Command) {
     .action(async (opts) => {
       try {
         await providersStatusCommand(opts, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  providers
+    .command("logs")
+    .description("Show recent provider logs from the gateway log file")
+    .option("--provider <name>", `Provider (${providerNames}|all)`, "all")
+    .option("--lines <n>", "Number of lines (default: 200)", "200")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      try {
+        await providersLogsCommand(opts, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
