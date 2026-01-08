@@ -323,4 +323,20 @@ describe("providers command", () => {
     expect(whatsappIndex).toBeGreaterThan(-1);
     expect(telegramIndex).toBeLessThan(whatsappIndex);
   });
+
+  it("surfaces Discord privileged intent issues in providers status output", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      discordAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          application: { intents: { messageContent: "limited" } },
+        },
+      ],
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/Message Content Intent is limited/i);
+    expect(lines.join("\n")).toMatch(/Run: clawdbot doctor/);
+  });
 });

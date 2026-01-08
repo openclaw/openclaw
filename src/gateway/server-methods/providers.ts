@@ -130,7 +130,9 @@ export const providersHandlers: GatewayRequestHandlers = {
         let discordProbe: DiscordProbe | undefined;
         let lastProbeAt: number | null = null;
         if (probe && configured && account.enabled) {
-          discordProbe = await probeDiscord(account.token, timeoutMs);
+          discordProbe = await probeDiscord(account.token, timeoutMs, {
+            includeApplication: true,
+          });
           lastProbeAt = Date.now();
         }
         return {
@@ -139,6 +141,8 @@ export const providersHandlers: GatewayRequestHandlers = {
           enabled: account.enabled,
           configured,
           tokenSource: account.tokenSource,
+          bot: rt?.bot ?? null,
+          application: rt?.application ?? null,
           running: rt?.running ?? false,
           lastStartAt: rt?.lastStartAt ?? null,
           lastStopAt: rt?.lastStopAt ?? null,

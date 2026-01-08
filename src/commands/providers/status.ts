@@ -13,6 +13,7 @@ import {
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
 import { formatAge } from "../../infra/provider-summary.js";
+import { collectProvidersStatusIssues } from "../../infra/providers-status-issues.js";
 import { listChatProviders } from "../../providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
@@ -98,6 +99,17 @@ export function formatGatewayProvidersStatusLines(
       ) {
         bits.push(`app:${account.appTokenSource}`);
       }
+      const application = account.application as
+        | { intents?: { messageContent?: string } }
+        | undefined;
+      const messageContent = application?.intents?.messageContent;
+      if (
+        typeof messageContent === "string" &&
+        messageContent.length > 0 &&
+        messageContent !== "enabled"
+      ) {
+        bits.push(`intents:content=${messageContent}`);
+      }
       if (typeof account.baseUrl === "string" && account.baseUrl) {
         bits.push(`url:${account.baseUrl}`);
       }
@@ -150,6 +162,17 @@ export function formatGatewayProvidersStatusLines(
   }
 
   lines.push("");
+  const issues = collectProvidersStatusIssues(payload);
+  if (issues.length > 0) {
+    lines.push(theme.warn("Warnings:"));
+    for (const issue of issues) {
+      lines.push(
+        `- ${issue.provider} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+      );
+    }
+    lines.push(`- Run: clawdbot doctor`);
+    lines.push("");
+  }
   lines.push(
     `Tip: ${formatDocsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
   );

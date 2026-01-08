@@ -64,6 +64,8 @@ import {
   printWizardHeader,
 } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
+import { callGateway } from "../gateway/call.js";
+import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -234,6 +236,30 @@ export async function doctorCommand(
       note(gatewayDetails.message, "Gateway connection");
     } else {
       runtime.error(`Health check failed: ${message}`);
+    }
+  }
+
+  if (healthOk) {
+    try {
+      const status = await callGateway<Record<string, unknown>>({
+        method: "providers.status",
+        params: { probe: false, timeoutMs: 5000 },
+        timeoutMs: 6000,
+      });
+      const issues = collectProvidersStatusIssues(status);
+      if (issues.length > 0) {
+        note(
+          issues
+            .map(
+              (issue) =>
+                `- ${issue.provider} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+            )
+            .join("\n"),
+          "Provider warnings",
+        );
+      }
+    } catch {
+      // ignore: doctor already reported gateway health
     }
   }
 
