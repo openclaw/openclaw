@@ -123,6 +123,7 @@ function findOtherStateDirs(stateDir: string): string[] {
 export async function noteStateIntegrity(
   cfg: ClawdbotConfig,
   prompter: DoctorPrompterLike,
+  configPath?: string,
 ) {
   const warnings: string[] = [];
   const changes: string[] = [];
@@ -184,6 +185,49 @@ export async function noteStateIntegrity(
       } catch (err) {
         warnings.push(`- Failed to repair ${stateDir}: ${String(err)}`);
       }
+    }
+  }
+  if (stateDirExists && process.platform !== "win32") {
+    try {
+      const stat = fs.statSync(stateDir);
+      if ((stat.mode & 0o077) !== 0) {
+        warnings.push(
+          `- State directory permissions are too open (${stateDir}). Recommend chmod 700.`,
+        );
+        const tighten = await prompter.confirmSkipInNonInteractive({
+          message: `Tighten permissions on ${stateDir} to 700?`,
+          initialValue: true,
+        });
+        if (tighten) {
+          fs.chmodSync(stateDir, 0o700);
+          changes.push(`- Tightened permissions on ${stateDir} to 700`);
+        }
+      }
+    } catch (err) {
+      warnings.push(`- Failed to read ${stateDir} permissions: ${String(err)}`);
+    }
+  }
+
+  if (configPath && existsFile(configPath) && process.platform !== "win32") {
+    try {
+      const stat = fs.statSync(configPath);
+      if ((stat.mode & 0o077) !== 0) {
+        warnings.push(
+          `- Config file is group/world readable (${configPath}). Recommend chmod 600.`,
+        );
+        const tighten = await prompter.confirmSkipInNonInteractive({
+          message: `Tighten permissions on ${configPath} to 600?`,
+          initialValue: true,
+        });
+        if (tighten) {
+          fs.chmodSync(configPath, 0o600);
+          changes.push(`- Tightened permissions on ${configPath} to 600`);
+        }
+      }
+    } catch (err) {
+      warnings.push(
+        `- Failed to read config permissions (${configPath}): ${String(err)}`,
+      );
     }
   }
 

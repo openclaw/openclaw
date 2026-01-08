@@ -59,6 +59,7 @@ cat ~/.clawdbot/clawdbot.json
 - Legacy config migration and normalization.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
+- Config file permission checks (chmod 600) when running locally.
 - Legacy workspace dir detection (`~/clawdis`, `~/clawdbot`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
@@ -129,6 +130,8 @@ Doctor checks:
   split between installs).
 - **Remote mode reminder**: if `gateway.mode=remote`, doctor reminds you to run
   it on the remote host (the state lives there).
+- **Config file permissions**: warns if `~/.clawdbot/clawdbot.json` is
+  group/world readable and offers to tighten to `600`.
 
 ### 5) Sandbox image repair
 When sandboxing is enabled, doctor checks Docker images and offers to build or

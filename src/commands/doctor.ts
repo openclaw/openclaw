@@ -146,7 +146,7 @@ export async function doctorCommand(
     }
   }
 
-  await noteStateIntegrity(cfg, prompter);
+  await noteStateIntegrity(cfg, prompter, snapshot.path ?? CONFIG_PATH_CLAWDBOT);
 
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
   noteSandboxScopeWarnings(cfg);

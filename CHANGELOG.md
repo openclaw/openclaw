@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
 - Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos

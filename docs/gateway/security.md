@@ -95,6 +95,14 @@ This is social engineering 101. Create distrust, encourage snooping.
 
 ## Configuration Hardening (examples)
 
+### 0) File permissions
+
+Keep config + state private on the gateway host:
+- `~/.clawdbot/clawdbot.json`: `600` (user read/write only)
+- `~/.clawdbot`: `700` (user only)
+
+`clawdbot doctor` can warn and offer to tighten these permissions.
+
 ### 1) DMs: pairing by default
 
 ```json5
