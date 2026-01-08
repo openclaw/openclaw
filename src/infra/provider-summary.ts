@@ -1,5 +1,9 @@
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import { resolveTelegramToken } from "../telegram/token.js";
+import { resolveTelegramAccount, listTelegramAccountIds } from "../telegram/accounts.js";
+import { resolveDiscordAccount, listDiscordAccountIds } from "../discord/accounts.js";
+import { resolveSlackAccount, listSlackAccountIds } from "../slack/accounts.js";
+import { resolveSignalAccount, listSignalAccountIds } from "../signal/accounts.js";
+import { resolveIMessageAccount, listIMessageAccountIds } from "../imessage/accounts.js";
 import { theme } from "../terminal/theme.js";
 import { normalizeE164 } from "../utils.js";
 import {
@@ -7,6 +11,8 @@ import {
   readWebSelfId,
   webAuthExists,
 } from "../web/session.js";
+import { listWhatsAppAccountIds, resolveWhatsAppAccount } from "../web/accounts.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export type ProviderSummaryOptions = {
   colorize?: boolean;
@@ -27,6 +33,13 @@ export async function buildProviderSummary(
   const resolved = { ...DEFAULT_OPTIONS, ...options };
   const tint = (value: string, color?: (input: string) => string) =>
     resolved.colorize && color ? color(value) : value;
+  const formatAccountLabel = (params: { accountId: string; name?: string }) => {
+    const base = params.accountId || DEFAULT_ACCOUNT_ID;
+    if (params.name?.trim()) return `${base} (${params.name.trim()})`;
+    return base;
+  };
+  const accountLine = (label: string, details: string[]) =>
+    `  - ${label}${details.length ? ` (${details.join(", ")})` : ""}`;
 
   const webEnabled = effective.web?.enabled !== false;
   if (!webEnabled) {
@@ -44,52 +57,198 @@ export async function buildProviderSummary(
           )
         : tint("WhatsApp: not linked", theme.error),
     );
+    if (webLinked) {
+      for (const accountId of listWhatsAppAccountIds(effective)) {
+        const account = resolveWhatsAppAccount({ cfg: effective, accountId });
+        const details: string[] = [];
+        if (!account.enabled) details.push("disabled");
+        if (account.selfChatMode) details.push("self-chat");
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId: account.accountId,
+              name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
   }
 
   const telegramEnabled = effective.telegram?.enabled !== false;
   if (!telegramEnabled) {
     lines.push(tint("Telegram: disabled", theme.muted));
   } else {
-    const { token: telegramToken } = resolveTelegramToken(effective);
-    const telegramConfigured = Boolean(telegramToken?.trim());
+    const accounts = listTelegramAccountIds(effective).map((accountId) =>
+      resolveTelegramAccount({ cfg: effective, accountId }),
+    );
+    const configuredAccounts = accounts.filter((account) =>
+      Boolean(account.token?.trim()),
+    );
+    const telegramConfigured = configuredAccounts.length > 0;
     lines.push(
       telegramConfigured
         ? tint("Telegram: configured", theme.success)
         : tint("Telegram: not configured", theme.muted),
     );
+    if (telegramConfigured) {
+      for (const account of configuredAccounts) {
+        const details: string[] = [];
+        if (!account.enabled) details.push("disabled");
+        if (account.tokenSource && account.tokenSource !== "none") {
+          details.push(`token:${account.tokenSource}`);
+        }
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId: account.accountId,
+              name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
+  }
+
+  const discordEnabled = effective.discord?.enabled !== false;
+  if (!discordEnabled) {
+    lines.push(tint("Discord: disabled", theme.muted));
+  } else {
+    const accounts = listDiscordAccountIds(effective).map((accountId) =>
+      resolveDiscordAccount({ cfg: effective, accountId }),
+    );
+    const configuredAccounts = accounts.filter((account) =>
+      Boolean(account.token?.trim()),
+    );
+    const discordConfigured = configuredAccounts.length > 0;
+    lines.push(
+      discordConfigured
+        ? tint("Discord: configured", theme.success)
+        : tint("Discord: not configured", theme.muted),
+    );
+    if (discordConfigured) {
+      for (const account of configuredAccounts) {
+        const details: string[] = [];
+        if (!account.enabled) details.push("disabled");
+        if (account.tokenSource && account.tokenSource !== "none") {
+          details.push(`token:${account.tokenSource}`);
+        }
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId: account.accountId,
+              name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
+  }
+
+  const slackEnabled = effective.slack?.enabled !== false;
+  if (!slackEnabled) {
+    lines.push(tint("Slack: disabled", theme.muted));
+  } else {
+    const accounts = listSlackAccountIds(effective).map((accountId) =>
+      resolveSlackAccount({ cfg: effective, accountId }),
+    );
+    const configuredAccounts = accounts.filter(
+      (account) =>
+        Boolean(account.botToken?.trim()) && Boolean(account.appToken?.trim()),
+    );
+    const slackConfigured = configuredAccounts.length > 0;
+    lines.push(
+      slackConfigured
+        ? tint("Slack: configured", theme.success)
+        : tint("Slack: not configured", theme.muted),
+    );
+    if (slackConfigured) {
+      for (const account of configuredAccounts) {
+        const details: string[] = [];
+        if (!account.enabled) details.push("disabled");
+        if (account.botTokenSource && account.botTokenSource !== "none") {
+          details.push(`bot:${account.botTokenSource}`);
+        }
+        if (account.appTokenSource && account.appTokenSource !== "none") {
+          details.push(`app:${account.appTokenSource}`);
+        }
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId: account.accountId,
+              name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
   }
 
   const signalEnabled = effective.signal?.enabled !== false;
   if (!signalEnabled) {
     lines.push(tint("Signal: disabled", theme.muted));
   } else {
-    const signalConfigured =
-      Boolean(effective.signal) &&
-      Boolean(
-        effective.signal?.account?.trim() ||
-          effective.signal?.httpUrl?.trim() ||
-          effective.signal?.cliPath?.trim() ||
-          effective.signal?.httpHost?.trim() ||
-          typeof effective.signal?.httpPort === "number" ||
-          typeof effective.signal?.autoStart === "boolean",
-      );
+    const accounts = listSignalAccountIds(effective).map((accountId) =>
+      resolveSignalAccount({ cfg: effective, accountId }),
+    );
+    const configuredAccounts = accounts.filter((account) => account.configured);
+    const signalConfigured = configuredAccounts.length > 0;
     lines.push(
       signalConfigured
         ? tint("Signal: configured", theme.success)
         : tint("Signal: not configured", theme.muted),
     );
+    if (signalConfigured) {
+      for (const account of configuredAccounts) {
+        const details: string[] = [];
+        if (!account.enabled) details.push("disabled");
+        if (account.baseUrl) details.push(account.baseUrl);
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId: account.accountId,
+              name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
   }
 
   const imessageEnabled = effective.imessage?.enabled !== false;
   if (!imessageEnabled) {
     lines.push(tint("iMessage: disabled", theme.muted));
   } else {
-    const imessageConfigured = Boolean(effective.imessage);
+    const accounts = listIMessageAccountIds(effective).map((accountId) =>
+      resolveIMessageAccount({ cfg: effective, accountId }),
+    );
+    const configuredAccounts = accounts.filter((account) => account.configured);
+    const imessageConfigured = configuredAccounts.length > 0;
     lines.push(
       imessageConfigured
         ? tint("iMessage: configured", theme.success)
         : tint("iMessage: not configured", theme.muted),
     );
+    if (imessageConfigured) {
+      for (const account of configuredAccounts) {
+        const details: string[] = [];
+        if (!account.enabled) details.push("disabled");
+        lines.push(
+          accountLine(
+            formatAccountLabel({
+              accountId: account.accountId,
+              name: account.name,
+            }),
+            details,
+          ),
+        );
+      }
+    }
   }
 
   if (resolved.includeAllowFrom) {

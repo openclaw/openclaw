@@ -35,6 +35,21 @@ export function formatGatewayProvidersStatusLines(
       if (typeof account.running === "boolean") {
         bits.push(account.running ? "running" : "stopped");
       }
+      if (typeof account.mode === "string" && account.mode.length > 0) {
+        bits.push(`mode:${account.mode}`);
+      }
+      if (typeof account.tokenSource === "string" && account.tokenSource) {
+        bits.push(`token:${account.tokenSource}`);
+      }
+      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
+        bits.push(`bot:${account.botTokenSource}`);
+      }
+      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
+        bits.push(`app:${account.appTokenSource}`);
+      }
+      if (typeof account.baseUrl === "string" && account.baseUrl) {
+        bits.push(`url:${account.baseUrl}`);
+      }
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
         bits.push(probe.ok ? "works" : "probe failed");
