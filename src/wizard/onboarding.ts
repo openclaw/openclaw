@@ -112,8 +112,7 @@ export async function runOnboardingWizard(
     }
   }
 
-  const flowHint =
-    "Configure anything via the Clawdbot configuration wizard anytime.";
+  const flowHint = "Configure details later via clawdbot configure.";
   let flow = (await prompter.select({
     message: "Onboarding mode",
     options: [
