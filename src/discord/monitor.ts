@@ -53,6 +53,7 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   buildAgentSessionKey,
   resolveAgentRoute,
@@ -591,16 +592,11 @@ export function createDiscordMessageHandler(params: {
                 try {
                   await sendMessageDiscord(
                     `user:${author.id}`,
-                    [
-                      "Clawdbot: access not configured.",
-                      "",
-                      `Your Discord user id: ${author.id}`,
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve --provider discord <code>",
-                    ].join("\n"),
+                    buildPairingReply({
+                      provider: "discord",
+                      idLine: `Your Discord user id: ${author.id}`,
+                      code,
+                    }),
                     { token, rest: client.rest, accountId },
                   );
                 } catch (err) {
@@ -1435,16 +1431,11 @@ function createDiscordNativeCommand(params: {
               });
               if (created) {
                 await interaction.reply({
-                  content: [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Your Discord user id: ${user.id}`,
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider discord <code>",
-                  ].join("\n"),
+                  content: buildPairingReply({
+                    provider: "discord",
+                    idLine: `Your Discord user id: ${user.id}`,
+                    code,
+                  }),
                   ephemeral: true,
                 });
               }

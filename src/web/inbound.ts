@@ -21,6 +21,7 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   formatLocationText,
   type NormalizedLocation,
@@ -310,16 +311,11 @@ export async function monitorWebInbox(options: {
                 );
                 try {
                   await sock.sendMessage(remoteJid, {
-                    text: [
-                      "Clawdbot: access not configured.",
-                      "",
-                      `Your WhatsApp sender id: ${candidate}`,
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve --provider whatsapp <code>",
-                    ].join("\n"),
+                    text: buildPairingReply({
+                      provider: "whatsapp",
+                      idLine: `Your WhatsApp sender id: ${candidate}`,
+                      code,
+                    }),
                   });
                 } catch (err) {
                   logVerbose(
