@@ -324,6 +324,40 @@ describe("sendMessageTelegram", () => {
     expect(sendAudio).not.toHaveBeenCalled();
   });
 
+  it("falls back to audio when asVoice is true but media is not voice compatible", async () => {
+    const chatId = "123";
+    const sendAudio = vi.fn().mockResolvedValue({
+      message_id: 14,
+      chat: { id: chatId },
+    });
+    const sendVoice = vi.fn().mockResolvedValue({
+      message_id: 15,
+      chat: { id: chatId },
+    });
+    const api = { sendAudio, sendVoice } as unknown as {
+      sendAudio: typeof sendAudio;
+      sendVoice: typeof sendVoice;
+    };
+
+    loadWebMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/mpeg",
+      fileName: "clip.mp3",
+    });
+
+    await sendMessageTelegram(chatId, "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/clip.mp3",
+      asVoice: true,
+    });
+
+    expect(sendAudio).toHaveBeenCalledWith(chatId, expect.anything(), {
+      caption: "caption",
+    });
+    expect(sendVoice).not.toHaveBeenCalled();
+  });
+
   it("includes message_thread_id for forum topic messages", async () => {
     const chatId = "-1001234567890";
     const sendMessage = vi.fn().mockResolvedValue({

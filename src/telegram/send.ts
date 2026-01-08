@@ -10,6 +10,7 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
+import { logVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
@@ -20,6 +21,7 @@ import {
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
+import { resolveTelegramVoiceDecision } from "./voice.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -237,7 +239,16 @@ export async function sendMessageTelegram(
         throw wrapChatNotFound(err);
       });
     } else if (kind === "audio") {
-      const useVoice = opts.asVoice === true; // default false (backward compatible)
+      const { useVoice, reason } = resolveTelegramVoiceDecision({
+        wantsVoice: opts.asVoice === true, // default false (backward compatible)
+        contentType: media.contentType,
+        fileName,
+      });
+      if (reason) {
+        logVerbose(
+          `Telegram voice requested but ${reason}; sending as audio file instead.`,
+        );
+      }
       if (useVoice) {
         result = await request(
           () => api.sendVoice(chatId, file, mediaParams),
