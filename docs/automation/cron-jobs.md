@@ -29,6 +29,7 @@ A cron job is a stored record with:
 - optional **delivery** (where output should be sent).
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
+In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
 
 ### Schedules
 Cron supports three schedule kinds:
