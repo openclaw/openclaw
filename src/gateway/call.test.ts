@@ -6,6 +6,8 @@ const pickPrimaryTailnetIPv4 = vi.fn();
 
 let lastClientOptions: {
   url?: string;
+  token?: string;
+  password?: string;
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -36,6 +38,8 @@ vi.mock("./client.js", () => ({
   GatewayClient: class {
     constructor(opts: {
       url?: string;
+      token?: string;
+      password?: string;
       onHelloOk?: () => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
     }) {
@@ -160,5 +164,88 @@ describe("callGateway error details", () => {
     expect(err?.message).toContain("Gateway target: ws://127.0.0.1:18789");
     expect(err?.message).toContain("Source: local loopback");
     expect(err?.message).toContain("Bind: loopback");
+  });
+});
+
+describe("callGateway password resolution", () => {
+  const originalEnvPassword = process.env.CLAWDBOT_GATEWAY_PASSWORD;
+
+  beforeEach(() => {
+    loadConfig.mockReset();
+    resolveGatewayPort.mockReset();
+    pickPrimaryTailnetIPv4.mockReset();
+    lastClientOptions = null;
+    startMode = "hello";
+    closeCode = 1006;
+    closeReason = "";
+    delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+  });
+
+  afterEach(() => {
+    if (originalEnvPassword == null) {
+      delete process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_PASSWORD = originalEnvPassword;
+    }
+  });
+
+  it("uses local config password when env is unset", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { password: "secret" },
+      },
+    });
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.password).toBe("secret");
+  });
+
+  it("prefers env password over local config password", async () => {
+    process.env.CLAWDBOT_GATEWAY_PASSWORD = "from-env";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "loopback",
+        auth: { password: "from-config" },
+      },
+    });
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.password).toBe("from-env");
+  });
+
+  it("uses remote password in remote mode when env is unset", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "ws://remote.example:18789", password: "remote-secret" },
+        auth: { password: "from-config" },
+      },
+    });
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.password).toBe("remote-secret");
+  });
+
+  it("prefers env password over remote password in remote mode", async () => {
+    process.env.CLAWDBOT_GATEWAY_PASSWORD = "from-env";
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "ws://remote.example:18789", password: "remote-secret" },
+        auth: { password: "from-config" },
+      },
+    });
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.password).toBe("from-env");
   });
 });
