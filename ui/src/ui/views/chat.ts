@@ -7,6 +7,19 @@ import { toSanitizedMarkdownHtml } from "../markdown";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display";
 import type { SessionsListResult } from "../types";
 import type { ChatQueueItem } from "../ui-types";
+import type { ChatItem, MessageGroup, ToolCard } from "../types/chat-types";
+import { TOOL_INLINE_THRESHOLD } from "../chat/constants";
+import {
+  formatToolOutputForSidebar,
+  getTruncatedPreview,
+} from "../chat/tool-helpers";
+import {
+  normalizeMessage,
+  normalizeRoleForGrouping,
+  isToolResultMessage,
+} from "../chat/message-normalizer";
+import { renderMarkdownSidebar } from "./markdown-sidebar";
+import "../components/resizable-divider";
 
 export type ChatProps = {
   sessionKey: string;
@@ -25,97 +38,140 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
+  // Legacy tool output expand/collapse (used when useNewChatLayout is false)
   isToolOutputExpanded: (id: string) => boolean;
   onToolOutputToggle: (id: string, expanded: boolean) => void;
+  // Focus mode
+  focusMode: boolean;
+  // Feature flag for new Slack-style layout with sidebar
+  useNewChatLayout?: boolean;
+  // Sidebar state (used when useNewChatLayout is true)
+  sidebarOpen?: boolean;
+  sidebarContent?: string | null;
+  sidebarError?: string | null;
+  splitRatio?: number;
+  // Event handlers
   onRefresh: () => void;
+  onToggleFocusMode: () => void;
+  onToggleLayout?: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onOpenSidebar?: (content: string) => void;
+  onCloseSidebar?: () => void;
+  onSplitRatioChange?: (ratio: number) => void;
 };
 
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || Boolean(props.stream);
-  const sessionOptions = resolveSessionOptions(props.sessionKey, props.sessions);
   const activeSession = props.sessions?.sessions?.find(
     (row) => row.key === props.sessionKey,
   );
   const reasoningLevel = activeSession?.reasoningLevel ?? "off";
   const showReasoning = reasoningLevel !== "off";
+
   const composePlaceholder = props.connected
     ? "Message (↩ to send, Shift+↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
 
+  const splitRatio = props.splitRatio ?? 0.6;
+  const sidebarOpen = Boolean(props.sidebarOpen && props.onCloseSidebar);
+  const useNewLayout = props.useNewChatLayout ?? false;
+
   return html`
     <section class="card chat">
-      <div class="chat-header">
-        <div class="chat-header__left">
-          <label class="field chat-session">
-            <span>Session Key</span>
-            <select
-              .value=${props.sessionKey}
-              ?disabled=${!props.connected}
-              @change=${(e: Event) =>
-                props.onSessionKeyChange((e.target as HTMLSelectElement).value)}
+      ${props.disabledReason
+        ? html`<div class="callout">${props.disabledReason}</div>`
+        : nothing}
+
+      ${props.error
+        ? html`<div class="callout danger">${props.error}</div>`
+        : nothing}
+
+      ${props.focusMode
+        ? html`
+            <button
+              class="chat-focus-exit"
+              type="button"
+              @click=${props.onToggleFocusMode}
+              aria-label="Exit focus mode"
+              title="Exit focus mode"
             >
-              ${sessionOptions.map(
-                (entry) =>
-                  html`<option value=${entry.key}>
-                    ${entry.displayName ?? entry.key}
-                  </option>`
-              )}
-            </select>
-          </label>
-          <button
-            class="btn"
-            ?disabled=${props.loading || !props.connected}
-            @click=${props.onRefresh}
-          >
-            ${props.loading ? "Loading…" : "Refresh"}
-          </button>
+              ✕
+            </button>
+          `
+        : nothing}
+
+      <div
+        class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}"
+      >
+        <div
+          class="chat-main"
+          style="flex: ${sidebarOpen ? `0 0 ${splitRatio * 100}%` : "1 1 100%"}"
+        >
+          <div class="chat-thread" role="log" aria-live="polite">
+            ${props.loading
+              ? html`<div class="muted">Loading chat…</div>`
+              : nothing}
+            ${repeat(buildChatItems(props), (item) => item.key, (item) => {
+              if (item.kind === "reading-indicator") {
+                return useNewLayout
+                  ? renderReadingIndicatorGroup()
+                  : renderReadingIndicator();
+              }
+
+              if (item.kind === "stream") {
+                return useNewLayout
+                  ? renderStreamingGroup(
+                      item.text,
+                      item.startedAt,
+                      props.onOpenSidebar,
+                    )
+                  : renderMessage(
+                      {
+                        role: "assistant",
+                        content: [{ type: "text", text: item.text }],
+                        timestamp: item.startedAt,
+                      },
+                      props,
+                      { streaming: true, showReasoning },
+                    );
+              }
+
+              if (item.kind === "group") {
+                return renderMessageGroup(item, {
+                  onOpenSidebar: props.onOpenSidebar,
+                  showReasoning,
+                });
+              }
+
+              return renderMessage(item.message, props, { showReasoning });
+            })}
+          </div>
         </div>
-        <div class="chat-header__right">
-          <div class="muted">Thinking: ${props.thinkingLevel ?? "inherit"}</div>
-          <div class="muted">Reasoning: ${reasoningLevel}</div>
-        </div>
-      </div>
 
-      ${
-        props.disabledReason
-          ? html`<div class="callout" style="margin-top: 12px;">
-            ${props.disabledReason}
-          </div>`
-          : nothing
-      }
-
-      ${
-        props.error
-          ? html`<div class="callout danger" style="margin-top: 12px;">${props.error}</div>`
-          : nothing
-      }
-
-      <div class="chat-thread" role="log" aria-live="polite">
-        ${props.loading ? html`<div class="muted">Loading chat…</div>` : nothing}
-        ${repeat(
-          buildChatItems(props),
-          (item) => item.key,
-          (item) => {
-            if (item.kind === "reading-indicator") return renderReadingIndicator();
-            if (item.kind === "stream") {
-              return renderMessage(
-                {
-                  role: "assistant",
-                  content: [{ type: "text", text: item.text }],
-                  timestamp: item.startedAt,
-                },
-                props,
-                { streaming: true }
-              );
-            }
-            return renderMessage(item.message, props, { showReasoning });
-          }
-        )}
+        ${useNewLayout && sidebarOpen
+          ? html`
+              <resizable-divider
+                .splitRatio=${splitRatio}
+                @resize=${(e: CustomEvent) =>
+                  props.onSplitRatioChange?.(e.detail.splitRatio)}
+              ></resizable-divider>
+              <div class="chat-sidebar">
+                ${renderMarkdownSidebar({
+                  content: props.sidebarContent ?? null,
+                  error: props.sidebarError ?? null,
+                  onClose: props.onCloseSidebar!,
+                  onViewRawText: () => {
+                    if (!props.sidebarContent || !props.onOpenSidebar) return;
+                    props.onOpenSidebar(`\`\`\`\n${props.sidebarContent}\n\`\`\``);
+                  },
+                })}
+              </div>
+            `
+          : nothing}
       </div>
 
       ${props.queue.length
@@ -157,11 +213,12 @@ export function renderChat(props: ChatProps) {
               e.preventDefault();
               if (canCompose) props.onSend();
             }}
-            @input=${(e: Event) => props.onDraftChange((e.target as HTMLTextAreaElement).value)}
+            @input=${(e: Event) =>
+              props.onDraftChange((e.target as HTMLTextAreaElement).value)}
             placeholder=${composePlaceholder}
           ></textarea>
         </label>
-        <div class="row chat-compose__actions">
+        <div class="chat-compose__actions">
           <button
             class="btn"
             ?disabled=${!props.connected || props.sending}
@@ -182,14 +239,46 @@ export function renderChat(props: ChatProps) {
   `;
 }
 
-type ChatItem =
-  | { kind: "message"; key: string; message: unknown }
-  | { kind: "stream"; key: string; text: string; startedAt: number }
-  | { kind: "reading-indicator"; key: string };
-
 const CHAT_HISTORY_RENDER_LIMIT = 200;
 
-function buildChatItems(props: ChatProps): ChatItem[] {
+function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
+  const result: Array<ChatItem | MessageGroup> = [];
+  let currentGroup: MessageGroup | null = null;
+
+  for (const item of items) {
+    if (item.kind !== "message") {
+      if (currentGroup) {
+        result.push(currentGroup);
+        currentGroup = null;
+      }
+      result.push(item);
+      continue;
+    }
+
+    const normalized = normalizeMessage(item.message);
+    const role = normalizeRoleForGrouping(normalized.role);
+    const timestamp = normalized.timestamp || Date.now();
+
+    if (!currentGroup || currentGroup.role !== role) {
+      if (currentGroup) result.push(currentGroup);
+      currentGroup = {
+        kind: "group",
+        key: `group:${role}:${item.key}`,
+        role,
+        messages: [{ message: item.message, key: item.key }],
+        timestamp,
+        isStreaming: false,
+      };
+    } else {
+      currentGroup.messages.push({ message: item.message, key: item.key });
+    }
+  }
+
+  if (currentGroup) result.push(currentGroup);
+  return result;
+}
+
+function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
   const items: ChatItem[] = [];
   const history = Array.isArray(props.messages) ? props.messages : [];
   const tools = Array.isArray(props.toolMessages) ? props.toolMessages : [];
@@ -234,6 +323,7 @@ function buildChatItems(props: ChatProps): ChatItem[] {
     }
   }
 
+  if (props.useNewChatLayout) return groupMessages(items);
   return items;
 }
 
@@ -247,7 +337,8 @@ function messageKey(message: unknown, index: number): string {
   if (messageId) return `msg:${messageId}`;
   const timestamp = typeof m.timestamp === "number" ? m.timestamp : null;
   const role = typeof m.role === "string" ? m.role : "unknown";
-  const fingerprint = extractText(message) ?? (typeof m.content === "string" ? m.content : null);
+  const fingerprint =
+    extractText(message) ?? (typeof m.content === "string" ? m.content : null);
   const seed = fingerprint ?? safeJson(message) ?? String(index);
   const hash = fnv1a(seed);
   return timestamp ? `msg:${role}:${timestamp}:${hash}` : `msg:${role}:${hash}`;
@@ -270,51 +361,6 @@ function fnv1a(input: string): string {
   return (hash >>> 0).toString(36);
 }
 
-type SessionOption = {
-  key: string;
-  updatedAt?: number | null;
-  displayName?: string;
-};
-
-function resolveSessionOptions(currentKey: string, sessions: SessionsListResult | null) {
-  const now = Date.now();
-  const cutoff = now - 24 * 60 * 60 * 1000;
-  const entries = Array.isArray(sessions?.sessions) ? (sessions?.sessions ?? []) : [];
-  const sorted = [...entries].sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const recent: SessionOption[] = [];
-  const seen = new Set<string>();
-  for (const entry of sorted) {
-    if (seen.has(entry.key)) continue;
-    seen.add(entry.key);
-    if ((entry.updatedAt ?? 0) < cutoff) continue;
-    recent.push(entry);
-  }
-
-  const result: SessionOption[] = [];
-  const included = new Set<string>();
-  const mainKey = "main";
-  const mainEntry = sorted.find((entry) => entry.key === mainKey);
-  if (mainEntry) {
-    result.push(mainEntry);
-    included.add(mainKey);
-  } else if (currentKey === mainKey) {
-    result.push({ key: mainKey, updatedAt: null });
-    included.add(mainKey);
-  }
-
-  for (const entry of recent) {
-    if (included.has(entry.key)) continue;
-    result.push(entry);
-    included.add(entry.key);
-  }
-
-  if (!included.has(currentKey)) {
-    result.push({ key: currentKey, updatedAt: null });
-  }
-
-  return result;
-}
-
 function renderReadingIndicator() {
   return html`
     <div class="chat-line assistant">
@@ -329,21 +375,37 @@ function renderReadingIndicator() {
   `;
 }
 
+function renderReadingIndicatorGroup() {
+  return html`
+    <div class="chat-group assistant">
+      ${renderAvatar("assistant")}
+      <div class="chat-group-messages">
+        <div class="chat-bubble chat-reading-indicator" aria-hidden="true">
+          <span class="chat-reading-indicator__dots">
+            <span></span><span></span><span></span>
+          </span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 function renderMessage(
   message: unknown,
   props?: Pick<ChatProps, "isToolOutputExpanded" | "onToolOutputToggle">,
-  opts?: { streaming?: boolean; showReasoning?: boolean }
+  opts?: { streaming?: boolean; showReasoning?: boolean },
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
   const toolCards = extractToolCards(message);
   const hasToolCards = toolCards.length > 0;
-  const isToolResult = isToolResultMessage(message);
+  const isToolResult =
+    isToolResultMessage(message) ||
+    typeof m.toolCallId === "string" ||
+    typeof m.tool_call_id === "string";
   const extractedText = extractText(message);
   const extractedThinking =
-    opts?.showReasoning && role === "assistant"
-      ? extractThinking(message)
-      : null;
+    opts?.showReasoning && role === "assistant" ? extractThinking(message) : null;
   const contentText = typeof m.content === "string" ? m.content : null;
   const fallback = hasToolCards ? null : JSON.stringify(message, null, 2);
 
@@ -355,6 +417,7 @@ function renderMessage(
         : !isToolResult && fallback
           ? { kind: "json" as const, value: fallback }
           : null;
+
   const markdownBase =
     display?.kind === "json"
       ? ["```json", display.value, "```"].join("\n")
@@ -367,31 +430,43 @@ function renderMessage(
 
   const timestamp =
     typeof m.timestamp === "number" ? new Date(m.timestamp).toLocaleTimeString() : "";
-  const klass = role === "assistant" ? "assistant" : role === "user" ? "user" : "other";
-  const who = role === "assistant" ? "Assistant" : role === "user" ? "You" : role;
+
+  const normalizedRole = normalizeRoleForGrouping(role);
+  const klass =
+    normalizedRole === "assistant"
+      ? "assistant"
+      : normalizedRole === "user"
+        ? "user"
+        : "other";
+  const who =
+    normalizedRole === "assistant"
+      ? "Assistant"
+      : normalizedRole === "user"
+        ? "You"
+        : normalizedRole;
+
   const toolCallId = typeof m.toolCallId === "string" ? m.toolCallId : "";
   const toolCardBase =
     toolCallId ||
     (typeof m.id === "string" ? m.id : "") ||
     (typeof m.messageId === "string" ? m.messageId : "") ||
     (typeof m.timestamp === "number" ? String(m.timestamp) : "tool-card");
+
   return html`
     <div class="chat-line ${klass}">
       <div class="chat-msg">
         <div class="chat-bubble ${opts?.streaming ? "streaming" : ""}">
-          ${
-            markdown
-              ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
-              : nothing
-          }
+          ${markdown
+            ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+            : nothing}
           ${toolCards.map((card, index) =>
-            renderToolCard(card, {
+            renderToolCardLegacy(card, {
               id: `${toolCardBase}:${index}`,
               expanded: props?.isToolOutputExpanded
                 ? props.isToolOutputExpanded(`${toolCardBase}:${index}`)
                 : false,
               onToggle: props?.onToolOutputToggle,
-            })
+            }),
           )}
         </div>
         <div class="chat-stamp mono">
@@ -446,7 +521,11 @@ function extractThinking(message: unknown): string | null {
   // Back-compat: older logs may still have <think> tags inside text blocks.
   const rawText = extractRawText(message);
   if (!rawText) return null;
-  const matches = [...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi)];
+  const matches = [
+    ...rawText.matchAll(
+      /<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi,
+    ),
+  ];
   const extracted = matches
     .map((m) => (m[1] ?? "").trim())
     .filter(Boolean);
@@ -482,13 +561,6 @@ function formatReasoningMarkdown(text: string): string {
   return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
 }
 
-type ToolCard = {
-  kind: "call" | "result";
-  name: string;
-  args?: unknown;
-  text?: string;
-};
-
 function extractToolCards(message: unknown): ToolCard[] {
   const m = message as Record<string, unknown>;
   const content = normalizeContent(m.content);
@@ -516,7 +588,10 @@ function extractToolCards(message: unknown): ToolCard[] {
     cards.push({ kind: "result", name, text });
   }
 
-  if (isToolResultMessage(message) && !cards.some((card) => card.kind === "result")) {
+  if (
+    isToolResultMessage(message) &&
+    !cards.some((card) => card.kind === "result")
+  ) {
     const name =
       (typeof m.toolName === "string" && m.toolName) ||
       (typeof m.tool_name === "string" && m.tool_name) ||
@@ -528,13 +603,13 @@ function extractToolCards(message: unknown): ToolCard[] {
   return cards;
 }
 
-function renderToolCard(
+function renderToolCardLegacy(
   card: ToolCard,
   opts?: {
     id: string;
     expanded: boolean;
     onToggle?: (id: string, expanded: boolean) => void;
-  }
+  },
 ) {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -543,11 +618,18 @@ function renderToolCard(
   const id = opts?.id ?? `${card.name}-${Math.random()}`;
   return html`
     <div class="chat-tool-card">
-      <div class="chat-tool-card__title">${display.emoji} ${display.label}</div>
-      ${detail ? html`<div class="chat-tool-card__detail">${detail}</div>` : nothing}
-      ${
-        hasOutput
-          ? html`
+      <div class="chat-tool-card__header">
+        <div class="chat-tool-card__title">
+          <span class="chat-tool-card__icon">${display.emoji}</span>
+          <span>${display.label}</span>
+        </div>
+        ${!hasOutput ? html`<span class="chat-tool-card__status">✓</span>` : nothing}
+      </div>
+      ${detail
+        ? html`<div class="chat-tool-card__detail">${detail}</div>`
+        : nothing}
+      ${hasOutput
+        ? html`
             <details
               class="chat-tool-card__details"
               ?open=${expanded}
@@ -563,17 +645,219 @@ function renderToolCard(
                   (${card.text?.length ?? 0} chars)
                 </span>
               </summary>
-              ${
-                expanded
-                  ? html`<div class="chat-tool-card__output chat-text">
+              ${expanded
+                ? html`<div class="chat-tool-card__output chat-text">
                     ${unsafeHTML(toSanitizedMarkdownHtml(card.text ?? ""))}
                   </div>`
-                  : nothing
-              }
+                : nothing}
             </details>
           `
-          : nothing
+        : nothing}
+    </div>
+  `;
+}
+
+function renderToolCardSidebar(
+  card: ToolCard,
+  onOpenSidebar?: (content: string) => void,
+) {
+  const display = resolveToolDisplay({ name: card.name, args: card.args });
+  const detail = formatToolDetail(display);
+  const hasText = Boolean(card.text?.trim());
+
+  const canClick = Boolean(onOpenSidebar);
+  const handleClick = canClick
+    ? () => {
+        if (hasText) {
+          onOpenSidebar!(formatToolOutputForSidebar(card.text!));
+          return;
+        }
+        const info = `## ${display.label}\n\n${
+          detail ? `**Command:** \`${detail}\`\n\n` : ""
+        }*No output — tool completed successfully.*`;
+        onOpenSidebar!(info);
       }
+    : undefined;
+
+  const isShort = hasText && (card.text?.length ?? 0) <= TOOL_INLINE_THRESHOLD;
+  const showCollapsed = hasText && !isShort;
+  const showInline = hasText && isShort;
+  const isEmpty = !hasText;
+
+  return html`
+    <div
+      class="chat-tool-card ${canClick ? "chat-tool-card--clickable" : ""}"
+      @click=${handleClick}
+      role=${canClick ? "button" : nothing}
+      tabindex=${canClick ? "0" : nothing}
+      @keydown=${canClick
+        ? (e: KeyboardEvent) => {
+            if (e.key !== "Enter" && e.key !== " ") return;
+            e.preventDefault();
+            handleClick?.();
+          }
+        : nothing}
+    >
+      <div class="chat-tool-card__header">
+        <div class="chat-tool-card__title">
+          <span class="chat-tool-card__icon">${display.emoji}</span>
+          <span>${display.label}</span>
+        </div>
+        ${canClick
+          ? html`<span class="chat-tool-card__action">${hasText ? "View ›" : "›"}</span>`
+          : nothing}
+        ${isEmpty && !canClick ? html`<span class="chat-tool-card__status">✓</span>` : nothing}
+      </div>
+      ${detail
+        ? html`<div class="chat-tool-card__detail">${detail}</div>`
+        : nothing}
+      ${isEmpty
+        ? html`<div class="chat-tool-card__status-text muted">Completed</div>`
+        : nothing}
+      ${showCollapsed
+        ? html`<div class="chat-tool-card__preview mono">${getTruncatedPreview(card.text!)}</div>`
+        : nothing}
+      ${showInline
+        ? html`<div class="chat-tool-card__inline mono">${card.text}</div>`
+        : nothing}
+    </div>
+  `;
+}
+
+function renderAvatar(role: string) {
+  const normalized = normalizeRoleForGrouping(role);
+  const initial = normalized === "user" ? "U" : normalized === "assistant" ? "A" : "?";
+  const className = normalized === "user" ? "user" : normalized === "assistant" ? "assistant" : "other";
+  return html`<div class="chat-avatar ${className}">${initial}</div>`;
+}
+
+function renderStreamingGroup(
+  text: string,
+  startedAt: number,
+  onOpenSidebar?: (content: string) => void,
+) {
+  const timestamp = new Date(startedAt).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return html`
+    <div class="chat-group assistant">
+      ${renderAvatar("assistant")}
+      <div class="chat-group-messages">
+        ${renderGroupedMessage(
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            timestamp: startedAt,
+          },
+          { isStreaming: true, showReasoning: false },
+          onOpenSidebar,
+        )}
+        <div class="chat-group-footer">
+          <span class="chat-sender-name">Assistant</span>
+          <span class="chat-group-timestamp">${timestamp}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMessageGroup(
+  group: MessageGroup,
+  opts: { onOpenSidebar?: (content: string) => void; showReasoning: boolean },
+) {
+  const normalizedRole = normalizeRoleForGrouping(group.role);
+  const who =
+    normalizedRole === "user"
+      ? "You"
+      : normalizedRole === "assistant"
+        ? "Assistant"
+        : normalizedRole;
+  const roleClass =
+    normalizedRole === "user"
+      ? "user"
+      : normalizedRole === "assistant"
+        ? "assistant"
+        : "other";
+  const timestamp = new Date(group.timestamp).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+  return html`
+    <div class="chat-group ${roleClass}">
+      ${renderAvatar(group.role)}
+      <div class="chat-group-messages">
+        ${group.messages.map((item, index) =>
+          renderGroupedMessage(
+            item.message,
+            {
+              isStreaming:
+                group.isStreaming && index === group.messages.length - 1,
+              showReasoning: opts.showReasoning,
+            },
+            opts.onOpenSidebar,
+          ),
+        )}
+        <div class="chat-group-footer">
+          <span class="chat-sender-name">${who}</span>
+          <span class="chat-group-timestamp">${timestamp}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderGroupedMessage(
+  message: unknown,
+  opts: { isStreaming: boolean; showReasoning: boolean },
+  onOpenSidebar?: (content: string) => void,
+) {
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role : "unknown";
+  const isToolResult =
+    isToolResultMessage(message) ||
+    role.toLowerCase() === "toolresult" ||
+    role.toLowerCase() === "tool_result" ||
+    typeof m.toolCallId === "string" ||
+    typeof m.tool_call_id === "string";
+
+  const toolCards = extractToolCards(message);
+  const hasToolCards = toolCards.length > 0;
+
+  const extractedText = extractText(message);
+  const extractedThinking =
+    opts.showReasoning && role === "assistant" ? extractThinking(message) : null;
+  const markdownBase = extractedText?.trim() ? extractedText : null;
+  const markdown = extractedThinking
+    ? [formatReasoningMarkdown(extractedThinking), markdownBase]
+        .filter(Boolean)
+        .join("\n\n")
+    : markdownBase;
+
+  const bubbleClasses = [
+    "chat-bubble",
+    opts.isStreaming ? "streaming" : "",
+    "fade-in",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  if (!markdown && hasToolCards && isToolResult) {
+    return html`${toolCards.map((card) =>
+      renderToolCardSidebar(card, onOpenSidebar),
+    )}`;
+  }
+
+  if (!markdown && !hasToolCards) return nothing;
+
+  return html`
+    <div class="${bubbleClasses}">
+      ${markdown
+        ? html`<div class="chat-text">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+        : nothing}
+      ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
     </div>
   `;
 }
@@ -599,10 +883,4 @@ function extractToolText(item: Record<string, unknown>): string | undefined {
   if (typeof item.text === "string") return item.text;
   if (typeof item.content === "string") return item.content;
   return undefined;
-}
-
-function isToolResultMessage(message: unknown): boolean {
-  const m = message as Record<string, unknown>;
-  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
-  return role === "toolresult" || role === "tool_result";
 }

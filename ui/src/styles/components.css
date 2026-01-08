@@ -1,3 +1,5 @@
+@import './chat.css';
+
 .card {
   border: 1px solid var(--border);
   background: linear-gradient(160deg, rgba(255, 255, 255, 0.04), transparent 65%),
@@ -210,6 +212,17 @@
   background: rgba(255, 107, 107, 0.18);
 }
 
+.btn--sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -287,14 +300,35 @@
 :root[data-theme="light"] .field input,
 :root[data-theme="light"] .field textarea,
 :root[data-theme="light"] .field select {
-  background: rgba(255, 255, 255, 0.9);
-  border-color: var(--border-strong);
+  background: rgba(255, 255, 255, 1);
+  border-color: rgba(16, 24, 40, 0.25);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
 }
 
 :root[data-theme="light"] .field input:focus,
 :root[data-theme="light"] .field textarea:focus,
 :root[data-theme="light"] .field select:focus {
   background: #ffffff;
+}
+
+/* Light theme button overrides */
+:root[data-theme="light"] .btn {
+  background: rgba(255, 255, 255, 0.9);
+  border-color: rgba(16, 24, 40, 0.2);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+}
+
+:root[data-theme="light"] .btn:hover {
+  background: rgba(255, 255, 255, 1);
+  border-color: rgba(16, 24, 40, 0.3);
+}
+
+:root[data-theme="light"] .btn.primary {
+  background: rgba(245, 159, 74, 0.15);
+}
+
+:root[data-theme="light"] .btn.active {
+  background: rgba(245, 159, 74, 0.12);
 }
 
 .muted {
@@ -569,6 +603,7 @@
 
 .shell--chat .chat {
   flex: 1;
+  max-height: calc(100vh - 180px); /* Constrain height for sticky compose */
 }
 
 .chat-header {
@@ -603,26 +638,18 @@
   flex-direction: column;
   gap: 12px;
   flex: 1;
-  max-height: none;
-  overflow: visible;
+  min-height: 0; /* Allow flex shrinking for scroll behavior */
+  overflow-y: auto; /* Enable scrolling */
+  overflow-x: hidden;
   padding: 14px 12px;
   min-width: 0;
-  border-radius: 16px;
-  border: 1px solid var(--border);
-  background: linear-gradient(
-    180deg,
-    rgba(0, 0, 0, 0.2) 0%,
-    rgba(0, 0, 0, 0.3) 100%
-  );
+  border-radius: 0;
+  border: none;
+  background: transparent;
 }
 
 :root[data-theme="light"] .chat-thread {
-  border-color: rgba(16, 24, 40, 0.12);
-  background: linear-gradient(
-    180deg,
-    rgba(16, 24, 40, 0.03) 0%,
-    rgba(16, 24, 40, 0.06) 100%
-  );
+  background: transparent;
 }
 
 .chat-queue {

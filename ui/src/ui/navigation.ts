@@ -98,6 +98,42 @@ export function inferBasePathFromPathname(pathname: string): string {
   return `/${segments.join("/")}`;
 }
 
+/** Returns the Flaticon uicons class for a tab icon */
+export function iconClassForTab(tab: Tab): string {
+  switch (tab) {
+    case "chat":
+      return "fi fi-rr-comment"; // chat bubble
+    case "overview":
+      return "fi fi-rr-chart-histogram"; // bar chart
+    case "connections":
+      return "fi fi-rr-link"; // link
+    case "instances":
+      return "fi fi-rr-radar"; // radar/satellite
+    case "sessions":
+      return "fi fi-rr-document"; // document
+    case "cron":
+      return "fi fi-rr-clock"; // clock
+    case "skills":
+      return "fi fi-rr-bolt"; // lightning bolt
+    case "nodes":
+      return "fi fi-rr-computer"; // computer
+    case "config":
+      return "fi fi-rr-settings"; // gear
+    case "debug":
+      return "fi fi-rr-bug"; // bug icon
+    case "logs":
+      return "fi fi-rr-file-code"; // file with code
+    default:
+      return "fi fi-rr-file"; // generic file
+  }
+}
+
+/** @deprecated Use iconClassForTab for better icon styling */
+export function iconForTab(tab: Tab): string {
+  // Keep backward compatibility - return empty string, icons now use CSS classes
+  return "";
+}
+
 export function titleForTab(tab: Tab) {
   switch (tab) {
     case "overview":
