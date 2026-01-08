@@ -20,6 +20,7 @@
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Daemon runtime: remove Bun from selection options.
+- CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
 
 ## 2026.1.8
 
