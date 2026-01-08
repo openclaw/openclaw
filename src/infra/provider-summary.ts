@@ -1,6 +1,6 @@
-import chalk from "chalk";
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveTelegramToken } from "../telegram/token.js";
+import { theme } from "../terminal/theme.js";
 import { normalizeE164 } from "../utils.js";
 import {
   getWebAuthAgeMs,
@@ -30,7 +30,7 @@ export async function buildProviderSummary(
 
   const webEnabled = effective.web?.enabled !== false;
   if (!webEnabled) {
-    lines.push(tint("WhatsApp: disabled", chalk.cyan));
+    lines.push(tint("WhatsApp: disabled", theme.muted));
   } else {
     const webLinked = await webAuthExists();
     const authAgeMs = getWebAuthAgeMs();
@@ -40,28 +40,28 @@ export async function buildProviderSummary(
       webLinked
         ? tint(
             `WhatsApp: linked${e164 ? ` ${e164}` : ""}${authAge}`,
-            chalk.green,
+            theme.success,
           )
-        : tint("WhatsApp: not linked", chalk.red),
+        : tint("WhatsApp: not linked", theme.error),
     );
   }
 
   const telegramEnabled = effective.telegram?.enabled !== false;
   if (!telegramEnabled) {
-    lines.push(tint("Telegram: disabled", chalk.cyan));
+    lines.push(tint("Telegram: disabled", theme.muted));
   } else {
     const { token: telegramToken } = resolveTelegramToken(effective);
     const telegramConfigured = Boolean(telegramToken?.trim());
     lines.push(
       telegramConfigured
-        ? tint("Telegram: configured", chalk.green)
-        : tint("Telegram: not configured", chalk.cyan),
+        ? tint("Telegram: configured", theme.success)
+        : tint("Telegram: not configured", theme.muted),
     );
   }
 
   const signalEnabled = effective.signal?.enabled !== false;
   if (!signalEnabled) {
-    lines.push(tint("Signal: disabled", chalk.cyan));
+    lines.push(tint("Signal: disabled", theme.muted));
   } else {
     const signalConfigured =
       Boolean(effective.signal) &&
@@ -75,20 +75,20 @@ export async function buildProviderSummary(
       );
     lines.push(
       signalConfigured
-        ? tint("Signal: configured", chalk.green)
-        : tint("Signal: not configured", chalk.cyan),
+        ? tint("Signal: configured", theme.success)
+        : tint("Signal: not configured", theme.muted),
     );
   }
 
   const imessageEnabled = effective.imessage?.enabled !== false;
   if (!imessageEnabled) {
-    lines.push(tint("iMessage: disabled", chalk.cyan));
+    lines.push(tint("iMessage: disabled", theme.muted));
   } else {
     const imessageConfigured = Boolean(effective.imessage);
     lines.push(
       imessageConfigured
-        ? tint("iMessage: configured", chalk.green)
-        : tint("iMessage: not configured", chalk.cyan),
+        ? tint("iMessage: configured", theme.success)
+        : tint("iMessage: not configured", theme.muted),
     );
   }
 
@@ -97,7 +97,7 @@ export async function buildProviderSummary(
       ? effective.whatsapp.allowFrom.map(normalizeE164).filter(Boolean)
       : [];
     if (allowFrom.length) {
-      lines.push(tint(`AllowFrom: ${allowFrom.join(", ")}`, chalk.cyan));
+      lines.push(tint(`AllowFrom: ${allowFrom.join(", ")}`, theme.muted));
     }
   }
 

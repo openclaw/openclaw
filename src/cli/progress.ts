@@ -23,6 +23,12 @@ export type ProgressReporter = {
   done: () => void;
 };
 
+export type ProgressTotalsUpdate = {
+  completed: number;
+  total: number;
+  label?: string;
+};
+
 const noopReporter: ProgressReporter = {
   setLabel: () => {},
   setPercent: () => {},
@@ -132,4 +138,21 @@ export async function withProgress<T>(
   } finally {
     progress.done();
   }
+}
+
+export async function withProgressTotals<T>(
+  options: ProgressOptions,
+  work: (
+    update: (update: ProgressTotalsUpdate) => void,
+    progress: ProgressReporter,
+  ) => Promise<T>,
+): Promise<T> {
+  return await withProgress(options, async (progress) => {
+    const update = ({ completed, total, label }: ProgressTotalsUpdate) => {
+      if (label) progress.setLabel(label);
+      if (!Number.isFinite(total) || total <= 0) return;
+      progress.setPercent((completed / total) * 100);
+    };
+    return await work(update, progress);
+  });
 }
