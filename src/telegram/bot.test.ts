@@ -140,12 +140,17 @@ describe("createTelegramBot", () => {
     globalThis.fetch = fetchSpy;
     try {
       createTelegramBot({ token: "tok" });
-      expect(botCtorSpy).toHaveBeenCalledWith(
-        "tok",
-        expect.objectContaining({
-          client: expect.objectContaining({ fetch: fetchSpy }),
-        }),
-      );
+      const isBun = "Bun" in globalThis || Boolean(process?.versions?.bun);
+      if (isBun) {
+        expect(botCtorSpy).toHaveBeenCalledWith(
+          "tok",
+          expect.objectContaining({
+            client: expect.objectContaining({ fetch: fetchSpy }),
+          }),
+        );
+      } else {
+        expect(botCtorSpy).toHaveBeenCalledWith("tok", undefined);
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
