@@ -44,6 +44,8 @@ describe("control command parsing", () => {
     expect(hasControlCommand("help")).toBe(false);
     expect(hasControlCommand("/status")).toBe(true);
     expect(hasControlCommand("/status:")).toBe(true);
+    expect(hasControlCommand("/usage")).toBe(true);
+    expect(hasControlCommand("/usage:")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
   });
 
