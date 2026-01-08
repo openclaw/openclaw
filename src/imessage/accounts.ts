@@ -10,6 +10,7 @@ export type ResolvedIMessageAccount = {
   enabled: boolean;
   name?: string;
   config: IMessageAccountConfig;
+  configured: boolean;
 };
 
 function listConfiguredAccountIds(cfg: ClawdbotConfig): string[] {
@@ -57,11 +58,26 @@ export function resolveIMessageAccount(params: {
   const baseEnabled = params.cfg.imessage?.enabled !== false;
   const merged = mergeIMessageAccountConfig(params.cfg, accountId);
   const accountEnabled = merged.enabled !== false;
+  const configured = Boolean(
+    merged.cliPath?.trim() ||
+      merged.dbPath?.trim() ||
+      merged.service ||
+      merged.region?.trim() ||
+      (merged.allowFrom && merged.allowFrom.length > 0) ||
+      (merged.groupAllowFrom && merged.groupAllowFrom.length > 0) ||
+      merged.dmPolicy ||
+      merged.groupPolicy ||
+      typeof merged.includeAttachments === "boolean" ||
+      typeof merged.mediaMaxMb === "number" ||
+      typeof merged.textChunkLimit === "number" ||
+      (merged.groups && Object.keys(merged.groups).length > 0),
+  );
   return {
     accountId,
     enabled: baseEnabled && accountEnabled,
     name: merged.name?.trim() || undefined,
     config: merged,
+    configured,
   };
 }
 
