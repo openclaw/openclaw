@@ -126,50 +126,58 @@ export async function monitorMSTeamsProvider(
   });
   const adapter = new CloudAdapter(authConfig);
 
-  // Helper to deliver replies as top-level messages (not threaded)
-  // We use proactive messaging to avoid threading to the original message
+  // Helper to deliver replies with configurable reply style
+  // - "thread": reply to the original message (for Posts layout channels)
+  // - "top-level": post as a new message (for Threads layout channels)
   async function deliverReplies(params: {
     replies: ReplyPayload[];
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     context: any; // TurnContext from SDK - has activity.getConversationReference()
     adapter: InstanceType<typeof CloudAdapter>;
     appId: string;
+    replyStyle: "thread" | "top-level";
   }) {
     const chunkLimit = Math.min(textLimit, 4000);
 
-    // Get conversation reference from SDK's activity (includes proper bot info)
-    // Then remove activityId to avoid threading
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const fullRef = params.context.activity.getConversationReference() as any;
-    const conversationRef = {
-      ...fullRef,
-      activityId: undefined, // Remove to post as top-level message, not thread
-    };
-    // Also strip the messageid suffix from conversation.id if present
-    if (conversationRef.conversation?.id) {
-      conversationRef.conversation = {
-        ...conversationRef.conversation,
-        id: conversationRef.conversation.id.split(";")[0],
-      };
-    }
+    // For "thread" style, use context.sendActivity directly (replies to original message)
+    // For "top-level" style, use proactive messaging without activityId
+    const sendMessage =
+      params.replyStyle === "thread"
+        ? async (message: string) => {
+            await params.context.sendActivity({ type: "message", text: message });
+          }
+        : async (message: string) => {
+            // Get conversation reference from SDK's activity (includes proper bot info)
+            // Then remove activityId to avoid threading
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const fullRef = params.context.activity.getConversationReference() as any;
+            const conversationRef = {
+              ...fullRef,
+              activityId: undefined, // Remove to post as top-level message
+            };
+            // Also strip the messageid suffix from conversation.id if present
+            if (conversationRef.conversation?.id) {
+              conversationRef.conversation = {
+                ...conversationRef.conversation,
+                id: conversationRef.conversation.id.split(";")[0],
+              };
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            await (params.adapter as any).continueConversation(
+              params.appId,
+              conversationRef,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              async (ctx: any) => {
+                await ctx.sendActivity({ type: "message", text: message });
+              },
+            );
+          };
 
     for (const payload of params.replies) {
       const mediaList =
         payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
       const text = payload.text ?? "";
       if (!text && mediaList.length === 0) continue;
-
-      const sendMessage = async (message: string) => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (params.adapter as any).continueConversation(
-          params.appId,
-          conversationRef,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          async (ctx: any) => {
-            await ctx.sendActivity({ type: "message", text: message });
-          },
-        );
-      };
 
       if (mediaList.length === 0) {
         for (const chunk of chunkMarkdownText(text, chunkLimit)) {
@@ -335,15 +343,15 @@ export async function monitorMSTeamsProvider(
       }
     }
 
+    // Resolve team/channel config for channels and group chats
+    const teamId = activity.channelData?.team?.id;
+    const channelId = conversationId;
+    const teamConfig = teamId ? msteamsCfg?.teams?.[teamId] : undefined;
+    const channelConfig = teamConfig?.channels?.[channelId];
+
     // Check requireMention for channels and group chats
     if (!isDirectMessage) {
-      const teamId = activity.channelData?.team?.id;
-      const channelId = conversationId;
-
       // Resolution order: channel config > team config > global config > default (true)
-      const teamConfig = teamId ? msteamsCfg?.teams?.[teamId] : undefined;
-      const channelConfig = teamConfig?.channels?.[channelId];
-
       const requireMention =
         channelConfig?.requireMention ??
         teamConfig?.requireMention ??
@@ -362,6 +370,24 @@ export async function monitorMSTeamsProvider(
         return;
       }
     }
+
+    // Resolve reply style for channels/groups
+    // Resolution order: channel config > team config > global config > default based on requireMention
+    // If requireMention is false (Threads layout), default to "top-level"
+    // If requireMention is true (Posts layout), default to "thread"
+    const explicitReplyStyle =
+      channelConfig?.replyStyle ??
+      teamConfig?.replyStyle ??
+      msteamsCfg?.replyStyle;
+    const effectiveRequireMention =
+      channelConfig?.requireMention ??
+      teamConfig?.requireMention ??
+      msteamsCfg?.requireMention ??
+      true;
+    // For DMs, always use "thread" style (direct reply)
+    const replyStyle: "thread" | "top-level" = isDirectMessage
+      ? "thread"
+      : explicitReplyStyle ?? (effectiveRequireMention ? "thread" : "top-level");
 
     // Format the message body with envelope
     const timestamp = parseTimestamp(activity.timestamp);
@@ -420,6 +446,7 @@ export async function monitorMSTeamsProvider(
             context,
             adapter,
             appId,
+            replyStyle,
           });
         },
         onError: (err, info) => {
