@@ -142,7 +142,12 @@ export async function maybeRepairGatewayServiceConfig(
   }
 
   const service = resolveGatewayService();
-  const command = await service.readCommand(process.env).catch(() => null);
+  let command: Awaited<ReturnType<typeof service.readCommand>> | null = null;
+  try {
+    command = await service.readCommand(process.env);
+  } catch {
+    command = null;
+  }
   if (!command) return;
 
   const audit = await auditGatewayServiceConfig({
@@ -154,7 +159,9 @@ export async function maybeRepairGatewayServiceConfig(
   note(
     audit.issues
       .map((issue) =>
-        issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+        issue.detail
+          ? `- ${issue.message} (${issue.detail})`
+          : `- ${issue.message}`,
       )
       .join("\n"),
     "Gateway service config",
