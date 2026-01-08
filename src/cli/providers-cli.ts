@@ -51,7 +51,7 @@ export function registerProvidersCli(program: Command) {
   providers
     .command("list")
     .description("List configured providers + auth profiles")
-    .option("--usage", "Show provider usage/quota snapshots", false)
+    .option("--no-usage", "Skip provider usage/quota snapshots")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       try {
