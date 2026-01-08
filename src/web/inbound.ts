@@ -540,7 +540,7 @@ export async function monitorWebInbox(options: {
       text: string,
       mediaBuffer?: Buffer,
       mediaType?: string,
-      options?: ActiveWebSendOptions,
+      sendOptions?: ActiveWebSendOptions,
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
@@ -558,7 +558,7 @@ export async function monitorWebInbox(options: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("video/")) {
-          const gifPlayback = options?.gifPlayback;
+          const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
             caption: text || undefined,

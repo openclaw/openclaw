@@ -44,8 +44,8 @@ import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatDurationSeconds } from "../infra/format-duration.js";
-import { enqueueSystemEvent } from "../infra/system-events.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -325,9 +325,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       publicKey: "a",
       token,
       autoDeploy: nativeEnabled,
-      eventQueue: {
-        listenerTimeout: 120_000,
-      },
     },
     {
       commands,
@@ -416,28 +413,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
   const gatewayEmitter = getDiscordGatewayEmitter(gateway);
-  let queueMetricsTimer: ReturnType<typeof setInterval> | undefined;
-  let lastQueueTimeouts = 0;
-  let lastQueueDropped = 0;
   const onGatewayWarning = (warning: unknown) => {
     logVerbose(`discord gateway warning: ${String(warning)}`);
   };
   if (shouldLogVerbose()) {
     gatewayEmitter?.on("warning", onGatewayWarning);
-    queueMetricsTimer = setInterval(() => {
-      const metrics = client.eventHandler?.getMetrics?.();
-      if (!metrics) return;
-      const nearCapacity =
-        metrics.maxQueueSize > 0 &&
-        metrics.queueSize / metrics.maxQueueSize >= 0.8;
-      const hasNewTimeouts = metrics.timeouts > lastQueueTimeouts;
-      const hasNewDrops = metrics.dropped > lastQueueDropped;
-      if (nearCapacity || hasNewTimeouts || hasNewDrops) {
-        logVerbose(`discord event queue metrics: ${JSON.stringify(metrics)}`);
-      }
-      lastQueueTimeouts = metrics.timeouts;
-      lastQueueDropped = metrics.dropped;
-    }, 60000);
   }
   try {
     await waitForDiscordGatewayStop({
@@ -460,9 +440,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
     });
   } finally {
-    if (queueMetricsTimer) {
-      clearInterval(queueMetricsTimer);
-    }
     gatewayEmitter?.removeListener("warning", onGatewayWarning);
   }
 }
