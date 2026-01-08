@@ -625,6 +625,24 @@ export type SandboxDockerSettings = {
   extraHosts?: string[];
 };
 
+export type SandboxBrowserSettings = {
+  enabled?: boolean;
+  image?: string;
+  containerPrefix?: string;
+  cdpPort?: number;
+  vncPort?: number;
+  noVncPort?: number;
+  headless?: boolean;
+  enableNoVnc?: boolean;
+};
+
+export type SandboxPruneSettings = {
+  /** Prune if idle for more than N hours (0 disables). */
+  idleHours?: number;
+  /** Prune if older than N days (0 disables). */
+  maxAgeDays?: number;
+};
+
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
@@ -663,11 +681,15 @@ export type RoutingConfig = {
         workspaceRoot?: string;
         /** Docker-specific sandbox overrides for this agent. */
         docker?: SandboxDockerSettings;
+        /** Optional sandboxed browser overrides for this agent. */
+        browser?: SandboxBrowserSettings;
         /** Tool allow/deny policy for sandboxed sessions (deny wins). */
         tools?: {
           allow?: string[];
           deny?: string[];
         };
+        /** Auto-prune overrides for this agent. */
+        prune?: SandboxPruneSettings;
       };
       tools?: {
         allow?: string[];
@@ -1093,28 +1115,14 @@ export type ClawdbotConfig = {
       /** Docker-specific sandbox settings. */
       docker?: SandboxDockerSettings;
       /** Optional sandboxed browser settings. */
-      browser?: {
-        enabled?: boolean;
-        image?: string;
-        containerPrefix?: string;
-        cdpPort?: number;
-        vncPort?: number;
-        noVncPort?: number;
-        headless?: boolean;
-        enableNoVnc?: boolean;
-      };
+      browser?: SandboxBrowserSettings;
       /** Tool allow/deny policy (deny wins). */
       tools?: {
         allow?: string[];
         deny?: string[];
       };
       /** Auto-prune sandbox containers. */
-      prune?: {
-        /** Prune if idle for more than N hours (0 disables). */
-        idleHours?: number;
-        /** Prune if older than N days (0 disables). */
-        maxAgeDays?: number;
-      };
+      prune?: SandboxPruneSettings;
     };
     /** Global tool allow/deny policy for all providers (deny wins). */
     tools?: {

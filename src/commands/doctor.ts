@@ -11,6 +11,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
+  resolveSandboxScope,
 } from "../agents/sandbox.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
@@ -63,25 +64,12 @@ function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
-type SandboxScope = "session" | "agent" | "shared";
-
-function resolveSandboxScope(params: {
-  scope?: SandboxScope;
-  perSession?: boolean;
-}): SandboxScope {
-  if (params.scope) return params.scope;
-  if (typeof params.perSession === "boolean") {
-    return params.perSession ? "session" : "shared";
-  }
-  return "agent";
+function hasObjectOverrides(value?: unknown) {
+  if (!value || typeof value !== "object") return false;
+  return Object.values(value).some((entry) => entry !== undefined);
 }
 
-function hasDockerOverrides(docker?: unknown) {
-  if (!docker || typeof docker !== "object") return false;
-  return Object.values(docker).some((value) => value !== undefined);
-}
-
-function collectSandboxSharedDockerOverrideWarnings(cfg: ClawdbotConfig) {
+function collectSandboxSharedOverrideWarnings(cfg: ClawdbotConfig) {
   const globalSandbox = cfg.agent?.sandbox;
   const agents = cfg.routing?.agents;
   if (!agents) return [];
@@ -91,16 +79,21 @@ function collectSandboxSharedDockerOverrideWarnings(cfg: ClawdbotConfig) {
     if (!agentCfg || typeof agentCfg !== "object") continue;
     const agentSandbox = agentCfg.sandbox;
     if (!agentSandbox || typeof agentSandbox !== "object") continue;
-    if (!hasDockerOverrides(agentSandbox.docker)) continue;
+
+    const hasOverrides =
+      hasObjectOverrides(agentSandbox.docker) ||
+      hasObjectOverrides(agentSandbox.browser) ||
+      hasObjectOverrides(agentSandbox.prune);
+    if (!hasOverrides) continue;
 
     const scope = resolveSandboxScope({
-      scope: (agentSandbox.scope ?? globalSandbox?.scope) as SandboxScope,
+      scope: agentSandbox.scope ?? globalSandbox?.scope,
       perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
     });
     if (scope !== "shared") continue;
 
     warnings.push(
-      `- routing.agents.${agentId}.sandbox.docker.* is ignored when sandbox scope resolves to "shared" (single shared container).`,
+      `- routing.agents.${agentId}.sandbox.{docker,browser,prune}.* is ignored when sandbox scope resolves to "shared" (single shared container).`,
     );
   }
 
@@ -1020,14 +1013,13 @@ export async function doctorCommand(
 
   await noteSecurityWarnings(cfg);
 
-  const sharedDockerOverrideWarnings =
-    collectSandboxSharedDockerOverrideWarnings(cfg);
-  if (sharedDockerOverrideWarnings.length > 0) {
+  const sharedOverrideWarnings = collectSandboxSharedOverrideWarnings(cfg);
+  if (sharedOverrideWarnings.length > 0) {
     note(
       [
-        ...sharedDockerOverrideWarnings,
+        ...sharedOverrideWarnings,
         "",
-        'Fix: set scope to "agent"/"session", or move the docker config to agent.sandbox.docker (global).',
+        'Fix: set scope to "agent"/"session", or move the config to agent.sandbox.{docker,browser,prune} (global).',
       ].join("\n"),
       "Sandbox",
     );

@@ -25,6 +25,7 @@ afterEach(() => {
 const readConfigFileSnapshot = vi.fn();
 const confirm = vi.fn().mockResolvedValue(true);
 const select = vi.fn().mockResolvedValue("node");
+const note = vi.fn();
 const writeConfigFile = vi.fn().mockResolvedValue(undefined);
 const migrateLegacyConfig = vi.fn((raw: unknown) => ({
   config: raw as Record<string, unknown>,
@@ -74,7 +75,7 @@ const serviceUninstall = vi.fn().mockResolvedValue(undefined);
 vi.mock("@clack/prompts", () => ({
   confirm,
   intro: vi.fn(),
-  note: vi.fn(),
+  note,
   outro: vi.fn(),
   select,
 }));
@@ -412,6 +413,61 @@ describe("doctor", () => {
     expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawd/sandboxes");
     expect(docker.image).toBe("clawdbot-sandbox");
     expect(docker.containerPrefix).toBe("clawdbot-sbx");
+  });
+
+  it("warns when per-agent sandbox docker/browser/prune overrides are ignored under shared scope", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {
+        agent: {
+          sandbox: {
+            mode: "all",
+            scope: "shared",
+          },
+        },
+        routing: {
+          agents: {
+            work: {
+              workspace: "~/clawd-work",
+              sandbox: {
+                mode: "all",
+                scope: "shared",
+                docker: {
+                  setupCommand: "echo work",
+                },
+              },
+            },
+          },
+        },
+      },
+      issues: [],
+      legacyIssues: [],
+    });
+
+    note.mockClear();
+
+    const { doctorCommand } = await import("./doctor.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await doctorCommand(runtime, { nonInteractive: true });
+
+    expect(
+      note.mock.calls.some(
+        ([message, title]) =>
+          title === "Sandbox" &&
+          typeof message === "string" &&
+          message.includes("routing.agents.work.sandbox") &&
+          message.includes('scope resolves to "shared"'),
+      ),
+    ).toBe(true);
   });
   it("falls back to legacy sandbox image when missing", async () => {
     readConfigFileSnapshot.mockResolvedValue({

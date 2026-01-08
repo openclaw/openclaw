@@ -260,6 +260,33 @@ const SandboxDockerSchema = z
   })
   .optional();
 
+const SandboxBrowserSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    image: z.string().optional(),
+    containerPrefix: z.string().optional(),
+    cdpPort: z.number().int().positive().optional(),
+    vncPort: z.number().int().positive().optional(),
+    noVncPort: z.number().int().positive().optional(),
+    headless: z.boolean().optional(),
+    enableNoVnc: z.boolean().optional(),
+  })
+  .optional();
+
+const SandboxPruneSchema = z
+  .object({
+    idleHours: z.number().int().nonnegative().optional(),
+    maxAgeDays: z.number().int().nonnegative().optional(),
+  })
+  .optional();
+
+const ToolPolicySchema = z
+  .object({
+    allow: z.array(z.string()).optional(),
+    deny: z.array(z.string()).optional(),
+  })
+  .optional();
+
 const RoutingSchema = z
   .object({
     groupChat: GroupChatSchema,
@@ -302,20 +329,12 @@ const RoutingSchema = z
                 perSession: z.boolean().optional(),
                 workspaceRoot: z.string().optional(),
                 docker: SandboxDockerSchema,
-                tools: z
-                  .object({
-                    allow: z.array(z.string()).optional(),
-                    deny: z.array(z.string()).optional(),
-                  })
-                  .optional(),
+                browser: SandboxBrowserSchema,
+                tools: ToolPolicySchema,
+                prune: SandboxPruneSchema,
               })
               .optional(),
-            tools: z
-              .object({
-                allow: z.array(z.string()).optional(),
-                deny: z.array(z.string()).optional(),
-              })
-              .optional(),
+            tools: ToolPolicySchema,
           })
           .optional(),
       )
@@ -706,30 +725,9 @@ export const ClawdbotSchema = z.object({
           perSession: z.boolean().optional(),
           workspaceRoot: z.string().optional(),
           docker: SandboxDockerSchema,
-          browser: z
-            .object({
-              enabled: z.boolean().optional(),
-              image: z.string().optional(),
-              containerPrefix: z.string().optional(),
-              cdpPort: z.number().int().positive().optional(),
-              vncPort: z.number().int().positive().optional(),
-              noVncPort: z.number().int().positive().optional(),
-              headless: z.boolean().optional(),
-              enableNoVnc: z.boolean().optional(),
-            })
-            .optional(),
-          tools: z
-            .object({
-              allow: z.array(z.string()).optional(),
-              deny: z.array(z.string()).optional(),
-            })
-            .optional(),
-          prune: z
-            .object({
-              idleHours: z.number().int().nonnegative().optional(),
-              maxAgeDays: z.number().int().nonnegative().optional(),
-            })
-            .optional(),
+          browser: SandboxBrowserSchema,
+          tools: ToolPolicySchema,
+          prune: SandboxPruneSchema,
         })
         .optional(),
     })
