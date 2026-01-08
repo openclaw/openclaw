@@ -982,6 +982,8 @@ export type AuthConfig = {
 
 export type AgentModelEntryConfig = {
   alias?: string;
+  /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
+  params?: Record<string, unknown>;
 };
 
 export type AgentModelListConfig = {

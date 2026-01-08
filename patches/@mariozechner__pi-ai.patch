@@ -241,3 +241,41 @@ diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-
                      lastError = error instanceof Error ? error : new Error(String(error));
                      // Network errors are retryable
                      if (attempt < MAX_RETRIES) {
+diff --git a/dist/stream.js b/dist/stream.js
+--- a/dist/stream.js
++++ b/dist/stream.js
+@@ -105,6 +105,8 @@ function mapOptionsForApi(model, options, apiKey) {
+         maxTokens: options?.maxTokens || Math.min(model.maxTokens, 32000),
+         signal: options?.signal,
+         apiKey: apiKey || options?.apiKey,
++        // PATCH: Pass extraParams through to provider-specific API handlers
++        extraParams: options?.extraParams,
+     };
+     // Helper to clamp xhigh to high for providers that don't support it
+     const clampReasoning = (effort) => (effort === "xhigh" ? "high" : effort);
+diff --git a/dist/providers/openai-completions.js b/dist/providers/openai-completions.js
+--- a/dist/providers/openai-completions.js
++++ b/dist/providers/openai-completions.js
+@@ -333,6 +333,11 @@ function buildParams(model, context, options) {
+     if (options?.reasoningEffort && model.reasoning && compat.supportsReasoningEffort) {
+         params.reasoning_effort = options.reasoningEffort;
+     }
++    // PATCH: Support arbitrary extra params for provider-specific features
++    // (e.g., Z.AI GLM-4.7 thinking: { type: "enabled", clear_thinking: boolean })
++    if (options?.extraParams && typeof options.extraParams === 'object') {
++        Object.assign(params, options.extraParams);
++    }
+     return params;
+ }
+ function convertMessages(model, context, compat) {
+diff --git a/dist/providers/openai-completions.d.ts b/dist/providers/openai-completions.d.ts
+--- a/dist/providers/openai-completions.d.ts
++++ b/dist/providers/openai-completions.d.ts
+@@ -7,5 +7,7 @@ export interface OpenAICompletionsOptions extends StreamOptions {
+         };
+     };
+     reasoningEffort?: "minimal" | "low" | "medium" | "high" | "xhigh";
++    /** Extra params to pass directly to the API (e.g., Z.AI GLM thinking mode params) */
++    extraParams?: Record<string, unknown>;
+ }
+ export declare const streamOpenAICompletions: StreamFunction<"openai-completions">;
