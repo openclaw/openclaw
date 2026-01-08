@@ -9,6 +9,12 @@ read_when:
 
 Docker is **optional**. Use it only if you want a containerized gateway or to validate the Docker flow.
 
+## Is Docker right for me?
+
+- **Yes**: you want an isolated, throwaway gateway environment or to run Clawdbot on a host without local installs.
+- **No**: you’re running on your own machine and just want the fastest dev loop. Use the normal install flow instead.
+- **Sandboxing note**: agent sandboxing uses Docker too, but it does **not** require the full gateway to run in Docker. See [Sandboxing](/gateway/sandboxing).
+
 This guide covers:
 - Containerized Gateway (full Clawdbot in Docker)
 - Per-session Agent Sandbox (host gateway + Docker-isolated agent tools)
@@ -35,6 +41,11 @@ This script:
 - runs the onboarding wizard
 - prints optional provider setup hints
 - starts the gateway via Docker Compose
+- generates a gateway token and writes it to `.env`
+
+After it finishes:
+- Open `http://127.0.0.1:18789/` in your browser.
+- Paste the token into the Control UI (Settings → token).
 
 It writes config/workspace on the host:
 - `~/.clawdbot/`
