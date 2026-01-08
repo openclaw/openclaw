@@ -24,6 +24,18 @@ clawdbot doctor --yes
 Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
 ```bash
+clawdbot doctor --repair
+```
+
+Apply recommended repairs without prompting (repairs + restarts where safe).
+
+```bash
+clawdbot doctor --repair --force
+```
+
+Apply aggressive repairs too (overwrites custom supervisor configs).
+
+```bash
 clawdbot doctor --non-interactive
 ```
 
@@ -153,6 +165,8 @@ rewrite the service file/task to the current defaults.
 Notes:
 - `clawdbot doctor` prompts before rewriting supervisor config.
 - `clawdbot doctor --yes` accepts the default repair prompts.
+- `clawdbot doctor --repair` applies recommended fixes without prompts.
+- `clawdbot doctor --repair --force` overwrites custom supervisor configs.
 - You can always force a full rewrite via `clawdbot daemon install --force`.
 
 ### 12) Gateway runtime + port diagnostics

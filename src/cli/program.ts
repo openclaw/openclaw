@@ -328,6 +328,8 @@ export function buildProgram() {
       false,
     )
     .option("--yes", "Accept defaults without prompting", false)
+    .option("--repair", "Apply recommended repairs without prompting", false)
+    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
     .option(
       "--non-interactive",
       "Run without prompts (safe migrations only)",
@@ -339,6 +341,8 @@ export function buildProgram() {
         await doctorCommand(defaultRuntime, {
           workspaceSuggestions: opts.workspaceSuggestions,
           yes: Boolean(opts.yes),
+          repair: Boolean(opts.repair),
+          force: Boolean(opts.force),
           nonInteractive: Boolean(opts.nonInteractive),
           deep: Boolean(opts.deep),
         });

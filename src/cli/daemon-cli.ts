@@ -552,7 +552,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       const detail = issue.detail ? ` (${issue.detail})` : "";
       defaultRuntime.error(`Service config issue: ${issue.message}${detail}`);
     }
-    defaultRuntime.error('Recommendation: run "clawdbot doctor".');
+    defaultRuntime.error(
+      'Recommendation: run "clawdbot doctor" (or "clawdbot doctor --repair").',
+    );
   }
   if (status.config) {
     const cliCfg = `${status.config.cli.path}${status.config.cli.exists ? "" : " (missing)"}${status.config.cli.valid ? "" : " (invalid)"}`;

@@ -167,10 +167,31 @@ export async function maybeRepairGatewayServiceConfig(
     "Gateway service config",
   );
 
-  const repair = await prompter.confirmSkipInNonInteractive({
-    message: "Update gateway service config to the recommended defaults now?",
-    initialValue: true,
-  });
+  const aggressiveIssues = audit.issues.filter(
+    (issue) => issue.level === "aggressive",
+  );
+  const recommendedIssues = audit.issues.filter(
+    (issue) => issue.level !== "aggressive",
+  );
+  const needsAggressive = aggressiveIssues.length > 0;
+
+  if (needsAggressive && !prompter.shouldForce) {
+    note(
+      "Custom or unexpected service edits detected. Rerun with --force to overwrite.",
+      "Gateway service config",
+    );
+  }
+
+  const repair = needsAggressive
+    ? await prompter.confirmAggressive({
+        message:
+          "Overwrite gateway service config with current defaults now?",
+        initialValue: Boolean(prompter.shouldForce),
+      })
+    : await prompter.confirmRepair({
+        message: "Update gateway service config to the recommended defaults now?",
+        initialValue: true,
+      });
   if (!repair) return;
 
   const devMode =

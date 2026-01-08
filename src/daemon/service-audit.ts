@@ -13,6 +13,7 @@ export type ServiceConfigIssue = {
   code: string;
   message: string;
   detail?: string;
+  level?: "recommended" | "aggressive";
 };
 
 export type ServiceConfigAudit = {
@@ -84,6 +85,7 @@ async function auditSystemdUnit(
       code: "systemd-after-network-online",
       message: "Missing systemd After=network-online.target",
       detail: unitPath,
+      level: "recommended",
     });
   }
   if (!parsed.wants.has("network-online.target")) {
@@ -91,6 +93,7 @@ async function auditSystemdUnit(
       code: "systemd-wants-network-online",
       message: "Missing systemd Wants=network-online.target",
       detail: unitPath,
+      level: "recommended",
     });
   }
   if (!isRestartSecPreferred(parsed.restartSec)) {
@@ -98,6 +101,7 @@ async function auditSystemdUnit(
       code: "systemd-restart-sec",
       message: "RestartSec does not match the recommended 5s",
       detail: unitPath,
+      level: "recommended",
     });
   }
 }
@@ -121,6 +125,7 @@ async function auditLaunchdPlist(
       code: "launchd-run-at-load",
       message: "LaunchAgent is missing RunAtLoad=true",
       detail: plistPath,
+      level: "recommended",
     });
   }
   if (!hasKeepAlive) {
@@ -128,6 +133,7 @@ async function auditLaunchdPlist(
       code: "launchd-keep-alive",
       message: "LaunchAgent is missing KeepAlive=true",
       detail: plistPath,
+      level: "recommended",
     });
   }
 }
@@ -141,6 +147,7 @@ function auditGatewayCommand(
     issues.push({
       code: "gateway-command-missing",
       message: "Service command does not include the gateway subcommand",
+      level: "aggressive",
     });
   }
 }
