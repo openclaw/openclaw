@@ -32,10 +32,7 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const previousHome = process.env.HOME;
   const previousBundledSkills = process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
   process.env.HOME = base;
-  process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = path.join(
-    base,
-    "bundled-skills",
-  );
+  process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = path.join(base, "bundled-skills");
   try {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     return await fn(base);

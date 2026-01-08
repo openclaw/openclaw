@@ -218,10 +218,7 @@ export async function runOnboardingWizard(
           "Tailscale exposure: Off",
           "Direct to chat providers.",
         ];
-    await prompter.note(
-      quickstartLines.join("\n"),
-      "QuickStart",
-    );
+    await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
   const localPort = resolveGatewayPort(baseConfig);
