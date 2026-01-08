@@ -14,7 +14,10 @@ import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
-import { extractReplyToTag } from "./reply-tags.js";
+import {
+  applyReplyThreading,
+  filterMessagingToolDuplicates,
+} from "./reply-payloads.js";
 import {
   createReplyToModeFilter,
   resolveReplyToMode,
@@ -193,24 +196,17 @@ export function createFollowupRunner(params: {
         resolveReplyToMode(queued.run.config, replyToChannel),
       );
 
-      const replyTaggedPayloads: ReplyPayload[] = sanitizedPayloads
-        .map((payload) => {
-          const { cleaned, replyToId } = extractReplyToTag(payload.text);
-          return {
-            ...payload,
-            text: cleaned ? cleaned : undefined,
-            replyToId: replyToId ?? payload.replyToId,
-          };
-        })
-        .filter(
-          (payload) =>
-            payload.text ||
-            payload.mediaUrl ||
-            (payload.mediaUrls && payload.mediaUrls.length > 0),
-        )
-        .map(applyReplyToMode);
+      const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
+        payloads: sanitizedPayloads,
+        applyReplyToMode,
+      });
 
-      if (replyTaggedPayloads.length === 0) return;
+      const dedupedPayloads = filterMessagingToolDuplicates({
+        payloads: replyTaggedPayloads,
+        sentTexts: runResult.messagingToolSentTexts ?? [],
+      });
+
+      if (dedupedPayloads.length === 0) return;
 
       if (autoCompactionCompleted) {
         const count = await incrementCompactionCount({
@@ -275,7 +271,7 @@ export function createFollowupRunner(params: {
         }
       }
 
-      await sendFollowupPayloads(replyTaggedPayloads, queued);
+      await sendFollowupPayloads(dedupedPayloads, queued);
     } finally {
       typing.markRunComplete();
     }
