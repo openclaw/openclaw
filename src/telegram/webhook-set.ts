@@ -1,4 +1,4 @@
-import { Bot } from "grammy";
+import { Bot, type ApiClientOptions } from "grammy";
 import { resolveTelegramFetch } from "./fetch.js";
 
 export async function setTelegramWebhook(opts: {
@@ -8,9 +8,12 @@ export async function setTelegramWebhook(opts: {
   dropPendingUpdates?: boolean;
 }) {
   const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
   const bot = new Bot(
     opts.token,
-    fetchImpl ? { client: { fetch: fetchImpl } } : undefined,
+    client ? { client } : undefined,
   );
   await bot.api.setWebhook(opts.url, {
     secret_token: opts.secret,
@@ -20,9 +23,12 @@ export async function setTelegramWebhook(opts: {
 
 export async function deleteTelegramWebhook(opts: { token: string }) {
   const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
   const bot = new Bot(
     opts.token,
-    fetchImpl ? { client: { fetch: fetchImpl } } : undefined,
+    client ? { client } : undefined,
   );
   await bot.api.deleteWebhook();
 }

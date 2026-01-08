@@ -1,5 +1,5 @@
 import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
-import { Bot, InputFile } from "grammy";
+import { Bot, InputFile, type ApiClientOptions } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RetryConfig } from "../infra/retry.js";
@@ -113,10 +113,12 @@ export async function sendMessageTelegram(
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
   const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
   const api =
     opts.api ??
-    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined)
-      .api;
+    new Bot(token, client ? { client } : undefined).api;
   const mediaUrl = opts.mediaUrl?.trim();
 
   // Build optional params for forum topics and reply threading.
@@ -271,10 +273,12 @@ export async function reactMessageTelegram(
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
   const fetchImpl = resolveTelegramFetch();
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
   const api =
     opts.api ??
-    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined)
-      .api;
+    new Bot(token, client ? { client } : undefined).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
     configRetry: account.config.retry,
