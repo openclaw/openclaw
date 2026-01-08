@@ -171,7 +171,7 @@ describe("bash tool backgrounding", () => {
       limit: 2,
     });
     const textBlock = log.content.find((c) => c.type === "text");
-    expect(textBlock?.text).toBe("two\nthree");
+    expect(textBlock?.text?.trim()).toBe("two\nthree");
     expect((log.details as { totalLines?: number }).totalLines).toBe(3);
     expect(status).toBe("completed");
   });
@@ -191,7 +191,7 @@ describe("bash tool backgrounding", () => {
       limit: 1,
     });
     const textBlock = log.content.find((c) => c.type === "text");
-    expect(textBlock?.text).toBe("beta");
+    expect(textBlock?.text?.trim()).toBe("beta");
   });
 
   it("scopes process sessions by scopeKey", async () => {

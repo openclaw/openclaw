@@ -513,8 +513,10 @@ describe("doctor", () => {
       .spyOn(os, "homedir")
       .mockReturnValue("/Users/steipete");
     const realExists = fs.existsSync;
+    const legacyPath = path.join("/Users/steipete", "clawdis");
     const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
-      if (value === "/Users/steipete/clawdis") return true;
+      if (value === "/Users/steipete/clawdis" || value === legacyPath)
+        return true;
       return realExists(value as never);
     });
 
