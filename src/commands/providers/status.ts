@@ -4,7 +4,39 @@ import { listChatProviders } from "../../providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
 import { theme } from "../../terminal/theme.js";
-import { type ChatProvider, formatProviderAccountLabel } from "./shared.js";
+import {
+  type ChatProvider,
+  formatProviderAccountLabel,
+  requireValidConfig,
+} from "./shared.js";
+import {
+  listDiscordAccountIds,
+  resolveDiscordAccount,
+} from "../../discord/accounts.js";
+import {
+  listIMessageAccountIds,
+  resolveIMessageAccount,
+} from "../../imessage/accounts.js";
+import {
+  listSignalAccountIds,
+  resolveSignalAccount,
+} from "../../signal/accounts.js";
+import { listSlackAccountIds, resolveSlackAccount } from "../../slack/accounts.js";
+import {
+  listTelegramAccountIds,
+  resolveTelegramAccount,
+} from "../../telegram/accounts.js";
+import {
+  listWhatsAppAccountIds,
+  resolveWhatsAppAccount,
+} from "../../web/accounts.js";
+import {
+  getWebAuthAgeMs,
+  readWebSelfId,
+  webAuthExists,
+} from "../../web/session.js";
+import { formatAge } from "../../infra/provider-summary.js";
+import type { ClawdbotConfig } from "../../config/config.js";
 
 export type ProvidersStatusOptions = {
   json?: boolean;
@@ -102,6 +134,145 @@ export function formatGatewayProvidersStatusLines(
   return lines;
 }
 
+async function formatConfigProvidersStatusLines(
+  cfg: ClawdbotConfig,
+): Promise<string[]> {
+  const lines: string[] = [];
+  lines.push(theme.warn("Gateway not reachable; showing config-only status."));
+
+  const accountLines = (
+    provider: ChatProvider,
+    accounts: Array<Record<string, unknown>>,
+  ) =>
+    accounts.map((account) => {
+      const bits: string[] = [];
+      if (typeof account.enabled === "boolean") {
+        bits.push(account.enabled ? "enabled" : "disabled");
+      }
+      if (typeof account.configured === "boolean") {
+        bits.push(account.configured ? "configured" : "not configured");
+      }
+      if (typeof account.linked === "boolean") {
+        bits.push(account.linked ? "linked" : "not linked");
+      }
+      if (typeof account.mode === "string" && account.mode.length > 0) {
+        bits.push(`mode:${account.mode}`);
+      }
+      if (typeof account.tokenSource === "string" && account.tokenSource) {
+        bits.push(`token:${account.tokenSource}`);
+      }
+      if (typeof account.botTokenSource === "string" && account.botTokenSource) {
+        bits.push(`bot:${account.botTokenSource}`);
+      }
+      if (typeof account.appTokenSource === "string" && account.appTokenSource) {
+        bits.push(`app:${account.appTokenSource}`);
+      }
+      if (typeof account.baseUrl === "string" && account.baseUrl) {
+        bits.push(`url:${account.baseUrl}`);
+      }
+      const accountId =
+        typeof account.accountId === "string" ? account.accountId : "default";
+      const name = typeof account.name === "string" ? account.name.trim() : "";
+      const labelText = formatProviderAccountLabel({
+        provider,
+        accountId,
+        name: name || undefined,
+      });
+      return `- ${labelText}: ${bits.join(", ")}`;
+    });
+
+  const accounts = {
+    whatsapp: listWhatsAppAccountIds(cfg).map((accountId) => {
+      const account = resolveWhatsAppAccount({ cfg, accountId });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: true,
+        linked: undefined,
+      };
+    }),
+    telegram: listTelegramAccountIds(cfg).map((accountId) => {
+      const account = resolveTelegramAccount({ cfg, accountId });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(account.token?.trim()),
+        tokenSource: account.tokenSource,
+        mode: account.config.webhookUrl ? "webhook" : "polling",
+      };
+    }),
+    discord: listDiscordAccountIds(cfg).map((accountId) => {
+      const account = resolveDiscordAccount({ cfg, accountId });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: Boolean(account.token?.trim()),
+        tokenSource: account.tokenSource,
+      };
+    }),
+    slack: listSlackAccountIds(cfg).map((accountId) => {
+      const account = resolveSlackAccount({ cfg, accountId });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured:
+          Boolean(account.botToken?.trim()) && Boolean(account.appToken?.trim()),
+        botTokenSource: account.botTokenSource,
+        appTokenSource: account.appTokenSource,
+      };
+    }),
+    signal: listSignalAccountIds(cfg).map((accountId) => {
+      const account = resolveSignalAccount({ cfg, accountId });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+        baseUrl: account.baseUrl,
+      };
+    }),
+    imessage: listIMessageAccountIds(cfg).map((accountId) => {
+      const account = resolveIMessageAccount({ cfg, accountId });
+      return {
+        accountId: account.accountId,
+        name: account.name,
+        enabled: account.enabled,
+        configured: account.configured,
+      };
+    }),
+  } satisfies Partial<Record<ChatProvider, Array<Record<string, unknown>>>>;
+
+  // WhatsApp linked info (config-only best-effort).
+  try {
+    const webLinked = await webAuthExists();
+    const authAgeMs = getWebAuthAgeMs();
+    const authAge = authAgeMs === null ? "" : ` auth ${formatAge(authAgeMs)}`;
+    const { e164 } = readWebSelfId();
+    lines.push(
+      `WhatsApp: ${webLinked ? "linked" : "not linked"}${e164 ? ` ${e164}` : ""}${webLinked ? authAge : ""}`,
+    );
+  } catch {
+    // ignore
+  }
+
+  for (const meta of listChatProviders()) {
+    const providerAccounts = accounts[meta.id];
+    if (providerAccounts && providerAccounts.length > 0) {
+      lines.push(...accountLines(meta.id, providerAccounts));
+    }
+  }
+
+  lines.push("");
+  lines.push(
+    `Tip: ${formatDocsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
+  );
+  return lines;
+}
+
 export async function providersStatusCommand(
   opts: ProvidersStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -132,6 +303,8 @@ export async function providersStatusCommand(
     );
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
-    runtime.exit(1);
+    const cfg = await requireValidConfig(runtime);
+    if (!cfg) return;
+    runtime.log((await formatConfigProvidersStatusLines(cfg)).join("\n"));
   }
 }
