@@ -41,6 +41,16 @@ function exists(filePath: string) {
   }
 }
 
+function findFirstExecutable(
+  candidates: Array<BrowserExecutable>,
+): BrowserExecutable | null {
+  for (const candidate of candidates) {
+    if (exists(candidate.path)) return candidate;
+  }
+
+  return null;
+}
+
 export function findChromeExecutableMac(): BrowserExecutable | null {
   const candidates: Array<BrowserExecutable> = [
     {
@@ -78,11 +88,7 @@ export function findChromeExecutableMac(): BrowserExecutable | null {
     },
   ];
 
-  for (const candidate of candidates) {
-    if (exists(candidate.path)) return candidate;
-  }
-
-  return null;
+  return findFirstExecutable(candidates);
 }
 
 export function findChromeExecutableLinux(): BrowserExecutable | null {
@@ -95,11 +101,7 @@ export function findChromeExecutableLinux(): BrowserExecutable | null {
     { kind: "chrome", path: "/usr/bin/chrome" },
   ];
 
-  for (const candidate of candidates) {
-    if (exists(candidate.path)) return candidate;
-  }
-
-  return null;
+  return findFirstExecutable(candidates);
 }
 
 export function findChromeExecutableWindows(): BrowserExecutable | null {
@@ -165,15 +167,12 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
     ),
   });
 
-  for (const candidate of candidates) {
-    if (exists(candidate.path)) return candidate;
-  }
-
-  return null;
+  return findFirstExecutable(candidates);
 }
 
-function resolveBrowserExecutable(
+export function resolveBrowserExecutableForPlatform(
   resolved: ResolvedBrowserConfig,
+  platform: NodeJS.Platform,
 ): BrowserExecutable | null {
   if (resolved.executablePath) {
     if (!exists(resolved.executablePath)) {
@@ -184,10 +183,16 @@ function resolveBrowserExecutable(
     return { kind: "custom", path: resolved.executablePath };
   }
 
-  if (process.platform === "darwin") return findChromeExecutableMac();
-  if (process.platform === "linux") return findChromeExecutableLinux();
-  if (process.platform === "win32") return findChromeExecutableWindows();
+  if (platform === "darwin") return findChromeExecutableMac();
+  if (platform === "linux") return findChromeExecutableLinux();
+  if (platform === "win32") return findChromeExecutableWindows();
   return null;
+}
+
+function resolveBrowserExecutable(
+  resolved: ResolvedBrowserConfig,
+): BrowserExecutable | null {
+  return resolveBrowserExecutableForPlatform(resolved, process.platform);
 }
 
 export function resolveClawdUserDataDir(
