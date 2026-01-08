@@ -390,8 +390,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
                     first_name?: string;
                     last_name?: string;
                     username?: string;
+                    id?: number;
                   }
                 | undefined;
+              const telegramUserId = from?.id ? String(from.id) : candidate;
               const { code, created } = await upsertTelegramPairingRequest({
                 chatId: candidate,
                 username: from?.username,
@@ -412,6 +414,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
                   chatId,
                   [
                     "Clawdbot: access not configured.",
+                    "",
+                    `Your Telegram user id: ${telegramUserId}`,
                     "",
                     `Pairing code: ${code}`,
                     "",

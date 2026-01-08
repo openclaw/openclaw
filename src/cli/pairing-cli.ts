@@ -93,8 +93,9 @@ export function registerPairingCli(program: Command) {
       }
       for (const r of requests) {
         const meta = r.meta ? JSON.stringify(r.meta) : "";
+        const idLabel = provider === "telegram" ? "telegramUserId" : "id";
         console.log(
-          `${r.code}  id=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
+          `${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
         );
       }
     });
