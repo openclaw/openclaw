@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getProviderActivity,
@@ -11,6 +11,10 @@ describe("provider activity", () => {
     resetProviderActivityForTest();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-08T00:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("records inbound/outbound separately", () => {
@@ -35,13 +39,17 @@ describe("provider activity", () => {
       direction: "inbound",
       at: 2,
     });
-    expect(getProviderActivity({ provider: "whatsapp", accountId: "a" })).toEqual({
-      inboundAt: 1,
-      outboundAt: null,
-    });
-    expect(getProviderActivity({ provider: "whatsapp", accountId: "b" })).toEqual({
-      inboundAt: 2,
-      outboundAt: null,
-    });
+    expect(getProviderActivity({ provider: "whatsapp", accountId: "a" })).toEqual(
+      {
+        inboundAt: 1,
+        outboundAt: null,
+      },
+    );
+    expect(getProviderActivity({ provider: "whatsapp", accountId: "b" })).toEqual(
+      {
+        inboundAt: 2,
+        outboundAt: null,
+      },
+    );
   });
 });
