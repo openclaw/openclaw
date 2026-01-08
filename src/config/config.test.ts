@@ -710,6 +710,30 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("rejects gateway.token", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      gateway: { token: "legacy-token" },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues[0]?.path).toBe("gateway.token");
+    }
+  });
+
+  it("migrates gateway.token to gateway.auth.token", async () => {
+    vi.resetModules();
+    const { migrateLegacyConfig } = await import("./config.js");
+    const res = migrateLegacyConfig({
+      gateway: { token: "legacy-token" },
+    });
+    expect(res.changes).toContain("Moved gateway.token → gateway.auth.token.");
+    expect(res.config?.gateway?.auth?.token).toBe("legacy-token");
+    expect(res.config?.gateway?.auth?.mode).toBe("token");
+    expect((res.config?.gateway as { token?: string })?.token).toBeUndefined();
+  });
+
   it('rejects telegram.dmPolicy="open" without allowFrom "*"', async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");

@@ -36,6 +36,7 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../infra/ports.js";
+import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { getResolvedLoggerSettings } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDefaultDeps } from "./deps.js";
@@ -145,7 +146,56 @@ function parsePort(raw: unknown): number | null {
   return parsed;
 }
 
-async function probeGatewayStatus(opts: GatewayRpcOpts) {
+function parsePortFromArgs(
+  programArguments: string[] | undefined,
+): number | null {
+  if (!programArguments?.length) return null;
+  for (let i = 0; i < programArguments.length; i += 1) {
+    const arg = programArguments[i];
+    if (arg === "--port") {
+      const next = programArguments[i + 1];
+      const parsed = parsePort(next);
+      if (parsed) return parsed;
+    }
+    if (arg?.startsWith("--port=")) {
+      const parsed = parsePort(arg.split("=", 2)[1]);
+      if (parsed) return parsed;
+    }
+  }
+  return null;
+}
+
+function pickProbeHostForBind(bindMode: string, tailnetIPv4: string | null) {
+  if (bindMode === "tailnet") return tailnetIPv4;
+  if (bindMode === "auto") return tailnetIPv4 ?? "127.0.0.1";
+  return "127.0.0.1";
+}
+
+function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
+  if (!env) return [];
+  const allow = [
+    "CLAWDBOT_PROFILE",
+    "CLAWDBOT_STATE_DIR",
+    "CLAWDBOT_CONFIG_PATH",
+    "CLAWDBOT_GATEWAY_PORT",
+    "CLAWDBOT_NIX_MODE",
+  ];
+  const lines: string[] = [];
+  for (const key of allow) {
+    const value = env[key];
+    if (!value?.trim()) continue;
+    lines.push(`${key}=${value.trim()}`);
+  }
+  return lines;
+}
+
+async function probeGatewayStatus(opts: {
+  url: string;
+  token?: string;
+  password?: string;
+  timeoutMs: number;
+  json?: boolean;
+}) {
   try {
     await withProgress(
       {
@@ -159,7 +209,7 @@ async function probeGatewayStatus(opts: GatewayRpcOpts) {
           token: opts.token,
           password: opts.password,
           method: "status",
-          timeoutMs: Number(opts.timeout ?? 10_000),
+          timeoutMs: opts.timeoutMs,
           clientName: "cli",
           mode: "cli",
         }),
@@ -209,6 +259,7 @@ function shouldReportPortUsage(
 
 function renderRuntimeHints(
   runtime: DaemonStatus["service"]["runtime"],
+  env: NodeJS.ProcessEnv = process.env,
 ): string[] {
   if (!runtime) return [];
   const hints: string[] = [];
@@ -227,7 +278,7 @@ function renderRuntimeHints(
   if (runtime.status === "stopped") {
     if (fileLog) hints.push(`File logs: ${fileLog}`);
     if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(process.env);
+      const logs = resolveGatewayLogPaths(env);
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
@@ -272,27 +323,114 @@ async function gatherDaemonStatus(opts: {
     service.readCommand(process.env).catch(() => null),
     service.readRuntime(process.env).catch(() => undefined),
   ]);
-  let portStatus: DaemonStatus["port"] | undefined;
-  try {
-    const cfg = loadConfig();
-    if (cfg.gateway?.mode !== "remote") {
-      const port = resolveGatewayPort(cfg, process.env);
-      const diagnostics = await inspectPortUsage(port);
-      portStatus = {
-        port: diagnostics.port,
-        status: diagnostics.status,
-        listeners: diagnostics.listeners,
-        hints: diagnostics.hints,
-      };
-    }
-  } catch {
-    portStatus = undefined;
-  }
+
+  const serviceEnv = command?.environment ?? undefined;
+  const mergedDaemonEnv = {
+    ...(process.env as Record<string, string | undefined>),
+    ...(serviceEnv ?? {}),
+  } satisfies Record<string, string | undefined>;
+
+  const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
+  const daemonConfigPath = resolveConfigPath(
+    mergedDaemonEnv as NodeJS.ProcessEnv,
+    resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
+  );
+
+  const cliIO = createConfigIO({ env: process.env, configPath: cliConfigPath });
+  const daemonIO = createConfigIO({
+    env: mergedDaemonEnv,
+    configPath: daemonConfigPath,
+  });
+
+  const [cliSnapshot, daemonSnapshot] = await Promise.all([
+    cliIO.readConfigFileSnapshot().catch(() => null),
+    daemonIO.readConfigFileSnapshot().catch(() => null),
+  ]);
+  const cliCfg = cliIO.loadConfig();
+  const daemonCfg = daemonIO.loadConfig();
+
+  const cliConfigSummary: ConfigSummary = {
+    path: cliSnapshot?.path ?? cliConfigPath,
+    exists: cliSnapshot?.exists ?? false,
+    valid: cliSnapshot?.valid ?? true,
+    ...(cliSnapshot?.issues?.length ? { issues: cliSnapshot.issues } : {}),
+  };
+  const daemonConfigSummary: ConfigSummary = {
+    path: daemonSnapshot?.path ?? daemonConfigPath,
+    exists: daemonSnapshot?.exists ?? false,
+    valid: daemonSnapshot?.valid ?? true,
+    ...(daemonSnapshot?.issues?.length ? { issues: daemonSnapshot.issues } : {}),
+  };
+  const configMismatch = cliConfigSummary.path !== daemonConfigSummary.path;
+
+  const portFromArgs = parsePortFromArgs(command?.programArguments);
+  const daemonPort = portFromArgs ?? resolveGatewayPort(daemonCfg, mergedDaemonEnv);
+  const portSource: GatewayStatusSummary["portSource"] = portFromArgs
+    ? "service args"
+    : "env/config";
+
+  const bindMode = daemonCfg.gateway?.bind ?? "loopback";
+  const bindHost = resolveGatewayBindHost(bindMode);
+  const tailnetIPv4 = pickPrimaryTailnetIPv4();
+  const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4);
+  const probeUrlOverride =
+    typeof opts.rpc.url === "string" && opts.rpc.url.trim().length > 0
+      ? opts.rpc.url.trim()
+      : null;
+  const probeUrl = probeUrlOverride ?? `ws://${probeHost}:${daemonPort}`;
+  const probeNote =
+    !probeUrlOverride && bindMode === "lan"
+      ? "Local probe uses loopback (127.0.0.1); gateway bind=lan listens on 0.0.0.0."
+      : !probeUrlOverride && bindMode === "loopback"
+        ? "Loopback-only gateway; only local clients can connect."
+        : undefined;
+
+  const cliPort = resolveGatewayPort(cliCfg, process.env);
+  const [portDiagnostics, portCliDiagnostics] = await Promise.all([
+    inspectPortUsage(daemonPort).catch(() => null),
+    cliPort !== daemonPort ? inspectPortUsage(cliPort).catch(() => null) : null,
+  ]);
+  const portStatus: DaemonStatus["port"] | undefined = portDiagnostics
+    ? {
+        port: portDiagnostics.port,
+        status: portDiagnostics.status,
+        listeners: portDiagnostics.listeners,
+        hints: portDiagnostics.hints,
+      }
+    : undefined;
+  const portCliStatus: DaemonStatus["portCli"] | undefined = portCliDiagnostics
+    ? {
+        port: portCliDiagnostics.port,
+        status: portCliDiagnostics.status,
+        listeners: portCliDiagnostics.listeners,
+        hints: portCliDiagnostics.hints,
+      }
+    : undefined;
+
   const legacyServices = await findLegacyGatewayServices(process.env);
   const extraServices = await findExtraGatewayServices(process.env, {
     deep: opts.deep,
   });
-  const rpc = opts.probe ? await probeGatewayStatus(opts.rpc) : undefined;
+
+  const timeoutMsRaw = Number.parseInt(String(opts.rpc.timeout ?? "10000"), 10);
+  const timeoutMs =
+    Number.isFinite(timeoutMsRaw) && timeoutMsRaw > 0 ? timeoutMsRaw : 10_000;
+
+  const rpc = opts.probe
+    ? await probeGatewayStatus({
+        url: probeUrl,
+        token:
+          opts.rpc.token ||
+          mergedDaemonEnv.CLAWDBOT_GATEWAY_TOKEN ||
+          daemonCfg.gateway?.auth?.token,
+        password:
+          opts.rpc.password ||
+          mergedDaemonEnv.CLAWDBOT_GATEWAY_PASSWORD ||
+          daemonCfg.gateway?.auth?.password,
+        timeoutMs,
+        json: opts.rpc.json,
+      })
+    : undefined;
   let lastError: string | undefined;
   if (
     loaded &&
@@ -300,7 +438,9 @@ async function gatherDaemonStatus(opts: {
     portStatus &&
     portStatus.status !== "busy"
   ) {
-    lastError = (await readLastGatewayErrorLine(process.env)) ?? undefined;
+    lastError =
+      (await readLastGatewayErrorLine(mergedDaemonEnv as NodeJS.ProcessEnv)) ??
+      undefined;
   }
 
   return {
@@ -312,9 +452,23 @@ async function gatherDaemonStatus(opts: {
       command,
       runtime,
     },
+    config: {
+      cli: cliConfigSummary,
+      daemon: daemonConfigSummary,
+      ...(configMismatch ? { mismatch: true } : {}),
+    },
+    gateway: {
+      bindMode,
+      bindHost,
+      port: daemonPort,
+      portSource,
+      probeUrl,
+      ...(probeNote ? { probeNote } : {}),
+    },
     port: portStatus,
+    ...(portCliStatus ? { portCli: portCliStatus } : {}),
     lastError,
-    rpc,
+    ...(rpc ? { rpc: { ...rpc, url: probeUrl } } : {}),
     legacyServices,
     extraServices,
   };
@@ -341,8 +495,55 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       `Command: ${service.command.programArguments.join(" ")}`,
     );
   }
+  if (service.command?.sourcePath) {
+    defaultRuntime.log(`Service file: ${service.command.sourcePath}`);
+  }
   if (service.command?.workingDirectory) {
     defaultRuntime.log(`Working dir: ${service.command.workingDirectory}`);
+  }
+  const daemonEnvLines = safeDaemonEnv(service.command?.environment);
+  if (daemonEnvLines.length > 0) {
+    defaultRuntime.log(`Daemon env: ${daemonEnvLines.join(" ")}`);
+  }
+  if (status.config) {
+    const cliCfg = `${status.config.cli.path}${status.config.cli.exists ? "" : " (missing)"}${status.config.cli.valid ? "" : " (invalid)"}`;
+    defaultRuntime.log(`Config (cli): ${cliCfg}`);
+    if (!status.config.cli.valid && status.config.cli.issues?.length) {
+      for (const issue of status.config.cli.issues.slice(0, 5)) {
+        defaultRuntime.error(`Config issue: ${issue.path || "<root>"}: ${issue.message}`);
+      }
+    }
+    if (status.config.daemon) {
+      const daemonCfg = `${status.config.daemon.path}${status.config.daemon.exists ? "" : " (missing)"}${status.config.daemon.valid ? "" : " (invalid)"}`;
+      defaultRuntime.log(`Config (daemon): ${daemonCfg}`);
+      if (!status.config.daemon.valid && status.config.daemon.issues?.length) {
+        for (const issue of status.config.daemon.issues.slice(0, 5)) {
+          defaultRuntime.error(
+            `Daemon config issue: ${issue.path || "<root>"}: ${issue.message}`,
+          );
+        }
+      }
+    }
+    if (status.config.mismatch) {
+      defaultRuntime.error(
+        "Root cause: CLI and daemon are using different config paths (likely a profile/state-dir mismatch).",
+      );
+    }
+  }
+  if (status.gateway) {
+    const bindHost = status.gateway.bindHost ?? "n/a";
+    defaultRuntime.log(
+      `Gateway: bind=${status.gateway.bindMode} (${bindHost}), port=${status.gateway.port} (${status.gateway.portSource})`,
+    );
+    defaultRuntime.log(`Probe target: ${status.gateway.probeUrl}`);
+    if (status.gateway.probeNote) {
+      defaultRuntime.log(`Probe note: ${status.gateway.probeNote}`);
+    }
+    if (status.gateway.bindMode === "tailnet" && !status.gateway.bindHost) {
+      defaultRuntime.error(
+        "Root cause: gateway bind=tailnet but no tailnet interface was found.",
+      );
+    }
   }
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
@@ -352,7 +553,12 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     if (rpc.ok) {
       defaultRuntime.log("RPC probe: ok");
     } else {
-      defaultRuntime.error(`RPC probe: failed (${rpc.error})`);
+      defaultRuntime.error("RPC probe: failed");
+      if (rpc.url) defaultRuntime.error(`RPC target: ${rpc.url}`);
+      const lines = String(rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
+      for (const line of lines.slice(0, 12)) {
+        defaultRuntime.error(`  ${line}`);
+      }
     }
   }
   if (service.runtime?.missingUnit) {
@@ -364,7 +570,10 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     defaultRuntime.error(
       "Service is loaded but not running (likely exited immediately).",
     );
-    for (const hint of renderRuntimeHints(service.runtime)) {
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
+    )) {
       defaultRuntime.error(hint);
     }
   }
@@ -384,6 +593,23 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       defaultRuntime.error(line);
     }
   }
+  if (status.port) {
+    const addrs = Array.from(
+      new Set(
+        status.port.listeners
+          .map((l) => l.address?.trim())
+          .filter((v): v is string => Boolean(v)),
+      ),
+    );
+    if (addrs.length > 0) {
+      defaultRuntime.log(`Listening: ${addrs.join(", ")}`);
+    }
+  }
+  if (status.portCli && status.portCli.port !== status.port?.port) {
+    defaultRuntime.log(
+      `Note: CLI config resolves gateway port=${status.portCli.port} (${status.portCli.status}).`,
+    );
+  }
   if (
     service.loaded &&
     service.runtime?.status === "running" &&
@@ -401,7 +627,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
         `Logs: journalctl --user -u ${GATEWAY_SYSTEMD_SERVICE_NAME}.service -n 200 --no-pager`,
       );
     } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(process.env);
+      const logs = resolveGatewayLogPaths(
+        (service.command?.environment ?? process.env) as NodeJS.ProcessEnv,
+      );
       defaultRuntime.error(`Logs: ${logs.stdoutPath}`);
       defaultRuntime.error(`Errors: ${logs.stderrPath}`);
     }
@@ -503,6 +731,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     });
   const environment: Record<string, string | undefined> = {
     PATH: process.env.PATH,
+    CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
+    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
+    CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
+    CLAWDBOT_GATEWAY_PORT: String(port),
     CLAWDBOT_GATEWAY_TOKEN:
       opts.token ||
       cfg.gateway?.auth?.token ||

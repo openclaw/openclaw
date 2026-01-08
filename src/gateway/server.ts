@@ -102,6 +102,7 @@ import type { WizardSession } from "../wizard/session.js";
 import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
+  resolveGatewayAuth,
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import {
@@ -432,21 +433,12 @@ export async function startGatewayServer(
     ...tailscaleOverrides,
   };
   const tailscaleMode = tailscaleConfig.mode ?? "off";
-  const token =
-    authConfig.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
-  const password =
-    authConfig.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
-  const authMode: ResolvedGatewayAuth["mode"] =
-    authConfig.mode ?? (password ? "password" : token ? "token" : "none");
-  const allowTailscale =
-    authConfig.allowTailscale ??
-    (tailscaleMode === "serve" && authMode !== "password");
-  const resolvedAuth: ResolvedGatewayAuth = {
-    mode: authMode,
-    token,
-    password,
-    allowTailscale,
-  };
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig,
+    env: process.env,
+    tailscaleMode,
+  });
+  const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
   let hooksConfig = resolveHooksConfig(cfgAtStart);
   const canvasHostEnabled =
     process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" &&

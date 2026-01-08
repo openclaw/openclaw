@@ -14,6 +14,7 @@ import {
 } from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { callGateway } from "../gateway/call.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
   type GatewayWsLogStyle,
@@ -413,19 +414,20 @@ export function registerGatewayCli(program: Command) {
 
       const snapshot = await readConfigFileSnapshot().catch(() => null);
       const miskeys = extractGatewayMiskeys(snapshot?.parsed);
-      const authModeFromConfig = cfg.gateway?.auth?.mode;
-      const tokenValue =
-        opts.token ??
-        cfg.gateway?.auth?.token ??
-        process.env.CLAWDBOT_GATEWAY_TOKEN;
-      const passwordValue =
-        opts.password ??
-        cfg.gateway?.auth?.password ??
-        process.env.CLAWDBOT_GATEWAY_PASSWORD;
-      const resolvedAuthMode =
-        authMode ??
-        authModeFromConfig ??
-        (passwordValue ? "password" : tokenValue ? "token" : "none");
+      const authConfig = {
+        ...cfg.gateway?.auth,
+        ...(authMode ? { mode: authMode } : {}),
+        ...(opts.password ? { password: String(opts.password) } : {}),
+        ...(opts.token ? { token: String(opts.token) } : {}),
+      };
+      const resolvedAuth = resolveGatewayAuth({
+        authConfig,
+        env: process.env,
+        tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+      });
+      const resolvedAuthMode = resolvedAuth.mode;
+      const tokenValue = resolvedAuth.token;
+      const passwordValue = resolvedAuth.password;
       const authHints: string[] = [];
       if (miskeys.hasGatewayToken) {
         authHints.push(
@@ -484,9 +486,10 @@ export function registerGatewayCli(program: Command) {
             await startGatewayServer(port, {
               bind,
               auth:
-                authMode || opts.password || authModeRaw
+                authMode || opts.password || opts.token || authModeRaw
                   ? {
                       mode: authMode ?? undefined,
+                      token: opts.token ? String(opts.token) : undefined,
                       password: opts.password
                         ? String(opts.password)
                         : undefined,
