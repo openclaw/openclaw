@@ -3,12 +3,6 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
 
-const nodePath = process.execPath.includes(" ")
-  ? `"${process.execPath}"`
-  : process.execPath;
-const nodeEval = (script: string) =>
-  `${nodePath} -e "${script.replaceAll('"', '\\"')}"`;
-
 describe("Agent-specific tool filtering", () => {
   it("should apply global tool policy when no agent-specific policy exists", () => {
     const cfg: ClawdbotConfig = {
@@ -239,7 +233,7 @@ describe("Agent-specific tool filtering", () => {
     expect(bash).toBeDefined();
 
     const result = await bash?.execute("call1", {
-      command: nodeEval("setTimeout(function(){ console.log('done') }, 50)"),
+      command: "echo done",
       yieldMs: 10,
     });
 

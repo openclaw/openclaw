@@ -7,11 +7,15 @@ import {
   processTool,
 } from "./bash-tools.js";
 
-const nodePath = process.execPath.includes(" ")
-  ? `"${process.execPath}"`
-  : process.execPath;
-const nodeEval = (script: string) =>
-  `${nodePath} -e "${script.replaceAll('"', '\\"')}"`;
+const isWin = process.platform === "win32";
+const shortDelayCmd = isWin ? "ping -n 2 127.0.0.1 > nul" : "sleep 0.05";
+const longDelayCmd = isWin ? "ping -n 4 127.0.0.1 > nul" : "sleep 2";
+const joinCommands = (commands: string[]) =>
+  commands.join(isWin ? " & " : "; ");
+const echoAfterDelay = (message: string) =>
+  joinCommands([shortDelayCmd, `echo ${message}`]);
+const echoLines = (lines: string[]) =>
+  joinCommands(lines.map((line) => `echo ${line}`));
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -38,7 +42,7 @@ beforeEach(() => {
 describe("bash tool backgrounding", () => {
   it("backgrounds after yield and can be polled", async () => {
     const result = await bashTool.execute("call1", {
-      command: nodeEval("setTimeout(function(){ console.log('done') }, 50)"),
+      command: echoAfterDelay("done"),
       yieldMs: 10,
     });
 
@@ -68,7 +72,7 @@ describe("bash tool backgrounding", () => {
 
   it("supports explicit background", async () => {
     const result = await bashTool.execute("call1", {
-      command: nodeEval("setTimeout(function(){ console.log('later') }, 50)"),
+      command: echoAfterDelay("later"),
       background: true,
     });
 
@@ -103,7 +107,7 @@ describe("bash tool backgrounding", () => {
     const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
-      command: nodeEval("setInterval(function(){}, 1000)"),
+      command: longDelayCmd,
       background: true,
     });
 
@@ -154,9 +158,7 @@ describe("bash tool backgrounding", () => {
 
   it("logs line-based slices and defaults to last lines", async () => {
     const result = await bashTool.execute("call1", {
-      command: nodeEval(
-        "console.log('one'); console.log('two'); console.log('three');",
-      ),
+      command: echoLines(["one", "two", "three"]),
       background: true,
     });
     const sessionId = (result.details as { sessionId: string }).sessionId;
@@ -176,9 +178,7 @@ describe("bash tool backgrounding", () => {
 
   it("supports line offsets for log slices", async () => {
     const result = await bashTool.execute("call1", {
-      command: nodeEval(
-        "console.log('alpha'); console.log('beta'); console.log('gamma');",
-      ),
+      command: echoLines(["alpha", "beta", "gamma"]),
       background: true,
     });
     const sessionId = (result.details as { sessionId: string }).sessionId;
@@ -201,11 +201,11 @@ describe("bash tool backgrounding", () => {
     const processB = createProcessTool({ scopeKey: "agent:beta" });
 
     const resultA = await bashA.execute("call1", {
-      command: nodeEval("setTimeout(function(){}, 50)"),
+      command: shortDelayCmd,
       background: true,
     });
     const resultB = await bashB.execute("call2", {
-      command: nodeEval("setTimeout(function(){}, 50)"),
+      command: shortDelayCmd,
       background: true,
     });
 
