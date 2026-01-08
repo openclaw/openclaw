@@ -75,6 +75,8 @@ const CHAT_PROVIDER_ALIASES: Record<string, ChatProviderId> = {
   imsg: "imessage",
 };
 
+const WEBSITE_URL = "https://clawd.bot";
+
 export function listChatProviders(): ChatProviderMeta[] {
   return CHAT_PROVIDER_ORDER.map((id) => CHAT_PROVIDER_META[id]);
 }
@@ -102,6 +104,11 @@ export function formatProviderSelectionLine(
   meta: ChatProviderMeta,
   docsLink: (path: string, label?: string) => string,
 ): string {
+  if (meta.id === "telegram") {
+    return `${meta.label} — ${meta.blurb} ${docsLink(
+      meta.docsPath,
+    )} ${WEBSITE_URL}`;
+  }
   return `${meta.label} — ${meta.blurb} Docs: ${docsLink(
     meta.docsPath,
     meta.docsLabel ?? meta.id,
