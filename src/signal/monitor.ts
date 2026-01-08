@@ -317,6 +317,10 @@ export async function monitorSignalProvider(
       const senderRecipient = resolveSignalRecipient(sender);
       const senderPeerId = resolveSignalPeerId(sender);
       const senderAllowId = formatSignalSenderId(sender);
+      const senderIdLine =
+        sender.kind === "phone"
+          ? `Your Signal number: ${sender.e164}`
+          : `Your Signal sender id: ${senderAllowId}`;
       if (!senderRecipient) return;
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
@@ -350,6 +354,8 @@ export async function monitorSignalProvider(
                   `signal:${senderRecipient}`,
                   [
                     "Clawdbot: access not configured.",
+                    "",
+                    senderIdLine,
                     "",
                     `Pairing code: ${code}`,
                     "",

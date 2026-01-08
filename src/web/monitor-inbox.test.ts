@@ -671,6 +671,9 @@ describe("web monitor inbox", () => {
     expect(sock.readMessages).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Your WhatsApp sender id: +999"),
+    });
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });
 
@@ -1122,6 +1125,9 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Your WhatsApp sender id: +999"),
+    });
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });
 
@@ -1274,6 +1280,9 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Your WhatsApp sender id: +999"),
+    });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });

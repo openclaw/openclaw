@@ -259,6 +259,8 @@ export async function monitorIMessageProvider(
                 [
                   "Clawdbot: access not configured.",
                   "",
+                  `Your iMessage sender id: ${senderId}`,
+                  "",
                   `Pairing code: ${code}`,
                   "",
                   "Ask the bot owner to approve with:",

@@ -568,6 +568,9 @@ describe("monitorSlackProvider tool results", () => {
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Your Slack user id: U1",
+    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
       "Pairing code: PAIRCODE",
     );
   });
