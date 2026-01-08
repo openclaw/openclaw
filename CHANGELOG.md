@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Discord: stop provider when gateway reconnects are exhausted and surface errors. (#514) — thanks @joshp123
+- Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).

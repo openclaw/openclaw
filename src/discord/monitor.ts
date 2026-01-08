@@ -1,3 +1,5 @@
+import type { EventEmitter } from "node:events";
+
 import {
   ChannelType,
   Client,
@@ -81,6 +83,62 @@ type DiscordMediaInfo = {
   contentType?: string;
   placeholder: string;
 };
+
+type DiscordGatewayHandle = {
+  emitter?: Pick<EventEmitter, "on" | "removeListener">;
+  disconnect?: () => void;
+};
+
+export async function waitForDiscordGatewayStop(params: {
+  gateway?: DiscordGatewayHandle;
+  abortSignal?: AbortSignal;
+  onGatewayError?: (err: unknown) => void;
+}): Promise<void> {
+  const { gateway, abortSignal, onGatewayError } = params;
+  const emitter = gateway?.emitter;
+  return await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      abortSignal?.removeEventListener("abort", onAbort);
+      emitter?.removeListener("error", onGatewayErrorEvent);
+    };
+    const finishResolve = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        gateway?.disconnect?.();
+      } finally {
+        resolve();
+      }
+    };
+    const finishReject = (err: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      try {
+        gateway?.disconnect?.();
+      } finally {
+        reject(err);
+      }
+    };
+    const onAbort = () => {
+      finishResolve();
+    };
+    const onGatewayErrorEvent = (err: unknown) => {
+      onGatewayError?.(err);
+      finishReject(err);
+    };
+
+    if (abortSignal?.aborted) {
+      onAbort();
+      return;
+    }
+
+    abortSignal?.addEventListener("abort", onAbort, { once: true });
+    emitter?.on("error", onGatewayErrorEvent);
+  });
+}
 
 type DiscordHistoryEntry = {
   sender: string;
@@ -402,18 +460,20 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 
-  await new Promise<void>((resolve) => {
-    const onAbort = async () => {
-      try {
-        const gateway = client.getPlugin<GatewayPlugin>("gateway");
-        gateway?.disconnect();
-      } finally {
-        resolve();
-      }
-    };
-    opts.abortSignal?.addEventListener("abort", () => {
-      void onAbort();
-    });
+  const gateway = client.getPlugin<GatewayPlugin>("gateway");
+  const gatewayEmitter = (gateway as unknown as { emitter?: EventEmitter })
+    ?.emitter;
+  await waitForDiscordGatewayStop({
+    gateway: gateway
+      ? {
+          emitter: gatewayEmitter,
+          disconnect: () => gateway.disconnect(),
+        }
+      : undefined,
+    abortSignal: opts.abortSignal,
+    onGatewayError: (err) => {
+      runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+    },
   });
 }
 
