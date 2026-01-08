@@ -158,6 +158,8 @@
     },
     "patchedDependencies": {
       "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
+      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
+      "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
       "qrcode-terminal": "patches/qrcode-terminal.patch",
       "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
     }
@@ -196,6 +198,8 @@
   },
   "patchedDependencies": {
     "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
+    "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
+    "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
     "qrcode-terminal": "patches/qrcode-terminal.patch",
     "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
   }

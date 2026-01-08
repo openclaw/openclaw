@@ -93,6 +93,70 @@ import { normalizeUsage, type UsageLike } from "./usage.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 // Optional features can be implemented as Pi extensions that run in the same Node process.
+
+/**
+ * Resolve provider-specific extraParams from model config.
+ * Auto-enables thinking mode for GLM-4.x models unless explicitly disabled.
+ *
+ * For ZAI GLM-4.x models, we auto-enable thinking via the Z.AI Cloud API format:
+ *   thinking: { type: "enabled", clear_thinking: boolean }
+ *
+ * - GLM-4.7: Preserved thinking (clear_thinking: false) - reasoning kept across turns
+ * - GLM-4.5/4.6: Interleaved thinking (clear_thinking: true) - reasoning cleared each turn
+ *
+ * Users can override via config:
+ *   agent.models["zai/glm-4.7"].params.thinking = { type: "disabled" }
+ *
+ * Or disable via runtime flag: --thinking off
+ *
+ * @see https://docs.z.ai/guides/capabilities/thinking-mode
+ * @internal Exported for testing only
+ */
+export function resolveExtraParams(params: {
+  cfg: ClawdbotConfig | undefined;
+  provider: string;
+  modelId: string;
+  thinkLevel?: string;
+}): Record<string, unknown> | undefined {
+  const modelKey = `${params.provider}/${params.modelId}`;
+  const modelConfig = params.cfg?.agent?.models?.[modelKey];
+  let extraParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
+
+  // Auto-enable thinking for ZAI GLM-4.x models when not explicitly configured
+  // Skip if user explicitly disabled thinking via --thinking off
+  if (params.provider === "zai" && params.thinkLevel !== "off") {
+    const modelIdLower = params.modelId.toLowerCase();
+    const isGlm4 = modelIdLower.includes("glm-4");
+
+    if (isGlm4) {
+      // Check if user has explicitly configured thinking params
+      const hasThinkingConfig = extraParams?.thinking !== undefined;
+
+      if (!hasThinkingConfig) {
+        // GLM-4.7 supports preserved thinking (reasoning kept across turns)
+        // GLM-4.5/4.6 use interleaved thinking (reasoning cleared each turn)
+        // Z.AI Cloud API format: thinking: { type: "enabled", clear_thinking: boolean }
+        const isGlm47 = modelIdLower.includes("glm-4.7");
+        const clearThinking = !isGlm47;
+
+        extraParams = {
+          ...extraParams,
+          thinking: {
+            type: "enabled",
+            clear_thinking: clearThinking,
+          },
+        };
+
+        log.debug(
+          `auto-enabled thinking for ${modelKey}: type=enabled, clear_thinking=${clearThinking}`,
+        );
+      }
+    }
+  }
+
+  return extraParams;
+}
+
 // We configure context pruning per-session via a WeakMap registry keyed by the SessionManager instance.
 
 function resolvePiExtensionPath(id: string): string {
@@ -837,6 +901,13 @@ export async function compactEmbeddedPiSession(params: {
           sandboxEnabled: !!sandbox?.enabled,
         });
 
+        const extraParams = resolveExtraParams({
+          cfg: params.config,
+          provider,
+          modelId,
+          thinkLevel: params.thinkLevel,
+        });
+
         let session: Awaited<ReturnType<typeof createAgentSession>>["session"];
         ({ session } = await createAgentSession({
           cwd: resolvedWorkspace,
@@ -853,6 +924,7 @@ export async function compactEmbeddedPiSession(params: {
           skills: [],
           contextFiles: [],
           additionalExtensionPaths,
+          extraParams,
         }));
 
         try {
@@ -1148,6 +1220,13 @@ export async function runEmbeddedPiAgent(params: {
             sandboxEnabled: !!sandbox?.enabled,
           });
 
+          const extraParams = resolveExtraParams({
+            cfg: params.config,
+            provider,
+            modelId,
+            thinkLevel,
+          });
+
           let session: Awaited<
             ReturnType<typeof createAgentSession>
           >["session"];
@@ -1168,6 +1247,7 @@ export async function runEmbeddedPiAgent(params: {
             skills: [],
             contextFiles: [],
             additionalExtensionPaths,
+            extraParams,
           }));
 
           try {

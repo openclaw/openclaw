@@ -910,6 +910,8 @@ export const ClawdbotSchema = z.object({
           z.string(),
           z.object({
             alias: z.string().optional(),
+            /** Provider-specific API parameters (e.g., GLM-4.7 thinking mode). */
+            params: z.record(z.string(), z.unknown()).optional(),
           }),
         )
         .optional(),
