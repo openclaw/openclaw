@@ -14,13 +14,13 @@ import {
 } from "../discord/accounts.js";
 import { callGateway } from "../gateway/call.js";
 import {
-  formatUsageReportLines,
-  loadProviderUsageSummary,
-} from "../infra/provider-usage.js";
-import {
   listIMessageAccountIds,
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
+import {
+  formatUsageReportLines,
+  loadProviderUsageSummary,
+} from "../infra/provider-usage.js";
 import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
@@ -617,11 +617,9 @@ export async function providersListCommand(
 
   runtime.log("");
   runtime.log(
-    `Docs: gateway/configuration -> ${formatTerminalLink(
-      DOCS_ROOT,
-      DOCS_ROOT,
-      { fallback: DOCS_ROOT },
-    )}`,
+    `Docs: gateway/configuration -> ${formatTerminalLink(DOCS_ROOT, DOCS_ROOT, {
+      fallback: DOCS_ROOT,
+    })}`,
   );
 }
 

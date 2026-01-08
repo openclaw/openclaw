@@ -117,7 +117,8 @@ export async function callGateway<T = unknown>(
       : undefined) ||
     process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode
-      ? typeof remote?.password === "string" && remote.password.trim().length > 0
+      ? typeof remote?.password === "string" &&
+        remote.password.trim().length > 0
         ? remote.password.trim()
         : undefined
       : typeof authPassword === "string" && authPassword.trim().length > 0
