@@ -483,6 +483,8 @@ export type SlackConfig = {
   reactionNotifications?: SlackReactionNotificationMode;
   /** Allowlist for reaction notifications when mode is allowlist. */
   reactionAllowlist?: Array<string | number>;
+  /** Control reply threading when reply tags are present (off|first|all). */
+  replyToMode?: ReplyToMode;
   actions?: SlackActionConfig;
   slashCommand?: SlackSlashCommandConfig;
   dm?: SlackDmConfig;

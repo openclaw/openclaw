@@ -75,9 +75,16 @@ export async function routeReply(
     const { text, mediaUrl } = params;
     switch (channel) {
       case "telegram": {
+        const replyToMessageId = replyToId
+          ? Number.parseInt(replyToId, 10)
+          : undefined;
+        const resolvedReplyToMessageId = Number.isFinite(replyToMessageId)
+          ? replyToMessageId
+          : undefined;
         const result = await sendMessageTelegram(to, text, {
           mediaUrl,
           messageThreadId: threadId,
+          replyToMessageId: resolvedReplyToMessageId,
         });
         return { ok: true, messageId: result.messageId };
       }

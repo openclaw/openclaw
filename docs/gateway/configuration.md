@@ -582,8 +582,9 @@ Set `telegram.enabled: false` to disable automatic startup.
         }
       }
     },
+    replyToMode: "first",                 // off | first | all
     streamMode: "partial",               // off | partial | block (draft streaming)
-    actions: { reactions: true },        // tool action gates (false disables)
+    actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
     mediaMaxMb: 5,
     retry: {                             // outbound retry policy
       attempts: 3,
@@ -707,6 +708,7 @@ Slack runs in Socket Mode and requires both a bot token and app token:
     },
     reactionNotifications: "own", // off | own | all | allowlist
     reactionAllowlist: ["U123"],
+    replyToMode: "off",           // off | first | all
     actions: {
       reactions: true,
       messages: true,

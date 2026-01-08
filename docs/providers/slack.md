@@ -167,6 +167,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     },
     "reactionNotifications": "own",
     "reactionAllowlist": ["U123"],
+    "replyToMode": "off",
     "actions": {
       "reactions": true,
       "messages": true,
@@ -192,6 +193,14 @@ Tokens can also be supplied via env vars:
 
 Ack reactions are controlled globally via `messages.ackReaction` +
 `messages.ackReactionScope`.
+
+## Reply threading
+Slack supports optional threaded replies via tags:
+- `[[reply_to_current]]` — reply to the triggering message.
+- `[[reply_to:<id>]]` — reply to a specific message id.
+
+Controlled by `slack.replyToMode`:
+- `off` (default), `first`, `all`.
 
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).

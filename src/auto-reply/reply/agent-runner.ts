@@ -7,6 +7,7 @@ import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
+import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
@@ -19,7 +20,7 @@ import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
-import type { TemplateContext } from "../templating.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -31,6 +32,10 @@ import {
   scheduleFollowupDrain,
 } from "./queue.js";
 import { extractReplyToTag } from "./reply-tags.js";
+import {
+  createReplyToModeFilter,
+  resolveReplyToMode,
+} from "./reply-threading.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -147,6 +152,16 @@ export async function runReplyAgent(params: {
       replyToId: payload.replyToId ?? null,
     });
   };
+  const replyToChannel =
+    sessionCtx.OriginatingChannel ??
+    ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
+      | OriginatingChannelType
+      | undefined);
+  const replyToMode = resolveReplyToMode(
+    followupRun.run.config,
+    replyToChannel,
+  );
+  const applyReplyToMode = createReplyToModeFilter(replyToMode);
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(
@@ -315,13 +330,12 @@ export async function runReplyAgent(params: {
                     if (!cleaned && !hasMedia) return;
                     if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia)
                       return;
-                    const blockPayload: ReplyPayload = {
+                    const blockPayload: ReplyPayload = applyReplyToMode({
                       text: cleaned,
                       mediaUrls: payload.mediaUrls,
                       mediaUrl: payload.mediaUrls?.[0],
-                      // Default to incoming message ID for threading support (replyToMode: "first"|"all")
-                      replyToId: tagResult.replyToId ?? sessionCtx.MessageSid,
-                    };
+                      replyToId: tagResult.replyToId,
+                    });
                     const payloadKey = buildPayloadKey(blockPayload);
                     if (
                       streamedPayloadKeys.has(payloadKey) ||
@@ -502,8 +516,7 @@ export async function runReplyAgent(params: {
         return {
           ...payload,
           text: cleaned ? cleaned : undefined,
-          // Default to incoming message ID for threading support (replyToMode: "first"|"all")
-          replyToId: replyToId ?? payload.replyToId ?? sessionCtx.MessageSid,
+          replyToId: replyToId ?? payload.replyToId,
         };
       })
       .filter(
@@ -511,23 +524,31 @@ export async function runReplyAgent(params: {
           payload.text ||
           payload.mediaUrl ||
           (payload.mediaUrls && payload.mediaUrls.length > 0),
-      );
+      )
+      .map(applyReplyToMode);
 
-    // Drop final payloads if:
-    // 1. Block streaming is enabled and we already streamed block replies, OR
-    // 2. A messaging tool (telegram, whatsapp, etc.) successfully sent the response.
-    //    The agent often generates confirmation text (e.g., "Respondi no Telegram!")
-    //    AFTER using the messaging tool - we must suppress this confirmation text.
+    // Drop final payloads if block streaming is enabled and we already streamed
+    // block replies. Tool-sent duplicates are filtered below.
     const shouldDropFinalPayloads =
-      (blockStreamingEnabled && didStreamBlockReply) ||
-      runResult.didSendViaMessagingTool === true;
+      blockStreamingEnabled && didStreamBlockReply;
+    const messagingToolSentTexts = runResult.messagingToolSentTexts ?? [];
+    const dedupedPayloads =
+      messagingToolSentTexts.length > 0
+        ? replyTaggedPayloads.filter(
+            (payload) =>
+              !isMessagingToolDuplicate(
+                payload.text ?? "",
+                messagingToolSentTexts,
+              ),
+          )
+        : replyTaggedPayloads;
     const filteredPayloads = shouldDropFinalPayloads
       ? []
       : blockStreamingEnabled
-        ? replyTaggedPayloads.filter(
+        ? dedupedPayloads.filter(
             (payload) => !streamedPayloadKeys.has(buildPayloadKey(payload)),
           )
-        : replyTaggedPayloads;
+        : dedupedPayloads;
 
     if (filteredPayloads.length === 0) return finalizeWithFollowup(undefined);
 

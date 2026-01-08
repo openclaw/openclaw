@@ -778,6 +778,7 @@ export function subscribeEmbeddedPiSession(params: {
     toolMetas,
     unsubscribe,
     isCompacting: () => compactionInFlight || pendingCompactionRetry > 0,
+    getMessagingToolSentTexts: () => messagingToolSentTexts.slice(),
     // Returns true if any messaging tool successfully sent a message.
     // Used to suppress agent's confirmation text (e.g., "Respondi no Telegram!")
     // which is generated AFTER the tool sends the actual answer.
