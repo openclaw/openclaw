@@ -150,10 +150,10 @@ export async function authorizeGatewayConnect(params: {
     if (auth.allowTailscale && !localDirect) {
       const tailscaleUser = getTailscaleUser(req);
       if (!tailscaleUser) {
-        return { ok: false, reason: "unauthorized" };
+        return { ok: false, reason: "tailscale_user_missing" };
       }
       if (!isTailscaleProxyRequest(req)) {
-        return { ok: false, reason: "unauthorized" };
+        return { ok: false, reason: "tailscale_proxy_missing" };
       }
       return {
         ok: true,
@@ -165,31 +165,45 @@ export async function authorizeGatewayConnect(params: {
   }
 
   if (auth.mode === "token") {
-    if (auth.token && connectAuth?.token === auth.token) {
-      return { ok: true, method: "token" };
+    if (!auth.token) {
+      return { ok: false, reason: "token_missing_config" };
     }
+    if (!connectAuth?.token) {
+      return { ok: false, reason: "token_missing" };
+    }
+    if (connectAuth.token !== auth.token) {
+      return { ok: false, reason: "token_mismatch" };
+    }
+    return { ok: true, method: "token" };
   }
 
   if (auth.mode === "password") {
     const password = connectAuth?.password;
-    if (!password || !auth.password) {
-      return { ok: false, reason: "unauthorized" };
+    if (!auth.password) {
+      return { ok: false, reason: "password_missing_config" };
+    }
+    if (!password) {
+      return { ok: false, reason: "password_missing" };
     }
     if (!safeEqual(password, auth.password)) {
-      return { ok: false, reason: "unauthorized" };
+      return { ok: false, reason: "password_mismatch" };
     }
     return { ok: true, method: "password" };
   }
 
   if (auth.allowTailscale) {
     const tailscaleUser = getTailscaleUser(req);
-    if (tailscaleUser && isTailscaleProxyRequest(req)) {
-      return {
-        ok: true,
-        method: "tailscale",
-        user: tailscaleUser.login,
-      };
+    if (!tailscaleUser) {
+      return { ok: false, reason: "tailscale_user_missing" };
     }
+    if (!isTailscaleProxyRequest(req)) {
+      return { ok: false, reason: "tailscale_proxy_missing" };
+    }
+    return {
+      ok: true,
+      method: "tailscale",
+      user: tailscaleUser.login,
+    };
   }
 
   return { ok: false, reason: "unauthorized" };
