@@ -10,6 +10,7 @@ import {
   findChromeExecutableMac,
   findChromeExecutableWindows,
   isChromeReachable,
+  resolveBrowserExecutableForPlatform,
   stopClawdChrome,
 } from "./chrome.js";
 import {
@@ -182,6 +183,29 @@ describe("browser chrome helpers", () => {
   it("returns null when no Chrome candidate exists on Windows", () => {
     const exists = vi.spyOn(fs, "existsSync").mockReturnValue(false);
     expect(findChromeExecutableWindows()).toBeNull();
+    exists.mockRestore();
+  });
+
+  it("resolves Windows executables without LOCALAPPDATA", () => {
+    vi.stubEnv("LOCALAPPDATA", "");
+    vi.stubEnv("ProgramFiles", "C:\\Program Files");
+    vi.stubEnv("ProgramFiles(x86)", "C:\\Program Files (x86)");
+    const marker = path.win32.join(
+      "Program Files",
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    );
+    const exists = vi
+      .spyOn(fs, "existsSync")
+      .mockImplementation((p) => String(p).includes(marker));
+    const exe = resolveBrowserExecutableForPlatform(
+      {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+      "win32",
+    );
+    expect(exe?.kind).toBe("chrome");
+    expect(exe?.path).toMatch(/chrome\.exe$/);
     exists.mockRestore();
   });
 
