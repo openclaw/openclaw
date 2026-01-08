@@ -19,6 +19,8 @@
 - CLI: remove `update`, `gateway-daemon`, `gateway {install|uninstall|start|stop|restart|daemon status|wake|send|agent}`, and `telegram` commands; move `login/logout` to `providers login/logout` (top-level aliases hidden); use `daemon` for service control, `send`/`agent`/`wake` for RPC, and `nodes canvas` for canvas ops.
 
 ### Fixes
+- Docker: handle Ctrl+C in `clawdbot-cli` containers by enabling `init`. Thanks @prathamdby for PR #463.
+- Docs/Docker: make provider setup optional and add provider setup hints.
 - CLI/Daemon: add `clawdbot logs` tailing and improve restart/service hints across platforms.
 - Gateway/CLI/Doctor: tighten LAN bind auth checks, warn/migrate mis-keyed gateway tokens, and surface last gateway error when daemon looks running but the port is closed.
 - CLI/Daemon: add `clawdbot daemon install --force` and expand daemon status guidance for config mismatches and probe targets.
