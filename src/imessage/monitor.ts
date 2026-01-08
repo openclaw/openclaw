@@ -21,6 +21,7 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveIMessageAccount } from "./accounts.js";
@@ -256,16 +257,11 @@ export async function monitorIMessageProvider(
             try {
               await sendMessageIMessage(
                 sender,
-                [
-                  "Clawdbot: access not configured.",
-                  "",
-                  `Your iMessage sender id: ${senderId}`,
-                  "",
-                  `Pairing code: ${code}`,
-                  "",
-                  "Ask the bot owner to approve with:",
-                  "clawdbot pairing approve --provider imessage <code>",
-                ].join("\n"),
+                buildPairingReply({
+                  provider: "imessage",
+                  idLine: `Your iMessage sender id: ${senderId}`,
+                  code,
+                }),
                 {
                   client,
                   maxBytes: mediaMaxBytes,

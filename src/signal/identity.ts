@@ -53,6 +53,13 @@ export function formatSignalSenderDisplay(sender: SignalSender): string {
   return sender.kind === "phone" ? sender.e164 : `uuid:${sender.raw}`;
 }
 
+export function formatSignalPairingIdLine(sender: SignalSender): string {
+  if (sender.kind === "phone") {
+    return `Your Signal number: ${sender.e164}`;
+  }
+  return `Your Signal sender id: ${formatSignalSenderId(sender)}`;
+}
+
 export function resolveSignalRecipient(sender: SignalSender): string {
   return sender.kind === "phone" ? sender.e164 : sender.raw;
 }

@@ -8,6 +8,7 @@ import {
   listProviderPairingRequests,
   type PairingProvider,
 } from "../pairing/pairing-store.js";
+import { PROVIDER_ID_LABELS } from "../pairing/pairing-labels.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
 import { sendMessageTelegram } from "../telegram/send.js";
@@ -21,15 +22,6 @@ const PROVIDERS: PairingProvider[] = [
   "slack",
   "whatsapp",
 ];
-
-const PROVIDER_ID_LABELS: Record<PairingProvider, string> = {
-  telegram: "telegramUserId",
-  discord: "discordUserId",
-  slack: "slackUserId",
-  signal: "signalNumber",
-  imessage: "imessageSenderId",
-  whatsapp: "whatsappSenderId",
-};
 
 function parseProvider(raw: unknown): PairingProvider {
   const value = (

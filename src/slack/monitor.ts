@@ -47,6 +47,7 @@ import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -824,16 +825,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               try {
                 await sendMessageSlack(
                   message.channel,
-                  [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Your Slack user id: ${directUserId}`,
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider slack <code>",
-                  ].join("\n"),
+                  buildPairingReply({
+                    provider: "slack",
+                    idLine: `Your Slack user id: ${directUserId}`,
+                    code,
+                  }),
                   {
                     token: botToken,
                     client: app.client,
@@ -1719,16 +1715,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               });
               if (created) {
                 await respond({
-                  text: [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Your Slack user id: ${command.user_id}`,
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider slack <code>",
-                  ].join("\n"),
+                  text: buildPairingReply({
+                    provider: "slack",
+                    idLine: `Your Slack user id: ${command.user_id}`,
+                    code,
+                  }),
                   response_type: "ephemeral",
                 });
               }

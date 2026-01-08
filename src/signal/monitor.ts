@@ -22,11 +22,13 @@ import { spawnSignalDaemon } from "./daemon.js";
 import {
   formatSignalSenderDisplay,
   formatSignalSenderId,
+  formatSignalPairingIdLine,
   isSignalSenderAllowed,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
 } from "./identity.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
@@ -317,11 +319,8 @@ export async function monitorSignalProvider(
       const senderRecipient = resolveSignalRecipient(sender);
       const senderPeerId = resolveSignalPeerId(sender);
       const senderAllowId = formatSignalSenderId(sender);
-      const senderIdLine =
-        sender.kind === "phone"
-          ? `Your Signal number: ${sender.e164}`
-          : `Your Signal sender id: ${senderAllowId}`;
       if (!senderRecipient) return;
+      const senderIdLine = formatSignalPairingIdLine(sender);
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
@@ -352,16 +351,11 @@ export async function monitorSignalProvider(
               try {
                 await sendMessageSignal(
                   `signal:${senderRecipient}`,
-                  [
-                    "Clawdbot: access not configured.",
-                    "",
-                    senderIdLine,
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider signal <code>",
-                  ].join("\n"),
+                  buildPairingReply({
+                    provider: "signal",
+                    idLine: senderIdLine,
+                    code,
+                  }),
                   {
                     baseUrl,
                     account,
