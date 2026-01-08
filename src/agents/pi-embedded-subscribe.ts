@@ -440,7 +440,8 @@ export function subscribeEmbeddedPiSession(params: {
     const splitResult = splitMediaFromOutput(chunk);
     const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) return;
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice)
+      return;
     void params.onBlockReply({
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
@@ -863,8 +864,11 @@ export function subscribeEmbeddedPiSession(params: {
                 );
               } else {
                 lastBlockReplyText = text;
-                const { text: cleanedText, mediaUrls, audioAsVoice } =
-                  splitMediaFromOutput(text);
+                const {
+                  text: cleanedText,
+                  mediaUrls,
+                  audioAsVoice,
+                } = splitMediaFromOutput(text);
                 // Emit if there's content OR audioAsVoice flag (to propagate the flag)
                 if (
                   cleanedText ||

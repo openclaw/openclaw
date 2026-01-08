@@ -541,7 +541,10 @@ export async function runReplyAgent(params: {
                       sessionCtx.MessageSid,
                     );
                     // Let through payloads with audioAsVoice flag even if empty (need to track it)
-                    if (!isRenderablePayload(taggedPayload) && !payload.audioAsVoice)
+                    if (
+                      !isRenderablePayload(taggedPayload) &&
+                      !payload.audioAsVoice
+                    )
                       return;
                     const audioTagResult = extractAudioTag(taggedPayload.text);
                     const cleaned = audioTagResult.cleaned || undefined;

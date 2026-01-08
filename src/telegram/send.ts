@@ -6,11 +6,11 @@ import type {
 } from "@grammyjs/types";
 import { type ApiClientOptions, Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
+import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
-import { logVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";

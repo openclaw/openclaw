@@ -60,11 +60,11 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
-import { resolveTelegramVoiceDecision } from "./voice.js";
 import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
 } from "./pairing-store.js";
+import { resolveTelegramVoiceDecision } from "./voice.js";
 
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;

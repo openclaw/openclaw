@@ -135,7 +135,7 @@ export function splitMediaFromOutput(raw: string): {
   if (media.length === 0) {
     const result: ReturnType<typeof splitMediaFromOutput> = {
       // Return cleaned text if we found a media token OR audio tag, otherwise original
-      text: (foundMediaToken || hasAudioAsVoice) ? cleanedText : trimmedRaw,
+      text: foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw,
     };
     if (hasAudioAsVoice) result.audioAsVoice = true;
     return result;
