@@ -94,29 +94,7 @@ body::before {
   z-index: 0;
 }
 
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  background:
-    repeating-linear-gradient(
-      90deg,
-      var(--grid-line) 0,
-      var(--grid-line) 1px,
-      transparent 1px,
-      transparent 140px
-    ),
-    repeating-linear-gradient(
-      0deg,
-      var(--grid-line) 0,
-      var(--grid-line) 1px,
-      transparent 1px,
-      transparent 140px
-    );
-  opacity: 0.45;
-  pointer-events: none;
-  z-index: 0;
-}
+/* Grid overlay removed for cleaner look */
 
 @keyframes theme-circle-transition {
   0% {
