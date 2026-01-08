@@ -150,7 +150,9 @@ Overrides:
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
 Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
-- `~/.claude/.credentials.json` (Claude Code) → `anthropic:claude-cli`
+- Claude Code → `anthropic:claude-cli`
+  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
+  - Linux/Windows: `~/.claude/.credentials.json`
 - `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
 
 ### `auth`

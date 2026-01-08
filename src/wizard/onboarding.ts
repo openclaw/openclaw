@@ -223,10 +223,16 @@ export async function runOnboardingWizard(
     },
   };
 
-  const authStore = ensureAuthProfileStore();
+  const authStore = ensureAuthProfileStore(undefined, {
+    allowKeychainPrompt: false,
+  });
   const authChoice = (await prompter.select({
     message: "Model/auth choice",
-    options: buildAuthChoiceOptions({ store: authStore, includeSkip: true }),
+    options: buildAuthChoiceOptions({
+      store: authStore,
+      includeSkip: true,
+      includeClaudeCliIfMissing: true,
+    }),
   })) as AuthChoice;
 
   const authResult = await applyAuthChoice({

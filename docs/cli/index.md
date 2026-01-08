@@ -228,7 +228,9 @@ Common options:
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
 
 OAuth sync sources:
-- `~/.claude/.credentials.json` → `anthropic:claude-cli`
+- Claude Code → `anthropic:claude-cli`
+  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
+  - Linux/Windows: `~/.claude/.credentials.json`
 - `~/.codex/auth.json` → `openai-codex:codex-cli`
 
 More detail: [/concepts/oauth](/concepts/oauth)

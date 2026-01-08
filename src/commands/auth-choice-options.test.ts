@@ -1,0 +1,57 @@
+import { describe, expect, it } from "vitest";
+
+import { CLAUDE_CLI_PROFILE_ID, type AuthProfileStore } from "../agents/auth-profiles.js";
+import { buildAuthChoiceOptions } from "./auth-choice-options.js";
+
+describe("buildAuthChoiceOptions", () => {
+  it("includes Claude CLI option on macOS even when missing", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: true,
+      platform: "darwin",
+    });
+
+    const claudeCli = options.find((opt) => opt.value === "claude-cli");
+    expect(claudeCli).toBeDefined();
+    expect(claudeCli?.hint).toBe("requires Keychain access");
+  });
+
+  it("skips missing Claude CLI option off macOS", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: true,
+      platform: "linux",
+    });
+
+    expect(options.find((opt) => opt.value === "claude-cli")).toBeUndefined();
+  });
+
+  it("uses token hint when Claude CLI credentials exist", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        [CLAUDE_CLI_PROFILE_ID]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "token",
+          refresh: "refresh",
+          expires: Date.now() + 60 * 60 * 1000,
+        },
+      },
+    };
+
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: true,
+      platform: "darwin",
+    });
+
+    const claudeCli = options.find((opt) => opt.value === "claude-cli");
+    expect(claudeCli?.hint).toContain("token ok");
+  });
+});

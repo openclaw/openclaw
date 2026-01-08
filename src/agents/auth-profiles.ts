@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -276,10 +277,23 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
 }
 
 /**
- * Read Anthropic OAuth credentials from Claude CLI's credential file.
- * Claude CLI stores credentials at ~/.claude/.credentials.json
+ * Read Anthropic OAuth credentials from Claude CLI's keychain entry (macOS)
+ * or credential file (Linux/Windows).
+ *
+ * On macOS, Claude Code stores credentials in keychain "Claude Code-credentials".
+ * On Linux/Windows, it uses ~/.claude/.credentials.json
  */
-function readClaudeCliCredentials(): OAuthCredential | null {
+function readClaudeCliCredentials(options?: {
+  allowKeychainPrompt?: boolean;
+}): OAuthCredential | null {
+  if (process.platform === "darwin" && options?.allowKeychainPrompt !== false) {
+    const keychainCreds = readClaudeCliKeychainCredentials();
+    if (keychainCreds) {
+      log.info("read anthropic credentials from claude cli keychain");
+      return keychainCreds;
+    }
+  }
+
   const credPath = path.join(
     resolveUserPath("~"),
     CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
@@ -306,6 +320,41 @@ function readClaudeCliCredentials(): OAuthCredential | null {
     refresh: refreshToken,
     expires: expiresAt,
   };
+}
+
+/**
+ * Read Claude Code credentials from macOS keychain.
+ * Uses the `security` CLI to access keychain without native dependencies.
+ */
+function readClaudeCliKeychainCredentials(): OAuthCredential | null {
+  try {
+    const result = execSync(
+      'security find-generic-password -s "Claude Code-credentials" -w',
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const data = JSON.parse(result.trim());
+    const claudeOauth = data?.claudeAiOauth;
+    if (!claudeOauth || typeof claudeOauth !== "object") return null;
+
+    const accessToken = claudeOauth.accessToken;
+    const refreshToken = claudeOauth.refreshToken;
+    const expiresAt = claudeOauth.expiresAt;
+
+    if (typeof accessToken !== "string" || !accessToken) return null;
+    if (typeof refreshToken !== "string" || !refreshToken) return null;
+    if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+
+    return {
+      type: "oauth",
+      provider: "anthropic",
+      access: accessToken,
+      refresh: refreshToken,
+      expires: expiresAt,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -374,12 +423,15 @@ function shallowEqualOAuthCredentials(
  *
  * Returns true if any credentials were updated.
  */
-function syncExternalCliCredentials(store: AuthProfileStore): boolean {
+function syncExternalCliCredentials(
+  store: AuthProfileStore,
+  options?: { allowKeychainPrompt?: boolean },
+): boolean {
   let mutated = false;
   const now = Date.now();
 
   // Sync from Claude CLI
-  const claudeCreds = readClaudeCliCredentials();
+  const claudeCreds = readClaudeCliCredentials(options);
   if (claudeCreds) {
     const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
     const existingOAuth = existing?.type === "oauth" ? existing : undefined;
@@ -486,13 +538,16 @@ export function loadAuthProfileStore(): AuthProfileStore {
   return store;
 }
 
-export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
+export function ensureAuthProfileStore(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
   if (asStore) {
     // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
+    const synced = syncExternalCliCredentials(asStore, options);
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -532,7 +587,7 @@ export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store);
+  const syncedCli = syncExternalCliCredentials(store, options);
   const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
   if (shouldWrite) {
     saveJsonFile(authPath, store);

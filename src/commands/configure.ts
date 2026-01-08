@@ -286,8 +286,9 @@ async function promptAuthConfig(
     await select({
       message: "Model/auth choice",
       options: buildAuthChoiceOptions({
-        store: ensureAuthProfileStore(),
+        store: ensureAuthProfileStore(undefined, { allowKeychainPrompt: false }),
         includeSkip: true,
+        includeClaudeCliIfMissing: true,
       }),
     }),
     runtime,
