@@ -59,6 +59,20 @@ export type ConfigIoDeps = {
   logger?: Pick<typeof console, "error" | "warn">;
 };
 
+function warnOnConfigMiskeys(
+  raw: unknown,
+  logger: Pick<typeof console, "warn">,
+): void {
+  if (!raw || typeof raw !== "object") return;
+  const gateway = (raw as Record<string, unknown>).gateway;
+  if (!gateway || typeof gateway !== "object") return;
+  if ("token" in (gateway as Record<string, unknown>)) {
+    logger.warn(
+      'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
+    );
+  }
+}
+
 function resolveConfigPathForDeps(deps: Required<ConfigIoDeps>): string {
   if (deps.configPath) return deps.configPath;
   return resolveConfigPath(deps.env, resolveStateDir(deps.env, deps.homedir));
@@ -106,6 +120,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
+      warnOnConfigMiskeys(parsed, deps.logger);
       if (typeof parsed !== "object" || parsed === null) return {};
       const validated = ClawdbotSchema.safeParse(parsed);
       if (!validated.success) {

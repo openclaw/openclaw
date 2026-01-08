@@ -129,6 +129,10 @@ For daemon runs, persist it in `~/.clawdbot/clawdbot.json`:
 }
 ```
 
+Notes:
+- Non-loopback binds require `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- `gateway.remote.token` is only for remote CLI calls; it does not enable local auth.
+
 Then point exe.dev’s proxy at `8080` (or whatever port you chose) and open your VM’s HTTPS URL:
 
 ```bash

@@ -5,7 +5,13 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "../commands/daemon-runtime.js";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
+import {
+  createConfigIO,
+  loadConfig,
+  resolveConfigPath,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../config/config.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
@@ -17,11 +23,13 @@ import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
 } from "../daemon/inspect.js";
+import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { callGateway } from "../gateway/call.js";
+import { resolveGatewayBindHost } from "../gateway/net.js";
 import {
   formatPortDiagnostics,
   inspectPortUsage,
@@ -33,6 +41,22 @@ import { defaultRuntime } from "../runtime.js";
 import { createDefaultDeps } from "./deps.js";
 import { withProgress } from "./progress.js";
 
+type ConfigSummary = {
+  path: string;
+  exists: boolean;
+  valid: boolean;
+  issues?: Array<{ path: string; message: string }>;
+};
+
+type GatewayStatusSummary = {
+  bindMode: string;
+  bindHost: string | null;
+  port: number;
+  portSource: "service args" | "env/config";
+  probeUrl: string;
+  probeNote?: string;
+};
+
 type DaemonStatus = {
   service: {
     label: string;
@@ -42,6 +66,8 @@ type DaemonStatus = {
     command?: {
       programArguments: string[];
       workingDirectory?: string;
+      environment?: Record<string, string>;
+      sourcePath?: string;
     } | null;
     runtime?: {
       status?: string;
@@ -57,15 +83,29 @@ type DaemonStatus = {
       missingUnit?: boolean;
     };
   };
+  config?: {
+    cli: ConfigSummary;
+    daemon?: ConfigSummary;
+    mismatch?: boolean;
+  };
+  gateway?: GatewayStatusSummary;
   port?: {
     port: number;
     status: PortUsageStatus;
     listeners: PortListener[];
     hints: string[];
   };
+  portCli?: {
+    port: number;
+    status: PortUsageStatus;
+    listeners: PortListener[];
+    hints: string[];
+  };
+  lastError?: string;
   rpc?: {
     ok: boolean;
     error?: string;
+    url?: string;
   };
   legacyServices: Array<{ label: string; detail: string }>;
   extraServices: Array<{ label: string; detail: string; scope: string }>;
@@ -253,6 +293,15 @@ async function gatherDaemonStatus(opts: {
     deep: opts.deep,
   });
   const rpc = opts.probe ? await probeGatewayStatus(opts.rpc) : undefined;
+  let lastError: string | undefined;
+  if (
+    loaded &&
+    runtime?.status === "running" &&
+    portStatus &&
+    portStatus.status !== "busy"
+  ) {
+    lastError = (await readLastGatewayErrorLine(process.env)) ?? undefined;
+  }
 
   return {
     service: {
@@ -264,6 +313,7 @@ async function gatherDaemonStatus(opts: {
       runtime,
     },
     port: portStatus,
+    lastError,
     rpc,
     legacyServices,
     extraServices,
@@ -332,6 +382,28 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       hints: status.port.hints,
     })) {
       defaultRuntime.error(line);
+    }
+  }
+  if (
+    service.loaded &&
+    service.runtime?.status === "running" &&
+    status.port &&
+    status.port.status !== "busy"
+  ) {
+    defaultRuntime.error(
+      `Gateway port ${status.port.port} is not listening (service appears running).`,
+    );
+    if (status.lastError) {
+      defaultRuntime.error(`Last gateway error: ${status.lastError}`);
+    }
+    if (process.platform === "linux") {
+      defaultRuntime.error(
+        `Logs: journalctl --user -u ${GATEWAY_SYSTEMD_SERVICE_NAME}.service -n 200 --no-pager`,
+      );
+    } else if (process.platform === "darwin") {
+      const logs = resolveGatewayLogPaths(process.env);
+      defaultRuntime.error(`Logs: ${logs.stdoutPath}`);
+      defaultRuntime.error(`Errors: ${logs.stderrPath}`);
     }
   }
 

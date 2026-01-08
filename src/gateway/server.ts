@@ -464,7 +464,7 @@ export async function startGatewayServer(
   }
   if (!isLoopbackHost(bindHost) && authMode === "none") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth or CLAWDBOT_GATEWAY_TOKEN)`,
+      `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth.token or CLAWDBOT_GATEWAY_TOKEN, or pass --token)`,
     );
   }
 

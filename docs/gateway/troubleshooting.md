@@ -29,6 +29,18 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 - Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
 
+### Service Running but Port Not Listening
+
+If the service reports **running** but nothing is listening on the gateway port,
+the Gateway likely refused to bind.
+
+**Check:**
+- `gateway.mode` must be `local` for `clawdbot gateway` and the daemon.
+- Non-loopback binds (`lan`/`tailnet`/`auto`) require auth:
+  `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- `gateway.remote.token` is for remote CLI calls only; it does **not** enable local auth.
+- `gateway.token` is ignored; use `gateway.auth.token`.
+
 ### Address Already in Use (Port 18789)
 
 This means something is already listening on the gateway port.

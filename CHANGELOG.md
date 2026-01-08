@@ -20,6 +20,7 @@
 
 ### Fixes
 - CLI/Daemon: add `clawdbot logs` tailing and improve restart/service hints across platforms.
+- Gateway/CLI: tighten LAN bind auth checks, warn on mis-keyed gateway tokens, and surface last gateway error when daemon looks running but the port is closed.
 - Auto-reply: keep typing indicators alive during tool execution without changing typing-mode semantics. Thanks @thesash for PR #452.
 - macOS: harden Voice Wake tester/runtime (pause trigger, mic persistence, local-only tester) and keep transcript logs private. Thanks @xadenryan for PR #438.
 - macOS: preserve node bridge tunnel port override so remote nodes connect on the bridge port. Thanks @sircrumpet for PR #364.
