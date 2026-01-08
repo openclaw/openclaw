@@ -33,6 +33,8 @@ import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import type { ServiceConfigAudit } from "../daemon/service-audit.js";
+import { auditGatewayServiceConfig } from "../daemon/service-audit.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
 import {
@@ -89,6 +91,7 @@ type DaemonStatus = {
       cachedLabel?: boolean;
       missingUnit?: boolean;
     };
+    configAudit?: ServiceConfigAudit;
   };
   config?: {
     cli: ConfigSummary;
@@ -343,6 +346,10 @@ async function gatherDaemonStatus(opts: {
     service.readCommand(process.env).catch(() => null),
     service.readRuntime(process.env).catch(() => undefined),
   ]);
+  const configAudit = await auditGatewayServiceConfig({
+    env: process.env,
+    command,
+  });
 
   const serviceEnv = command?.environment ?? undefined;
   const mergedDaemonEnv = {
@@ -484,6 +491,7 @@ async function gatherDaemonStatus(opts: {
       notLoadedText: service.notLoadedText,
       command,
       runtime,
+      configAudit,
     },
     config: {
       cli: cliConfigSummary,
@@ -537,6 +545,16 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   const daemonEnvLines = safeDaemonEnv(service.command?.environment);
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`Daemon env: ${daemonEnvLines.join(" ")}`);
+  }
+  if (service.configAudit?.issues.length) {
+    defaultRuntime.error(
+      "Service config looks out of date or non-standard.",
+    );
+    for (const issue of service.configAudit.issues) {
+      const detail = issue.detail ? ` (${issue.detail})` : "";
+      defaultRuntime.error(`Service config issue: ${issue.message}${detail}`);
+    }
+    defaultRuntime.error('Recommendation: run "clawdbot doctor".');
   }
   if (status.config) {
     const cliCfg = `${status.config.cli.path}${status.config.cli.exists ? "" : " (missing)"}${status.config.cli.valid ? "" : " (invalid)"}`;

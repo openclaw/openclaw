@@ -54,7 +54,11 @@ clawdbot doctor
 ```
 
 ## System control (systemd user unit)
-Full unit example lives in the [Gateway runbook](/gateway). Minimal setup:
+Clawdbot installs a systemd **user** service by default. Use a **system**
+service for shared or always-on servers. The full unit example and guidance
+live in the [Gateway runbook](/gateway).
+
+Minimal setup:
 
 Create `~/.config/systemd/user/clawdbot-gateway.service`:
 

@@ -189,6 +189,14 @@ Bundled mac app:
   - `launchctl` only works if the LaunchAgent is installed; otherwise use `clawdbot daemon install` first.
 
 ## Supervision (systemd user unit)
+Clawdbot installs a **systemd user service** by default on Linux/WSL2. We
+recommend user services for single-user machines (simpler env, per-user config).
+Use a **system service** for multi-user or always-on servers (no lingering
+required, shared supervision).
+
+`clawdbot daemon install` writes the user unit. `clawdbot doctor` audits the
+unit and can update it to match the current recommended defaults.
+
 Create `~/.config/systemd/user/clawdbot-gateway.service`:
 ```
 [Unit]

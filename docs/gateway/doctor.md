@@ -51,6 +51,7 @@ cat ~/.clawdbot/clawdbot.json
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
 - Gateway runtime checks (service installed but not running; cached launchd label).
+- Supervisor config audit (launchd/systemd/schtasks) with optional repair.
 - Gateway port collision diagnostics (default `18789`).
 - Security warnings for open DM policies.
 - systemd linger check on Linux.
@@ -143,17 +144,23 @@ workspace.
 Doctor runs a health check and offers to restart the gateway when it looks
 unhealthy.
 
-### 11) Gateway runtime + port diagnostics
+### 11) Supervisor config audit + repair
+Doctor checks the installed supervisor config (launchd/systemd/schtasks) for
+missing or outdated defaults (e.g., systemd network-online dependencies and
+restart delay). When it finds a mismatch, it recommends an update and can
+rewrite the service file/task to the current defaults.
+
+### 12) Gateway runtime + port diagnostics
 Doctor inspects the daemon runtime (PID, last exit status) and warns when the
 service is installed but not actually running. It also checks for port collisions
 on the gateway port (default `18789`) and reports likely causes (gateway already
 running, SSH tunnel).
 
-### 12) Config write + wizard metadata
+### 13) Config write + wizard metadata
 Doctor persists any config changes and stamps wizard metadata to record the
 doctor run.
 
-### 13) Workspace tips (backup + memory system)
+### 14) Workspace tips (backup + memory system)
 Doctor suggests a workspace memory system when missing and prints a backup tip
 if the workspace is not already under git.
 

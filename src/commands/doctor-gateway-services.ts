@@ -15,6 +15,7 @@ import {
 } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { auditGatewayServiceConfig } from "../daemon/service-audit.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -22,6 +23,18 @@ import {
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+
+function detectGatewayRuntime(
+  programArguments: string[] | undefined,
+): GatewayDaemonRuntime {
+  const first = programArguments?.[0];
+  if (first) {
+    const base = path.basename(first).toLowerCase();
+    if (base === "bun" || base === "bun.exe") return "bun";
+    if (base === "node" || base === "node.exe") return "node";
+  }
+  return DEFAULT_GATEWAY_DAEMON_RUNTIME;
+}
 
 export async function maybeMigrateLegacyGatewayService(
   cfg: ClawdbotConfig,
@@ -110,6 +123,83 @@ export async function maybeMigrateLegacyGatewayService(
     workingDirectory,
     environment,
   });
+}
+
+export async function maybeRepairGatewayServiceConfig(
+  cfg: ClawdbotConfig,
+  mode: "local" | "remote",
+  runtime: RuntimeEnv,
+  prompter: DoctorPrompter,
+) {
+  if (resolveIsNixMode(process.env)) {
+    note("Nix mode detected; skip service updates.", "Gateway");
+    return;
+  }
+
+  if (mode === "remote") {
+    note("Gateway mode is remote; skipped local service audit.", "Gateway");
+    return;
+  }
+
+  const service = resolveGatewayService();
+  const command = await service.readCommand(process.env).catch(() => null);
+  if (!command) return;
+
+  const audit = await auditGatewayServiceConfig({
+    env: process.env,
+    command,
+  });
+  if (audit.issues.length === 0) return;
+
+  note(
+    audit.issues
+      .map((issue) =>
+        issue.detail ? `- ${issue.message} (${issue.detail})` : `- ${issue.message}`,
+      )
+      .join("\n"),
+    "Gateway service config",
+  );
+
+  const repair = await prompter.confirmSkipInNonInteractive({
+    message: "Update gateway service config to the recommended defaults now?",
+    initialValue: true,
+  });
+  if (!repair) return;
+
+  const devMode =
+    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
+    process.argv[1]?.endsWith(".ts");
+  const port = resolveGatewayPort(cfg, process.env);
+  const runtimeChoice = detectGatewayRuntime(command.programArguments);
+  const { programArguments, workingDirectory } =
+    await resolveGatewayProgramArguments({
+      port,
+      dev: devMode,
+      runtime: runtimeChoice,
+    });
+  const environment: Record<string, string | undefined> = {
+    PATH: process.env.PATH,
+    CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
+    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
+    CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
+    CLAWDBOT_GATEWAY_PORT: String(port),
+    CLAWDBOT_GATEWAY_TOKEN:
+      cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    CLAWDBOT_LAUNCHD_LABEL:
+      process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+  };
+
+  try {
+    await service.install({
+      env: process.env,
+      stdout: process.stdout,
+      programArguments,
+      workingDirectory,
+      environment,
+    });
+  } catch (err) {
+    runtime.error(`Gateway service update failed: ${String(err)}`);
+  }
 }
 
 export async function maybeScanExtraGatewayServices(options: DoctorOptions) {

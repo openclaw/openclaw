@@ -33,6 +33,12 @@ function resolveSystemdUnitPath(
   return resolveSystemdUnitPathForName(env, GATEWAY_SYSTEMD_SERVICE_NAME);
 }
 
+export function resolveSystemdUserUnitPath(
+  env: Record<string, string | undefined>,
+): string {
+  return resolveSystemdUnitPath(env);
+}
+
 function resolveLoginctlUser(
   env: Record<string, string | undefined>,
 ): string | null {
