@@ -52,6 +52,8 @@ export type GatewayService = {
   readCommand: (env: Record<string, string | undefined>) => Promise<{
     programArguments: string[];
     workingDirectory?: string;
+    environment?: Record<string, string>;
+    sourcePath?: string;
   } | null>;
   readRuntime: (
     env: Record<string, string | undefined>,

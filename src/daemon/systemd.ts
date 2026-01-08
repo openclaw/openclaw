@@ -191,12 +191,18 @@ function parseSystemdExecStart(value: string): string[] {
 
 export async function readSystemdServiceExecStart(
   env: Record<string, string | undefined>,
-): Promise<{ programArguments: string[]; workingDirectory?: string } | null> {
+): Promise<{
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+  sourcePath?: string;
+} | null> {
   const unitPath = resolveSystemdUnitPath(env);
   try {
     const content = await fs.readFile(unitPath, "utf8");
     let execStart = "";
     let workingDirectory = "";
+    const environment: Record<string, string> = {};
     for (const rawLine of content.split("\n")) {
       const line = rawLine.trim();
       if (!line || line.startsWith("#")) continue;
@@ -204,6 +210,10 @@ export async function readSystemdServiceExecStart(
         execStart = line.slice("ExecStart=".length).trim();
       } else if (line.startsWith("WorkingDirectory=")) {
         workingDirectory = line.slice("WorkingDirectory=".length).trim();
+      } else if (line.startsWith("Environment=")) {
+        const raw = line.slice("Environment=".length).trim();
+        const parsed = parseSystemdEnvAssignment(raw);
+        if (parsed) environment[parsed.key] = parsed.value;
       }
     }
     if (!execStart) return null;
@@ -211,10 +221,45 @@ export async function readSystemdServiceExecStart(
     return {
       programArguments,
       ...(workingDirectory ? { workingDirectory } : {}),
+      ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      sourcePath: unitPath,
     };
   } catch {
     return null;
   }
+}
+
+function parseSystemdEnvAssignment(
+  raw: string,
+): { key: string; value: string } | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+
+  const unquoted = (() => {
+    if (!(trimmed.startsWith('"') && trimmed.endsWith('"'))) return trimmed;
+    let out = "";
+    let escapeNext = false;
+    for (const ch of trimmed.slice(1, -1)) {
+      if (escapeNext) {
+        out += ch;
+        escapeNext = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escapeNext = true;
+        continue;
+      }
+      out += ch;
+    }
+    return out;
+  })();
+
+  const eq = unquoted.indexOf("=");
+  if (eq <= 0) return null;
+  const key = unquoted.slice(0, eq).trim();
+  if (!key) return null;
+  const value = unquoted.slice(eq + 1);
+  return { key, value };
 }
 
 export type SystemdServiceInfo = {
