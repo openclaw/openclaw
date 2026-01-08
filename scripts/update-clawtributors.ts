@@ -131,21 +131,33 @@ const entriesByKey = new Map<string, Entry>();
 
 for (const seed of seedEntries) {
   const login = loginFromUrl(seed.html_url);
-  const key = login ? login.toLowerCase() : `name:${normalizeName(seed.display)}`;
-  if (entriesByKey.has(key)) {
-    continue;
+  const resolvedLogin =
+    login ?? resolveLogin(seed.display, null, apiByLogin, nameToLogin, emailToLogin);
+  const key = resolvedLogin ? resolvedLogin.toLowerCase() : `name:${normalizeName(seed.display)}`;
+  const avatar =
+    seed.avatar_url && !isGhostAvatar(seed.avatar_url)
+      ? normalizeAvatar(seed.avatar_url)
+      : placeholderAvatar;
+  const existing = entriesByKey.get(key);
+  if (!existing) {
+    const user = resolvedLogin ? apiByLogin.get(key) : null;
+    entriesByKey.set(key, {
+      key,
+      login: resolvedLogin ?? login ?? undefined,
+      display: seed.display,
+      html_url: user?.html_url ?? seed.html_url,
+      avatar_url: user?.avatar_url ?? avatar,
+      lines: 0,
+    });
+  } else {
+    existing.display = existing.display || seed.display;
+    if (existing.avatar_url === placeholderAvatar || !existing.avatar_url) {
+      existing.avatar_url = avatar;
+    }
+    if (!existing.html_url || existing.html_url.includes("/search?q=")) {
+      existing.html_url = seed.html_url;
+    }
   }
-  const avatar = seed.avatar_url && !isGhostAvatar(seed.avatar_url)
-    ? normalizeAvatar(seed.avatar_url)
-    : placeholderAvatar;
-  entriesByKey.set(key, {
-    key,
-    login: login ?? undefined,
-    display: seed.display,
-    html_url: seed.html_url,
-    avatar_url: avatar,
-    lines: 0,
-  });
 }
 
 for (const item of contributors) {
