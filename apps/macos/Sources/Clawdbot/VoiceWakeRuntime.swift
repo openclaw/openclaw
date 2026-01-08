@@ -399,11 +399,11 @@ actor VoiceWakeRuntime {
             return "\(seg.text)@\(start)-\(end)"
         }.joined(separator: ", ")
 
-        self.logger.info(
-            "voicewake runtime transcript='\(transcript, privacy: .public)' textOnly=\(textOnly) " +
+        self.logger.debug(
+            "voicewake runtime transcript='\(transcript, privacy: .private)' textOnly=\(textOnly) " +
                 "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
                 "capturing=\(capturing) fallback=\(usedFallback) " +
-                "\(matchSummary) segments=[\(segmentSummary, privacy: .public)]")
+                "\(matchSummary) segments=[\(segmentSummary, privacy: .private)]")
     }
 
     private func noteAudioTap(rms: Double) {

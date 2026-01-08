@@ -18,6 +18,7 @@
 - Auto-reply: removed `autoReply` from Discord/Slack/Telegram channel configs; use `requireMention` instead (Telegram topics now support `requireMention` overrides).
 
 ### Fixes
+- macOS: harden Voice Wake tester/runtime (pause trigger, mic persistence, local-only tester) and keep transcript logs private. Thanks @xadenryan for PR #438.
 - Doctor/Daemon: surface gateway runtime state + port collision diagnostics; warn on legacy workspace dirs.
 - Discord: format slow listener logs in seconds to match shared duration style.
 - CLI: show colored table output for `clawdbot cron list` (JSON behind `--json`).

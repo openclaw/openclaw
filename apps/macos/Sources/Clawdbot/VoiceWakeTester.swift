@@ -282,10 +282,10 @@ final class VoiceWakeTester {
             "match=true gap=\(String(format: "%.2f", $0.postGap))s cmdLen=\($0.command.count)"
         } ?? "match=false"
 
-        self.logger.info(
-            "voicewake test transcript='\(transcript, privacy: .public)' textOnly=\(textOnly) " +
+        self.logger.debug(
+            "voicewake test transcript='\(transcript, privacy: .private)' textOnly=\(textOnly) " +
                 "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
-                "\(matchSummary) gaps=[\(gaps, privacy: .public)] segments=[\(segmentSummary, privacy: .public)]")
+                "\(matchSummary) gaps=[\(gaps, privacy: .private)] segments=[\(segmentSummary, privacy: .private)]")
     }
 
     private static func debugSegments(_ segments: [WakeWordSegment]) -> String {
