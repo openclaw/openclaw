@@ -33,6 +33,7 @@ Works:
 Does NOT work:
 - **Image/file content** from channel or group chat messages (payload only includes HTML stub).
 - Downloading attachments stored in SharePoint/OneDrive (requires Graph).
+- Reading **message history** beyond the live webhook event (requires Graph).
 - Accessing messages outside the installed team.
 
 ### With **Teams RSC + Microsoft Graph Application permissions**
@@ -40,6 +41,7 @@ Adds:
 - Downloading **hosted contents** (images pasted into messages).
 - Downloading **file attachments** stored in SharePoint/OneDrive.
 - Full message/attachment lookup via Graph endpoints.
+- Reading **channel/chat message history** via Graph.
 
 Still **not** added automatically:
 - 1:1 chat file support (requires separate Bot file flows if we want to support it).
@@ -78,6 +80,9 @@ Expected behavior:
 Teams stores images and files in Microsoft 365 storage (SharePoint/OneDrive). The Teams bot webhook **does not send file bytes**, only a message shell. To access the actual file, the app must call **Microsoft Graph** with sufficient permissions.
 
 If Graph tokens are unavailable (permissions missing or no admin consent), image downloads will always fail.
+
+## Note on History Access
+The Teams bot webhook only delivers **new** messages. Any attempt to fetch **prior messages**, thread history, or message lists requires Microsoft Graph permissions (for example, `ChannelMessage.Read.All` or `Chat.Read.All`). Without Graph, history lookups will always return empty or be unavailable.
 
 ## Validation Checklist
 - [ ] Teams app installed in target team.
