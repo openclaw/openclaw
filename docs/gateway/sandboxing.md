@@ -45,6 +45,10 @@ Not sandboxed:
 - `"rw"`: mounts the agent workspace read/write at `/workspace`.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Skills note: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`,
+Clawdbot mirrors eligible skills into the sandbox workspace (`.../skills`) so
+they can be read. With `"rw"`, workspace skills are readable from
+`/workspace/skills`.
 
 ## Images + setup
 Default image: `clawdbot-sandbox:bookworm-slim`
