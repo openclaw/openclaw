@@ -73,14 +73,6 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     textAliases: ["/new"],
   },
   {
-    key: "compact",
-    nativeName: "compact",
-    description: "Compact the current session context.",
-    textAliases: ["/compact"],
-    acceptsArgs: true,
-    supportsNative: false,
-  },
-  {
     key: "think",
     nativeName: "think",
     description: "Set thinking level.",
