@@ -114,7 +114,7 @@ export async function runOnboardingWizard(
 
   const quickstartHint = "Configure details later via clawdbot configure.";
   const advancedHint =
-    "Configure anything via the Clawdbot configuration wizard anytime.";
+    "Configure port, network, Tailscale, and auth options.";
   let flow = (await prompter.select({
     message: "Onboarding mode",
     options: [
@@ -408,6 +408,8 @@ export async function runOnboardingWizard(
     forceAllowFromProviders:
       flow === "quickstart" ? ["telegram", "whatsapp"] : [],
     skipDmPolicyPrompt: flow === "quickstart",
+    skipConfirm: flow === "quickstart",
+    quickstartDefaults: flow === "quickstart",
   });
 
   await writeConfigFile(nextConfig);
