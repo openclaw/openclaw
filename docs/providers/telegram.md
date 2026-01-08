@@ -15,8 +15,17 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 - DMs share the agent's main session; groups stay isolated (`telegram:group:<chatId>`).
 
 ## Setup (fast path)
-1) Create a bot with @BotFather and copy the token.
-2) Configure the token (env or config). Example:
+### 1) Create a bot token (BotFather)
+1) Open Telegram and chat with **@BotFather**.
+2) Run `/newbot`, then follow the prompts (name + username ending in `bot`).
+3) Copy the token and store it safely.
+
+Optional BotFather settings:
+- `/setjoingroups` — allow/deny adding the bot to groups.
+- `/setprivacy` — control whether the bot sees all group messages.
+
+### 2) Configure the token (env or config)
+Example:
 
 ```json5
 {
@@ -33,7 +42,26 @@ Multi-account support: use `telegram.accounts` with per-account tokens and optio
 
 3) Start the gateway. Telegram starts when a `telegram` config section exists and a token is resolved.
 4) DM access defaults to pairing. Approve the code when the bot is first contacted.
-5) For groups: add the bot, disable privacy mode (or make it admin), then set `telegram.groups` to control mention gating + allowlists.
+5) For groups: add the bot, decide privacy/admin behavior (below), then set `telegram.groups` to control mention gating + allowlists.
+
+## Token + privacy + permissions (Telegram side)
+
+### Token creation (BotFather)
+- `/newbot` creates the bot and returns the token (keep it secret).
+- If a token leaks, revoke/regenerate it via @BotFather and update your config.
+
+### Group message visibility (Privacy Mode)
+Telegram bots default to **Privacy Mode**, which limits which group messages they receive.
+If your bot must see *all* group messages, you have two options:
+- Disable privacy mode with `/setprivacy` **or**
+- Add the bot as a group **admin** (admin bots receive all messages).
+
+**Note:** When you toggle privacy mode, Telegram requires removing + re‑adding the bot
+to each group for the change to take effect.
+
+### Group permissions (admin rights)
+Admin status is set inside the group (Telegram UI). Admin bots always receive all
+group messages, so use admin if you need full visibility.
 
 ## How it works (behavior)
 - Inbound messages are normalized into the shared provider envelope with reply context and media placeholders.
