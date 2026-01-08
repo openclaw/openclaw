@@ -7,9 +7,9 @@ import {
   shouldLogVerbose,
   warn,
 } from "../globals.js";
-import { colorize, isRich, theme } from "../terminal/theme.js";
 import { runExec } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
 export async function getTailnetHostname(exec: typeof runExec = runExec) {
@@ -182,14 +182,10 @@ export async function ensureFunnel(
     if (shouldLogVerbose()) {
       const rich = isRich();
       if (stdout.trim()) {
-        runtime.error(
-          colorize(rich, theme.muted, `stdout: ${stdout.trim()}`),
-        );
+        runtime.error(colorize(rich, theme.muted, `stdout: ${stdout.trim()}`));
       }
       if (stderr.trim()) {
-        runtime.error(
-          colorize(rich, theme.muted, `stderr: ${stderr.trim()}`),
-        );
+        runtime.error(colorize(rich, theme.muted, `stderr: ${stderr.trim()}`));
       }
       runtime.error(err as Error);
     }
