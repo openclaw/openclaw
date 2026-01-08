@@ -222,6 +222,7 @@
 - Agent: add `skipBootstrap` config option. Thanks @onutc for PR #292.
 - UI: add favicon.ico derived from the macOS app icon. Thanks @jeffersonwarrior for PR #305.
 - Tooling: replace tsx with bun for TypeScript execution. Thanks @obviyus for PR #278.
+- Deps: refresh workspace dependencies (pi-* 0.38, carbon 0.13, Vite 7.3.1, TypeBox 0.34.47).
 - Deps: bump pi-* stack, Slack SDK, discord-api-types, file-type, zod, and Biome.
 - Skills: add CodexBar model usage helper with macOS requirement metadata.
 - Skills: add 1Password CLI skill with op examples.
