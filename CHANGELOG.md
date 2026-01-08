@@ -27,6 +27,7 @@
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
+- Signal: accept UUID-only senders for pairing/allowlists/routing when sourceNumber is missing. (#523) — thanks @neist
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
