@@ -19,6 +19,7 @@
 
 ### Fixes
 - Discord: format slow listener logs in seconds to match shared duration style.
+- CLI: add cron `create`/`remove`/`delete` aliases for job management.
 - Agent: avoid duplicating context/skills when SDK rebuilds the system prompt. (#418)
 - Signal: reconnect SSE monitor with abortable backoff; log stream errors. Thanks @nexty5870 for PR #430.
 - Gateway: pass resolved provider as messageProvider for agent runs so provider-specific tools are available. Thanks @imfing for PR #389.
