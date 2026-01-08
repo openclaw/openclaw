@@ -46,6 +46,7 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
+import { parseTelegramTarget } from "../telegram/targets.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import type { CronJob } from "./types.js";
@@ -487,6 +488,9 @@ export async function runCronIsolatedAgentTurn(params: {
           summary: "Delivery skipped (no Telegram chatId).",
         };
       }
+      const telegramTarget = parseTelegramTarget(resolvedDelivery.to);
+      const chatId = telegramTarget.chatId;
+      const messageThreadId = telegramTarget.messageThreadId;
       const textLimit = resolveTextChunkLimit(params.cfg, "telegram");
       try {
         for (const payload of payloads) {
@@ -497,29 +501,23 @@ export async function runCronIsolatedAgentTurn(params: {
               payload.text ?? "",
               textLimit,
             )) {
-              await params.deps.sendMessageTelegram(
-                resolvedDelivery.to,
-                chunk,
-                {
-                  verbose: false,
-                  token: telegramToken || undefined,
-                },
-              );
+              await params.deps.sendMessageTelegram(chatId, chunk, {
+                verbose: false,
+                token: telegramToken || undefined,
+                messageThreadId,
+              });
             }
           } else {
             let first = true;
             for (const url of mediaList) {
               const caption = first ? (payload.text ?? "") : "";
               first = false;
-              await params.deps.sendMessageTelegram(
-                resolvedDelivery.to,
-                caption,
-                {
-                  verbose: false,
-                  mediaUrl: url,
-                  token: telegramToken || undefined,
-                },
-              );
+              await params.deps.sendMessageTelegram(chatId, caption, {
+                verbose: false,
+                mediaUrl: url,
+                token: telegramToken || undefined,
+                messageThreadId,
+              });
             }
           }
         }
