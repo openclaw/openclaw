@@ -31,7 +31,7 @@
 - Discord: include all inbound attachments in `MediaPaths`/`MediaUrls` (back-compat `MediaPath`/`MediaUrl` still first).
 - Sandbox: add `agent.sandbox.workspaceAccess` (`none`/`ro`/`rw`) to control agent workspace visibility inside the container; `ro` hard-disables `write`/`edit`.
 - Routing: allow per-agent sandbox overrides (including `workspaceAccess` and `sandbox.tools`) plus per-agent tool policies in multi-agent configs. Thanks @pasogott for PR #380.
-- Sandbox: allow per-agent `routing.agents.<agentId>.sandbox.docker.setupCommand` overrides for multi-agent gateways (ignored when `scope: "shared"`).
+- Sandbox: allow per-agent `routing.agents.<agentId>.sandbox.docker.*` overrides for multi-agent gateways (ignored when `scope: "shared"`).
 - Tools: make per-agent tool policies override global defaults and run bash synchronously when `process` is disallowed.
 - Tools: scope `process` sessions per agent to prevent cross-agent visibility.
 - Cron: clamp timer delay to avoid TimeoutOverflowWarning. Thanks @emanuelst for PR #412.

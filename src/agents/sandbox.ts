@@ -246,6 +246,9 @@ function defaultSandboxConfig(
     perSession: agentSandbox?.perSession ?? agent?.perSession,
   });
 
+  const globalDocker = agent?.docker;
+  const agentDocker = scope === "shared" ? undefined : agentSandbox?.docker;
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
     scope,
@@ -256,29 +259,39 @@ function defaultSandboxConfig(
       agent?.workspaceRoot ??
       DEFAULT_SANDBOX_WORKSPACE_ROOT,
     docker: {
-      image: agent?.docker?.image ?? DEFAULT_SANDBOX_IMAGE,
+      image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,
       containerPrefix:
-        agent?.docker?.containerPrefix ?? DEFAULT_SANDBOX_CONTAINER_PREFIX,
-      workdir: agent?.docker?.workdir ?? DEFAULT_SANDBOX_WORKDIR,
-      readOnlyRoot: agent?.docker?.readOnlyRoot ?? true,
-      tmpfs: agent?.docker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
-      network: agent?.docker?.network ?? "none",
-      user: agent?.docker?.user,
-      capDrop: agent?.docker?.capDrop ?? ["ALL"],
-      env: agent?.docker?.env ?? { LANG: "C.UTF-8" },
-      setupCommand:
-        scope === "shared"
-          ? agent?.docker?.setupCommand
-          : (agentSandbox?.docker?.setupCommand ?? agent?.docker?.setupCommand),
-      pidsLimit: agent?.docker?.pidsLimit,
-      memory: agent?.docker?.memory,
-      memorySwap: agent?.docker?.memorySwap,
-      cpus: agent?.docker?.cpus,
-      ulimits: agent?.docker?.ulimits,
-      seccompProfile: agent?.docker?.seccompProfile,
-      apparmorProfile: agent?.docker?.apparmorProfile,
-      dns: agent?.docker?.dns,
-      extraHosts: agent?.docker?.extraHosts,
+        agentDocker?.containerPrefix ??
+        globalDocker?.containerPrefix ??
+        DEFAULT_SANDBOX_CONTAINER_PREFIX,
+      workdir:
+        agentDocker?.workdir ??
+        globalDocker?.workdir ??
+        DEFAULT_SANDBOX_WORKDIR,
+      readOnlyRoot:
+        agentDocker?.readOnlyRoot ?? globalDocker?.readOnlyRoot ?? true,
+      tmpfs: agentDocker?.tmpfs ??
+        globalDocker?.tmpfs ?? ["/tmp", "/var/tmp", "/run"],
+      network: agentDocker?.network ?? globalDocker?.network ?? "none",
+      user: agentDocker?.user ?? globalDocker?.user,
+      capDrop: agentDocker?.capDrop ?? globalDocker?.capDrop ?? ["ALL"],
+      env: agentDocker?.env
+        ? { ...(globalDocker?.env ?? { LANG: "C.UTF-8" }), ...agentDocker.env }
+        : (globalDocker?.env ?? { LANG: "C.UTF-8" }),
+      setupCommand: agentDocker?.setupCommand ?? globalDocker?.setupCommand,
+      pidsLimit: agentDocker?.pidsLimit ?? globalDocker?.pidsLimit,
+      memory: agentDocker?.memory ?? globalDocker?.memory,
+      memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
+      cpus: agentDocker?.cpus ?? globalDocker?.cpus,
+      ulimits: agentDocker?.ulimits
+        ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
+        : globalDocker?.ulimits,
+      seccompProfile:
+        agentDocker?.seccompProfile ?? globalDocker?.seccompProfile,
+      apparmorProfile:
+        agentDocker?.apparmorProfile ?? globalDocker?.apparmorProfile,
+      dns: agentDocker?.dns ?? globalDocker?.dns,
+      extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
     },
     browser: {
       enabled: agent?.browser?.enabled ?? false,

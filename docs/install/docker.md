@@ -160,7 +160,7 @@ Hardening knobs live under `agent.sandbox.docker`:
 `network`, `user`, `pidsLimit`, `memory`, `memorySwap`, `cpus`, `ulimits`,
 `seccompProfile`, `apparmorProfile`, `dns`, `extraHosts`.
 
-Multi-agent: override `setupCommand` per agent via `routing.agents.<agentId>.sandbox.docker.setupCommand`
+Multi-agent: override `agent.sandbox.docker.*` per agent via `routing.agents.<agentId>.sandbox.docker.*`
 (ignored when `agent.sandbox.scope` / `routing.agents.<agentId>.sandbox.scope` is `"shared"`).
 
 ### Build the default sandbox image

@@ -224,6 +224,42 @@ const HeartbeatSchema = z
   })
   .optional();
 
+const SandboxDockerSchema = z
+  .object({
+    image: z.string().optional(),
+    containerPrefix: z.string().optional(),
+    workdir: z.string().optional(),
+    readOnlyRoot: z.boolean().optional(),
+    tmpfs: z.array(z.string()).optional(),
+    network: z.string().optional(),
+    user: z.string().optional(),
+    capDrop: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    setupCommand: z.string().optional(),
+    pidsLimit: z.number().int().positive().optional(),
+    memory: z.union([z.string(), z.number()]).optional(),
+    memorySwap: z.union([z.string(), z.number()]).optional(),
+    cpus: z.number().positive().optional(),
+    ulimits: z
+      .record(
+        z.string(),
+        z.union([
+          z.string(),
+          z.number(),
+          z.object({
+            soft: z.number().int().nonnegative().optional(),
+            hard: z.number().int().nonnegative().optional(),
+          }),
+        ]),
+      )
+      .optional(),
+    seccompProfile: z.string().optional(),
+    apparmorProfile: z.string().optional(),
+    dns: z.array(z.string()).optional(),
+    extraHosts: z.array(z.string()).optional(),
+  })
+  .optional();
+
 const RoutingSchema = z
   .object({
     groupChat: GroupChatSchema,
@@ -265,11 +301,7 @@ const RoutingSchema = z
                   .optional(),
                 perSession: z.boolean().optional(),
                 workspaceRoot: z.string().optional(),
-                docker: z
-                  .object({
-                    setupCommand: z.string().optional(),
-                  })
-                  .optional(),
+                docker: SandboxDockerSchema,
                 tools: z
                   .object({
                     allow: z.array(z.string()).optional(),
@@ -673,41 +705,7 @@ export const ClawdbotSchema = z.object({
             .optional(),
           perSession: z.boolean().optional(),
           workspaceRoot: z.string().optional(),
-          docker: z
-            .object({
-              image: z.string().optional(),
-              containerPrefix: z.string().optional(),
-              workdir: z.string().optional(),
-              readOnlyRoot: z.boolean().optional(),
-              tmpfs: z.array(z.string()).optional(),
-              network: z.string().optional(),
-              user: z.string().optional(),
-              capDrop: z.array(z.string()).optional(),
-              env: z.record(z.string(), z.string()).optional(),
-              setupCommand: z.string().optional(),
-              pidsLimit: z.number().int().positive().optional(),
-              memory: z.union([z.string(), z.number()]).optional(),
-              memorySwap: z.union([z.string(), z.number()]).optional(),
-              cpus: z.number().positive().optional(),
-              ulimits: z
-                .record(
-                  z.string(),
-                  z.union([
-                    z.string(),
-                    z.number(),
-                    z.object({
-                      soft: z.number().int().nonnegative().optional(),
-                      hard: z.number().int().nonnegative().optional(),
-                    }),
-                  ]),
-                )
-                .optional(),
-              seccompProfile: z.string().optional(),
-              apparmorProfile: z.string().optional(),
-              dns: z.array(z.string()).optional(),
-              extraHosts: z.array(z.string()).optional(),
-            })
-            .optional(),
+          docker: SandboxDockerSchema,
           browser: z
             .object({
               enabled: z.boolean().optional(),

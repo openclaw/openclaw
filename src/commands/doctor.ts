@@ -63,6 +63,50 @@ function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+type SandboxScope = "session" | "agent" | "shared";
+
+function resolveSandboxScope(params: {
+  scope?: SandboxScope;
+  perSession?: boolean;
+}): SandboxScope {
+  if (params.scope) return params.scope;
+  if (typeof params.perSession === "boolean") {
+    return params.perSession ? "session" : "shared";
+  }
+  return "agent";
+}
+
+function hasDockerOverrides(docker?: unknown) {
+  if (!docker || typeof docker !== "object") return false;
+  return Object.values(docker).some((value) => value !== undefined);
+}
+
+function collectSandboxSharedDockerOverrideWarnings(cfg: ClawdbotConfig) {
+  const globalSandbox = cfg.agent?.sandbox;
+  const agents = cfg.routing?.agents;
+  if (!agents) return [];
+
+  const warnings: string[] = [];
+  for (const [agentId, agentCfg] of Object.entries(agents)) {
+    if (!agentCfg || typeof agentCfg !== "object") continue;
+    const agentSandbox = agentCfg.sandbox;
+    if (!agentSandbox || typeof agentSandbox !== "object") continue;
+    if (!hasDockerOverrides(agentSandbox.docker)) continue;
+
+    const scope = resolveSandboxScope({
+      scope: (agentSandbox.scope ?? globalSandbox?.scope) as SandboxScope,
+      perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
+    });
+    if (scope !== "shared") continue;
+
+    warnings.push(
+      `- routing.agents.${agentId}.sandbox.docker.* is ignored when sandbox scope resolves to "shared" (single shared container).`,
+    );
+  }
+
+  return warnings;
+}
+
 function resolveLegacyConfigPath(env: NodeJS.ProcessEnv): string {
   const override = env.CLAWDIS_CONFIG_PATH?.trim();
   if (override) return override;
@@ -975,6 +1019,19 @@ export async function doctorCommand(
   await maybeScanExtraGatewayServices(options);
 
   await noteSecurityWarnings(cfg);
+
+  const sharedDockerOverrideWarnings =
+    collectSandboxSharedDockerOverrideWarnings(cfg);
+  if (sharedDockerOverrideWarnings.length > 0) {
+    note(
+      [
+        ...sharedDockerOverrideWarnings,
+        "",
+        'Fix: set scope to "agent"/"session", or move the docker config to agent.sandbox.docker (global).',
+      ].join("\n"),
+      "Sandbox",
+    );
+  }
 
   if (
     options.nonInteractive !== true &&

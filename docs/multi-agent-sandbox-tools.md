@@ -1,3 +1,10 @@
+---
+summary: "Per-agent sandbox + tool restrictions, precedence, and examples"
+title: Multi-Agent Sandbox & Tools
+read_when: "You want per-agent sandboxing or per-agent tool allow/deny policies in a multi-agent gateway."
+status: active
+---
+
 # Multi-Agent Sandbox & Tools Configuration
 
 ## Overview
@@ -142,9 +149,12 @@ routing.agents[id].sandbox.mode > agent.sandbox.mode
 routing.agents[id].sandbox.scope > agent.sandbox.scope
 routing.agents[id].sandbox.workspaceRoot > agent.sandbox.workspaceRoot
 routing.agents[id].sandbox.workspaceAccess > agent.sandbox.workspaceAccess
+routing.agents[id].sandbox.docker.* > agent.sandbox.docker.*
 ```
 
-**Note:** `docker`, `browser`, and `prune` settings from `agent.sandbox` are still **global** and apply to all sandboxed agents.
+**Notes:**
+- `routing.agents[id].sandbox.docker.*` overrides `agent.sandbox.docker.*` for that agent (ignored when sandbox scope resolves to `"shared"`).
+- `browser` and `prune` settings under `agent.sandbox` are still **global** and apply to all sandboxed agents.
 
 ### Tool Restrictions
 The filtering order is:
