@@ -140,6 +140,7 @@ export async function modelsScanCommand(
     setDefault?: boolean;
     setImage?: boolean;
     json?: boolean;
+    probe?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
@@ -174,15 +175,18 @@ export async function modelsScanCommand(
   }
 
   const cfg = loadConfig();
+  const probe = opts.probe ?? true;
   let storedKey: string | undefined;
-  try {
-    const resolved = await resolveApiKeyForProvider({
-      provider: "openrouter",
-      cfg,
-    });
-    storedKey = resolved.apiKey;
-  } catch {
-    storedKey = undefined;
+  if (probe) {
+    try {
+      const resolved = await resolveApiKeyForProvider({
+        provider: "openrouter",
+        cfg,
+      });
+      storedKey = resolved.apiKey;
+    } catch {
+      storedKey = undefined;
+    }
   }
   const results = await scanOpenRouterModels({
     apiKey: storedKey ?? undefined,
@@ -191,7 +195,20 @@ export async function modelsScanCommand(
     providerFilter: opts.provider,
     timeoutMs: timeout,
     concurrency,
+    probe,
   });
+
+  if (!probe) {
+    if (!opts.json) {
+      runtime.log(
+        `Found ${results.length} OpenRouter free models (metadata only; pass --probe to test tools/images).`,
+      );
+      printScanTable(sortScanResults(results), runtime);
+    } else {
+      runtime.log(JSON.stringify(results, null, 2));
+    }
+    return;
+  }
 
   const toolOk = results.filter((entry) => entry.tool.ok);
   if (toolOk.length === 0) {
