@@ -16,6 +16,8 @@ const echoAfterDelay = (message: string) =>
   joinCommands([shortDelayCmd, `echo ${message}`]);
 const echoLines = (lines: string[]) =>
   joinCommands(lines.map((line) => `echo ${line}`));
+const normalizeText = (value?: string) =>
+  (value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -171,7 +173,7 @@ describe("bash tool backgrounding", () => {
       limit: 2,
     });
     const textBlock = log.content.find((c) => c.type === "text");
-    expect(textBlock?.text?.trim()).toBe("two\nthree");
+    expect(normalizeText(textBlock?.text)).toBe("two\nthree");
     expect((log.details as { totalLines?: number }).totalLines).toBe(3);
     expect(status).toBe("completed");
   });
@@ -191,7 +193,7 @@ describe("bash tool backgrounding", () => {
       limit: 1,
     });
     const textBlock = log.content.find((c) => c.type === "text");
-    expect(textBlock?.text?.trim()).toBe("beta");
+    expect(normalizeText(textBlock?.text)).toBe("beta");
   });
 
   it("scopes process sessions by scopeKey", async () => {
