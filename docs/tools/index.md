@@ -36,7 +36,7 @@ Core parameters:
 - `yieldMs` (auto-background after timeout, default 10000)
 - `background` (immediate background)
 - `timeout` (seconds; kills the process if exceeded, default 1800)
-- `elevated` (bool; run on host if elevated mode is enabled/allowed)
+- `elevated` (bool; run on host if elevated mode is enabled/allowed; only changes behavior when the agent is sandboxed)
 - Need a real TTY? Use the tmux skill.
 
 Notes:
