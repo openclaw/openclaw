@@ -12,7 +12,7 @@ type SendContext = {
 type ConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
-  bot?: { id?: string; name?: string };
+  agent?: { id?: string; name?: string; aadObjectId?: string } | null;
   conversation: { id: string; conversationType?: string; tenantId?: string };
   channelId: string;
   serviceUrl?: string;
@@ -59,10 +59,18 @@ function buildConversationReference(
   if (!conversationId) {
     throw new Error("Invalid stored reference: missing conversation.id");
   }
+  const agent = ref.agent ?? ref.bot ?? undefined;
+  if (agent == null || !agent.id) {
+    throw new Error("Invalid stored reference: missing agent.id");
+  }
+  const user = ref.user;
+  if (!user?.id) {
+    throw new Error("Invalid stored reference: missing user.id");
+  }
   return {
     activityId: ref.activityId,
-    user: ref.user,
-    bot: ref.bot,
+    user,
+    agent,
     conversation: {
       id: normalizeConversationId(conversationId),
       conversationType: ref.conversation?.conversationType,
