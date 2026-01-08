@@ -39,6 +39,7 @@ The dashboard settings panel lets you store a token; passwords are not persisted
 - Config: apply + restart with validation (`config.apply`) and wake the last active session
 - Config schema + form rendering (`config.schema`); Raw JSON editor remains available
 - Debug: status/health/models snapshots + event log + manual RPC calls (`status`, `health`, `models.list`)
+- Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
 
 ## Tailnet access (recommended)

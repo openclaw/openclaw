@@ -50,6 +50,10 @@ import {
   GatewayFrameSchema,
   type HelloOk,
   HelloOkSchema,
+  type LogsTailParams,
+  LogsTailParamsSchema,
+  type LogsTailResult,
+  LogsTailResultSchema,
   type ModelsListParams,
   ModelsListParamsSchema,
   type NodeDescribeParams,
@@ -258,6 +262,8 @@ export const validateCronRunParams =
   ajv.compile<CronRunParams>(CronRunParamsSchema);
 export const validateCronRunsParams =
   ajv.compile<CronRunsParams>(CronRunsParamsSchema);
+export const validateLogsTailParams =
+  ajv.compile<LogsTailParams>(LogsTailParamsSchema);
 export const validateChatHistoryParams = ajv.compile(ChatHistoryParamsSchema);
 export const validateChatSendParams = ajv.compile(ChatSendParamsSchema);
 export const validateChatAbortParams = ajv.compile<ChatAbortParams>(
@@ -338,6 +344,8 @@ export {
   CronRemoveParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
+  LogsTailParamsSchema,
+  LogsTailResultSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
   UpdateRunParamsSchema,
@@ -407,6 +415,8 @@ export type {
   CronRunParams,
   CronRunsParams,
   CronRunLogEntry,
+  LogsTailParams,
+  LogsTailResult,
   PollParams,
   UpdateRunParams,
 };

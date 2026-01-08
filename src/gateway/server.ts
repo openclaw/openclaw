@@ -212,6 +212,7 @@ type Client = {
 
 const METHODS = [
   "health",
+  "logs.tail",
   "providers.status",
   "status",
   "usage.status",
