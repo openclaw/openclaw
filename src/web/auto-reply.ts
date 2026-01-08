@@ -1611,7 +1611,7 @@ export async function monitorWebProvider(
 
     if (loggedOut) {
       runtime.error(
-        "WhatsApp session logged out. Run `clawdbot login --provider web` to relink.",
+        "WhatsApp session logged out. Run `clawdbot providers login --provider web` to relink.",
       );
       await closeListener();
       break;

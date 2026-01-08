@@ -138,9 +138,9 @@ clawdbot gateway --verbose
 If you’re logged out / unlinked:
 
 ```bash
-clawdbot logout
+clawdbot providers logout
 trash ~/.clawdbot/credentials # if logout can't cleanly remove everything
-clawdbot login --verbose       # re-scan QR
+clawdbot providers login --verbose       # re-scan QR
 ```
 
 ### Media Send Failing
@@ -219,7 +219,7 @@ Get verbose logging:
 #
 # Then run verbose commands to mirror debug output to stdout:
 clawdbot gateway --verbose
-clawdbot login --verbose
+clawdbot providers login --verbose
 ```
 
 ## Log Locations
@@ -250,7 +250,7 @@ Nuclear option:
 
 ```bash
 trash ~/.clawdbot
-clawdbot login         # re-pair WhatsApp
+clawdbot providers login         # re-pair WhatsApp
 clawdbot gateway        # start the Gateway again
 ```
 

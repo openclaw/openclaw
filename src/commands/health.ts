@@ -143,7 +143,7 @@ export async function healthCommand(
     runtime.log(
       summary.web.linked
         ? `Web: linked (auth age ${summary.web.authAgeMs ? `${Math.round(summary.web.authAgeMs / 60000)}m` : "unknown"})`
-        : "Web: not linked (run clawdbot login)",
+        : "Web: not linked (run clawdbot providers login)",
     );
     if (summary.web.linked) {
       const cfg = loadConfig();

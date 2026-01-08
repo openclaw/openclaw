@@ -44,13 +44,13 @@ clawdbot [--dev] [--profile <name>] <command>
   onboard
   configure (alias: config)
   doctor
-  login
-  logout
   providers
     list
     status
     add
     remove
+    login
+    logout
   skills
     list
     info
@@ -138,8 +138,6 @@ clawdbot [--dev] [--profile <name>] <command>
   pairing
     list
     approve
-  telegram
-    pairing list|approve
   docs
   dns
     setup
@@ -198,22 +196,7 @@ Options:
 - `--non-interactive`: skip prompts; apply safe migrations only.
 - `--deep`: scan system services for extra gateway installs.
 
-## Auth + provider helpers
-
-### `login`
-Link a WhatsApp Web account via QR.
-
-Options:
-- `--verbose`
-- `--provider <provider>` (default `whatsapp`)
-- `--account <id>`
-
-### `logout`
-Clear cached WhatsApp Web credentials.
-
-Options:
-- `--provider <provider>`
-- `--account <id>`
+## Provider helpers
 
 ### `providers`
 Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
@@ -223,11 +206,22 @@ Subcommands:
 - `providers status`: check gateway reachability and provider health (`--probe` to verify credentials; use `status --deep` for local-only probes).
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
+- `providers login`: interactive provider login (WhatsApp Web only).
+- `providers logout`: log out of a provider session (WhatsApp Web only).
 
 Common options:
 - `--provider <name>`: `whatsapp|telegram|discord|slack|signal|imessage`
 - `--account <id>`: provider account id (default `default`)
 - `--name <label>`: display name for the account
+
+`providers login` options:
+- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
+- `--account <id>`
+- `--verbose`
+
+`providers logout` options:
+- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
+- `--account <id>`
 
 `providers list` options:
 - `--no-usage`: skip provider usage/quota snapshots (OAuth/API-backed only).

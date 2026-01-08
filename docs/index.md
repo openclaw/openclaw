@@ -104,7 +104,7 @@ pnpm build
 pnpm link --global
 
 # Pair WhatsApp Web (shows QR)
-clawdbot login
+clawdbot providers login
 
 # Run the Gateway (leave running)
 clawdbot gateway --port 18789

@@ -7,7 +7,9 @@ import {
   providersStatusCommand,
 } from "../commands/providers.js";
 import { listChatProviders } from "../providers/registry.js";
+import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { hasExplicitOptions } from "./command-options.js";
 
 const optionNamesAdd = [
@@ -113,6 +115,48 @@ export function registerProvidersCli(program: Command) {
         await providersRemoveCommand(opts, defaultRuntime, { hasFlags });
       } catch (err) {
         defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  providers
+    .command("login")
+    .description("Link a provider account (WhatsApp Web only)")
+    .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .option("--account <id>", "WhatsApp account id (accountId)")
+    .option("--verbose", "Verbose connection logs", false)
+    .action(async (opts) => {
+      try {
+        await runProviderLogin(
+          {
+            provider: opts.provider as string | undefined,
+            account: opts.account as string | undefined,
+            verbose: Boolean(opts.verbose),
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(danger(`Provider login failed: ${String(err)}`));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  providers
+    .command("logout")
+    .description("Log out of a provider session (WhatsApp Web only)")
+    .option("--provider <provider>", "Provider alias (default: whatsapp)")
+    .option("--account <id>", "WhatsApp account id (accountId)")
+    .action(async (opts) => {
+      try {
+        await runProviderLogout(
+          {
+            provider: opts.provider as string | undefined,
+            account: opts.account as string | undefined,
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(danger(`Provider logout failed: ${String(err)}`));
         defaultRuntime.exit(1);
       }
     });

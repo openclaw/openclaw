@@ -856,7 +856,7 @@ export async function setupProviders(
       }
     } else if (!whatsappLinked) {
       await prompter.note(
-        "Run `clawdbot login` later to link WhatsApp.",
+        "Run `clawdbot providers login` later to link WhatsApp.",
         "WhatsApp",
       );
     }

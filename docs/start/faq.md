@@ -430,7 +430,7 @@ You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
 Run the login command again and scan the QR code:
 
 ```bash
-clawdbot login
+clawdbot providers login
 ```
 
 ### Build errors on `main` — what’s the standard fix path?

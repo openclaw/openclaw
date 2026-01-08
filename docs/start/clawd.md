@@ -60,7 +60,7 @@ If you link your personal WhatsApp to CLAWDBOT, every message to you becomes “
 1) Pair WhatsApp Web (shows QR; scan with the assistant phone):
 
 ```bash
-clawdbot login
+clawdbot providers login
 ```
 
 2) Start the Gateway (leave it running):
