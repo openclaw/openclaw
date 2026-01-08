@@ -42,6 +42,27 @@ export function formatAccountLabel(params: {
 export const providerLabel = (provider: ChatProvider) =>
   getChatProviderMeta(provider).label;
 
+export function formatProviderAccountLabel(params: {
+  provider: ChatProvider;
+  accountId: string;
+  name?: string;
+  providerStyle?: (value: string) => string;
+  accountStyle?: (value: string) => string;
+}): string {
+  const providerText = providerLabel(params.provider);
+  const accountText = formatAccountLabel({
+    accountId: params.accountId,
+    name: params.name,
+  });
+  const styledProvider = params.providerStyle
+    ? params.providerStyle(providerText)
+    : providerText;
+  const styledAccount = params.accountStyle
+    ? params.accountStyle(accountText)
+    : accountText;
+  return `${styledProvider} ${styledAccount}`;
+}
+
 export function shouldUseWizard(params?: { hasFlags?: boolean }) {
   return params?.hasFlags === false;
 }

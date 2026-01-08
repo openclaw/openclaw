@@ -19,6 +19,7 @@ If you change the CLI code, update this doc.
 ## Output styling
 
 - ANSI colors and progress indicators only render in TTY sessions.
+- OSC-8 hyperlinks render as clickable links in supported terminals; otherwise we fall back to plain URLs.
 - `--json` (and `--plain` where supported) disables styling for clean output.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
@@ -50,6 +51,10 @@ clawdbot [--dev] [--profile <name>] <command>
     status
     add
     remove
+  skills
+    list
+    info
+    check
   send
   poll
   agent
@@ -236,6 +241,21 @@ clawdbot providers remove --provider discord --account work --delete
 clawdbot providers status --probe
 clawdbot status --deep
 ```
+
+### `skills`
+List and inspect available skills plus readiness info.
+
+Subcommands:
+- `skills list`: list skills (default when no subcommand).
+- `skills info <name>`: show details for one skill.
+- `skills check`: summary of ready vs missing requirements.
+
+Options:
+- `--eligible`: show only ready skills.
+- `--json`: output JSON (no styling).
+- `-v`, `--verbose`: include missing requirements detail.
+
+Tip: use `npx clawdhub` to search, install, and sync skills.
 
 ### `pairing`
 Approve DM pairing requests across providers.

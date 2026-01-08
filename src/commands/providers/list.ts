@@ -40,11 +40,7 @@ import {
   resolveWhatsAppAuthDir,
 } from "../../web/accounts.js";
 import { webAuthExists } from "../../web/session.js";
-import {
-  formatAccountLabel,
-  providerLabel,
-  requireValidConfig,
-} from "./shared.js";
+import { formatProviderAccountLabel, requireValidConfig } from "./shared.js";
 
 export type ProvidersListOptions = {
   json?: boolean;
@@ -116,12 +112,14 @@ export async function providersListCommand(
   > = {
     telegram: async (accountId) => {
       const account = resolveTelegramAccount({ cfg, accountId });
-      return `- ${theme.accent(providerLabel("telegram"))} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name: account.name,
-        }),
-      )}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
+      const label = formatProviderAccountLabel({
+        provider: "telegram",
+        accountId,
+        name: account.name,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
         account.tokenSource,
       )}, ${formatEnabled(account.enabled)}`;
     },
@@ -129,12 +127,14 @@ export async function providersListCommand(
       const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
       const linked = await webAuthExists(authDir);
       const name = cfg.whatsapp?.accounts?.[accountId]?.name;
-      return `- ${theme.accent(providerLabel("whatsapp"))} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name,
-        }),
-      )}: ${formatLinked(linked)}, ${formatEnabled(
+      const label = formatProviderAccountLabel({
+        provider: "whatsapp",
+        accountId,
+        name,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatLinked(linked)}, ${formatEnabled(
         cfg.whatsapp?.accounts?.[accountId]?.enabled ??
           cfg.web?.enabled ??
           true,
@@ -142,24 +142,28 @@ export async function providersListCommand(
     },
     discord: async (accountId) => {
       const account = resolveDiscordAccount({ cfg, accountId });
-      return `- ${theme.accent(providerLabel("discord"))} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name: account.name,
-        }),
-      )}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
+      const label = formatProviderAccountLabel({
+        provider: "discord",
+        accountId,
+        name: account.name,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
         account.tokenSource,
       )}, ${formatEnabled(account.enabled)}`;
     },
     slack: async (accountId) => {
       const account = resolveSlackAccount({ cfg, accountId });
       const configured = Boolean(account.botToken && account.appToken);
-      return `- ${theme.accent(providerLabel("slack"))} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name: account.name,
-        }),
-      )}: ${formatConfigured(configured)}, ${formatSource(
+      const label = formatProviderAccountLabel({
+        provider: "slack",
+        accountId,
+        name: account.name,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatConfigured(configured)}, ${formatSource(
         "bot",
         account.botTokenSource,
       )}, ${formatSource("app", account.appTokenSource)}, ${formatEnabled(
@@ -168,23 +172,27 @@ export async function providersListCommand(
     },
     signal: async (accountId) => {
       const account = resolveSignalAccount({ cfg, accountId });
-      return `- ${theme.accent(providerLabel("signal"))} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name: account.name,
-        }),
-      )}: ${formatConfigured(account.configured)}, base=${theme.muted(
+      const label = formatProviderAccountLabel({
+        provider: "signal",
+        accountId,
+        name: account.name,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatConfigured(account.configured)}, base=${theme.muted(
         account.baseUrl,
       )}, ${formatEnabled(account.enabled)}`;
     },
     imessage: async (accountId) => {
       const account = resolveIMessageAccount({ cfg, accountId });
-      return `- ${theme.accent(providerLabel("imessage"))} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name: account.name,
-        }),
-      )}: ${formatEnabled(account.enabled)}`;
+      const label = formatProviderAccountLabel({
+        provider: "imessage",
+        accountId,
+        name: account.name,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      return `- ${label}: ${formatEnabled(account.enabled)}`;
     },
   };
 
