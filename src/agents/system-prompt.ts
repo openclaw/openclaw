@@ -45,6 +45,7 @@ export function buildAgentSystemPrompt(params: {
     cron: "Manage cron jobs and wake events",
     gateway:
       "Restart, apply config, or run updates on the running ClaudeBot process",
+    agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
@@ -71,6 +72,7 @@ export function buildAgentSystemPrompt(params: {
     "nodes",
     "cron",
     "gateway",
+    "agents_list",
     "sessions_list",
     "sessions_history",
     "sessions_send",

@@ -150,6 +150,11 @@
         "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] }
       }
     },
+    "agents_list": {
+      "emoji": "🧭",
+      "title": "Agents",
+      "detailKeys": []
+    },
     "sessions_list": {
       "emoji": "🗂️",
       "title": "Sessions",

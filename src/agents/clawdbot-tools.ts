@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
+import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createCronTool } from "./tools/cron-tool.js";
 import { createDiscordTool } from "./tools/discord-tool.js";
@@ -37,6 +38,7 @@ export function createClawdbotTools(options?: {
     createTelegramTool(),
     createWhatsAppTool(),
     createGatewayTool({ agentSessionKey: options?.agentSessionKey }),
+    createAgentsListTool({ agentSessionKey: options?.agentSessionKey }),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,

@@ -32,6 +32,9 @@ Tool params:
 Allowlist:
 - `routing.agents.<agentId>.subagents.allowAgents`: list of agent ids that can be targeted via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
+Discovery:
+- Use `agents_list` to see which agent ids are currently allowed for `sessions_spawn`.
+
 Auto-archive:
 - Sub-agent sessions are automatically archived after `agent.subagents.archiveAfterMinutes` (default: 60).
 - Archive uses `sessions.delete` and renames the transcript to `*.deleted.<timestamp>` (same folder).

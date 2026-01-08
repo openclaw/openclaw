@@ -286,6 +286,26 @@ describe("subagents", () => {
     expect(childSessionKey?.startsWith("agent:main:subagent:")).toBe(true);
   });
 
+  it("sessions_spawn only allows same-agent by default", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "main",
+      agentProvider: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call6", {
+      task: "do thing",
+      agentId: "beta",
+    });
+    expect(result.details).toMatchObject({
+      status: "forbidden",
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it("sessions_spawn allows cross-agent spawning when configured", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
@@ -325,7 +345,58 @@ describe("subagents", () => {
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
-    const result = await tool.execute("call6", {
+    const result = await tool.execute("call7", {
+      task: "do thing",
+      agentId: "beta",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(childSessionKey?.startsWith("agent:beta:subagent:")).toBe(true);
+  });
+
+  it("sessions_spawn allows any agent when allowlist is *", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      routing: {
+        agents: {
+          main: {
+            subagents: {
+              allowAgents: ["*"],
+            },
+          },
+        },
+      },
+    };
+
+    let childSessionKey: string | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        childSessionKey = params?.sessionKey;
+        return { runId: "run-1", status: "accepted", acceptedAt: 5100 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "main",
+      agentProvider: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call8", {
       task: "do thing",
       agentId: "beta",
     });
@@ -362,7 +433,7 @@ describe("subagents", () => {
     }).find((candidate) => candidate.name === "sessions_spawn");
     if (!tool) throw new Error("missing sessions_spawn tool");
 
-    const result = await tool.execute("call7", {
+    const result = await tool.execute("call9", {
       task: "do thing",
       agentId: "beta",
     });
