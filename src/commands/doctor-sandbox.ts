@@ -11,8 +11,8 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
 import { replaceModernName } from "./doctor-legacy-config.js";
+import type { DoctorPrompter } from "./doctor-prompter.js";
 
 type SandboxScriptInfo = {
   scriptPath: string;

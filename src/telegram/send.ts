@@ -1,17 +1,17 @@
 import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
 import { Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
-import type { ClawdbotConfig } from "../config/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
-import { resolveTelegramToken } from "./token.js";
+import { resolveTelegramAccount } from "./accounts.js";
 
 type TelegramSendOpts = {
   token?: string;
+  accountId?: string;
   verbose?: boolean;
   mediaUrl?: string;
   maxBytes?: number;
@@ -30,6 +30,7 @@ type TelegramSendResult = {
 
 type TelegramReactionOpts = {
   token?: string;
+  accountId?: string;
   api?: Bot["api"];
   remove?: boolean;
   verbose?: boolean;
@@ -39,15 +40,17 @@ type TelegramReactionOpts = {
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;
 
-function resolveToken(explicit?: string, cfg?: ClawdbotConfig): string {
+function resolveToken(
+  explicit: string | undefined,
+  params: { accountId: string; token: string },
+) {
   if (explicit?.trim()) return explicit.trim();
-  const { token } = resolveTelegramToken(cfg);
-  if (!token) {
+  if (!params.token) {
     throw new Error(
-      "TELEGRAM_BOT_TOKEN (or telegram.botToken/tokenFile) is required for Telegram sends (Bot API)",
+      `Telegram bot token missing for account "${params.accountId}" (set telegram.accounts.${params.accountId}.botToken/tokenFile or TELEGRAM_BOT_TOKEN for default).`,
     );
   }
-  return token.trim();
+  return params.token.trim();
 }
 
 function normalizeChatId(to: string): string {
@@ -97,7 +100,11 @@ export async function sendMessageTelegram(
   opts: TelegramSendOpts = {},
 ): Promise<TelegramSendResult> {
   const cfg = loadConfig();
-  const token = resolveToken(opts.token, cfg);
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(to);
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
@@ -116,7 +123,7 @@ export async function sendMessageTelegram(
   const hasThreadParams = Object.keys(threadParams).length > 0;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
-    configRetry: cfg.telegram?.retry,
+    configRetry: account.config.retry,
     verbose: opts.verbose,
   });
 
@@ -236,13 +243,17 @@ export async function reactMessageTelegram(
   opts: TelegramReactionOpts = {},
 ): Promise<{ ok: true }> {
   const cfg = loadConfig();
-  const token = resolveToken(opts.token, cfg);
+  const account = resolveTelegramAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
+  const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
   const api = opts.api ?? new Bot(token).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
-    configRetry: cfg.telegram?.retry,
+    configRetry: account.config.retry,
     verbose: opts.verbose,
   });
   const remove = opts.remove === true;

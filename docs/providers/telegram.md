@@ -29,6 +29,8 @@ Status: production-ready for bot DMs + groups via grammY. Long-polling by defaul
 }
 ```
 
+Multi-account support: use `telegram.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
 3) Start the gateway. Telegram starts when a `telegram` config section exists and a token is resolved.
 4) DM access defaults to pairing. Approve the code when the bot is first contacted.
 5) For groups: add the bot, disable privacy mode (or make it admin), then set `telegram.groups` to control mention gating + allowlists.

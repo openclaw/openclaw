@@ -44,13 +44,17 @@ function normalizeDefaultWorkspacePath(
   return next === resolved ? value : next;
 }
 
-export function replaceLegacyName(value: string | undefined): string | undefined {
+export function replaceLegacyName(
+  value: string | undefined,
+): string | undefined {
   if (!value) return value;
   const replacedClawdis = value.replace(/clawdis/g, "clawdbot");
   return replacedClawdis.replace(/clawd(?!bot)/g, "clawdbot");
 }
 
-export function replaceModernName(value: string | undefined): string | undefined {
+export function replaceModernName(
+  value: string | undefined,
+): string | undefined {
   if (!value) return value;
   if (!value.includes("clawdbot")) return value;
   return value.replace(/clawdbot/g, "clawdis");

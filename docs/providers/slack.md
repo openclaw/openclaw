@@ -22,6 +22,8 @@ read_when: "Setting up Slack or debugging Slack socket mode"
 
 Use the manifest below so scopes and events stay in sync.
 
+Multi-account support: use `slack.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+
 ## Manifest (optional)
 Use this Slack app manifest to create the app quickly (adjust the name/command if you want).
 

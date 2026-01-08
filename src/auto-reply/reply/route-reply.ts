@@ -85,6 +85,7 @@ export async function routeReply(
           mediaUrl,
           messageThreadId: threadId,
           replyToMessageId: resolvedReplyToMessageId,
+          accountId,
         });
         return { ok: true, messageId: result.messageId };
       }
@@ -93,6 +94,7 @@ export async function routeReply(
         const result = await sendMessageSlack(to, text, {
           mediaUrl,
           threadTs: replyToId,
+          accountId,
         });
         return { ok: true, messageId: result.messageId };
       }
@@ -101,17 +103,24 @@ export async function routeReply(
         const result = await sendMessageDiscord(to, text, {
           mediaUrl,
           replyTo: replyToId,
+          accountId,
         });
         return { ok: true, messageId: result.messageId };
       }
 
       case "signal": {
-        const result = await sendMessageSignal(to, text, { mediaUrl });
+        const result = await sendMessageSignal(to, text, {
+          mediaUrl,
+          accountId,
+        });
         return { ok: true, messageId: result.messageId };
       }
 
       case "imessage": {
-        const result = await sendMessageIMessage(to, text, { mediaUrl });
+        const result = await sendMessageIMessage(to, text, {
+          mediaUrl,
+          accountId,
+        });
         return { ok: true, messageId: result.messageId };
       }
 
