@@ -906,6 +906,13 @@ Controls the embedded agent runtime (model/thinking/verbose/timeouts).
 `agent.models` defines the configured model catalog (and acts as the allowlist for `/model`).
 `agent.model.primary` sets the default model; `agent.model.fallbacks` are global failovers.
 `agent.imageModel` is optional and is **only used if the primary model lacks image input**.
+Each `agent.models` entry can include:
+- `alias` (optional model shortcut, e.g. `/opus`).
+- `params` (optional provider-specific API params passed through to the model request).
+
+Z.AI GLM-4.x models automatically enable thinking mode unless you:
+- set `--thinking off`, or
+- define `agent.models["zai/<model>"].params.thinking` yourself.
 
 Clawdbot also ships a few built-in alias shorthands. Defaults only apply when the model
 is already present in `agent.models`:
@@ -925,7 +932,16 @@ If you configure the same alias name (case-insensitive) yourself, your value win
     models: {
       "anthropic/claude-opus-4-5": { alias: "Opus" },
       "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
-      "openrouter/deepseek/deepseek-r1:free": {}
+      "openrouter/deepseek/deepseek-r1:free": {},
+      "zai/glm-4.7": {
+        alias: "GLM",
+        params: {
+          thinking: {
+            type: "enabled",
+            clear_thinking: false
+          }
+        }
+      }
     },
     model: {
       primary: "anthropic/claude-opus-4-5",

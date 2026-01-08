@@ -21,7 +21,7 @@ Clawdbot selects models in this order:
 
 Key pieces:
 - `provider/model` is the canonical model id (e.g. `anthropic/claude-opus-4-5`).
-- `agent.models` is the **allowlist/catalog** of models Clawdbot can use, with optional aliases.
+- `agent.models` is the **allowlist/catalog** of models Clawdbot can use, with optional aliases and provider params.
 - `agent.imageModel` is only used when the primary model **can’t** accept images.
 - `models.providers` lets you add custom providers + models (written to `models.json`).
 - `/model <id>` switches the active model for the current session; `/model list` shows what’s allowed.
@@ -92,6 +92,7 @@ and an **Auth overview** section showing which providers have profiles/env/model
 ## Config changes
 
 - `agent.models` (configured model catalog + aliases).
+- `agent.models.*.params` (provider-specific API params passed through to requests).
 - `agent.model.primary` + `agent.model.fallbacks`.
 - `agent.imageModel.primary` + `agent.imageModel.fallbacks` (optional).
 - `auth.profiles` + `auth.order` for per-provider auth failover.
