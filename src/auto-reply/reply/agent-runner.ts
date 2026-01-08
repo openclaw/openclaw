@@ -7,7 +7,6 @@ import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
-import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
@@ -31,7 +30,12 @@ import {
   type QueueSettings,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { extractReplyToTag } from "./reply-tags.js";
+import {
+  applyReplyTagsToPayload,
+  applyReplyThreading,
+  filterMessagingToolDuplicates,
+  isRenderablePayload,
+} from "./reply-payloads.js";
 import {
   createReplyToModeFilter,
   resolveReplyToMode,
@@ -321,21 +325,25 @@ export async function runReplyAgent(params: {
                       if (stripped.shouldSkip && !hasMedia) return;
                       text = stripped.text;
                     }
-                    const tagResult = extractReplyToTag(
-                      text,
+                    const taggedPayload = applyReplyTagsToPayload(
+                      {
+                        text,
+                        mediaUrls: payload.mediaUrls,
+                        mediaUrl: payload.mediaUrls?.[0],
+                      },
                       sessionCtx.MessageSid,
                     );
-                    const cleaned = tagResult.cleaned || undefined;
-                    const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                    if (!cleaned && !hasMedia) return;
-                    if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia)
+                    if (!isRenderablePayload(taggedPayload)) return;
+                    const hasMedia =
+                      Boolean(taggedPayload.mediaUrl) ||
+                      (taggedPayload.mediaUrls?.length ?? 0) > 0;
+                    if (
+                      taggedPayload.text?.trim() === SILENT_REPLY_TOKEN &&
+                      !hasMedia
+                    )
                       return;
-                    const blockPayload: ReplyPayload = applyReplyToMode({
-                      text: cleaned,
-                      mediaUrls: payload.mediaUrls,
-                      mediaUrl: payload.mediaUrls?.[0],
-                      replyToId: tagResult.replyToId,
-                    });
+                    const blockPayload: ReplyPayload =
+                      applyReplyToMode(taggedPayload);
                     const payloadKey = buildPayloadKey(blockPayload);
                     if (
                       streamedPayloadKeys.has(payloadKey) ||
@@ -345,7 +353,7 @@ export async function runReplyAgent(params: {
                     }
                     pendingStreamedPayloadKeys.add(payloadKey);
                     const task = (async () => {
-                      await typingSignals.signalTextDelta(cleaned);
+                      await typingSignals.signalTextDelta(taggedPayload.text);
                       await opts.onBlockReply?.(blockPayload);
                     })()
                       .then(() => {
@@ -507,41 +515,21 @@ export async function runReplyAgent(params: {
           return [{ ...payload, text: stripped.text }];
         });
 
-    const replyTaggedPayloads: ReplyPayload[] = sanitizedPayloads
-      .map((payload) => {
-        const { cleaned, replyToId } = extractReplyToTag(
-          payload.text,
-          sessionCtx.MessageSid,
-        );
-        return {
-          ...payload,
-          text: cleaned ? cleaned : undefined,
-          replyToId: replyToId ?? payload.replyToId,
-        };
-      })
-      .filter(
-        (payload) =>
-          payload.text ||
-          payload.mediaUrl ||
-          (payload.mediaUrls && payload.mediaUrls.length > 0),
-      )
-      .map(applyReplyToMode);
+    const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
+      payloads: sanitizedPayloads,
+      applyReplyToMode,
+      currentMessageId: sessionCtx.MessageSid,
+    });
 
     // Drop final payloads if block streaming is enabled and we already streamed
     // block replies. Tool-sent duplicates are filtered below.
     const shouldDropFinalPayloads =
       blockStreamingEnabled && didStreamBlockReply;
     const messagingToolSentTexts = runResult.messagingToolSentTexts ?? [];
-    const dedupedPayloads =
-      messagingToolSentTexts.length > 0
-        ? replyTaggedPayloads.filter(
-            (payload) =>
-              !isMessagingToolDuplicate(
-                payload.text ?? "",
-                messagingToolSentTexts,
-              ),
-          )
-        : replyTaggedPayloads;
+    const dedupedPayloads = filterMessagingToolDuplicates({
+      payloads: replyTaggedPayloads,
+      sentTexts: messagingToolSentTexts,
+    });
     const filteredPayloads = shouldDropFinalPayloads
       ? []
       : blockStreamingEnabled
