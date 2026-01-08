@@ -2,6 +2,7 @@ import { loadConfig } from "../../config/config.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/index.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { sendMessageIMessage } from "../../imessage/index.js";
+import { sendMessageMSTeams } from "../../msteams/send.js";
 import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -133,6 +134,26 @@ export const sendHandlers: GatewayRequestHandlers = {
         const payload = {
           runId: idem,
           messageId: result.messageId,
+          provider,
+        };
+        context.dedupe.set(`send:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { provider });
+      } else if (provider === "msteams") {
+        const cfg = loadConfig();
+        const result = await sendMessageMSTeams({
+          cfg,
+          to,
+          text: message,
+          mediaUrl: request.mediaUrl,
+        });
+        const payload = {
+          runId: idem,
+          messageId: result.messageId,
+          conversationId: result.conversationId,
           provider,
         };
         context.dedupe.set(`send:${idem}`, {

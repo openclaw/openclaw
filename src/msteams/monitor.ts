@@ -96,6 +96,7 @@ export async function monitorMSTeamsProvider(
     log.error("msteams credentials not configured");
     return { app: null, shutdown: async () => {} };
   }
+  const appId = creds.appId; // Extract for use in closures
 
   const runtime: RuntimeEnv = opts.runtime ?? {
     log: console.log,
@@ -117,34 +118,74 @@ export async function monitorMSTeamsProvider(
   const { ActivityHandler, CloudAdapter, authorizeJWT, getAuthConfigWithDefaults } =
     agentsHosting;
 
-  // Helper to deliver replies via Teams SDK
+  // Auth configuration - create early so adapter is available for deliverReplies
+  const authConfig = getAuthConfigWithDefaults({
+    clientId: creds.appId,
+    clientSecret: creds.appPassword,
+    tenantId: creds.tenantId,
+  });
+  const adapter = new CloudAdapter(authConfig);
+
+  // Helper to deliver replies as top-level messages (not threaded)
+  // We use proactive messaging to avoid threading to the original message
   async function deliverReplies(params: {
     replies: ReplyPayload[];
-    context: TeamsTurnContext;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    context: any; // TurnContext from SDK - has activity.getConversationReference()
+    adapter: InstanceType<typeof CloudAdapter>;
+    appId: string;
   }) {
     const chunkLimit = Math.min(textLimit, 4000);
+
+    // Get conversation reference from SDK's activity (includes proper bot info)
+    // Then remove activityId to avoid threading
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const fullRef = params.context.activity.getConversationReference() as any;
+    const conversationRef = {
+      ...fullRef,
+      activityId: undefined, // Remove to post as top-level message, not thread
+    };
+    // Also strip the messageid suffix from conversation.id if present
+    if (conversationRef.conversation?.id) {
+      conversationRef.conversation = {
+        ...conversationRef.conversation,
+        id: conversationRef.conversation.id.split(";")[0],
+      };
+    }
+
     for (const payload of params.replies) {
       const mediaList =
         payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
       const text = payload.text ?? "";
       if (!text && mediaList.length === 0) continue;
 
+      const sendMessage = async (message: string) => {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        await (params.adapter as any).continueConversation(
+          params.appId,
+          conversationRef,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          async (ctx: any) => {
+            await ctx.sendActivity({ type: "message", text: message });
+          },
+        );
+      };
+
       if (mediaList.length === 0) {
         for (const chunk of chunkMarkdownText(text, chunkLimit)) {
           const trimmed = chunk.trim();
           if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
-          await params.context.sendActivity(trimmed);
+          await sendMessage(trimmed);
         }
       } else {
         // For media, send text first then media URLs as separate messages
         if (text.trim() && text.trim() !== SILENT_REPLY_TOKEN) {
           for (const chunk of chunkMarkdownText(text, chunkLimit)) {
-            await params.context.sendActivity(chunk);
+            await sendMessage(chunk);
           }
         }
         for (const mediaUrl of mediaList) {
-          // Teams supports adaptive cards for rich media, but for now just send URL
-          await params.context.sendActivity(mediaUrl);
+          await sendMessage(mediaUrl);
         }
       }
     }
@@ -377,6 +418,8 @@ export async function monitorMSTeamsProvider(
           await deliverReplies({
             replies: [payload],
             context,
+            adapter,
+            appId,
           });
         },
         onError: (err, info) => {
@@ -450,16 +493,7 @@ export async function monitorMSTeamsProvider(
       await next();
     });
 
-  // Auth configuration - use SDK's defaults merger
-  const authConfig = getAuthConfigWithDefaults({
-    clientId: creds.appId,
-    clientSecret: creds.appPassword,
-    tenantId: creds.tenantId,
-  });
-
-  // Create our own Express server (instead of using startServer) so we can control shutdown
-  // Pass authConfig to CloudAdapter so it can authenticate outbound calls
-  const adapter = new CloudAdapter(authConfig);
+  // Create Express server
   const expressApp = express.default();
   expressApp.use(express.json());
   expressApp.use(authorizeJWT(authConfig));
