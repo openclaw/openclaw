@@ -575,6 +575,11 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (runtimeLine) {
     defaultRuntime.log(`Runtime: ${runtimeLine}`);
   }
+  if (rpc && !rpc.ok && service.loaded && service.runtime?.status === "running") {
+    defaultRuntime.log(
+      "Warm-up: launch agents can take a few seconds. Try again shortly.",
+    );
+  }
   if (rpc) {
     if (rpc.ok) {
       defaultRuntime.log("RPC probe: ok");
@@ -689,6 +694,8 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       "If you need multiple gateways, isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
     );
   }
+  defaultRuntime.log("Troubles: run clawdbot status");
+  defaultRuntime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
 }
 
 export async function runDaemonStatus(opts: DaemonStatusOptions) {
