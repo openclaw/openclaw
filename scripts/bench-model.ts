@@ -88,7 +88,7 @@ async function main(): Promise<void> {
   const minimaxBaseUrl =
     process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
   const minimaxModelId =
-    process.env.MINIMAX_MODEL?.trim() || "minimax-m2.1";
+    process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
 
   const minimaxModel: Model<"openai-completions"> = {
     id: minimaxModelId,
