@@ -170,9 +170,6 @@ export async function maybeRepairGatewayServiceConfig(
   const aggressiveIssues = audit.issues.filter(
     (issue) => issue.level === "aggressive",
   );
-  const _recommendedIssues = audit.issues.filter(
-    (issue) => issue.level !== "aggressive",
-  );
   const needsAggressive = aggressiveIssues.length > 0;
 
   if (needsAggressive && !prompter.shouldForce) {
