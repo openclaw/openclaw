@@ -1383,8 +1383,8 @@ Notes:
 - `z.ai/*` and `z-ai/*` are accepted aliases and normalize to `zai/*`.
 - If `ZAI_API_KEY` is missing, requests to `zai/*` will fail with an auth error at runtime.
 - Example error: `No API key found for provider "zai".`
-- Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. The GLM Coding
-  Plan uses the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
+- Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. GLM coding
+  requests use the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
   The built-in `zai` provider uses the Coding endpoint. If you need the general
   endpoint, define a custom provider in `models.providers` with the base URL
   override (see the custom providers section above).

@@ -61,7 +61,6 @@ Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when 
 4) Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
 ## Testing / verification
-- Automated: `pnpm test -- src/web/auto-reply.test.ts --runInBand` (covers mention gating, history injection, sender suffix).
 - Manual smoke:
   - Send an `@clawd` ping in the group and confirm a reply that references the sender name.
   - Send a second ping and verify the history block is included then cleared on the next turn.

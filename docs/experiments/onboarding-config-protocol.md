@@ -8,11 +8,11 @@ read_when: "Changing onboarding wizard steps or config schema endpoints"
 Purpose: shared onboarding + config surfaces across CLI, macOS app, and Web UI.
 
 ## Components
-- Wizard engine: `src/wizard` (session + prompts + onboarding state).
-- CLI: [`src/commands/onboard-*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/commands/onboard-*.ts) uses the wizard with the CLI prompter.
-- Gateway RPC: wizard + config schema endpoints serve UI clients.
-- macOS: SwiftUI onboarding uses the wizard step model.
-- Web UI: config form renders from JSON Schema + hints.
+- Wizard engine (shared session + prompts + onboarding state).
+- CLI onboarding uses the same wizard flow as the UI clients.
+- Gateway RPC exposes wizard + config schema endpoints.
+- macOS onboarding uses the wizard step model.
+- Web UI renders config forms from JSON Schema + UI hints.
 
 ## Gateway RPC
 - `wizard.start` params: `{ mode?: "local"|"remote", workspace?: string }`

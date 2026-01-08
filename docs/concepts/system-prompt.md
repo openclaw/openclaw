@@ -8,7 +8,7 @@ read_when:
 
 ClaudeBot builds a custom system prompt for every agent run. The prompt is **Clawdbot-owned** and does not use the p-coding-agent default prompt.
 
-The prompt is assembled in `src/agents/system-prompt.ts` and injected by `src/agents/pi-embedded-runner.ts`.
+The prompt is assembled by Clawdbot and injected into each agent run.
 
 ## Structure
 
@@ -56,9 +56,3 @@ Skills are **not** auto-injected. Instead, the prompt instructs the model to use
 ```
 
 This keeps the base prompt small while still enabling targeted skill usage.
-
-## Code references
-
-- Prompt text: `src/agents/system-prompt.ts`
-- Prompt assembly + injection: `src/agents/pi-embedded-runner.ts`
-- Bootstrap trimming: `src/agents/pi-embedded-helpers.ts`

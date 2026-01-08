@@ -188,8 +188,3 @@ Recommended for personal numbers:
 - Subsystems: `whatsapp/inbound`, `whatsapp/outbound`, `web-heartbeat`, `web-reconnect`.
 - Log file: `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (configurable).
 - Troubleshooting guide: [`docs/troubleshooting.md`](/gateway/troubleshooting).
-
-## Tests
-- [`src/web/auto-reply.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/auto-reply.test.ts) (mention gating, history injection, reply flow)
-- [`src/web/monitor-inbox.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/monitor-inbox.test.ts) (inbound parsing + reply context)
-- [`src/web/outbound.test.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/web/outbound.test.ts) (send mapping + media)

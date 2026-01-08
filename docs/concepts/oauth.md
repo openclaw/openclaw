@@ -97,7 +97,7 @@ At runtime:
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
 
-See implementation: `src/agents/auth-profiles.ts`.
+The refresh flow is automatic; you generally don’t need to manage tokens manually.
 
 ## Multiple accounts (profiles) + routing
 

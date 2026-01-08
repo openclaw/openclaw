@@ -294,25 +294,12 @@ Node targeting:
 - Respect user consent for camera/screen capture.
 - Use `status/describe` to ensure permissions before invoking media commands.
 
-## How the model sees tools (pi-mono internals)
+## How tools are presented to the agent
 
-Tools are exposed to the model in **two parallel channels**:
+Tools are exposed in two parallel channels:
 
-1) **System prompt text**: a human-readable list + guidelines.
-2) **Provider tool schema**: the actual function/tool declarations sent to the model API.
+1) **System prompt text**: a human-readable list + guidance.
+2) **Tool schema**: the structured function definitions sent to the model API.
 
-In pi-mono:
-- System prompt builder: [`packages/coding-agent/src/core/system-prompt.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts)
-  - Builds the `Available tools:` list from `toolDescriptions`.
-  - Appends skills and project context.
-- Tool schemas passed to providers:
-  - OpenAI: [`packages/ai/src/providers/openai-responses.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) (`convertTools`)
-  - Anthropic: [`packages/ai/src/providers/anthropic.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) (`convertTools`)
-  - Gemini: [`packages/ai/src/providers/google-shared.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/google-shared.ts) (`convertTools`)
-- Tool execution loop:
-  - Agent loop: [`packages/ai/src/agent/agent-loop.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/agent/agent-loop.ts)
-  - Validates tool arguments and executes tools, then appends `toolResult` messages.
-
-In Clawdbot:
-- System prompt append: [`src/agents/system-prompt.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/system-prompt.ts)
-- Tool list injected via `createClawdbotCodingTools()` in [`src/agents/pi-tools.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-tools.ts)
+That means the agent sees both “what tools exist” and “how to call them.” If a tool
+doesn’t appear in the system prompt or the schema, the model cannot call it.

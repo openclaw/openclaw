@@ -76,7 +76,7 @@ Goal: model can request location even when node is backgrounded, but only when:
 
 Push-triggered flow (future):
 1) Gateway sends a push to the node (silent push or FCM data).
-2) Node wakes briefly and calls `location.get` internally.
+2) Node wakes briefly and requests location from the device.
 3) Node forwards payload to Gateway.
 
 Notes:

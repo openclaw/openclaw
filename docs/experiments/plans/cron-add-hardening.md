@@ -28,44 +28,29 @@ Recent gateway logs show repeated `cron.add` failures with invalid parameters (m
 - Agent cron tool schema allows arbitrary `job` objects, enabling malformed inputs.
 - Gateway strictly validates `cron.add` with no normalization, so wrapped payloads fail.
 
-## Proposed Approach
-1. **Normalize** incoming `cron.add` payloads (unwrap `data`/`job`, infer `schedule.kind` and `payload.kind`, default `wakeMode` + `sessionTarget` when safe).
-2. **Harden** the agent cron tool schema using the canonical gateway `CronAddParamsSchema` and normalize before sending to the gateway.
-3. **Align** provider enums and cron status fields across gateway schema, TS types, CLI descriptions, and UI form controls.
-4. **Test** normalization in gateway tests and tool behavior in agent tests.
+## What changed
 
-## Multi-phase Execution Plan
+- `cron.add` and `cron.update` now normalize common wrapper shapes and infer missing `kind` fields.
+- Agent cron tool schema matches the gateway schema, which reduces invalid payloads.
+- Provider enums are aligned across gateway, CLI, UI, and macOS picker.
+- Control UI uses the gateway’s `jobs` count field for status.
 
-### Phase 1 — Schema + type alignment
-- [x] Expand gateway `CronPayloadSchema` provider enum to include `signal` and `imessage`.
-- [x] Update CLI `--provider` descriptions to include `slack` (already supported by gateway).
-- [x] Update UI Cron payload/provider union types to include all supported providers.
-- [x] Fix UI CronStatus type to match gateway (`jobs` instead of `jobCount`).
-- [x] Update cron UI provider select to include Discord/Slack/Signal/iMessage.
-- [x] Update macOS CronJobEditor provider picker + enum to include Slack/Signal/iMessage.
-- [x] Document cron compatibility normalization policy in [`docs/cron-jobs.md`](/automation/cron-jobs).
+## Current behavior
 
-### Phase 2 — Input normalization + tooling hardening
-- [x] Add shared cron input normalization helpers (`normalizeCronJobCreate`/`normalizeCronJobPatch`).
-- [x] Apply normalization in gateway `cron.add` (and patch normalization in `cron.update`).
-- [x] Tighten agent cron tool schema to `CronAddParamsSchema` and normalize job/patch before sending.
+- **Normalization:** wrapped `data`/`job` payloads are unwrapped; `schedule.kind` and `payload.kind` are inferred when safe.
+- **Defaults:** safe defaults are applied for `wakeMode` and `sessionTarget` when missing.
+- **Providers:** Discord/Slack/Signal/iMessage are now consistently surfaced across CLI/UI.
 
-### Phase 3 — Tests
-- [x] Add gateway test covering wrapped `cron.add` payload normalization.
-- [x] Add cron tool test to assert normalization and defaulting for `cron.add`.
-- [x] Add gateway test covering `cron.update` normalization.
-- [x] Add UI + Swift conformance test for cron channels + status fields.
+See [`docs/cron-jobs.md`](/automation/cron-jobs) for the normalized shape and examples.
 
-### Phase 4 — Verification
-- [x] Run tests (full suite executed via `pnpm test -- cron-tool`).
+## Verification
 
-## Rollout/Monitoring
 - Watch gateway logs for reduced `cron.add` INVALID_REQUEST errors.
 - Confirm Control UI cron status shows job count after refresh.
-- If errors persist, extend normalization for additional common shapes (e.g., `schedule.at`, `payload.message` without `kind`).
 
 ## Optional Follow-ups
-- Manual Control UI smoke: add cron job per provider + verify status job count.
+
+- Manual Control UI smoke: add a cron job per provider + verify status job count.
 
 ## Open Questions
 - Should `cron.add` accept explicit `state` from clients (currently disallowed by schema)?

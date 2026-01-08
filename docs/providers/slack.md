@@ -107,18 +107,16 @@ Slack's Conversations API is type-scoped: you only need the scopes for the
 conversation types you actually touch (channels, groups, im, mpim). See
 https://api.slack.com/docs/conversations-api for the overview.
 
-### Required by current code
+### Required scopes
 - `chat:write` (send/update/delete messages via `chat.postMessage`)
   https://api.slack.com/methods/chat.postMessage
 - `im:write` (open DMs via `conversations.open` for user DMs)
   https://api.slack.com/methods/conversations.open
 - `channels:history`, `groups:history`, `im:history`, `mpim:history`
-  (`conversations.history` in [`src/slack/actions.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/actions.ts))
   https://api.slack.com/methods/conversations.history
 - `channels:read`, `groups:read`, `im:read`, `mpim:read`
-  (`conversations.info` in [`src/slack/monitor.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/monitor.ts))
   https://api.slack.com/methods/conversations.info
-- `users:read` (`users.info` in [`src/slack/monitor.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/monitor.ts) + [`src/slack/actions.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/slack/actions.ts))
+- `users:read` (user lookup)
   https://api.slack.com/methods/users.info
 - `reactions:read`, `reactions:write` (`reactions.get` / `reactions.add`)
   https://api.slack.com/methods/reactions.get

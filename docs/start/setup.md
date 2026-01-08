@@ -55,7 +55,7 @@ clawdbot providers login
 clawdbot health
 ```
 
-If onboarding is still WIP/broken on your build:
+If onboarding is not available in your build:
 - Run `clawdbot setup`, then `clawdbot providers login`, then start the Gateway manually (`clawdbot gateway`).
 
 ## Bleeding edge workflow (Gateway in a terminal)
@@ -77,7 +77,7 @@ pnpm install
 pnpm gateway:watch
 ```
 
-`gateway:watch` runs `src/entry.ts gateway --force` and reloads on [`src/**/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/**/*.ts) changes.
+`gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
 
 ### 2) Point the macOS app at your running Gateway
 

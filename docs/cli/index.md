@@ -7,8 +7,7 @@ read_when:
 
 # CLI reference
 
-This page mirrors `src/cli/*` and is the source of truth for CLI behavior.
-If you change the CLI code, update this doc.
+This page describes the current CLI behavior. If commands change, update this doc.
 
 ## Global flags
 
@@ -25,7 +24,7 @@ If you change the CLI code, update this doc.
 
 ## Color palette
 
-Clawdbot uses a lobster palette for CLI output. Source of truth: `src/terminal/theme.ts`.
+Clawdbot uses a lobster palette for CLI output.
 
 - `accent` (#FF5A2D): headings, provider labels, primary highlights.
 - `accentBright` (#FF7A3D): command names, emphasis.
