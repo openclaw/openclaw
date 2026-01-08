@@ -1,12 +1,8 @@
-import {
-  chunkMarkdownText,
-  resolveTextChunkLimit,
-} from "../auto-reply/chunk.js";
+import type { Request, Response } from "express";
+import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -17,10 +13,32 @@ import {
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  saveConversationReference,
-  type StoredConversationReference,
+import type {
+  MSTeamsConversationStore,
+  StoredConversationReference,
 } from "./conversation-store.js";
+import { createMSTeamsConversationStoreFs } from "./conversation-store-fs.js";
+import {
+  classifyMSTeamsSendError,
+  formatMSTeamsSendErrorHint,
+  formatUnknownError,
+} from "./errors.js";
+import {
+  normalizeMSTeamsConversationId,
+  parseMSTeamsActivityTimestamp,
+  stripMSTeamsMentionTags,
+  wasMSTeamsBotMentioned,
+} from "./inbound.js";
+import {
+  type MSTeamsAdapter,
+  renderReplyPayloadsToMessages,
+  sendMSTeamsMessages,
+} from "./messenger.js";
+import {
+  resolveMSTeamsReplyPolicy,
+  resolveMSTeamsRouteConfig,
+} from "./policy.js";
+import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 const log = getChildLogger({ name: "msteams" });
@@ -29,57 +47,13 @@ export type MonitorMSTeamsOpts = {
   cfg: ClawdbotConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
+  conversationStore?: MSTeamsConversationStore;
 };
 
 export type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };
-
-type TeamsActivity = {
-  id?: string;
-  type?: string;
-  timestamp?: string | Date;
-  text?: string;
-  from?: { id?: string; name?: string; aadObjectId?: string };
-  recipient?: { id?: string; name?: string };
-  conversation?: {
-    id?: string;
-    conversationType?: string;
-    tenantId?: string;
-    isGroup?: boolean;
-  };
-  channelId?: string;
-  serviceUrl?: string;
-  membersAdded?: Array<{ id?: string; name?: string }>;
-  /** Entities including mentions */
-  entities?: Array<{
-    type?: string;
-    mentioned?: { id?: string; name?: string };
-  }>;
-  /** Teams-specific channel data including team info */
-  channelData?: {
-    team?: { id?: string; name?: string };
-    channel?: { id?: string; name?: string };
-    tenant?: { id?: string };
-  };
-};
-
-type TeamsTurnContext = {
-  activity: TeamsActivity;
-  sendActivity: (textOrActivity: string | object) => Promise<unknown>;
-  sendActivities?: (
-    activities: Array<{ type: string } & Record<string, unknown>>,
-  ) => Promise<unknown>;
-};
-
-// Helper to convert timestamp to Date
-function parseTimestamp(ts?: string | Date): Date | undefined {
-  if (!ts) return undefined;
-  if (ts instanceof Date) return ts;
-  const date = new Date(ts);
-  return Number.isNaN(date.getTime()) ? undefined : date;
-}
 
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
@@ -108,6 +82,8 @@ export async function monitorMSTeamsProvider(
 
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = resolveTextChunkLimit(cfg, "msteams");
+  const conversationStore =
+    opts.conversationStore ?? createMSTeamsConversationStoreFs();
 
   log.info(`starting provider (port ${port})`);
 
@@ -115,8 +91,12 @@ export async function monitorMSTeamsProvider(
   const agentsHosting = await import("@microsoft/agents-hosting");
   const express = await import("express");
 
-  const { ActivityHandler, CloudAdapter, authorizeJWT, getAuthConfigWithDefaults } =
-    agentsHosting;
+  const {
+    ActivityHandler,
+    CloudAdapter,
+    authorizeJWT,
+    getAuthConfigWithDefaults,
+  } = agentsHosting;
 
   // Auth configuration - create early so adapter is available for deliverReplies
   const authConfig = getAuthConfigWithDefaults({
@@ -126,100 +106,11 @@ export async function monitorMSTeamsProvider(
   });
   const adapter = new CloudAdapter(authConfig);
 
-  // Helper to deliver replies with configurable reply style
-  // - "thread": reply to the original message (for Posts layout channels)
-  // - "top-level": post as a new message (for Threads layout channels)
-  async function deliverReplies(params: {
-    replies: ReplyPayload[];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    context: any; // TurnContext from SDK - has activity.getConversationReference()
-    adapter: InstanceType<typeof CloudAdapter>;
-    appId: string;
-    replyStyle: "thread" | "top-level";
-  }) {
-    const chunkLimit = Math.min(textLimit, 4000);
-
-    // For "thread" style, use context.sendActivity directly (replies to original message)
-    // For "top-level" style, use proactive messaging without activityId
-    const sendMessage =
-      params.replyStyle === "thread"
-        ? async (message: string) => {
-            await params.context.sendActivity({ type: "message", text: message });
-          }
-        : async (message: string) => {
-            // Get conversation reference from SDK's activity (includes proper bot info)
-            // Then remove activityId to avoid threading
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const fullRef = params.context.activity.getConversationReference() as any;
-            const conversationRef = {
-              ...fullRef,
-              activityId: undefined, // Remove to post as top-level message
-            };
-            // Also strip the messageid suffix from conversation.id if present
-            if (conversationRef.conversation?.id) {
-              conversationRef.conversation = {
-                ...conversationRef.conversation,
-                id: conversationRef.conversation.id.split(";")[0],
-              };
-            }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            await (params.adapter as any).continueConversation(
-              params.appId,
-              conversationRef,
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              async (ctx: any) => {
-                await ctx.sendActivity({ type: "message", text: message });
-              },
-            );
-          };
-
-    for (const payload of params.replies) {
-      const mediaList =
-        payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-      const text = payload.text ?? "";
-      if (!text && mediaList.length === 0) continue;
-
-      if (mediaList.length === 0) {
-        for (const chunk of chunkMarkdownText(text, chunkLimit)) {
-          const trimmed = chunk.trim();
-          if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
-          await sendMessage(trimmed);
-        }
-      } else {
-        // For media, send text first then media URLs as separate messages
-        if (text.trim() && text.trim() !== SILENT_REPLY_TOKEN) {
-          for (const chunk of chunkMarkdownText(text, chunkLimit)) {
-            await sendMessage(chunk);
-          }
-        }
-        for (const mediaUrl of mediaList) {
-          await sendMessage(mediaUrl);
-        }
-      }
-    }
-  }
-
-  // Strip Teams @mention HTML tags from message text
-  function stripMentionTags(text: string): string {
-    // Teams wraps mentions in <at>...</at> tags
-    return text.replace(/<at>.*?<\/at>/gi, "").trim();
-  }
-
-  // Check if the bot was mentioned in the activity
-  function wasBotMentioned(activity: TeamsActivity): boolean {
-    const botId = activity.recipient?.id;
-    if (!botId) return false;
-    const entities = activity.entities ?? [];
-    return entities.some(
-      (e) => e.type === "mention" && e.mentioned?.id === botId,
-    );
-  }
-
   // Handler for incoming messages
-  async function handleTeamsMessage(context: TeamsTurnContext) {
+  async function handleTeamsMessage(context: MSTeamsTurnContext) {
     const activity = context.activity;
     const rawText = activity.text?.trim() ?? "";
-    const text = stripMentionTags(rawText);
+    const text = stripMSTeamsMentionTags(rawText);
     const from = activity.from;
     const conversation = activity.conversation;
 
@@ -241,7 +132,7 @@ export async function monitorMSTeamsProvider(
 
     // Teams conversation.id may include ";messageid=..." suffix - strip it for session key
     const rawConversationId = conversation?.id ?? "";
-    const conversationId = rawConversationId.split(";")[0];
+    const conversationId = normalizeMSTeamsConversationId(rawConversationId);
     const conversationType = conversation?.conversationType ?? "personal";
     const isGroupChat =
       conversationType === "groupChat" || conversation?.isGroup === true;
@@ -266,8 +157,10 @@ export async function monitorMSTeamsProvider(
       channelId: activity.channelId,
       serviceUrl: activity.serviceUrl,
     };
-    saveConversationReference(conversationId, conversationRef).catch((err) => {
-      log.debug("failed to save conversation reference", { error: String(err) });
+    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+      log.debug("failed to save conversation reference", {
+        error: formatUnknownError(err),
+      });
     });
 
     // Build Teams-specific identifiers
@@ -346,19 +239,21 @@ export async function monitorMSTeamsProvider(
     // Resolve team/channel config for channels and group chats
     const teamId = activity.channelData?.team?.id;
     const channelId = conversationId;
-    const teamConfig = teamId ? msteamsCfg?.teams?.[teamId] : undefined;
-    const channelConfig = teamConfig?.channels?.[channelId];
+    const { teamConfig, channelConfig } = resolveMSTeamsRouteConfig({
+      cfg: msteamsCfg,
+      teamId,
+      conversationId: channelId,
+    });
+    const { requireMention, replyStyle } = resolveMSTeamsReplyPolicy({
+      isDirectMessage,
+      globalConfig: msteamsCfg,
+      teamConfig,
+      channelConfig,
+    });
 
     // Check requireMention for channels and group chats
     if (!isDirectMessage) {
-      // Resolution order: channel config > team config > global config > default (true)
-      const requireMention =
-        channelConfig?.requireMention ??
-        teamConfig?.requireMention ??
-        msteamsCfg?.requireMention ??
-        true;
-
-      const mentioned = wasBotMentioned(activity);
+      const mentioned = wasMSTeamsBotMentioned(activity);
 
       if (requireMention && !mentioned) {
         log.debug("skipping message (mention required)", {
@@ -371,26 +266,8 @@ export async function monitorMSTeamsProvider(
       }
     }
 
-    // Resolve reply style for channels/groups
-    // Resolution order: channel config > team config > global config > default based on requireMention
-    // If requireMention is false (Threads layout), default to "top-level"
-    // If requireMention is true (Posts layout), default to "thread"
-    const explicitReplyStyle =
-      channelConfig?.replyStyle ??
-      teamConfig?.replyStyle ??
-      msteamsCfg?.replyStyle;
-    const effectiveRequireMention =
-      channelConfig?.requireMention ??
-      teamConfig?.requireMention ??
-      msteamsCfg?.requireMention ??
-      true;
-    // For DMs, always use "thread" style (direct reply)
-    const replyStyle: "thread" | "top-level" = isDirectMessage
-      ? "thread"
-      : explicitReplyStyle ?? (effectiveRequireMention ? "thread" : "top-level");
-
     // Format the message body with envelope
-    const timestamp = parseTimestamp(activity.timestamp);
+    const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
     const body = formatAgentEnvelope({
       provider: "Teams",
       from: senderName,
@@ -413,7 +290,7 @@ export async function monitorMSTeamsProvider(
       Surface: "msteams" as const,
       MessageSid: activity.id,
       Timestamp: timestamp?.getTime() ?? Date.now(),
-      WasMentioned: isDirectMessage || wasBotMentioned(activity),
+      WasMentioned: isDirectMessage || wasMSTeamsBotMentioned(activity),
       CommandAuthorized: true,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
@@ -428,9 +305,7 @@ export async function monitorMSTeamsProvider(
     // Send typing indicator
     const sendTypingIndicator = async () => {
       try {
-        if (context.sendActivities) {
-          await context.sendActivities([{ type: "typing" }]);
-        }
+        await context.sendActivities([{ type: "typing" }]);
       } catch {
         // Typing indicator is best-effort
       }
@@ -441,25 +316,43 @@ export async function monitorMSTeamsProvider(
       createReplyDispatcherWithTyping({
         responsePrefix: cfg.messages?.responsePrefix,
         deliver: async (payload) => {
-          await deliverReplies({
-            replies: [payload],
-            context,
-            adapter,
-            appId,
+          const messages = renderReplyPayloadsToMessages([payload], {
+            textChunkLimit: textLimit,
+            chunkText: true,
+            mediaMode: "split",
+          });
+          await sendMSTeamsMessages({
             replyStyle,
+            adapter: adapter as unknown as MSTeamsAdapter,
+            appId,
+            conversationRef,
+            context,
+            messages,
+            // Enable default retry/backoff for throttling/transient failures.
+            retry: {},
+            onRetry: (event) => {
+              log.debug("retrying send", {
+                replyStyle,
+                ...event,
+              });
+            },
           });
         },
         onError: (err, info) => {
-          const errMsg =
-            err instanceof Error
-              ? err.message
-              : typeof err === "object"
-                ? JSON.stringify(err)
-                : String(err);
+          const errMsg = formatUnknownError(err);
+          const classification = classifyMSTeamsSendError(err);
+          const hint = formatMSTeamsSendErrorHint(classification);
           runtime.error?.(
-            danger(`msteams ${info.kind} reply failed: ${errMsg}`),
+            danger(
+              `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
+            ),
           );
-          log.error("reply failed", { kind: info.kind, error: err });
+          log.error("reply failed", {
+            kind: info.kind,
+            error: errMsg,
+            classification,
+            hint,
+          });
         },
         onReplyStart: sendTypingIndicator,
       });
@@ -499,11 +392,10 @@ export async function monitorMSTeamsProvider(
   }
 
   // Create activity handler using fluent API
-  // The SDK's TurnContext is compatible with our TeamsTurnContext
   const handler = new ActivityHandler()
     .onMessage(async (context, next) => {
       try {
-        await handleTeamsMessage(context as unknown as TeamsTurnContext);
+        await handleTeamsMessage(context as unknown as MSTeamsTurnContext);
       } catch (err) {
         runtime.error?.(danger(`msteams handler failed: ${String(err)}`));
       }
@@ -527,9 +419,12 @@ export async function monitorMSTeamsProvider(
 
   // Set up the messages endpoint - use configured path and /api/messages as fallback
   const configuredPath = msteamsCfg.webhook?.path ?? "/api/messages";
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const messageHandler = (req: any, res: any) => {
-    adapter.process(req, res, (context) => handler.run(context));
+  const messageHandler = (req: Request, res: Response) => {
+    void adapter
+      .process(req, res, (context) => handler.run(context))
+      .catch((err) => {
+        log.error("msteams webhook failed", { error: formatUnknownError(err) });
+      });
   };
 
   // Listen on configured path and /api/messages (standard Bot Framework path)
