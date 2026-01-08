@@ -4,6 +4,7 @@ import SwabbleKit
 enum VoiceWakeTextUtils {
     private static let whitespaceAndPunctuation = CharacterSet.whitespacesAndNewlines
         .union(.punctuationCharacters)
+    typealias TrimWake = (String, [String]) -> String
 
     static func normalizeToken(_ token: String) -> String {
         token
@@ -34,8 +35,8 @@ enum VoiceWakeTextUtils {
         transcript: String,
         triggers: [String],
         minCommandLength: Int,
-        trimWake: (String, [String]) -> String
-    ) -> String? {
+        trimWake: TrimWake) -> String?
+    {
         guard !transcript.isEmpty else { return nil }
         guard !self.normalizeToken(transcript).isEmpty else { return nil }
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
