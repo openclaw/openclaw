@@ -130,17 +130,32 @@ function formatAccountLabel(params: { accountId: string; name?: string }) {
   return base;
 }
 
+const colorValue = (value: string) => {
+  if (value === "none") return chalk.red(value);
+  if (value === "env") return chalk.cyan(value);
+  return chalk.green(value);
+};
+
 function formatEnabled(value: boolean | undefined): string {
-  return value === false ? "disabled" : "enabled";
+  return value === false ? chalk.red("disabled") : chalk.green("enabled");
 }
 
 function formatConfigured(value: boolean): string {
-  return value ? "configured" : "not configured";
+  return value ? chalk.green("configured") : chalk.yellow("not configured");
 }
 
 function formatTokenSource(source?: string): string {
-  if (!source || source === "none") return "token=none";
-  return `token=${source}`;
+  const value = source || "none";
+  return `token=${colorValue(value)}`;
+}
+
+function formatSource(label: string, source?: string): string {
+  const value = source || "none";
+  return `${label}=${colorValue(value)}`;
+}
+
+function formatLinked(value: boolean): string {
+  return value ? chalk.green("linked") : chalk.yellow("not linked");
 }
 
 function applyAccountName(params: {
@@ -481,17 +496,19 @@ export async function providersListCommand(
   }
 
   const lines: string[] = [];
-  lines.push("Chat providers:");
+  lines.push(chalk.bold("Chat providers:"));
 
   for (const accountId of whatsappAccounts) {
     const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
     const linked = await webAuthExists(authDir);
     const name = cfg.whatsapp?.accounts?.[accountId]?.name;
     lines.push(
-      `- WhatsApp ${formatAccountLabel({
-        accountId,
-        name,
-      })}: ${linked ? "linked" : "not linked"}, ${formatEnabled(
+      `- ${chalk.cyan("WhatsApp")} ${chalk.bold(
+        formatAccountLabel({
+          accountId,
+          name,
+        }),
+      )}: ${formatLinked(linked)}, ${formatEnabled(
         cfg.whatsapp?.accounts?.[accountId]?.enabled ??
           cfg.web?.enabled ??
           true,
@@ -502,10 +519,12 @@ export async function providersListCommand(
   for (const accountId of telegramAccounts) {
     const account = resolveTelegramAccount({ cfg, accountId });
     lines.push(
-      `- Telegram ${formatAccountLabel({
-        accountId,
-        name: account.name,
-      })}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
+      `- ${chalk.cyan("Telegram")} ${chalk.bold(
+        formatAccountLabel({
+          accountId,
+          name: account.name,
+        }),
+      )}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
         account.tokenSource,
       )}, ${formatEnabled(account.enabled)}`,
     );
@@ -514,10 +533,12 @@ export async function providersListCommand(
   for (const accountId of discordAccounts) {
     const account = resolveDiscordAccount({ cfg, accountId });
     lines.push(
-      `- Discord ${formatAccountLabel({
-        accountId,
-        name: account.name,
-      })}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
+      `- ${chalk.cyan("Discord")} ${chalk.bold(
+        formatAccountLabel({
+          accountId,
+          name: account.name,
+        }),
+      )}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
         account.tokenSource,
       )}, ${formatEnabled(account.enabled)}`,
     );
@@ -527,10 +548,15 @@ export async function providersListCommand(
     const account = resolveSlackAccount({ cfg, accountId });
     const configured = Boolean(account.botToken && account.appToken);
     lines.push(
-      `- Slack ${formatAccountLabel({
-        accountId,
-        name: account.name,
-      })}: ${formatConfigured(configured)}, bot=${account.botTokenSource}, app=${account.appTokenSource}, ${formatEnabled(
+      `- ${chalk.cyan("Slack")} ${chalk.bold(
+        formatAccountLabel({
+          accountId,
+          name: account.name,
+        }),
+      )}: ${formatConfigured(configured)}, ${formatSource(
+        "bot",
+        account.botTokenSource,
+      )}, ${formatSource("app", account.appTokenSource)}, ${formatEnabled(
         account.enabled,
       )}`,
     );
@@ -539,33 +565,39 @@ export async function providersListCommand(
   for (const accountId of signalAccounts) {
     const account = resolveSignalAccount({ cfg, accountId });
     lines.push(
-      `- Signal ${formatAccountLabel({
-        accountId,
-        name: account.name,
-      })}: ${formatConfigured(account.configured)}, base=${account.baseUrl}, ${formatEnabled(
-        account.enabled,
-      )}`,
+      `- ${chalk.cyan("Signal")} ${chalk.bold(
+        formatAccountLabel({
+          accountId,
+          name: account.name,
+        }),
+      )}: ${formatConfigured(account.configured)}, base=${chalk.dim(
+        account.baseUrl,
+      )}, ${formatEnabled(account.enabled)}`,
     );
   }
 
   for (const accountId of imessageAccounts) {
     const account = resolveIMessageAccount({ cfg, accountId });
     lines.push(
-      `- iMessage ${formatAccountLabel({
-        accountId,
-        name: account.name,
-      })}: ${formatEnabled(account.enabled)}`,
+      `- ${chalk.cyan("iMessage")} ${chalk.bold(
+        formatAccountLabel({
+          accountId,
+          name: account.name,
+        }),
+      )}: ${formatEnabled(account.enabled)}`,
     );
   }
 
   lines.push("");
-  lines.push("Auth providers (OAuth + API keys):");
+  lines.push(chalk.bold("Auth providers (OAuth + API keys):"));
   if (authProfiles.length === 0) {
-    lines.push("- none");
+    lines.push(chalk.dim("- none"));
   } else {
     for (const profile of authProfiles) {
-      const external = profile.isExternal ? " (synced)" : "";
-      lines.push(`- ${profile.id} (${profile.type}${external})`);
+      const external = profile.isExternal ? chalk.dim(" (synced)") : "";
+      lines.push(
+        `- ${chalk.cyan(profile.id)} (${chalk.green(profile.type)}${external})`,
+      );
     }
   }
 
