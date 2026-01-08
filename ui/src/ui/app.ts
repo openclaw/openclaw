@@ -89,6 +89,7 @@ type EventLogEntry = {
 };
 
 const TOOL_STREAM_LIMIT = 50;
+const TOOL_STREAM_THROTTLE_MS = 80;
 const TOOL_OUTPUT_CHAR_LIMIT = 120_000;
 const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
   trace: true,
@@ -200,6 +201,7 @@ export class ClawdbotApp extends LitElement {
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
   private eventLogBuffer: EventLogEntry[] = [];
+  private toolStreamSyncTimer: number | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -211,6 +213,7 @@ export class ClawdbotApp extends LitElement {
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() toolOutputExpanded = new Set<string>();
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -608,10 +611,22 @@ export class ClawdbotApp extends LitElement {
     this.toolStreamById.clear();
     this.toolStreamOrder = [];
     this.chatToolMessages = [];
+    this.toolOutputExpanded = new Set();
+    this.flushToolStreamSync();
   }
 
   resetChatScroll() {
     this.chatHasAutoScrolled = false;
+  }
+
+  toggleToolOutput(id: string, expanded: boolean) {
+    const next = new Set(this.toolOutputExpanded);
+    if (expanded) {
+      next.add(id);
+    } else {
+      next.delete(id);
+    }
+    this.toolOutputExpanded = next;
   }
 
   private trimToolStream() {
@@ -625,6 +640,26 @@ export class ClawdbotApp extends LitElement {
     this.chatToolMessages = this.toolStreamOrder
       .map((id) => this.toolStreamById.get(id)?.message)
       .filter((msg): msg is Record<string, unknown> => Boolean(msg));
+  }
+
+  private scheduleToolStreamSync(force = false) {
+    if (force) {
+      this.flushToolStreamSync();
+      return;
+    }
+    if (this.toolStreamSyncTimer != null) return;
+    this.toolStreamSyncTimer = window.setTimeout(
+      () => this.flushToolStreamSync(),
+      TOOL_STREAM_THROTTLE_MS,
+    );
+  }
+
+  private flushToolStreamSync() {
+    if (this.toolStreamSyncTimer != null) {
+      clearTimeout(this.toolStreamSyncTimer);
+      this.toolStreamSyncTimer = null;
+    }
+    this.syncToolStreamMessages();
   }
 
   private buildToolStreamMessage(entry: ToolStreamEntry): Record<string, unknown> {
@@ -699,7 +734,7 @@ export class ClawdbotApp extends LitElement {
 
     entry.message = this.buildToolStreamMessage(entry);
     this.trimToolStream();
-    this.syncToolStreamMessages();
+    this.scheduleToolStreamSync(phase === "result");
   }
 
   private onEvent(evt: GatewayEventFrame) {

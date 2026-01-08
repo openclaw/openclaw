@@ -440,6 +440,9 @@ export function renderApp(state: AppViewState) {
               disabledReason: chatDisabledReason,
               error: state.lastError,
               sessions: state.sessionsResult,
+              isToolOutputExpanded: (id) => state.toolOutputExpanded.has(id),
+              onToolOutputToggle: (id, expanded) =>
+                state.toggleToolOutput(id, expanded),
               onRefresh: () => {
                 state.resetToolStream();
                 return loadChatHistory(state);

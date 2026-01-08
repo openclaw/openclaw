@@ -54,6 +54,8 @@
 - Web UI: add Logs tab for gateway file logs with filtering, auto-follow, and export.
 - Web UI: cap tool output + large markdown rendering to avoid UI freezes on huge tool results.
 - Web UI: keep config form edits synced to raw JSON so form saves persist.
+- Web UI: window chat history rendering and throttle tool stream updates to reduce UI churn.
+- Web UI: collapse tool output by default and lazy-render tool markdown on expand.
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.

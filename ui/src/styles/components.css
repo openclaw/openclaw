@@ -883,6 +883,34 @@
   color: var(--muted);
 }
 
+.chat-tool-card__details {
+  margin-top: 6px;
+}
+
+.chat-tool-card__summary {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-tool-card__summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-tool-card__summary-meta {
+  color: var(--muted);
+  opacity: 0.8;
+}
+
+.chat-tool-card__details[open] .chat-tool-card__summary {
+  color: var(--chat-text);
+}
+
 .chat-tool-card__output {
   margin-top: 6px;
   font-family: var(--font-mono);
