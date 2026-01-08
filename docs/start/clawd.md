@@ -23,13 +23,22 @@ Start conservative:
 ## Prerequisites
 
 - Node **22+**
-- CLAWDBOT available on PATH (recommended during development: from source + global link)
+- CLAWDBOT available on PATH (recommended: global install)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
-From source (recommended while the npm package is still settling):
+```bash
+pnpm add -g clawdbot@latest
+# or: npm install -g clawdbot@latest
+```
+
+From source (development):
 
 ```bash
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
 pnpm install
+pnpm ui:install
+pnpm ui:build
 pnpm build
 pnpm link --global
 ```

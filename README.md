@@ -37,25 +37,18 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 - Models config + CLI: [Models](https://docs.clawd.bot/models)
 - Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.clawd.bot/model-failover)
 
-## Recommended setup (from source)
+## Install (recommended)
 
-Do **not** download prebuilt binaries. Run from source.
-
-Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+Runtime: **Node ≥22**.
 
 ```bash
-# Clone this repo
-git clone https://github.com/clawdbot/clawdbot.git
-cd clawdbot
+pnpm add -g clawdbot@latest
+# or: npm install -g clawdbot@latest
 
-pnpm install
-pnpm ui:install
-pnpm ui:build
-pnpm build
-pnpm clawdbot onboard
+clawdbot onboard --install-daemon
 ```
 
-Note: `pnpm clawdbot ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `clawdbot` binary.
+The wizard installs the Gateway daemon (launchd/systemd user service) so it stays running.
 
 ## Quick start (TL;DR)
 
@@ -64,23 +57,39 @@ Runtime: **Node ≥22**.
 Full beginner guide (auth, pairing, providers): [Getting started](https://docs.clawd.bot/getting-started)
 
 ```bash
-pnpm clawdbot onboard
+clawdbot onboard --install-daemon
 
-pnpm clawdbot gateway --port 18789 --verbose
-
-# Dev loop (auto-reload on TS changes)
-pnpm gateway:watch
+clawdbot gateway --port 18789 --verbose
 
 # Send a message
-pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
+clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 
 # Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
-pnpm clawdbot agent --message "Ship checklist" --thinking high
+clawdbot agent --message "Ship checklist" --thinking high
 ```
 
 Upgrading? [Updating guide](https://docs.clawd.bot/updating) (and run `clawdbot doctor`).
 
-If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
+## From source (development)
+
+Prefer `pnpm` for builds from source. Bun is optional for running TypeScript directly.
+
+```bash
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
+
+pnpm install
+pnpm ui:install
+pnpm ui:build
+pnpm build
+
+pnpm clawdbot onboard --install-daemon
+
+# Dev loop (auto-reload on TS changes)
+pnpm gateway:watch
+```
+
+Note: `pnpm clawdbot ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `clawdbot` binary.
 
 ## Security defaults (DM access)
 
