@@ -1695,7 +1695,6 @@ export async function runEmbeddedPiAgent(params: {
           const hasAudioAsVoiceTag = replyItems.some(
             (item) => item.audioAsVoice,
           );
-
           const payloads = replyItems
             .map((item) => ({
               text: item.text?.trim() ? item.text.trim() : undefined,
