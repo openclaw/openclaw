@@ -994,7 +994,7 @@ If you configure the same alias name (case-insensitive) yourself, your value win
 }
 ```
 
-#### `agent.contextPruning` (opt-in tool-result pruning)
+#### `agent.contextPruning` (tool-result pruning)
 
 `agent.contextPruning` prunes **old tool results** from the in-memory context right before a request is sent to the LLM.
 It does **not** modify the session history on disk (`*.jsonl` remains complete).
@@ -1025,12 +1025,23 @@ Notes / current limitations:
 - If the session doesn’t contain at least `keepLastAssistants` assistant messages yet, pruning is skipped.
 - In `aggressive` mode, `hardClear.enabled` is ignored (eligible tool results are always replaced with `hardClear.placeholder`).
 
-Example (minimal):
+Default (adaptive):
 ```json5
 {
   agent: {
     contextPruning: {
       mode: "adaptive"
+    }
+  }
+}
+```
+
+To disable:
+```json5
+{
+  agent: {
+    contextPruning: {
+      mode: "off"
     }
   }
 }
