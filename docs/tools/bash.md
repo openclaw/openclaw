@@ -19,6 +19,7 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `timeout` (seconds, default 1800): kill on expiry
 - `elevated` (bool): run on host if elevated mode is enabled/allowed (only changes behavior when the agent is sandboxed)
 - Need a real TTY? Use the tmux skill.
+Note: `elevated` is ignored when sandboxing is off (bash already runs on the host).
 
 ## Examples
 

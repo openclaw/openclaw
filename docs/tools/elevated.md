@@ -20,6 +20,10 @@ read_when:
 - **Unsandboxed agents**: when there is no sandbox to bypass, elevated does not change where `bash` runs.
 - **Tool policy still applies**: if `bash` is denied by tool policy, elevated cannot be used.
 
+Note:
+- Sandbox on: `/elevated on` runs that `bash` command on the host.
+- Sandbox off: `/elevated on` does not change execution (already on host).
+
 ## When elevated matters
 - Only impacts `bash` when the agent is running sandboxed (it drops the sandbox for that command).
 - For unsandboxed agents, elevated does not change execution; it only affects gating, logging, and status.

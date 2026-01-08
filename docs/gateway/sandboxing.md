@@ -24,6 +24,7 @@ Not sandboxed:
 - The Gateway process itself.
 - Any tool explicitly allowed to run on the host (e.g. `agent.elevated`).
   - **Elevated bash runs on the host and bypasses sandboxing.**
+  - If sandboxing is off, `agent.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
 
 ## Modes
 `agent.sandbox.mode` controls **when** sandboxing is used:
