@@ -40,6 +40,7 @@ clawdbot doctor --non-interactive
 ```
 
 Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
+Legacy state migrations run automatically when detected.
 
 ```bash
 clawdbot doctor --deep

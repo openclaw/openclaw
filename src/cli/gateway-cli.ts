@@ -74,6 +74,13 @@ function parsePort(raw: unknown): number | null {
   return parsed;
 }
 
+const toOptionString = (value: unknown): string | undefined => {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint")
+    return value.toString();
+  return undefined;
+};
+
 function describeUnknownError(err: unknown): string {
   if (err instanceof Error) return err.message;
   if (typeof err === "string") return err;
@@ -338,9 +345,10 @@ async function runGatewayCommand(
     }
   }
   if (opts.token) {
-    process.env.CLAWDBOT_GATEWAY_TOKEN = String(opts.token);
+    const token = toOptionString(opts.token);
+    if (token) process.env.CLAWDBOT_GATEWAY_TOKEN = token;
   }
-  const authModeRaw = opts.auth ? String(opts.auth) : undefined;
+  const authModeRaw = toOptionString(opts.auth);
   const authMode: GatewayAuthMode | null =
     authModeRaw === "token" || authModeRaw === "password" ? authModeRaw : null;
   if (authModeRaw && !authMode) {
@@ -348,7 +356,7 @@ async function runGatewayCommand(
     defaultRuntime.exit(1);
     return;
   }
-  const tailscaleRaw = opts.tailscale ? String(opts.tailscale) : undefined;
+  const tailscaleRaw = toOptionString(opts.tailscale);
   const tailscaleMode =
     tailscaleRaw === "off" ||
     tailscaleRaw === "serve" ||
@@ -362,6 +370,8 @@ async function runGatewayCommand(
     defaultRuntime.exit(1);
     return;
   }
+  const passwordRaw = toOptionString(opts.password);
+  const tokenRaw = toOptionString(opts.token);
   const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
@@ -377,7 +387,7 @@ async function runGatewayCommand(
     defaultRuntime.exit(1);
     return;
   }
-  const bindRaw = String(opts.bind ?? cfg.gateway?.bind ?? "loopback");
+  const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
   const bind =
     bindRaw === "loopback" ||
     bindRaw === "tailnet" ||
@@ -398,8 +408,8 @@ async function runGatewayCommand(
   const authConfig = {
     ...cfg.gateway?.auth,
     ...(authMode ? { mode: authMode } : {}),
-    ...(opts.password ? { password: String(opts.password) } : {}),
-    ...(opts.token ? { token: String(opts.token) } : {}),
+    ...(passwordRaw ? { password: passwordRaw } : {}),
+    ...(tokenRaw ? { token: tokenRaw } : {}),
   };
   const resolvedAuth = resolveGatewayAuth({
     authConfig,
@@ -467,11 +477,11 @@ async function runGatewayCommand(
         await startGatewayServer(port, {
           bind,
           auth:
-            authMode || opts.password || opts.token || authModeRaw
+            authMode || passwordRaw || tokenRaw || authModeRaw
               ? {
                   mode: authMode ?? undefined,
-                  token: opts.token ? String(opts.token) : undefined,
-                  password: opts.password ? String(opts.password) : undefined,
+                  token: tokenRaw,
+                  password: passwordRaw,
                 }
               : undefined,
           tailscale:
