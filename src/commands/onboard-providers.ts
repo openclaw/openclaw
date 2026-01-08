@@ -140,7 +140,8 @@ async function noteTelegramTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Run /newbot (or /mybots)",
       "3) Copy the token (looks like 123456:ABC...)",
       "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
-      `Docs: ${formatDocsLink("/telegram", "telegram")}`,
+      `Docs: ${formatDocsLink("/telegram")}`,
+      "Website: https://clawd.bot",
     ].join("\n"),
     "Telegram bot token",
   );

@@ -23,7 +23,8 @@ describe("provider registry", () => {
     const line = formatProviderSelectionLine(first, (path, label) =>
       [label, path].filter(Boolean).join(":"),
     );
-    expect(line).toContain("Docs:");
-    expect(line).toContain("telegram");
+    expect(line).not.toContain("Docs:");
+    expect(line).toContain("/telegram");
+    expect(line).toContain("https://clawd.bot");
   });
 });
