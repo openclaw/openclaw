@@ -324,6 +324,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       publicKey: "a",
       token,
       autoDeploy: nativeEnabled,
+      eventQueue: {
+        listenerTimeout: 120_000,
+      },
     },
     {
       commands,
@@ -331,6 +334,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     },
     [
       new GatewayPlugin({
+        reconnect: {
+          maxAttempts: Number.POSITIVE_INFINITY,
+        },
         intents:
           GatewayIntents.Guilds |
           GatewayIntents.GuildMessages |
@@ -409,18 +415,55 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
   const gatewayEmitter = getDiscordGatewayEmitter(gateway);
-  await waitForDiscordGatewayStop({
-    gateway: gateway
-      ? {
-          emitter: gatewayEmitter,
-          disconnect: () => gateway.disconnect(),
-        }
-      : undefined,
-    abortSignal: opts.abortSignal,
-    onGatewayError: (err) => {
-      runtime.error?.(danger(`discord gateway error: ${String(err)}`));
-    },
-  });
+  let queueMetricsTimer: ReturnType<typeof setInterval> | undefined;
+  let lastQueueTimeouts = 0;
+  let lastQueueDropped = 0;
+  const onGatewayWarning = (warning: unknown) => {
+    logVerbose(`discord gateway warning: ${String(warning)}`);
+  };
+  if (shouldLogVerbose()) {
+    gatewayEmitter?.on("warning", onGatewayWarning);
+    queueMetricsTimer = setInterval(() => {
+      const metrics = client.eventHandler?.getMetrics?.();
+      if (!metrics) return;
+      const nearCapacity =
+        metrics.maxQueueSize > 0 &&
+        metrics.queueSize / metrics.maxQueueSize >= 0.8;
+      const hasNewTimeouts = metrics.timeouts > lastQueueTimeouts;
+      const hasNewDrops = metrics.dropped > lastQueueDropped;
+      if (nearCapacity || hasNewTimeouts || hasNewDrops) {
+        logVerbose(`discord event queue metrics: ${JSON.stringify(metrics)}`);
+      }
+      lastQueueTimeouts = metrics.timeouts;
+      lastQueueDropped = metrics.dropped;
+    }, 60000);
+  }
+  try {
+    await waitForDiscordGatewayStop({
+      gateway: gateway
+        ? {
+            emitter: gatewayEmitter,
+            disconnect: () => gateway.disconnect(),
+          }
+        : undefined,
+      abortSignal: opts.abortSignal,
+      onGatewayError: (err) => {
+        runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+      },
+      shouldStopOnError: (err) => {
+        const message = String(err);
+        return (
+          message.includes("Max reconnect attempts") ||
+          message.includes("Fatal Gateway error")
+        );
+      },
+    });
+  } finally {
+    if (queueMetricsTimer) {
+      clearInterval(queueMetricsTimer);
+    }
+    gatewayEmitter?.removeListener("warning", onGatewayWarning);
+  }
 }
 
 async function clearDiscordNativeCommands(params: {
