@@ -21,9 +21,93 @@ Status: text + DM attachments are supported; channel/group attachments require M
 4. Configure `msteams` in `~/.clawdbot/clawdbot.json` (or env vars) and start the gateway.
 5. The gateway listens for Bot Framework webhook traffic on `/api/messages` by default.
 
+## Azure Bot Setup (Prerequisites)
+
+Before configuring Clawdbot, you need to create an Azure Bot resource.
+
+### Step 1: Create Azure Bot
+
+1. Go to [Create Azure Bot](https://portal.azure.com/#create/Microsoft.AzureBot)
+2. Fill in the **Basics** tab:
+
+   | Field | Value |
+   |-------|-------|
+   | **Bot handle** | Your bot name, e.g., `clawdbot-msteams` (must be unique) |
+   | **Subscription** | Select your Azure subscription |
+   | **Resource group** | Create new or use existing |
+   | **Pricing tier** | **Free** for dev/testing |
+   | **Type of App** | **Single Tenant** (recommended) |
+   | **Creation type** | **Create new Microsoft App ID** |
+
+3. Click **Review + create** → **Create** (wait ~1-2 minutes)
+
+### Step 2: Get Credentials
+
+1. Go to your Azure Bot resource → **Configuration**
+2. Copy **Microsoft App ID** → this is your `appId`
+3. Click **Manage Password** → go to the App Registration
+4. Under **Certificates & secrets** → **New client secret** → copy the **Value** → this is your `appPassword`
+5. Go to **Overview** → copy **Directory (tenant) ID** → this is your `tenantId`
+
+### Step 3: Configure Messaging Endpoint
+
+1. In Azure Bot → **Configuration**
+2. Set **Messaging endpoint** to your webhook URL:
+   - Production: `https://your-domain.com/api/messages`
+   - Local dev: Use a tunnel (see [Local Development](#local-development-tunneling) below)
+
+### Step 4: Enable Teams Channel
+
+1. In Azure Bot → **Channels**
+2. Click **Microsoft Teams** → Configure → Save
+3. Accept the Terms of Service
+
+## Local Development (Tunneling)
+
+Teams can't reach `localhost`. Use a tunnel for local development:
+
+**Option A: ngrok**
+```bash
+ngrok http 3978
+# Copy the https URL, e.g., https://abc123.ngrok.io
+# Set messaging endpoint to: https://abc123.ngrok.io/api/messages
+```
+
+**Option B: Tailscale Funnel**
+```bash
+tailscale funnel 3978
+# Use your Tailscale funnel URL as the messaging endpoint
+```
+
+## Teams Developer Portal (Alternative)
+
+Instead of manually creating a manifest ZIP, you can use the [Teams Developer Portal](https://dev.teams.microsoft.com/apps):
+
+1. Click **+ New app**
+2. Fill in basic info (name, description, developer info)
+3. Go to **App features** → **Bot**
+4. Select **Enter a bot ID manually** and paste your Azure Bot App ID
+5. Check scopes: **Personal**, **Team**, **Group Chat**
+6. Click **Distribute** → **Download app package**
+7. In Teams: **Apps** → **Manage your apps** → **Upload a custom app** → select the ZIP
+
+This is often easier than hand-editing JSON manifests.
+
+## Testing the Bot
+
+**Option A: Azure Web Chat (verify webhook first)**
+1. In Azure Portal → your Azure Bot resource → **Test in Web Chat**
+2. Send a message - you should see a response
+3. This confirms your webhook endpoint works before Teams setup
+
+**Option B: Teams (after app installation)**
+1. Install the Teams app (sideload or org catalog)
+2. Find the bot in Teams and send a DM
+3. Check gateway logs for incoming activity
+
 ## Setup (minimal text-only)
 1. **Bot registration**
-   - Create an Azure Bot and note:
+   - Create an Azure Bot (see above) and note:
      - App ID
      - Client secret (App password)
      - Tenant ID (single-tenant)
@@ -60,15 +144,19 @@ Status: text + DM attachments are supported; channel/group attachments require M
    - The Teams provider starts automatically when `msteams` config exists and credentials are set.
 
 ## Current Teams RSC Permissions (Manifest)
-These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team where the app is installed.
+These are the **existing resourceSpecific permissions** in our Teams app manifest. They only apply inside the team/chat where the app is installed.
 
-- `ChannelMessage.Read.Group` (Application)
+**For channels (team scope):**
+- `ChannelMessage.Read.Group` (Application) - receive all channel messages without @mention
 - `ChannelMessage.Send.Group` (Application)
 - `Member.Read.Group` (Application)
 - `Owner.Read.Group` (Application)
 - `ChannelSettings.Read.Group` (Application)
 - `TeamMember.Read.Group` (Application)
 - `TeamSettings.Read.Group` (Application)
+
+**For group chats:**
+- `ChatMessage.Read.Chat` (Application) - receive all group chat messages without @mention
 
 ## Example Teams Manifest (redacted)
 Minimal, valid example with the required fields. Replace IDs and URLs.
@@ -111,7 +199,8 @@ Minimal, valid example with the required fields. Replace IDs and URLs.
         { "name": "Owner.Read.Group", "type": "Application" },
         { "name": "ChannelSettings.Read.Group", "type": "Application" },
         { "name": "TeamMember.Read.Group", "type": "Application" },
-        { "name": "TeamSettings.Read.Group", "type": "Application" }
+        { "name": "TeamSettings.Read.Group", "type": "Application" },
+        { "name": "ChatMessage.Read.Chat", "type": "Application" }
       ]
     }
   }
@@ -166,9 +255,11 @@ Key settings (see `/gateway/configuration` for shared provider patterns):
 - `msteams.allowFrom`: allowlist for DMs (AAD object IDs or UPNs).
 - `msteams.textChunkLimit`: outbound text chunk size.
 - `msteams.requireMention`: require @mention in channels/groups (default true).
-- `msteams.replyStyle`: `thread | top-level`.
+- `msteams.replyStyle`: `thread | top-level` (see [Reply Style](#reply-style-threads-vs-posts)).
 - `msteams.teams.<teamId>.replyStyle`: per-team override.
+- `msteams.teams.<teamId>.requireMention`: per-team override.
 - `msteams.teams.<teamId>.channels.<conversationId>.replyStyle`: per-channel override.
+- `msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
 
 ## Routing & Sessions
 - Direct messages use session key: `msteams:<userId>` (shared main session).
@@ -176,19 +267,118 @@ Key settings (see `/gateway/configuration` for shared provider patterns):
   - `msteams:channel:<conversationId>`
   - `msteams:group:<conversationId>`
 
+## Reply Style: Threads vs Posts
+
+Teams recently introduced two channel UI styles over the same underlying data model:
+
+| Style | Description | Recommended `replyStyle` |
+|-------|-------------|--------------------------|
+| **Posts** (classic) | Messages appear as cards with threaded replies underneath | `thread` (default) |
+| **Threads** (Slack-like) | Messages flow linearly, more like Slack | `top-level` |
+
+**The problem:** The Teams API does not expose which UI style a channel uses. If you use the wrong `replyStyle`:
+- `thread` in a Threads-style channel → replies appear nested awkwardly
+- `top-level` in a Posts-style channel → replies appear as separate top-level posts instead of in-thread
+
+**Solution:** Configure `replyStyle` per-channel based on how the channel is set up:
+
+```json
+{
+  "msteams": {
+    "replyStyle": "thread",
+    "teams": {
+      "19:abc...@thread.tacv2": {
+        "channels": {
+          "19:xyz...@thread.tacv2": {
+            "replyStyle": "top-level"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
 ## Attachments & Images
-- **DMs:** attachments work via Teams bot file APIs.
-- **Channels/groups:** attachments live in M365 storage; payloads only include HTML stubs. Graph is required to fetch the actual bytes.
+
+**Current limitations:**
+- **DMs:** Images and file attachments work via Teams bot file APIs.
+- **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
+
+Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
 
 ## Proactive messaging
 - Proactive messages are only possible **after** a user has interacted, because we store conversation references at that point.
 - See `/gateway/configuration` for `dmPolicy` and allowlist gating.
 
+## Team and Channel IDs (Common Gotcha)
+
+The `groupId` query parameter in Teams URLs is **NOT** the team ID used for configuration. Extract IDs from the URL path instead:
+
+**Team URL:**
+```
+https://teams.microsoft.com/l/team/19%3ABk4j...%40thread.tacv2/conversations?groupId=...
+                                    └────────────────────────────┘
+                                    Team ID (URL-decode this)
+```
+
+**Channel URL:**
+```
+https://teams.microsoft.com/l/channel/19%3A15bc...%40thread.tacv2/ChannelName?groupId=...
+                                      └─────────────────────────┘
+                                      Channel ID (URL-decode this)
+```
+
+**For config:**
+- Team ID = path segment after `/team/` (URL-decoded, e.g., `19:Bk4j...@thread.tacv2`)
+- Channel ID = path segment after `/channel/` (URL-decoded)
+- **Ignore** the `groupId` query parameter
+
+## Private Channels
+
+Bots have limited support in private channels:
+
+| Feature | Standard Channels | Private Channels |
+|---------|-------------------|------------------|
+| Bot installation | Yes | Limited |
+| Real-time messages (webhook) | Yes | May not work |
+| RSC permissions | Yes | May behave differently |
+| @mentions | Yes | If bot is accessible |
+| Graph API history | Yes | Yes (with permissions) |
+
+**Workarounds if private channels don't work:**
+1. Use standard channels for bot interactions
+2. Use DMs - users can always message the bot directly
+3. Use Graph API for historical access (requires `ChannelMessage.Read.All`)
+
 ## Troubleshooting
+
+### Common issues
+
 - **Images not showing in channels:** Graph permissions or admin consent missing. Reinstall the Teams app and fully quit/reopen Teams.
 - **No responses in channel:** mentions are required by default; set `msteams.requireMention=false` or configure per team/channel.
 - **Version mismatch (Teams still shows old manifest):** remove + re-add the app and fully quit Teams to refresh.
+- **401 Unauthorized from webhook:** Expected when testing manually without Azure JWT - means endpoint is reachable but auth failed. Use Azure Web Chat to test properly.
+
+### Manifest upload errors
+
+- **"Icon file cannot be empty":** The manifest references icon files that are 0 bytes. Create valid PNG icons (32x32 for `outline.png`, 192x192 for `color.png`).
+- **"webApplicationInfo.Id already in use":** The app is still installed in another team/chat. Find and uninstall it first, or wait 5-10 minutes for propagation.
+- **"Something went wrong" on upload:** Upload via https://admin.teams.microsoft.com instead, open browser DevTools (F12) → Network tab, and check the response body for the actual error.
+- **Sideload failing:** Try "Upload an app to your org's app catalog" instead of "Upload a custom app" - this often bypasses sideload restrictions.
+
+### RSC permissions not working
+
+1. Verify `webApplicationInfo.id` matches your bot's App ID exactly
+2. Re-upload the app and reinstall in the team/chat
+3. Check if your org admin has blocked RSC permissions
+4. Confirm you're using the right scope: `ChannelMessage.Read.Group` for teams, `ChatMessage.Read.Chat` for group chats
 
 ## References
-- Teams bot file handling (channel/group requires Graph):
-  - https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4
+- [Create Azure Bot](https://learn.microsoft.com/en-us/azure/bot-service/bot-service-quickstart-registration) - Azure Bot setup guide
+- [Teams Developer Portal](https://dev.teams.microsoft.com/apps) - create/manage Teams apps
+- [Teams app manifest schema](https://learn.microsoft.com/en-us/microsoftteams/platform/resources/schema/manifest-schema)
+- [Receive channel messages with RSC](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/channel-messages-with-rsc)
+- [RSC permissions reference](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent)
+- [Teams bot file handling](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/bots-filesv4) (channel/group requires Graph)
+- [Proactive messaging](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
