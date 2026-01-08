@@ -5,6 +5,7 @@
 - Discord: stop provider when gateway reconnects are exhausted and surface errors. (#514) — thanks @joshp123
 - Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
+- macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
