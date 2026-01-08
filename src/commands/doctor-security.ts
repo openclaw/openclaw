@@ -111,7 +111,7 @@ export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
         `- Telegram DMs: locked (telegram.dmPolicy="${dmPolicy}") with no allowlist; unknown senders will be blocked / get a pairing code.`,
       );
       warnings.push(
-        `  Approve via: clawdbot telegram pairing list / clawdbot telegram pairing approve <code>`,
+        `  Approve via: clawdbot pairing list --provider telegram / clawdbot pairing approve --provider telegram <code>`,
       );
     }
 
