@@ -50,6 +50,7 @@ import {
   extractQueueDirective,
   type QueueDropPolicy,
   type QueueMode,
+  resolveQueueSettings,
 } from "./queue.js";
 
 const SYSTEM_MARK = "⚙️";
@@ -328,6 +329,7 @@ export async function handleDirectiveOnly(params: {
     allowedModelKeys,
     allowedModelCatalog,
     resetModelOverride,
+    provider,
     initialModelLabel,
     formatModelSwitchEvent,
     currentThinkLevel,
@@ -431,6 +433,33 @@ export async function handleDirectiveOnly(params: {
     (!elevatedEnabled || !elevatedAllowed)
   ) {
     return { text: "elevated is not available right now." };
+  }
+
+  if (
+    directives.hasQueueDirective &&
+    !directives.queueMode &&
+    !directives.queueReset &&
+    !directives.hasQueueOptions &&
+    directives.rawQueueMode === undefined &&
+    directives.rawDebounce === undefined &&
+    directives.rawCap === undefined &&
+    directives.rawDrop === undefined
+  ) {
+    const settings = resolveQueueSettings({
+      cfg: params.cfg,
+      provider,
+      sessionEntry,
+    });
+    const debounceLabel =
+      typeof settings.debounceMs === "number"
+        ? `${settings.debounceMs}ms`
+        : "default";
+    const capLabel =
+      typeof settings.cap === "number" ? String(settings.cap) : "default";
+    const dropLabel = settings.dropPolicy ?? "default";
+    return {
+      text: `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
+    };
   }
 
   const queueModeInvalid =
