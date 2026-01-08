@@ -46,6 +46,8 @@ describe("msteams messenger", () => {
   describe("sendMSTeamsMessages", () => {
     const baseRef: StoredConversationReference = {
       activityId: "activity123",
+      user: { id: "user123", name: "User" },
+      agent: { id: "bot123", name: "Bot" },
       conversation: { id: "19:abc@thread.tacv2;messageid=deadbeef" },
       channelId: "msteams",
       serviceUrl: "https://service.example.com",

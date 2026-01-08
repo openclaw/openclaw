@@ -11,7 +11,9 @@ export type StoredConversationReference = {
   activityId?: string;
   /** User who sent the message */
   user?: { id?: string; name?: string; aadObjectId?: string };
-  /** Bot that received the message */
+  /** Agent/bot that received the message */
+  agent?: { id?: string; name?: string; aadObjectId?: string } | null;
+  /** @deprecated legacy field (pre-Agents SDK). Prefer `agent`. */
   bot?: { id?: string; name?: string };
   /** Conversation details */
   conversation?: { id?: string; conversationType?: string; tenantId?: string };
