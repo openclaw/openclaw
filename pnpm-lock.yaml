@@ -103,6 +103,9 @@ importers:
       long:
         specifier: 5.3.2
         version: 5.3.2
+      markdown-it:
+        specifier: ^14.1.0
+        version: 14.1.0
       osc-progress:
         specifier: ^0.2.0
         version: 0.2.0
@@ -182,9 +185,6 @@ importers:
       lucide:
         specifier: ^0.562.0
         version: 0.562.0
-      markdown-it:
-        specifier: ^14.1.0
-        version: 14.1.0
       ollama:
         specifier: ^0.6.3
         version: 0.6.3
