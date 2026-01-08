@@ -71,4 +71,15 @@ describe("buildAgentSystemPromptAppend", () => {
     expect(prompt).toContain("Prefer aliases when specifying model overrides");
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
+
+  it("adds gateway self-update guidance when gateway tool is available", () => {
+    const prompt = buildAgentSystemPromptAppend({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["gateway", "bash"],
+    });
+
+    expect(prompt).toContain("## Gateway Self-Update");
+    expect(prompt).toContain("config.apply");
+    expect(prompt).toContain("update.run");
+  });
 });

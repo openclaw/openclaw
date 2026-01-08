@@ -41,7 +41,8 @@ export function buildAgentSystemPromptAppend(params: {
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events",
-    gateway: "Restart the running Gateway process",
+    gateway:
+      "Restart, apply config, or run updates on the running Gateway process",
     sessions_list: "List sessions with filters and last messages",
     sessions_history: "Fetch message history for a session",
     sessions_send: "Send a message into another session",
@@ -93,6 +94,7 @@ export function buildAgentSystemPromptAppend(params: {
     toolLines.push(`- ${tool}`);
   }
 
+  const hasGateway = availableTools.has("gateway");
   const thinkHint =
     params.defaultThinkLevel && params.defaultThinkLevel !== "off"
       ? `Default thinking level: ${params.defaultThinkLevel}.`
@@ -160,6 +162,16 @@ export function buildAgentSystemPromptAppend(params: {
           "- sessions_send: send to another session",
         ].join("\n"),
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
+    "",
+    hasGateway ? "## Gateway Self-Update" : "",
+    hasGateway
+      ? [
+          "Use the gateway tool to update or reconfigure this instance when asked.",
+          "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
+          "After restart, Clawdbot pings the last active session automatically.",
+        ].join("\n")
+      : "",
+    hasGateway ? "" : "",
     "",
     params.modelAliasLines && params.modelAliasLines.length > 0
       ? "## Model Aliases"
