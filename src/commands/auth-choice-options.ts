@@ -45,8 +45,11 @@ function formatOAuthHint(
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
+  includeClaudeCliIfMissing?: boolean;
+  platform?: NodeJS.Platform;
 }): AuthChoiceOption[] {
   const options: AuthChoiceOption[] = [];
+  const platform = params.platform ?? process.platform;
 
   const codexCli = params.store.profiles[CODEX_CLI_PROFILE_ID];
   if (codexCli?.type === "oauth") {
@@ -63,6 +66,12 @@ export function buildAuthChoiceOptions(params: {
       value: "claude-cli",
       label: "Anthropic OAuth (Claude CLI)",
       hint: formatOAuthHint(claudeCli.expires),
+    });
+  } else if (params.includeClaudeCliIfMissing && platform === "darwin") {
+    options.push({
+      value: "claude-cli",
+      label: "Anthropic OAuth (Claude CLI)",
+      hint: "requires Keychain access",
     });
   }
 

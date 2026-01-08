@@ -120,10 +120,14 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
   } else if (authChoice === "claude-cli") {
-    const store = ensureAuthProfileStore();
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
     if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
       runtime.error(
-        "No Claude CLI credentials found at ~/.claude/.credentials.json",
+        process.platform === "darwin"
+          ? 'No Claude CLI credentials found. Run interactive onboarding to approve Keychain access for "Claude Code-credentials".'
+          : "No Claude CLI credentials found at ~/.claude/.credentials.json",
       );
       runtime.exit(1);
       return;
