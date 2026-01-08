@@ -110,4 +110,21 @@ describe("handleSlackAction", () => {
       ),
     ).rejects.toThrow(/Slack reactions are disabled/);
   });
+
+  it("passes threadTs to sendSlackMessage for thread replies", async () => {
+    const cfg = { slack: { botToken: "tok" } } as ClawdbotConfig;
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Hello thread",
+        threadTs: "1234567890.123456",
+      },
+      cfg,
+    );
+    expect(sendSlackMessage).toHaveBeenCalledWith("channel:C123", "Hello thread", {
+      mediaUrl: undefined,
+      threadTs: "1234567890.123456",
+    });
+  });
 });
