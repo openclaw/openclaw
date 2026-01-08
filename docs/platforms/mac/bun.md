@@ -63,6 +63,8 @@ Manager:
 Behavior:
 - “Clawdbot Active” enables/disables the LaunchAgent.
 - App quit does **not** stop the gateway (launchd keeps it alive).
+ - CLI install (`clawdbot daemon install`) writes the same LaunchAgent; `clawdbot daemon install --force` rewrites it.
+ - `clawdbot doctor` audits the LaunchAgent config and can update it to current defaults.
 
 Logging:
 - launchd stdout/err: `/tmp/clawdbot/clawdbot-gateway.log`

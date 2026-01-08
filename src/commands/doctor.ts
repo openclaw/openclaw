@@ -30,6 +30,7 @@ import {
 } from "./doctor-format.js";
 import {
   maybeMigrateLegacyGatewayService,
+  maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
 import {
@@ -157,6 +158,12 @@ export async function doctorCommand(
     prompter,
   );
   await maybeScanExtraGatewayServices(options);
+  await maybeRepairGatewayServiceConfig(
+    cfg,
+    resolveMode(cfg),
+    runtime,
+    prompter,
+  );
 
   await noteSecurityWarnings(cfg);
 
