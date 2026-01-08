@@ -18,6 +18,7 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { normalizeChatProviderId } from "../providers/registry.js";
 import { resolveDefaultWhatsAppAccountId } from "../web/accounts.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -29,11 +30,16 @@ import type { AuthChoice, ProviderChoice } from "./onboard-types.js";
 
 type AgentsListOptions = {
   json?: boolean;
+  bindings?: boolean;
 };
 
 type AgentsAddOptions = {
   name?: string;
   workspace?: string;
+  model?: string;
+  agentDir?: string;
+  bind?: string[];
+  nonInteractive?: boolean;
   json?: boolean;
 };
 
@@ -50,6 +56,7 @@ export type AgentSummary = {
   agentDir: string;
   model?: string;
   bindings: number;
+  bindingDetails?: string[];
   isDefault: boolean;
 };
 
@@ -63,6 +70,10 @@ type AgentBinding = {
     teamId?: string;
   };
 };
+
+function createQuietRuntime(runtime: RuntimeEnv): RuntimeEnv {
+  return { ...runtime, log: () => {} };
+}
 
 function resolveAgentName(cfg: ClawdbotConfig, agentId: string) {
   return cfg.routing?.agents?.[agentId]?.name?.trim() || undefined;
@@ -270,7 +281,13 @@ function formatSummary(summary: AgentSummary) {
     summary.model ? `model: ${summary.model}` : null,
     `bindings: ${summary.bindings}`,
   ].filter(Boolean);
-  return `- ${parts.join(" | ")}`;
+  const lines = [`- ${parts.join(" | ")}`];
+  if (summary.bindingDetails?.length) {
+    for (const binding of summary.bindingDetails) {
+      lines.push(`  - ${binding}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 async function requireValidConfig(
@@ -300,6 +317,22 @@ export async function agentsListCommand(
   if (!cfg) return;
 
   const summaries = buildAgentSummaries(cfg);
+  if (opts.bindings) {
+    const bindingMap = new Map<string, string[]>();
+    for (const binding of cfg.routing?.bindings ?? []) {
+      const agentId = normalizeAgentId(binding.agentId);
+      const list = bindingMap.get(agentId) ?? [];
+      list.push(describeBinding(binding as AgentBinding));
+      bindingMap.set(agentId, list);
+    }
+    for (const summary of summaries) {
+      const details = bindingMap.get(summary.id);
+      if (details && details.length > 0) {
+        summary.bindingDetails = details;
+      }
+    }
+  }
+
   if (opts.json) {
     runtime.log(JSON.stringify(summaries, null, 2));
     return;
@@ -340,6 +373,40 @@ function buildProviderBindings(params: {
   return bindings;
 }
 
+function parseBindingSpecs(params: {
+  agentId: string;
+  specs?: string[];
+  config: ClawdbotConfig;
+}): { bindings: AgentBinding[]; errors: string[] } {
+  const bindings: AgentBinding[] = [];
+  const errors: string[] = [];
+  const specs = params.specs ?? [];
+  const agentId = normalizeAgentId(params.agentId);
+  for (const raw of specs) {
+    const trimmed = raw?.trim();
+    if (!trimmed) continue;
+    const [providerRaw, accountRaw] = trimmed.split(":", 2);
+    const provider = normalizeChatProviderId(providerRaw);
+    if (!provider) {
+      errors.push(`Unknown provider "${providerRaw}".`);
+      continue;
+    }
+    let accountId = accountRaw?.trim();
+    if (accountRaw !== undefined && !accountId) {
+      errors.push(`Invalid binding "${trimmed}" (empty account id).`);
+      continue;
+    }
+    if (!accountId && provider === "whatsapp") {
+      accountId = resolveDefaultWhatsAppAccountId(params.config);
+      if (!accountId) accountId = DEFAULT_ACCOUNT_ID;
+    }
+    const match: AgentBinding["match"] = { provider };
+    if (accountId) match.accountId = accountId;
+    bindings.push({ agentId, match });
+  }
+  return { bindings, errors };
+}
+
 export async function agentsAddCommand(
   opts: AgentsAddOptions,
   runtime: RuntimeEnv = defaultRuntime,
@@ -351,8 +418,9 @@ export async function agentsAddCommand(
   const workspaceFlag = opts.workspace?.trim();
   const nameInput = opts.name?.trim();
   const hasFlags = params?.hasFlags === true;
+  const nonInteractive = Boolean(opts.nonInteractive || hasFlags);
 
-  if (hasFlags && !workspaceFlag) {
+  if (nonInteractive && !workspaceFlag) {
     runtime.error(
       "Non-interactive mode requires --workspace. Re-run without flags to use the wizard.",
     );
@@ -360,9 +428,9 @@ export async function agentsAddCommand(
     return;
   }
 
-  if (workspaceFlag) {
+  if (nonInteractive) {
     if (!nameInput) {
-      runtime.error("Agent name is required when --workspace is provided.");
+      runtime.error("Agent name is required in non-interactive mode.");
       runtime.exit(1);
       return;
     }
@@ -382,18 +450,38 @@ export async function agentsAddCommand(
     }
 
     const workspaceDir = resolveUserPath(workspaceFlag);
-    const agentDir = resolveAgentDir(cfg, agentId);
+    const agentDir = opts.agentDir?.trim()
+      ? resolveUserPath(opts.agentDir.trim())
+      : resolveAgentDir(cfg, agentId);
+    const model = opts.model?.trim();
     const nextConfig = applyAgentConfig(cfg, {
       agentId,
       name: nameInput,
       workspace: workspaceDir,
       agentDir,
+      ...(model ? { model } : {}),
     });
 
-    await writeConfigFile(nextConfig);
-    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-    await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-      skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+    const bindingParse = parseBindingSpecs({
+      agentId,
+      specs: opts.bind,
+      config: nextConfig,
+    });
+    if (bindingParse.errors.length > 0) {
+      runtime.error(bindingParse.errors.join("\n"));
+      runtime.exit(1);
+      return;
+    }
+    const bindingResult =
+      bindingParse.bindings.length > 0
+        ? applyAgentBindings(nextConfig, bindingParse.bindings)
+        : { config: nextConfig, added: [], skipped: [], conflicts: [] };
+
+    await writeConfigFile(bindingResult.config);
+    if (!opts.json) runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+    const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
+    await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
+      skipBootstrap: Boolean(bindingResult.config.agent?.skipBootstrap),
       agentId,
     });
 
@@ -402,6 +490,15 @@ export async function agentsAddCommand(
       name: nameInput,
       workspace: workspaceDir,
       agentDir,
+      model,
+      bindings: {
+        added: bindingResult.added.map(describeBinding),
+        skipped: bindingResult.skipped.map(describeBinding),
+        conflicts: bindingResult.conflicts.map(
+          (conflict) =>
+            `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+        ),
+      },
     };
     if (opts.json) {
       runtime.log(JSON.stringify(payload, null, 2));
@@ -409,6 +506,18 @@ export async function agentsAddCommand(
       runtime.log(`Agent: ${agentId}`);
       runtime.log(`Workspace: ${workspaceDir}`);
       runtime.log(`Agent dir: ${agentDir}`);
+      if (model) runtime.log(`Model: ${model}`);
+      if (bindingResult.conflicts.length > 0) {
+        runtime.error(
+          [
+            "Skipped bindings already claimed by another agent:",
+            ...bindingResult.conflicts.map(
+              (conflict) =>
+                `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+            ),
+          ].join("\n"),
+        );
+      }
     }
     return;
   }
@@ -633,11 +742,12 @@ export async function agentsDeleteCommand(
 
   const result = pruneAgentConfig(cfg, agentId);
   await writeConfigFile(result.config);
-  runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+  if (!opts.json) runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
 
-  await moveToTrash(workspaceDir, runtime);
-  await moveToTrash(agentDir, runtime);
-  await moveToTrash(sessionsDir, runtime);
+  const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
+  await moveToTrash(workspaceDir, quietRuntime);
+  await moveToTrash(agentDir, quietRuntime);
+  await moveToTrash(sessionsDir, quietRuntime);
 
   if (opts.json) {
     runtime.log(

@@ -20,7 +20,7 @@
 
 ### Fixes
 - CLI/Daemon: add `clawdbot logs` tailing and improve restart/service hints across platforms.
-- Gateway/CLI: tighten LAN bind auth checks, warn on mis-keyed gateway tokens, and surface last gateway error when daemon looks running but the port is closed.
+- Gateway/CLI/Doctor: tighten LAN bind auth checks, warn/migrate mis-keyed gateway tokens, and surface last gateway error when daemon looks running but the port is closed.
 - Auto-reply: keep typing indicators alive during tool execution without changing typing-mode semantics. Thanks @thesash for PR #452.
 - macOS: harden Voice Wake tester/runtime (pause trigger, mic persistence, local-only tester) and keep transcript logs private. Thanks @xadenryan for PR #438.
 - macOS: preserve node bridge tunnel port override so remote nodes connect on the bridge port. Thanks @sircrumpet for PR #364.
@@ -71,6 +71,7 @@
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
+- CLI: add non-interactive flags for `agents add`, support `agents list --bindings`, and keep JSON output clean for scripting.
 - Discord/Slack: fork thread sessions (agent-scoped) and inject thread starters for context. Thanks @thewilloftheshadow for PR #400.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
 - Agent: add opt-in session pruning for tool results to reduce context bloat. Thanks @maxsumrall for PR #381.

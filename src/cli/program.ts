@@ -48,6 +48,10 @@ import { registerTuiCli } from "./tui-cli.js";
 
 export { forceFreePort };
 
+function collectOption(value: string, previous: string[] = []): string[] {
+  return [...previous, value];
+}
+
 export function buildProgram() {
   const program = new Command();
   const PROGRAM_VERSION = VERSION;
@@ -553,9 +557,13 @@ Examples:
     .command("list")
     .description("List configured agents")
     .option("--json", "Output JSON instead of text", false)
+    .option("--bindings", "Include routing bindings", false)
     .action(async (opts) => {
       try {
-        await agentsListCommand({ json: Boolean(opts.json) }, defaultRuntime);
+        await agentsListCommand(
+          { json: Boolean(opts.json), bindings: Boolean(opts.bindings) },
+          defaultRuntime,
+        );
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
@@ -566,14 +574,28 @@ Examples:
     .command("add [name]")
     .description("Add a new isolated agent")
     .option("--workspace <dir>", "Workspace directory for the new agent")
+    .option("--model <id>", "Model id for this agent")
+    .option("--agent-dir <dir>", "Agent state directory for this agent")
+    .option("--bind <provider[:accountId]>", "Route provider binding (repeatable)", collectOption, [])
+    .option("--non-interactive", "Disable prompts; requires --workspace", false)
     .option("--json", "Output JSON summary", false)
     .action(async (name, opts, command) => {
       try {
-        const hasFlags = hasExplicitOptions(command, ["workspace", "json"]);
+        const hasFlags = hasExplicitOptions(command, [
+          "workspace",
+          "model",
+          "agentDir",
+          "bind",
+          "nonInteractive",
+        ]);
         await agentsAddCommand(
           {
             name: typeof name === "string" ? name : undefined,
             workspace: opts.workspace as string | undefined,
+            model: opts.model as string | undefined,
+            agentDir: opts.agentDir as string | undefined,
+            bind: Array.isArray(opts.bind) ? (opts.bind as string[]) : undefined,
+            nonInteractive: Boolean(opts.nonInteractive),
             json: Boolean(opts.json),
           },
           defaultRuntime,
