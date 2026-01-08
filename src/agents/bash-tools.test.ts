@@ -17,7 +17,13 @@ const echoAfterDelay = (message: string) =>
 const echoLines = (lines: string[]) =>
   joinCommands(lines.map((line) => `echo ${line}`));
 const normalizeText = (value?: string) =>
-  (value ?? "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+  (value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.replace(/\s+$/u, ""))
+    .join("\n")
+    .trim();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
