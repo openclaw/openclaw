@@ -41,6 +41,12 @@ Real projects from the community. See what people are building with Clawdbot.
   Collects PDFs from email, preps documents for tax consultant. Monthly accounting on autopilot.
 </Card>
 
+<Card title="Couch Potato Dev Mode" icon="couch" href="https://davekiss.com">
+  **@davekiss** • `telegram` `website` `migration` `astro`
+  
+  Rebuilt entire personal site via Telegram while watching Netflix — Notion → Astro, 18 posts migrated, DNS to Cloudflare. Never opened a laptop.
+</Card>
+
 </CardGroup>
 
 ## 🧠 Knowledge & Memory
