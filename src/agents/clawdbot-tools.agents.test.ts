@@ -120,4 +120,35 @@ describe("agents_list", () => {
       "research",
     ]);
   });
+
+  it("marks allowlisted-but-unconfigured agents", async () => {
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      routing: {
+        agents: {
+          main: {
+            subagents: {
+              allowAgents: ["research"],
+            },
+          },
+        },
+      },
+    };
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "main",
+    }).find((candidate) => candidate.name === "agents_list");
+    if (!tool) throw new Error("missing agents_list tool");
+
+    const result = await tool.execute("call4", {});
+    const agents = (result.details as {
+      agents?: Array<{ id: string; configured: boolean }>;
+    }).agents;
+    expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
+    const research = agents?.find((agent) => agent.id === "research");
+    expect(research?.configured).toBe(false);
+  });
 });

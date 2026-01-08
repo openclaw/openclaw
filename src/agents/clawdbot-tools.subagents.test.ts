@@ -408,6 +408,57 @@ describe("subagents", () => {
     expect(childSessionKey?.startsWith("agent:beta:subagent:")).toBe(true);
   });
 
+  it("sessions_spawn normalizes allowlisted agent ids", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: {
+        mainKey: "main",
+        scope: "per-sender",
+      },
+      routing: {
+        agents: {
+          main: {
+            subagents: {
+              allowAgents: ["Research"],
+            },
+          },
+        },
+      },
+    };
+
+    let childSessionKey: string | undefined;
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      if (request.method === "agent") {
+        const params = request.params as { sessionKey?: string } | undefined;
+        childSessionKey = params?.sessionKey;
+        return { runId: "run-1", status: "accepted", acceptedAt: 5200 };
+      }
+      if (request.method === "agent.wait") {
+        return { status: "timeout" };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "main",
+      agentProvider: "whatsapp",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call10", {
+      task: "do thing",
+      agentId: "research",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+    });
+    expect(childSessionKey?.startsWith("agent:research:subagent:")).toBe(true);
+  });
+
   it("sessions_spawn forbids cross-agent spawning when not allowed", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
