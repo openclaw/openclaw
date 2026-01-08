@@ -49,7 +49,7 @@
 - Cron: clamp timer delay to avoid TimeoutOverflowWarning. Thanks @emanuelst for PR #412.
 - Web UI: allow reconnect + password URL auth for the control UI and always scrub auth params from the URL. Thanks @oswalpalash for PR #414.
 - Web UI: add Connect button on Overview to apply connection changes. Thanks @wizaj for PR #385.
-- Web UI: keep Focus toggle on the top bar (swap with theme toggle) so it stays visible. (#440)
+- Web UI: keep Focus toggle on the top bar (swap with theme toggle) so it stays visible. Thanks @RobOK2050 for reporting. (#440)
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
