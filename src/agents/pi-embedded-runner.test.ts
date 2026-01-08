@@ -119,9 +119,17 @@ describe("createSystemPromptAppender", () => {
     const appender = createSystemPromptAppender("APPEND_SECTION");
     const finalPrompt = appender(defaultPrompt);
     const occurrences = finalPrompt.split(sentinel).length - 1;
+    const contextHeaders = finalPrompt.split("# Project Context").length - 1;
     expect(typeof appender).toBe("function");
     expect(occurrences).toBe(1);
+    expect(contextHeaders).toBe(1);
     expect(finalPrompt).toContain("APPEND_SECTION");
+  });
+
+  it("returns the default prompt when append text is empty", () => {
+    const defaultPrompt = buildSystemPrompt({ cwd: "/tmp" });
+    const appender = createSystemPromptAppender("  \n  ");
+    expect(appender(defaultPrompt)).toBe(defaultPrompt);
   });
 });
 

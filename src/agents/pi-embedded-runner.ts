@@ -491,6 +491,42 @@ export function buildEmbeddedSandboxInfo(
   };
 }
 
+function buildEmbeddedAppendPrompt(params: {
+  workspaceDir: string;
+  defaultThinkLevel?: ThinkLevel;
+  extraSystemPrompt?: string;
+  ownerNumbers?: string[];
+  reasoningTagHint: boolean;
+  heartbeatPrompt?: string;
+  runtimeInfo: {
+    host: string;
+    os: string;
+    arch: string;
+    node: string;
+    model: string;
+  };
+  sandboxInfo?: EmbeddedSandboxInfo;
+  tools: AgentTool[];
+  modelAliasLines: string[];
+  userTimezone: string;
+  userTime?: string;
+}): string {
+  return buildAgentSystemPromptAppend({
+    workspaceDir: params.workspaceDir,
+    defaultThinkLevel: params.defaultThinkLevel,
+    extraSystemPrompt: params.extraSystemPrompt,
+    ownerNumbers: params.ownerNumbers,
+    reasoningTagHint: params.reasoningTagHint,
+    heartbeatPrompt: params.heartbeatPrompt,
+    runtimeInfo: params.runtimeInfo,
+    sandboxInfo: params.sandboxInfo,
+    toolNames: params.tools.map((tool) => tool.name),
+    modelAliasLines: params.modelAliasLines,
+    userTimezone: params.userTimezone,
+    userTime: params.userTime,
+  });
+}
+
 export function createSystemPromptAppender(
   appendPrompt: string,
 ): (defaultPrompt: string) => string {
@@ -784,7 +820,7 @@ export async function compactEmbeddedPiSession(params: {
           params.config?.agent?.userTimezone,
         );
         const userTime = formatUserTime(new Date(), userTimezone);
-        const appendPrompt = buildAgentSystemPromptAppend({
+        const appendPrompt = buildEmbeddedAppendPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
           extraSystemPrompt: params.extraSystemPrompt,
@@ -795,7 +831,7 @@ export async function compactEmbeddedPiSession(params: {
           ),
           runtimeInfo,
           sandboxInfo,
-          toolNames: tools.map((tool) => tool.name),
+          tools,
           modelAliasLines: buildModelAliasLines(params.config),
           userTimezone,
           userTime,
@@ -1104,7 +1140,7 @@ export async function runEmbeddedPiAgent(params: {
             params.config?.agent?.userTimezone,
           );
           const userTime = formatUserTime(new Date(), userTimezone);
-          const appendPrompt = buildAgentSystemPromptAppend({
+          const appendPrompt = buildEmbeddedAppendPrompt({
             workspaceDir: effectiveWorkspace,
             defaultThinkLevel: thinkLevel,
             extraSystemPrompt: params.extraSystemPrompt,
@@ -1115,7 +1151,7 @@ export async function runEmbeddedPiAgent(params: {
             ),
             runtimeInfo,
             sandboxInfo,
-            toolNames: tools.map((tool) => tool.name),
+            tools,
             modelAliasLines: buildModelAliasLines(params.config),
             userTimezone,
             userTime,
