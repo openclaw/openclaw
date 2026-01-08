@@ -11,6 +11,8 @@ import {
   ChatEventSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
+  type ConfigApplyParams,
+  ConfigApplyParamsSchema,
   type ConfigGetParams,
   ConfigGetParamsSchema,
   type ConfigSchemaParams,
@@ -107,6 +109,8 @@ import {
   TalkModeParamsSchema,
   type TickEvent,
   TickEventSchema,
+  type UpdateRunParams,
+  UpdateRunParamsSchema,
   type WakeParams,
   WakeParamsSchema,
   type WebLoginStartParams,
@@ -202,6 +206,9 @@ export const validateConfigGetParams = ajv.compile<ConfigGetParams>(
 export const validateConfigSetParams = ajv.compile<ConfigSetParams>(
   ConfigSetParamsSchema,
 );
+export const validateConfigApplyParams = ajv.compile<ConfigApplyParams>(
+  ConfigApplyParamsSchema,
+);
 export const validateConfigSchemaParams = ajv.compile<ConfigSchemaParams>(
   ConfigSchemaParamsSchema,
 );
@@ -257,6 +264,9 @@ export const validateChatAbortParams = ajv.compile<ChatAbortParams>(
   ChatAbortParamsSchema,
 );
 export const validateChatEvent = ajv.compile(ChatEventSchema);
+export const validateUpdateRunParams = ajv.compile<UpdateRunParams>(
+  UpdateRunParamsSchema,
+);
 export const validateWebLoginStartParams = ajv.compile<WebLoginStartParams>(
   WebLoginStartParamsSchema,
 );
@@ -302,6 +312,7 @@ export {
   SessionsCompactParamsSchema,
   ConfigGetParamsSchema,
   ConfigSetParamsSchema,
+  ConfigApplyParamsSchema,
   ConfigSchemaParamsSchema,
   ConfigSchemaResponseSchema,
   WizardStartParamsSchema,
@@ -329,6 +340,7 @@ export {
   CronRunsParamsSchema,
   ChatHistoryParamsSchema,
   ChatSendParamsSchema,
+  UpdateRunParamsSchema,
   TickEventSchema,
   ShutdownEventSchema,
   ProtocolSchemas,
@@ -359,6 +371,7 @@ export type {
   NodePairApproveParams,
   ConfigGetParams,
   ConfigSetParams,
+  ConfigApplyParams,
   ConfigSchemaParams,
   ConfigSchemaResponse,
   WizardStartParams,
@@ -395,4 +408,5 @@ export type {
   CronRunsParams,
   CronRunLogEntry,
   PollParams,
+  UpdateRunParams,
 };

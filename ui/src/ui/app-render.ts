@@ -60,7 +60,13 @@ import {
 } from "./controllers/skills";
 import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
-import { loadConfig, saveConfig, updateConfigFormValue } from "./controllers/config";
+import {
+  applyConfig,
+  loadConfig,
+  runUpdate,
+  saveConfig,
+  updateConfigFormValue,
+} from "./controllers/config";
 import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
 
@@ -97,6 +103,8 @@ export type AppViewState = {
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
+  configApplying: boolean;
+  updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown | null;
   configSchemaLoading: boolean;
@@ -244,7 +252,11 @@ export function renderApp(state: AppViewState) {
                 state.sessionKey = next;
                 state.chatMessage = "";
                 state.resetToolStream();
-                state.applySettings({ ...state.settings, sessionKey: next });
+                state.applySettings({
+                  ...state.settings,
+                  sessionKey: next,
+                  lastActiveSessionKey: next,
+                });
               },
               onRefresh: () => state.loadOverview(),
               onReconnect: () => state.connect(),
@@ -384,7 +396,11 @@ export function renderApp(state: AppViewState) {
                 state.chatRunId = null;
                 state.resetToolStream();
                 state.resetChatScroll();
-                state.applySettings({ ...state.settings, sessionKey: next });
+                state.applySettings({
+                  ...state.settings,
+                  sessionKey: next,
+                  lastActiveSessionKey: next,
+                });
                 void loadChatHistory(state);
               },
               thinkingLevel: state.chatThinkingLevel,
@@ -422,6 +438,8 @@ export function renderApp(state: AppViewState) {
               issues: state.configIssues,
               loading: state.configLoading,
               saving: state.configSaving,
+              applying: state.configApplying,
+              updating: state.updateRunning,
               connected: state.connected,
               schema: state.configSchema,
               schemaLoading: state.configSchemaLoading,
@@ -433,6 +451,8 @@ export function renderApp(state: AppViewState) {
               onFormPatch: (path, value) => updateConfigFormValue(state, path, value),
               onReload: () => loadConfig(state),
               onSave: () => saveConfig(state),
+              onApply: () => applyConfig(state),
+              onUpdate: () => runUpdate(state),
             })
           : nothing}
 

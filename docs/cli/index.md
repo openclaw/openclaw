@@ -401,6 +401,10 @@ Subcommands:
 - `gateway restart`
 - `gateway daemon status` (alias for `clawdbot daemon status`)
 
+Common RPCs:
+- `config.apply` (validate + write config + restart + wake)
+- `update.run` (run update + restart + wake)
+
 ## Models
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.

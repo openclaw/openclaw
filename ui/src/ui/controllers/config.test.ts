@@ -1,7 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   applyConfigSnapshot,
+  applyConfig,
+  runUpdate,
   updateConfigFormValue,
   type ConfigState,
 } from "./config";
@@ -95,11 +97,14 @@ function createState(): ConfigState {
   return {
     client: null,
     connected: false,
+    applySessionKey: "main",
     configLoading: false,
     configRaw: "",
     configValid: null,
     configIssues: [],
     configSaving: false,
+    configApplying: false,
+    updateRunning: false,
     configSnapshot: null,
     configSchema: null,
     configSchemaVersion: null,
@@ -158,6 +163,41 @@ describe("updateConfigFormValue", () => {
     expect(state.configForm).toEqual({
       telegram: { botToken: "t" },
       gateway: { mode: "local", port: 18789 },
+    });
+  });
+});
+
+describe("applyConfig", () => {
+  it("sends config.apply with raw and session key", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "agent:main:whatsapp:dm:+15555550123";
+    state.configFormMode = "raw";
+    state.configRaw = "{\n  agent: { workspace: \"~/clawd\" }\n}\n";
+
+    await applyConfig(state);
+
+    expect(request).toHaveBeenCalledWith("config.apply", {
+      raw: "{\n  agent: { workspace: \"~/clawd\" }\n}\n",
+      sessionKey: "agent:main:whatsapp:dm:+15555550123",
+    });
+  });
+});
+
+describe("runUpdate", () => {
+  it("sends update.run with session key", async () => {
+    const request = vi.fn().mockResolvedValue({});
+    const state = createState();
+    state.connected = true;
+    state.client = { request } as unknown as ConfigState["client"];
+    state.applySessionKey = "agent:main:whatsapp:dm:+15555550123";
+
+    await runUpdate(state);
+
+    expect(request).toHaveBeenCalledWith("update.run", {
+      sessionKey: "agent:main:whatsapp:dm:+15555550123",
     });
   });
 });

@@ -21,11 +21,14 @@ import {
 export type ConfigState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
+  applySessionKey: string;
   configLoading: boolean;
   configRaw: string;
   configValid: boolean | null;
   configIssues: unknown[];
   configSaving: boolean;
+  configApplying: boolean;
+  updateRunning: boolean;
   configSnapshot: ConfigSnapshot | null;
   configSchema: unknown | null;
   configSchemaVersion: string | null;
@@ -394,6 +397,43 @@ export async function saveConfig(state: ConfigState) {
     state.lastError = String(err);
   } finally {
     state.configSaving = false;
+  }
+}
+
+export async function applyConfig(state: ConfigState) {
+  if (!state.client || !state.connected) return;
+  state.configApplying = true;
+  state.lastError = null;
+  try {
+    const raw =
+      state.configFormMode === "form" && state.configForm
+        ? `${JSON.stringify(state.configForm, null, 2).trimEnd()}\n`
+        : state.configRaw;
+    await state.client.request("config.apply", {
+      raw,
+      sessionKey: state.applySessionKey,
+    });
+    state.configFormDirty = false;
+    await loadConfig(state);
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.configApplying = false;
+  }
+}
+
+export async function runUpdate(state: ConfigState) {
+  if (!state.client || !state.connected) return;
+  state.updateRunning = true;
+  state.lastError = null;
+  try {
+    await state.client.request("update.run", {
+      sessionKey: state.applySessionKey,
+    });
+  } catch (err) {
+    state.lastError = String(err);
+  } finally {
+    state.updateRunning = false;
   }
 }
 

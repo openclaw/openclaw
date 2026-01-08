@@ -36,7 +36,7 @@ export function createClawdbotTools(options?: {
     createSlackTool(),
     createTelegramTool(),
     createWhatsAppTool(),
-    createGatewayTool(),
+    createGatewayTool({ agentSessionKey: options?.agentSessionKey }),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
       sandboxed: options?.sandboxed,

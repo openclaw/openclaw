@@ -34,3 +34,48 @@ export function triggerClawdbotRestart():
   spawnSync("launchctl", ["kickstart", "-k", target], { stdio: "ignore" });
   return "launchctl";
 }
+
+export type ScheduledRestart = {
+  ok: boolean;
+  pid: number;
+  signal: "SIGUSR1";
+  delayMs: number;
+  reason?: string;
+  mode: "emit" | "signal";
+};
+
+export function scheduleGatewaySigusr1Restart(opts?: {
+  delayMs?: number;
+  reason?: string;
+}): ScheduledRestart {
+  const delayMsRaw =
+    typeof opts?.delayMs === "number" && Number.isFinite(opts.delayMs)
+      ? Math.floor(opts.delayMs)
+      : 2000;
+  const delayMs = Math.min(Math.max(delayMsRaw, 0), 60_000);
+  const reason =
+    typeof opts?.reason === "string" && opts.reason.trim()
+      ? opts.reason.trim().slice(0, 200)
+      : undefined;
+  const pid = process.pid;
+  const hasListener = process.listenerCount("SIGUSR1") > 0;
+  setTimeout(() => {
+    try {
+      if (hasListener) {
+        process.emit("SIGUSR1");
+      } else {
+        process.kill(pid, "SIGUSR1");
+      }
+    } catch {
+      /* ignore */
+    }
+  }, delayMs);
+  return {
+    ok: true,
+    pid,
+    signal: "SIGUSR1",
+    delayMs,
+    reason,
+    mode: hasListener ? "emit" : "signal",
+  };
+}

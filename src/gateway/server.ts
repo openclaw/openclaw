@@ -10,6 +10,7 @@ import {
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import {
   type CanvasHostHandler,
@@ -18,6 +19,7 @@ import {
   startCanvasHost,
 } from "../canvas-host/server.js";
 import { createDefaultDeps } from "../cli/deps.js";
+import { agentCommand } from "../commands/agent.js";
 import { getHealthSnapshot, type HealthSummary } from "../commands/health.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -57,7 +59,13 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { resolveOutboundTarget } from "../infra/outbound/targets.js";
 import { ensureClawdbotCliOnPath } from "../infra/path-env.js";
+import {
+  consumeRestartSentinel,
+  formatRestartSentinelMessage,
+  summarizeRestartSentinel,
+} from "../infra/restart-sentinel.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import {
@@ -88,6 +96,7 @@ import {
   runtimeForLogger,
 } from "../logging.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { defaultRuntime } from "../runtime.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
 import {
@@ -107,6 +116,18 @@ import {
   isLoopbackHost,
   resolveGatewayBindHost,
 } from "./net.js";
+import {
+  type ConnectParams,
+  ErrorCodes,
+  type ErrorShape,
+  errorShape,
+  formatValidationErrors,
+  PROTOCOL_VERSION,
+  type RequestFrame,
+  type Snapshot,
+  validateConnectParams,
+  validateRequestFrame,
+} from "./protocol/index.js";
 import { createBridgeHandlers } from "./server-bridge.js";
 import {
   type BridgeListConnectedFn,
@@ -138,6 +159,7 @@ import { handleGatewayRequest } from "./server-methods.js";
 import { createProviderManager } from "./server-providers.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog, logWs, summarizeAgentEventForWsLog } from "./ws-log.js";
 
 ensureClawdbotCliOnPath();
@@ -181,19 +203,6 @@ async function loadGatewayModelCatalog(): Promise<GatewayModelChoice[]> {
   return await loadModelCatalog({ config: loadConfig() });
 }
 
-import {
-  type ConnectParams,
-  ErrorCodes,
-  type ErrorShape,
-  errorShape,
-  formatValidationErrors,
-  PROTOCOL_VERSION,
-  type RequestFrame,
-  type Snapshot,
-  validateConnectParams,
-  validateRequestFrame,
-} from "./protocol/index.js";
-
 type Client = {
   socket: WebSocket;
   connect: ConnectParams;
@@ -208,6 +217,7 @@ const METHODS = [
   "usage.status",
   "config.get",
   "config.set",
+  "config.apply",
   "config.schema",
   "wizard.start",
   "wizard.next",
@@ -218,6 +228,7 @@ const METHODS = [
   "skills.status",
   "skills.install",
   "skills.update",
+  "update.run",
   "voicewake.get",
   "voicewake.set",
   "sessions.list",
@@ -1648,6 +1659,77 @@ export async function startGatewayServer(
     }
   } else {
     logProviders.info("skipping provider start (CLAWDBOT_SKIP_PROVIDERS=1)");
+  }
+
+  const scheduleRestartSentinelWake = async () => {
+    const sentinel = await consumeRestartSentinel();
+    if (!sentinel) return;
+    const payload = sentinel.payload;
+    const sessionKey = payload.sessionKey?.trim();
+    const message = formatRestartSentinelMessage(payload);
+    const summary = summarizeRestartSentinel(payload);
+
+    if (!sessionKey) {
+      enqueueSystemEvent(message);
+      return;
+    }
+
+    const { cfg, entry } = loadSessionEntry(sessionKey);
+    const lastProvider =
+      entry?.lastProvider && entry.lastProvider !== "webchat"
+        ? entry.lastProvider
+        : undefined;
+    const lastTo = entry?.lastTo?.trim();
+    const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
+    const provider = lastProvider ?? parsedTarget?.provider;
+    const to = lastTo || parsedTarget?.to;
+    if (!provider || !to) {
+      enqueueSystemEvent(message);
+      return;
+    }
+
+    const resolved = resolveOutboundTarget({
+      provider: provider as
+        | "whatsapp"
+        | "telegram"
+        | "discord"
+        | "slack"
+        | "signal"
+        | "imessage"
+        | "webchat",
+      to,
+      allowFrom: cfg.whatsapp?.allowFrom ?? [],
+    });
+    if (!resolved.ok) {
+      enqueueSystemEvent(message);
+      return;
+    }
+
+    try {
+      await agentCommand(
+        {
+          message,
+          sessionKey,
+          to: resolved.to,
+          provider,
+          deliver: true,
+          bestEffortDeliver: true,
+          messageProvider: provider,
+        },
+        defaultRuntime,
+        deps,
+      );
+    } catch (err) {
+      enqueueSystemEvent(`${summary}\n${String(err)}`);
+    }
+  };
+
+  const shouldWakeFromSentinel =
+    !process.env.VITEST && process.env.NODE_ENV !== "test";
+  if (shouldWakeFromSentinel) {
+    setTimeout(() => {
+      void scheduleRestartSentinelWake();
+    }, 750);
   }
 
   const applyHotReload = async (

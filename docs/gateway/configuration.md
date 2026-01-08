@@ -23,6 +23,26 @@ The Control UI renders a form from this schema, with a **Raw JSON** editor as an
 Hints (labels, grouping, sensitive fields) ship alongside the schema so clients can render
 better forms without hard-coding config knowledge.
 
+## Apply + restart (RPC)
+
+Use `config.apply` to validate + write the full config and restart the Gateway in one step.
+It writes a restart sentinel and pings the last active session after the Gateway comes back.
+
+Params:
+- `raw` (string) — JSON5 payload for the entire config
+- `sessionKey` (optional) — last active session key for the wake-up ping
+- `restartDelayMs` (optional) — delay before restart (default 2000)
+
+Example (via `gateway call`):
+
+```bash
+clawdbot gateway call config.apply --params '{
+  "raw": "{\\n  agent: { workspace: \\"~/clawd\\" }\\n}\\n",
+  "sessionKey": "agent:main:whatsapp:dm:+15555550123",
+  "restartDelayMs": 1000
+}'
+```
+
 ## Minimal config (recommended starting point)
 
 ```json5

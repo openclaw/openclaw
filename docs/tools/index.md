@@ -159,10 +159,13 @@ Notes:
 - `update` uses `{ id, patch }`.
 
 ### `gateway`
-Restart the running Gateway process (in-place).
+Restart or apply updates to the running Gateway process (in-place).
 
 Core actions:
 - `restart` (sends `SIGUSR1` to the current process; `clawdbot gateway`/`gateway-daemon` restart in-place)
+- `config.get` / `config.schema`
+- `config.apply` (validate + write config + restart + wake)
+- `update.run` (run update + restart + wake)
 
 Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.

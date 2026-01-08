@@ -42,6 +42,15 @@ Notes:
 - If your Gateway runs as a service, `clawdbot gateway restart` is preferred over killing PIDs.
 - If you’re pinned to a specific version, see “Rollback / pinning” below.
 
+## Update (Control UI / RPC)
+
+The Control UI has **Update & Restart** (RPC: `update.run`). It:
+1) Runs a git update (clean rebase) or package manager update.
+2) Writes a restart sentinel with a structured report (stdout/stderr tail).
+3) Restarts the gateway and pings the last active session with the report.
+
+If the rebase fails, the gateway aborts and restarts without applying the update.
+
 ## Update (from source)
 
 From the repo checkout:
