@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import {
+  mergeWhatsAppConfig,
   setWhatsAppAllowFrom,
   setWhatsAppDmPolicy,
   setWhatsAppSelfChatMode,
@@ -53,5 +54,28 @@ describe("onboard-providers WhatsApp setters", () => {
 
     expect(next.whatsapp?.selfChatMode).toBe(true);
     expect(next.whatsapp?.allowFrom).toEqual(["+15555550123"]);
+  });
+
+  it("merges WhatsApp config without clobbering fields", () => {
+    const cfg: ClawdbotConfig = {
+      whatsapp: {
+        dmPolicy: "pairing",
+        allowFrom: ["*"],
+      },
+    };
+
+    const merged = mergeWhatsAppConfig(cfg, {
+      dmPolicy: "open",
+      allowFrom: undefined,
+    });
+    const cleared = mergeWhatsAppConfig(
+      cfg,
+      { allowFrom: undefined },
+      { unsetOnUndefined: ["allowFrom"] },
+    );
+
+    expect(merged.whatsapp?.dmPolicy).toBe("open");
+    expect(merged.whatsapp?.allowFrom).toEqual(["*"]);
+    expect(cleared.whatsapp?.allowFrom).toBeUndefined();
   });
 });

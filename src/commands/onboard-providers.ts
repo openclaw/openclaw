@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ClawdbotConfig } from "../config/config.js";
-import type { DmPolicy, WhatsAppConfig } from "../config/types.js";
+import { mergeWhatsAppConfig } from "../config/merge-config.js";
+import type { DmPolicy } from "../config/types.js";
 import {
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
@@ -249,20 +250,7 @@ async function noteSlackTokenHelp(
   );
 }
 
-export function mergeWhatsAppConfig(
-  cfg: ClawdbotConfig,
-  patch: Partial<WhatsAppConfig>,
-): ClawdbotConfig {
-  const base = cfg.whatsapp ?? {};
-  return {
-    ...cfg,
-    whatsapp: {
-      selfChatMode: base.selfChatMode,
-      ...base,
-      ...patch,
-    },
-  };
-}
+export { mergeWhatsAppConfig };
 
 export function setWhatsAppDmPolicy(
   cfg: ClawdbotConfig,
@@ -275,7 +263,11 @@ export function setWhatsAppAllowFrom(
   cfg: ClawdbotConfig,
   allowFrom?: string[],
 ): ClawdbotConfig {
-  return mergeWhatsAppConfig(cfg, { allowFrom });
+  return mergeWhatsAppConfig(
+    cfg,
+    { allowFrom },
+    { unsetOnUndefined: ["allowFrom"] },
+  );
 }
 
 function setMessagesResponsePrefix(
