@@ -32,6 +32,94 @@ jobs:
           - runtime: bun
             task: build
             command: bunx tsc -p tsconfig.json
+          - runtime: bun
+            task: lint
+            command: bunx biome check src
+          - runtime: bun
+            task: test
+            command: bunx vitest run
+          - runtime: bun
+            task: build
+            command: bunx tsc -p tsconfig.json
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Checkout submodules (retry)
+        run: |
+          set -euo pipefail
+          git submodule sync --recursive
+          for attempt in 1 2 3 4 5; do
+            if git -c protocol.version=2 submodule update --init --force --depth=1 --recursive; then
+              exit 0
+            fi
+            echo "Submodule update failed (attempt $attempt/5). Retrying…"
+            sleep $((attempt * 10))
+          done
+          exit 1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          check-latest: true
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Runtime versions
+        run: |
+          node -v
+          npm -v
+          bun -v
+
+      - name: Capture node path
+        run: echo "NODE_BIN=$(dirname \"$(node -p \"process.execPath\")\")" >> "$GITHUB_ENV"
+
+      - name: Enable corepack and pin pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.23.0 --activate
+          pnpm -v
+
+      - name: Install dependencies
+        env:
+          CI: true
+        run: |
+          export PATH="$NODE_BIN:$PATH"
+          which node
+          node -v
+          pnpm -v
+          pnpm install --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
+
+      - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
+        run: ${{ matrix.command }}
+
+  checks-windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: node
+            task: lint
+            command: pnpm lint
+          - runtime: node
+            task: test
+            command: pnpm test
+          - runtime: node
+            task: build
+            command: pnpm build
+          - runtime: node
+            task: protocol
+            command: pnpm protocol:check
     steps:
       - name: Checkout
         uses: actions/checkout@v4
