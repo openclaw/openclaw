@@ -43,6 +43,7 @@ Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
 - If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
+- `elevated` is gated by `agent.elevated` (global sender allowlist) and runs on the host.
 
 ### `process`
 Manage background bash sessions.

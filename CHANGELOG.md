@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete

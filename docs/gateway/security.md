@@ -162,7 +162,7 @@ Also consider agent workspace access inside the sandbox:
 - `workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`)
 - `workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 
-Important: `agent.elevated` is an explicit escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers.
+Important: `agent.elevated` is a **global**, sender-based escape hatch that runs bash on the host. Keep `agent.elevated.allowFrom` tight and don’t enable it for strangers. See [Elevated Mode](/tools/elevated).
 
 ## Per-agent access profiles (multi-agent)
 

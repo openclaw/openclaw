@@ -479,7 +479,6 @@ export function createDiscordMessageHandler(params: {
     guildEntries,
   } = params;
   const logger = getChildLogger({ module: "discord-auto-reply" });
-  const mentionRegexes = buildMentionRegexes(cfg);
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const groupPolicy = discordConfig?.groupPolicy ?? "open";
@@ -576,6 +575,17 @@ export function createDiscordMessageHandler(params: {
       }
       const botId = botUserId;
       const baseText = resolveDiscordMessageText(message);
+      const route = resolveAgentRoute({
+        cfg,
+        provider: "discord",
+        accountId,
+        guildId: data.guild_id ?? undefined,
+        peer: {
+          kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
+          id: isDirectMessage ? author.id : message.channelId,
+        },
+      });
+      const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
       const wasMentioned =
         !isDirectMessage &&
         (Boolean(
@@ -647,16 +657,6 @@ export function createDiscordMessageHandler(params: {
         guildInfo?.slug ||
         (data.guild?.name ? normalizeDiscordSlug(data.guild.name) : "");
 
-      const route = resolveAgentRoute({
-        cfg,
-        provider: "discord",
-        accountId,
-        guildId: data.guild_id ?? undefined,
-        peer: {
-          kind: isDirectMessage ? "dm" : isGroupDm ? "group" : "channel",
-          id: isDirectMessage ? author.id : message.channelId,
-        },
-      });
       const baseSessionKey = route.sessionKey;
       const channelConfig = isGuildMessage
         ? resolveDiscordChannelConfig({

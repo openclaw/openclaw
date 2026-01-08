@@ -508,7 +508,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.slashCommand ?? slackCfg.slashCommand,
   );
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
-  const mentionRegexes = buildMentionRegexes(cfg);
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
@@ -855,6 +854,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "slack",
+      accountId: account.accountId,
+      teamId: teamId || undefined,
+      peer: {
+        kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
+        id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
+      },
+    });
+    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
       opts.wasMentioned ??
       (!isDirectMessage &&
@@ -963,16 +973,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       : isRoom
         ? `slack:channel:${message.channel}`
         : `slack:group:${message.channel}`;
-    const route = resolveAgentRoute({
-      cfg,
-      provider: "slack",
-      accountId: account.accountId,
-      teamId: teamId || undefined,
-      peer: {
-        kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
-        id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
-      },
-    });
     const baseSessionKey = route.sessionKey;
     const threadTs = message.thread_ts;
     const hasThreadTs = typeof threadTs === "string" && threadTs.length > 0;

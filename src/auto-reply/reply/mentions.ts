@@ -1,8 +1,23 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 
-export function buildMentionRegexes(cfg: ClawdbotConfig | undefined): RegExp[] {
-  const patterns = cfg?.routing?.groupChat?.mentionPatterns ?? [];
+function resolveMentionPatterns(
+  cfg: ClawdbotConfig | undefined,
+  agentId?: string,
+): string[] {
+  if (!cfg) return [];
+  const agentConfig = agentId ? cfg.routing?.agents?.[agentId] : undefined;
+  if (agentConfig && Object.hasOwn(agentConfig, "mentionPatterns")) {
+    return agentConfig.mentionPatterns ?? [];
+  }
+  return cfg.routing?.groupChat?.mentionPatterns ?? [];
+}
+
+export function buildMentionRegexes(
+  cfg: ClawdbotConfig | undefined,
+  agentId?: string,
+): RegExp[] {
+  const patterns = resolveMentionPatterns(cfg, agentId);
   return patterns
     .map((pattern) => {
       try {
@@ -48,9 +63,10 @@ export function stripMentions(
   text: string,
   ctx: MsgContext,
   cfg: ClawdbotConfig | undefined,
+  agentId?: string,
 ): string {
   let result = text;
-  const patterns = cfg?.routing?.groupChat?.mentionPatterns ?? [];
+  const patterns = resolveMentionPatterns(cfg, agentId);
   for (const p of patterns) {
     try {
       const re = new RegExp(p, "gi");

@@ -10,6 +10,14 @@ read_when:
 - Directive forms: `/elevated on`, `/elevated off`, `/elev on`, `/elev off`.
 - Only `on|off` are accepted; anything else returns a hint and does not change state.
 
+## What it controls (and what it doesn’t)
+- **Global availability gate**: `agent.elevated` is global (not per-agent). If disabled or sender not allowlisted, elevated is unavailable everywhere.
+- **Per-session state**: `/elevated on|off` sets the elevated level for the current session key.
+- **Inline directive**: `/elevated on` inside a message applies to that message only.
+- **Groups**: In group chats, elevated directives are only honored when the agent is mentioned.
+- **Host execution**: elevated runs `bash` on the host (bypasses sandbox).
+- **Tool policy still applies**: if `bash` is denied by tool policy, elevated cannot be used.
+
 ## Resolution order
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).

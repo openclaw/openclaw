@@ -149,7 +149,6 @@ export async function monitorIMessageProvider(
   );
   const groupPolicy = imessageCfg.groupPolicy ?? "open";
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
-  const mentionRegexes = buildMentionRegexes(cfg);
   const includeAttachments =
     opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;
   const mediaMaxBytes =
@@ -287,6 +286,18 @@ export async function monitorIMessageProvider(
       }
     }
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "imessage",
+      accountId: accountInfo.accountId,
+      peer: {
+        kind: isGroup ? "group" : "dm",
+        id: isGroup
+          ? String(chatId ?? "unknown")
+          : normalizeIMessageHandle(sender),
+      },
+    });
+    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const messageText = (message.text ?? "").trim();
     const mentioned = isGroup
       ? matchesMentionPatterns(messageText, mentionRegexes)
@@ -357,17 +368,6 @@ export async function monitorIMessageProvider(
       body: bodyText,
     });
 
-    const route = resolveAgentRoute({
-      cfg,
-      provider: "imessage",
-      accountId: accountInfo.accountId,
-      peer: {
-        kind: isGroup ? "group" : "dm",
-        id: isGroup
-          ? String(chatId ?? "unknown")
-          : normalizeIMessageHandle(sender),
-      },
-    });
     const imessageTo = chatTarget || `imessage:${sender}`;
     const ctxPayload = {
       Body: body,

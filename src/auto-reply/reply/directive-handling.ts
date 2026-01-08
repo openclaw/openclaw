@@ -184,7 +184,7 @@ export type InlineDirectives = {
 
 export function parseInlineDirectives(
   body: string,
-  options?: { modelAliases?: string[] },
+  options?: { modelAliases?: string[]; disableElevated?: boolean },
 ): InlineDirectives {
   const {
     cleaned: thinkCleaned,
@@ -209,7 +209,14 @@ export function parseInlineDirectives(
     elevatedLevel,
     rawLevel: rawElevatedLevel,
     hasDirective: hasElevatedDirective,
-  } = extractElevatedDirective(reasoningCleaned);
+  } = options?.disableElevated
+    ? {
+        cleaned: reasoningCleaned,
+        elevatedLevel: undefined,
+        rawLevel: undefined,
+        hasDirective: false,
+      }
+    : extractElevatedDirective(reasoningCleaned);
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } =
     extractStatusDirective(elevatedCleaned);
   const {
@@ -272,9 +279,10 @@ export function isDirectiveOnly(params: {
   cleanedBody: string;
   ctx: MsgContext;
   cfg: ClawdbotConfig;
+  agentId?: string;
   isGroup: boolean;
 }): boolean {
-  const { directives, cleanedBody, ctx, cfg, isGroup } = params;
+  const { directives, cleanedBody, ctx, cfg, agentId, isGroup } = params;
   if (
     !directives.hasThinkDirective &&
     !directives.hasVerboseDirective &&
@@ -285,7 +293,9 @@ export function isDirectiveOnly(params: {
   )
     return false;
   const stripped = stripStructuralPrefixes(cleanedBody ?? "");
-  const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
+  const noMentions = isGroup
+    ? stripMentions(stripped, ctx, cfg, agentId)
+    : stripped;
   return noMentions.length === 0;
 }
 

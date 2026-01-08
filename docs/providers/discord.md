@@ -138,6 +138,7 @@ Example “single server, only allow me, only allow #help”:
 Notes:
 - `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
 - `routing.groupChat.mentionPatterns` also count as mentions for guild messages.
+- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
 - If `channels` is present, any channel not listed is denied by default.
 
 ### 6) Verify it works

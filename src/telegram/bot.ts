@@ -225,7 +225,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
-  const mentionRegexes = buildMentionRegexes(cfg);
   let botHasTopicsEnabled: boolean | undefined;
   const resolveBotTopicsEnabled = async (ctx?: TelegramContext) => {
     const fromCtx = ctx?.me as { has_topics_enabled?: boolean } | undefined;
@@ -322,6 +321,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         id: peerId,
       },
     });
+    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const effectiveDmAllow = normalizeAllowFrom([
       ...(allowFrom ?? []),
       ...storeAllowFrom,

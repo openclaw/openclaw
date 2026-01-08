@@ -319,6 +319,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
 - **Text patterns**: Regex patterns defined in `mentionPatterns`. Always checked regardless of self-chat mode.
 - Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
+ - Per-agent override: `routing.agents.<agentId>.mentionPatterns` (useful when multiple agents share a group).
 
 ```json5
 {
@@ -326,6 +327,18 @@ Group messages default to **require mention** (either metadata mention or regex 
     groupChat: {
       mentionPatterns: ["@clawd", "clawdbot", "clawd"],
       historyLimit: 50
+    }
+  }
+}
+```
+
+Per-agent override (takes precedence when set, even `[]`):
+```json5
+{
+  routing: {
+    agents: {
+      work: { mentionPatterns: ["@workbot", "\\+15555550123"] },
+      personal: { mentionPatterns: ["@homebot", "\\+15555550999"] }
     }
   }
 }
