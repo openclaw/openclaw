@@ -21,8 +21,8 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 - Group entries may include `displayName`, `provider`, `subject`, `room`, and `space` to label sessions in UIs.
 - Clawdbot does **not** read legacy Pi/Tau session folders.
 
-## Session pruning (optional)
-Clawdbot can trim **old tool results** from the in-memory context right before LLM calls (opt-in).
+## Session pruning
+Clawdbot trims **old tool results** from the in-memory context right before LLM calls by default.
 This does **not** rewrite JSONL history. See [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Mapping transports → session keys

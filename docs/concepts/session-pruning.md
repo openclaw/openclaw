@@ -1,12 +1,12 @@
 ---
-summary: "Session pruning: opt-in tool-result trimming to reduce context bloat"
+summary: "Session pruning: tool-result trimming to reduce context bloat"
 read_when:
   - You want to reduce LLM context growth from tool outputs
   - You are tuning agent.contextPruning
 ---
 # Session Pruning
 
-Session pruning trims **old tool results** from the in-memory context right before each LLM call. It is **opt-in** and does **not** rewrite the on-disk session history (`*.jsonl`).
+Session pruning trims **old tool results** from the in-memory context right before each LLM call. It does **not** rewrite the on-disk session history (`*.jsonl`).
 
 ## When it runs
 - Before each LLM request (context hook).
@@ -59,11 +59,20 @@ Pruning uses an estimated context window (chars ≈ tokens × 4). The window siz
 - `hardClear`: `{ enabled: true, placeholder: "[Old tool result content cleared]" }`
 
 ## Examples
-Minimal (adaptive):
+Default (adaptive):
 ```json5
 {
   agent: {
     contextPruning: { mode: "adaptive" }
+  }
+}
+```
+
+To disable:
+```json5
+{
+  agent: {
+    contextPruning: { mode: "off" }
   }
 }
 ```

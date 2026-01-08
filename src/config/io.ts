@@ -17,6 +17,7 @@ import {
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
+  applyContextPruningDefaults,
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
@@ -135,10 +136,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       const cfg = applyModelDefaults(
-        applySessionDefaults(
-          applyLoggingDefaults(
-            applyMessageDefaults(
-              applyIdentityDefaults(validated.data as ClawdbotConfig),
+        applyContextPruningDefaults(
+          applySessionDefaults(
+            applyLoggingDefaults(
+              applyMessageDefaults(
+                applyIdentityDefaults(validated.data as ClawdbotConfig),
+              ),
             ),
           ),
         ),
@@ -182,7 +185,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const config = applyTalkApiKey(
-        applyModelDefaults(applySessionDefaults(applyMessageDefaults({}))),
+        applyModelDefaults(
+          applyContextPruningDefaults(
+            applySessionDefaults(applyMessageDefaults({})),
+          ),
+        ),
       );
       const legacyIssues: LegacyConfigIssue[] = [];
       return {
