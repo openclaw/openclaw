@@ -272,7 +272,7 @@ export function extractQueueDirective(body?: string): {
   const args = body.slice(argsStart);
   const parsed = parseQueueDirectiveArgs(args);
   const cleanedRaw =
-    body.slice(0, start) + body.slice(argsStart + parsed.consumed);
+    body.slice(0, start) + " " + body.slice(argsStart + parsed.consumed);
   const cleaned = cleanedRaw.replace(/\s+/g, " ").trim();
   return {
     cleaned,

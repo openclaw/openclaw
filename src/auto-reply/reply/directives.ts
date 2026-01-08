@@ -56,6 +56,7 @@ const extractLevelDirective = <T>(
   const level = normalize(rawLevel);
   const cleaned = body
     .slice(0, match.start)
+    .concat(" ")
     .concat(body.slice(match.end))
     .replace(/\s+/g, " ")
     .trim();
@@ -76,7 +77,7 @@ const extractSimpleDirective = (
     new RegExp(`(?:^|\\s)\\/(?:${namePattern})(?=$|\\s|:)(?:\\s*:\\s*)?`, "i"),
   );
   const cleaned = match
-    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    ? body.replace(match[0], " ").replace(/\s+/g, " ").trim()
     : body.trim();
   return {
     cleaned,

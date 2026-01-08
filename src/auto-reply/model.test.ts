@@ -107,6 +107,12 @@ describe("extractModelDirective", () => {
   });
 
   describe("edge cases", () => {
+    it("preserves spacing when /model is followed by a path segment", () => {
+      const result = extractModelDirective("thats not /model gpt-5/tmp/hello");
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleaned).toBe("thats not /hello");
+    });
+
     it("handles alias with special regex characters", () => {
       const result = extractModelDirective("/test.alias", {
         aliases: ["test.alias"],
