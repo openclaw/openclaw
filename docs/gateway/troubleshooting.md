@@ -7,6 +7,8 @@ read_when:
 
 When your CLAWDBOT misbehaves, here's how to fix it.
 
+Start with the FAQ’s [First 60 seconds](/start/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
+
 ## Common Issues
 
 ### Service Installed but Nothing is Running
@@ -36,6 +38,8 @@ the Gateway likely refused to bind.
 
 **Check:**
 - `gateway.mode` must be `local` for `clawdbot gateway` and the daemon.
+- If you set `gateway.mode=remote`, the **CLI defaults** to a remote URL. The daemon can still be running locally, but your CLI may be probing the wrong place. Use `clawdbot daemon status` to see the daemon’s resolved port + probe target (or pass `--url`).
+- `clawdbot daemon status` and `clawdbot doctor` surface the **last gateway error** from logs when the service looks running but the port is closed.
 - Non-loopback binds (`lan`/`tailnet`/`auto`) require auth:
   `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - `gateway.remote.token` is for remote CLI calls only; it does **not** enable local auth.
@@ -242,7 +246,8 @@ clawdbot providers login --verbose
 
 | Log | Location |
 |-----|----------|
-| Main logs (default) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` |
+| Gateway file logs (structured) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or `logging.file`) |
+| Gateway service logs (supervisor) | macOS: `~/.clawdbot/logs/gateway.log` + `gateway.err.log` (profiles use `~/.clawdbot-<profile>/logs/...`)<br>Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br>Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
 | Session files | `~/.clawdbot/agents/<agentId>/sessions/` |
 | Media cache | `~/.clawdbot/media/` |
 | Credentials | `~/.clawdbot/credentials/` |
