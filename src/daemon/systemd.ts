@@ -141,10 +141,13 @@ function buildSystemdUnit({
   return [
     "[Unit]",
     "Description=Clawdbot Gateway",
+    "After=network-online.target",
+    "Wants=network-online.target",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
+    "RestartSec=5",
     workingDirLine,
     ...envLines,
     "",
