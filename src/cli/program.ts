@@ -1,4 +1,3 @@
-import chalk from "chalk";
 import { Command } from "commander";
 import { agentCliCommand } from "../commands/agent-via-gateway.js";
 import {
@@ -31,6 +30,7 @@ import { VERSION } from "../version.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { registerCanvasCli } from "./canvas-cli.js";
+import { hasExplicitOptions } from "./command-options.js";
 import { registerCronCli } from "./cron-cli.js";
 import { registerDaemonCli } from "./daemon-cli.js";
 import { createDefaultDeps } from "./deps.js";
@@ -45,6 +45,7 @@ import { forceFreePort } from "./ports.js";
 import { registerProvidersCli } from "./providers-cli.js";
 import { registerTelegramCli } from "./telegram-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
+import { isRich, theme } from "../terminal/theme.js";
 
 export { forceFreePort };
 
@@ -68,27 +69,27 @@ export function buildProgram() {
     );
 
   const formatIntroLine = (version: string, rich = true) => {
-    const base = `📡 clawdbot ${version} — ${TAGLINE}`;
-    return rich && chalk.level > 0
-      ? `${chalk.bold.cyan("📡 clawdbot")} ${chalk.white(version)} ${chalk.gray("—")} ${chalk.green(TAGLINE)}`
+    const base = `🦞 ClawdBot ${version} — ${TAGLINE}`;
+    return rich
+      ? `${theme.heading("🦞 ClawdBot")} ${theme.info(version)} ${theme.muted("—")} ${theme.accentDim(TAGLINE)}`
       : base;
   };
 
   program.configureHelp({
-    optionTerm: (option) => chalk.yellow(option.flags),
-    subcommandTerm: (cmd) => chalk.green(cmd.name()),
+    optionTerm: (option) => theme.option(option.flags),
+    subcommandTerm: (cmd) => theme.command(cmd.name()),
   });
 
   program.configureOutput({
     writeOut: (str) => {
       const colored = str
-        .replace(/^Usage:/gm, chalk.bold.cyan("Usage:"))
-        .replace(/^Options:/gm, chalk.bold.cyan("Options:"))
-        .replace(/^Commands:/gm, chalk.bold.cyan("Commands:"));
+        .replace(/^Usage:/gm, theme.heading("Usage:"))
+        .replace(/^Options:/gm, theme.heading("Options:"))
+        .replace(/^Commands:/gm, theme.heading("Commands:"));
       process.stdout.write(colored);
     },
     writeErr: (str) => process.stderr.write(str),
-    outputError: (str, write) => write(chalk.red(str)),
+    outputError: (str, write) => write(theme.error(str)),
   });
 
   if (
@@ -100,7 +101,10 @@ export function buildProgram() {
     process.exit(0);
   }
 
-  program.addHelpText("beforeAll", `\n${formatIntroLine(PROGRAM_VERSION)}\n`);
+  program.addHelpText(
+    "beforeAll",
+    `\n${formatIntroLine(PROGRAM_VERSION, isRich())}\n`,
+  );
 
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     if (actionCommand.name() === "doctor") return;
@@ -171,12 +175,12 @@ export function buildProgram() {
   ] as const;
 
   const fmtExamples = examples
-    .map(([cmd, desc]) => `  ${chalk.green(cmd)}\n    ${chalk.gray(desc)}`)
+    .map(([cmd, desc]) => `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`)
     .join("\n");
 
   program.addHelpText(
     "afterAll",
-    `\n${chalk.bold.cyan("Examples:")}\n${fmtExamples}\n`,
+    `\n${theme.heading("Examples:")}\n${fmtExamples}\n`,
   );
 
   program
@@ -581,8 +585,9 @@ Examples:
     .description("Add a new isolated agent")
     .option("--workspace <dir>", "Workspace directory for the new agent")
     .option("--json", "Output JSON summary", false)
-    .action(async (name, opts) => {
+    .action(async (name, opts, command) => {
       try {
+        const hasFlags = hasExplicitOptions(command, ["workspace", "json"]);
         await agentsAddCommand(
           {
             name: typeof name === "string" ? name : undefined,
@@ -590,6 +595,7 @@ Examples:
             json: Boolean(opts.json),
           },
           defaultRuntime,
+          { hasFlags },
         );
       } catch (err) {
         defaultRuntime.error(String(err));
