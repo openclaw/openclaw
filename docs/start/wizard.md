@@ -79,7 +79,7 @@ clawdbot agents add <name>
    - Discord: bot token.
    - Signal: optional `signal-cli` install + account config.
    - iMessage: local `imsg` CLI path + DB access.
-   - DM security: default is pairing (unknown DMs get a pairing code). Approve via `clawdbot pairing approve --provider <provider> <code>`.
+  - DM security: default is pairing. First DM sends a code; approve via `clawdbot pairing approve --provider <provider> <code>` or use allowlists.
 
 6) **Daemon install**
    - macOS: LaunchAgent
@@ -99,7 +99,8 @@ clawdbot agents add <name>
 
 9) **Finish**
    - Summary + next steps, including iOS/Android/macOS apps for extra features.
-   - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
+  - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
+  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:install && pnpm ui:build`.
 
 ## Remote mode
 

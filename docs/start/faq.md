@@ -87,6 +87,15 @@ pnpm clawdbot onboard
 
 This creates `~/.clawdbot/clawdbot.json` with your API keys, workspace path, and owner phone number.
 
+### My bot doesn’t respond after I DM it
+
+Clawdbot defaults to **pairing** for DMs. Your first DM sends a pairing code; messages are ignored until you approve it.
+
+```bash
+clawdbot pairing list --provider telegram
+clawdbot pairing approve --provider telegram <CODE>
+```
+
 ### How do I start fresh?
 
 ```bash

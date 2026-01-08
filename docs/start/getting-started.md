@@ -42,14 +42,14 @@ Note: Bun is optional if you prefer running TypeScript directly:
 bun install
 ```
 
-## 2) Build the Control UI (recommended)
+## 2) Control UI (auto + fallback)
 
 The Gateway serves the browser dashboard (Control UI) when assets exist.
+The wizard tries to build these for you. If it fails, run:
 
 ```bash
 pnpm ui:install
 pnpm ui:build
-pnpm build
 ```
 
 If you skip UI build, the gateway still works — you just won’t get the dashboard.
@@ -63,7 +63,7 @@ pnpm clawdbot onboard
 What you’ll choose:
 - **Local vs Remote** gateway
 - **Auth**: Anthropic OAuth or OpenAI OAuth (recommended), API key (optional), or skip for now
-- **Providers**: WhatsApp QR login, bot tokens, etc.
+- **Providers**: WhatsApp QR login, Telegram/Discord bot tokens, etc.
 - **Daemon**: optional background install (launchd/systemd; WSL2 uses systemd)
   - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
 
@@ -112,9 +112,12 @@ The wizard can write tokens/config for you. If you prefer manual config, start w
 - Telegram: [Telegram](/providers/telegram)
 - Discord: [Discord](/providers/discord)
 
+**Telegram DM tip:** your first DM returns a pairing code. Approve it (see next step) or the bot won’t respond.
+
 ## 6) DM safety (pairing approvals)
 
 Default posture: unknown DMs get a short code and messages are not processed until approved.
+If your first DM gets no reply, approve the pairing:
 
 Approve:
 
