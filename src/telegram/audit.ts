@@ -102,22 +102,30 @@ export async function auditTelegramGroupMembership(params: {
       const res = await fetchWithTimeout(url, params.timeoutMs, fetcher);
       const json = (await res.json()) as
         | TelegramApiOk<{ status?: string }>
-        | TelegramApiErr
-        | unknown;
+        | TelegramApiErr;
       if (!res.ok || !isRecord(json) || json.ok !== true) {
         const desc =
-          isRecord(json) && json.ok === false && typeof json.description === "string"
+          isRecord(json) &&
+          json.ok === false &&
+          typeof json.description === "string"
             ? json.description
             : `getChatMember failed (${res.status})`;
         groups.push({ chatId, ok: false, status: null, error: desc });
         continue;
       }
       const status = isRecord((json as TelegramApiOk<unknown>).result)
-        ? (json as TelegramApiOk<{ status?: string }>).result.status ?? null
+        ? ((json as TelegramApiOk<{ status?: string }>).result.status ?? null)
         : null;
       const ok =
-        status === "creator" || status === "administrator" || status === "member";
-      groups.push({ chatId, ok, status, error: ok ? null : "bot not in group" });
+        status === "creator" ||
+        status === "administrator" ||
+        status === "member";
+      groups.push({
+        chatId,
+        ok,
+        status,
+        error: ok ? null : "bot not in group",
+      });
     } catch (err) {
       groups.push({
         chatId,
@@ -137,4 +145,3 @@ export async function auditTelegramGroupMembership(params: {
     elapsedMs: Date.now() - started,
   };
 }
-
