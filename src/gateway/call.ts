@@ -38,14 +38,15 @@ export async function callGateway<T = unknown>(
     preferTailnet && tailnetIPv4
       ? `ws://${tailnetIPv4}:${localPort}`
       : `ws://127.0.0.1:${localPort}`;
-  const url =
-    (typeof opts.url === "string" && opts.url.trim().length > 0
+  const urlOverride =
+    typeof opts.url === "string" && opts.url.trim().length > 0
       ? opts.url.trim()
-      : undefined) ||
-    (typeof remote?.url === "string" && remote.url.trim().length > 0
+      : undefined;
+  const remoteUrl =
+    typeof remote?.url === "string" && remote.url.trim().length > 0
       ? remote.url.trim()
-      : undefined) ||
-    localUrl;
+      : undefined;
+  const url = urlOverride || remoteUrl || localUrl;
   const token =
     (typeof opts.token === "string" && opts.token.trim().length > 0
       ? opts.token.trim()
@@ -66,6 +67,43 @@ export async function callGateway<T = unknown>(
     (typeof remote?.password === "string" && remote.password.trim().length > 0
       ? remote.password.trim()
       : undefined);
+  const urlSource = urlOverride
+    ? "cli --url"
+    : remoteUrl
+      ? "config gateway.remote.url"
+      : preferTailnet && tailnetIPv4
+        ? `local tailnet ${tailnetIPv4}`
+        : "local loopback";
+  const remoteFallbackNote =
+    isRemoteMode && !urlOverride && !remoteUrl
+      ? "Note: gateway.mode=remote but gateway.remote.url is missing; using local URL."
+      : undefined;
+  const bindDetail =
+    !urlOverride && !remoteUrl
+      ? `Bind: ${bindMode}`
+      : undefined;
+  const connectionDetails = [
+    `Gateway target: ${url}`,
+    `Source: ${urlSource}`,
+    bindDetail,
+    remoteFallbackNote,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const formatCloseError = (code: number, reason: string) => {
+    const reasonText = reason?.trim() || "no close reason";
+    const hint =
+      code === 1006
+        ? "abnormal closure (no close frame)"
+        : code === 1000
+          ? "normal closure"
+          : "";
+    const suffix = hint ? ` ${hint}` : "";
+    return `gateway closed (${code}${suffix}): ${reasonText}\n${connectionDetails}`;
+  };
+  const formatTimeoutError = () =>
+    `gateway timeout after ${timeoutMs}ms\n${connectionDetails}`;
   return await new Promise<T>((resolve, reject) => {
     let settled = false;
     let ignoreClose = false;
@@ -106,14 +144,14 @@ export async function callGateway<T = unknown>(
         if (settled || ignoreClose) return;
         ignoreClose = true;
         client.stop();
-        stop(new Error(`gateway closed (${code}): ${reason}`));
+        stop(new Error(formatCloseError(code, reason)));
       },
     });
 
     const timer = setTimeout(() => {
       ignoreClose = true;
       client.stop();
-      stop(new Error("gateway timeout"));
+      stop(new Error(formatTimeoutError()));
     }, timeoutMs);
 
     client.start();
