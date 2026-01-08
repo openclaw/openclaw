@@ -157,6 +157,7 @@ vi.mock("../daemon/service.js", () => ({
     restart: serviceRestart,
     isLoaded: serviceIsLoaded,
     readCommand: vi.fn(),
+    readRuntime: vi.fn().mockResolvedValue({ status: "running" }),
   }),
 }));
 
@@ -491,6 +492,52 @@ describe("doctor", () => {
           message.includes('scope resolves to "shared"'),
       ),
     ).toBe(true);
+  });
+
+  it("warns when legacy workspace directories exist", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      valid: true,
+      config: {
+        agent: { workspace: "/Users/steipete/clawd" },
+      },
+      issues: [],
+      legacyIssues: [],
+    });
+
+    note.mockClear();
+    const homedirSpy = vi
+      .spyOn(os, "homedir")
+      .mockReturnValue("/Users/steipete");
+    const realExists = fs.existsSync;
+    const existsSpy = vi.spyOn(fs, "existsSync").mockImplementation((value) => {
+      if (value === "/Users/steipete/clawdis") return true;
+      return realExists(value as never);
+    });
+
+    const { doctorCommand } = await import("./doctor.js");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn(),
+    };
+
+    await doctorCommand(runtime, { nonInteractive: true });
+
+    expect(
+      note.mock.calls.some(
+        ([message, title]) =>
+          title === "Legacy workspace" &&
+          typeof message === "string" &&
+          message.includes("/Users/steipete/clawdis"),
+      ),
+    ).toBe(true);
+
+    homedirSpy.mockRestore();
+    existsSpy.mockRestore();
   });
   it("falls back to legacy sandbox image when missing", async () => {
     readConfigFileSnapshot.mockResolvedValue({

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
@@ -38,4 +39,37 @@ export async function shouldSuggestMemorySystem(
   }
 
   return true;
+}
+
+export type LegacyWorkspaceDetection = {
+  activeWorkspace: string;
+  legacyDirs: string[];
+};
+
+export function detectLegacyWorkspaceDirs(params: {
+  workspaceDir: string;
+  homedir?: () => string;
+  exists?: (value: string) => boolean;
+}): LegacyWorkspaceDetection {
+  const homedir = params.homedir ?? os.homedir;
+  const exists = params.exists ?? fs.existsSync;
+  const home = homedir();
+  const activeWorkspace = path.resolve(params.workspaceDir);
+  const candidates = [path.join(home, "clawdis"), path.join(home, "clawdbot")];
+  const legacyDirs = candidates.filter((candidate) => {
+    if (!exists(candidate)) return false;
+    return path.resolve(candidate) !== activeWorkspace;
+  });
+  return { activeWorkspace, legacyDirs };
+}
+
+export function formatLegacyWorkspaceWarning(
+  detection: LegacyWorkspaceDetection,
+): string {
+  return [
+    "Legacy workspace directories detected (may contain old agent files):",
+    ...detection.legacyDirs.map((dir) => `- ${dir}`),
+    `Active workspace: ${detection.activeWorkspace}`,
+    "If unused, archive or move to Trash (e.g. trash ~/clawdis).",
+  ].join("\n");
 }
