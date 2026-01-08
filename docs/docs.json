@@ -508,6 +508,10 @@
     {
       "source": "/wizard",
       "destination": "/start/wizard"
+    },
+    {
+      "source": "/oauth",
+      "destination": "/concepts/oauth"
     }
   ],
   "navigation": {
@@ -544,6 +548,7 @@
           "concepts/agent",
           "concepts/agent-loop",
           "concepts/system-prompt",
+          "concepts/oauth",
           "concepts/agent-workspace",
           "concepts/multi-agent",
           "concepts/compaction",

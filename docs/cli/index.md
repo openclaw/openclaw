@@ -166,7 +166,7 @@ Options:
 - `--workspace <dir>`
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--auth-choice <oauth|openai-codex|antigravity|apiKey|minimax|skip>`
+- `--auth-choice <oauth|claude-cli|openai-codex|codex-cli|antigravity|apiKey|minimax|skip>`
 - `--anthropic-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto>`
@@ -202,7 +202,7 @@ Options:
 Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
 
 Subcommands:
-- `providers list`: show configured chat providers and auth profiles (Claude CLI + Codex CLI sync included).
+- `providers list`: show configured chat providers and auth profiles (Claude Code + Codex CLI OAuth sync included).
 - `providers status`: check gateway reachability and provider health (`--probe` to verify credentials; use `status --deep` for local-only probes).
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
@@ -226,6 +226,12 @@ Common options:
 `providers list` options:
 - `--no-usage`: skip provider usage/quota snapshots (OAuth/API-backed only).
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
+
+OAuth sync sources:
+- `~/.claude/.credentials.json` → `anthropic:claude-cli`
+- `~/.codex/auth.json` → `openai-codex:codex-cli`
+
+More detail: [/concepts/oauth](/concepts/oauth)
 
 Examples:
 ```bash

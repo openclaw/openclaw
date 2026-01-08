@@ -54,6 +54,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Groups](https://docs.clawd.bot/concepts/groups)
 - [Group messages](https://docs.clawd.bot/concepts/group-messages)
 - [Model failover](https://docs.clawd.bot/concepts/model-failover)
+- [OAuth](https://docs.clawd.bot/concepts/oauth)
 
 ## Providers + ingress
 
