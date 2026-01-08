@@ -33,6 +33,7 @@ import {
 } from "./daemon-cli.js";
 import { createDefaultDeps } from "./deps.js";
 import { forceFreePortAndWait } from "./ports.js";
+import { withProgress } from "./progress.js";
 
 type GatewayRpcOpts = {
   url?: string;
@@ -211,17 +212,25 @@ const callGatewayCli = async (
   opts: GatewayRpcOpts,
   params?: unknown,
 ) =>
-  callGateway({
-    url: opts.url,
-    token: opts.token,
-    password: opts.password,
-    method,
-    params,
-    expectFinal: Boolean(opts.expectFinal),
-    timeoutMs: Number(opts.timeout ?? 10_000),
-    clientName: "cli",
-    mode: "cli",
-  });
+  withProgress(
+    {
+      label: `Gateway ${method}`,
+      indeterminate: true,
+      enabled: true,
+    },
+    async () =>
+      await callGateway({
+        url: opts.url,
+        token: opts.token,
+        password: opts.password,
+        method,
+        params,
+        expectFinal: Boolean(opts.expectFinal),
+        timeoutMs: Number(opts.timeout ?? 10_000),
+        clientName: "cli",
+        mode: "cli",
+      }),
+  );
 
 export function registerGatewayCli(program: Command) {
   program

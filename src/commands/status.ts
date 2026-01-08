@@ -18,6 +18,7 @@ import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
+import { withProgress } from "../cli/progress.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
@@ -233,13 +234,29 @@ export async function statusCommand(
 ) {
   const summary = await getStatusSummary();
   const usage = opts.usage
-    ? await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs })
+    ? await withProgress(
+        {
+          label: "Fetching usage snapshot…",
+          indeterminate: true,
+          enabled: opts.json !== true,
+        },
+        async () =>
+          await loadProviderUsageSummary({ timeoutMs: opts.timeoutMs }),
+      )
     : undefined;
   const health: HealthSummary | undefined = opts.deep
-    ? await callGateway<HealthSummary>({
-        method: "health",
-        timeoutMs: opts.timeoutMs,
-      })
+    ? await withProgress(
+        {
+          label: "Checking gateway health…",
+          indeterminate: true,
+          enabled: opts.json !== true,
+        },
+        async () =>
+          await callGateway<HealthSummary>({
+            method: "health",
+            timeoutMs: opts.timeoutMs,
+          }),
+      )
     : undefined;
 
   if (opts.json) {

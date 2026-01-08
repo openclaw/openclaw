@@ -1,8 +1,8 @@
-import chalk from "chalk";
 import type { Command } from "commander";
 import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -69,8 +69,6 @@ const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
 
-const isRich = () => Boolean(process.stdout.isTTY && chalk.level > 0);
-
 const pad = (value: string, width: number) => value.padEnd(width);
 
 const truncate = (value: string, width: number) => {
@@ -122,12 +120,6 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-const colorize = (
-  rich: boolean,
-  color: (msg: string) => string,
-  msg: string,
-) => (rich ? color(msg) : msg);
-
 function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
   if (jobs.length === 0) {
     runtime.log("No cron jobs.");
@@ -145,7 +137,7 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     pad("Target", CRON_TARGET_PAD),
   ].join(" ");
 
-  runtime.log(rich ? chalk.bold(header) : header);
+  runtime.log(rich ? theme.heading(header) : header);
   const now = Date.now();
 
   for (const job of jobs) {
@@ -168,26 +160,28 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
 
     const coloredStatus = (() => {
-      if (statusRaw === "ok") return colorize(rich, chalk.green, statusLabel);
-      if (statusRaw === "error") return colorize(rich, chalk.red, statusLabel);
+      if (statusRaw === "ok")
+        return colorize(rich, theme.success, statusLabel);
+      if (statusRaw === "error")
+        return colorize(rich, theme.error, statusLabel);
       if (statusRaw === "running")
-        return colorize(rich, chalk.yellow, statusLabel);
+        return colorize(rich, theme.warn, statusLabel);
       if (statusRaw === "skipped")
-        return colorize(rich, chalk.gray, statusLabel);
-      return colorize(rich, chalk.gray, statusLabel);
+        return colorize(rich, theme.muted, statusLabel);
+      return colorize(rich, theme.muted, statusLabel);
     })();
 
     const coloredTarget =
       job.sessionTarget === "isolated"
-        ? colorize(rich, chalk.magenta, targetLabel)
-        : colorize(rich, chalk.cyan, targetLabel);
+        ? colorize(rich, theme.accentBright, targetLabel)
+        : colorize(rich, theme.accent, targetLabel);
 
     const line = [
-      colorize(rich, chalk.cyan, idLabel),
-      colorize(rich, chalk.white, nameLabel),
-      colorize(rich, chalk.white, scheduleLabel),
-      colorize(rich, chalk.gray, nextLabel),
-      colorize(rich, chalk.gray, lastLabel),
+      colorize(rich, theme.accent, idLabel),
+      colorize(rich, theme.info, nameLabel),
+      colorize(rich, theme.info, scheduleLabel),
+      colorize(rich, theme.muted, nextLabel),
+      colorize(rich, theme.muted, lastLabel),
       coloredStatus,
       coloredTarget,
     ].join(" ");

@@ -7,6 +7,7 @@ import {
 } from "../config/sessions.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withProgress } from "../cli/progress.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { agentCommand } from "./agent.js";
 
@@ -125,26 +126,34 @@ export async function agentViaGatewayCommand(
   const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
-  const response = await callGateway<GatewayAgentResponse>({
-    method: "agent",
-    params: {
-      message: body,
-      to: opts.to,
-      sessionId: opts.sessionId,
-      sessionKey,
-      thinking: opts.thinking,
-      deliver: Boolean(opts.deliver),
-      provider,
-      timeout: timeoutSeconds,
-      lane: opts.lane,
-      extraSystemPrompt: opts.extraSystemPrompt,
-      idempotencyKey,
+  const response = await withProgress(
+    {
+      label: "Waiting for agent reply…",
+      indeterminate: true,
+      enabled: opts.json !== true,
     },
-    expectFinal: true,
-    timeoutMs: gatewayTimeoutMs,
-    clientName: "cli",
-    mode: "cli",
-  });
+    async () =>
+      await callGateway<GatewayAgentResponse>({
+        method: "agent",
+        params: {
+          message: body,
+          to: opts.to,
+          sessionId: opts.sessionId,
+          sessionKey,
+          thinking: opts.thinking,
+          deliver: Boolean(opts.deliver),
+          provider,
+          timeout: timeoutSeconds,
+          lane: opts.lane,
+          extraSystemPrompt: opts.extraSystemPrompt,
+          idempotencyKey,
+        },
+        expectFinal: true,
+        timeoutMs: gatewayTimeoutMs,
+        clientName: "cli",
+        mode: "cli",
+      }),
+  );
 
   if (opts.json) {
     runtime.log(JSON.stringify(response, null, 2));

@@ -112,6 +112,9 @@ importers:
       long:
         specifier: 5.3.2
         version: 5.3.2
+      osc-progress:
+        specifier: ^0.2.0
+        version: 0.2.0
       playwright-core:
         specifier: 1.57.0
         version: 1.57.0(patch_hash=66f1f266424dbe354068aaa5bba87bfb0e1d7d834a938c25dd70d43cdf1c1b02)
@@ -2427,6 +2430,10 @@ packages:
 
   opus-decoder@0.7.11:
     resolution: {integrity: sha512-+e+Jz3vGQLxRTBHs8YJQPRPc1Tr+/aC6coV/DlZylriA29BdHQAYXhvNRKtjftof17OFng0+P4wsFIqQu3a48A==}
+
+  osc-progress@0.2.0:
+    resolution: {integrity: sha512-GJR9XnS8dQ+sAdbhX90RA4WbmEyrso7X9aHMws4MaQ2GRpfEjnOUSZIdOXJQfnIfBoy9oCc7US/MNFCyuJQzjg==}
+    engines: {node: '>=20'}
 
   oxlint-tsgolint@0.10.1:
     resolution: {integrity: sha512-EEHNdo5cW2w1xwYdBQ7d3IXDqWAtMkfVFrh+9gQ4kYbYJwygY4QXSh1eH80/xVipZdVKujAwBgg/nNNHk56kxQ==}
@@ -5293,6 +5300,8 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
     optional: true
+
+  osc-progress@0.2.0: {}
 
   oxlint-tsgolint@0.10.1:
     optionalDependencies:
