@@ -326,7 +326,9 @@ async function runGatewayCommand(
           );
         }
         if (waitedMs > 0) {
-          gatewayLog.info(`force: waited ${waitedMs}ms for port ${port} to free`);
+          gatewayLog.info(
+            `force: waited ${waitedMs}ms for port ${port} to free`,
+          );
         }
       }
     } catch (err) {
@@ -354,7 +356,9 @@ async function runGatewayCommand(
       ? tailscaleRaw
       : null;
   if (tailscaleRaw && !tailscaleMode) {
-    defaultRuntime.error('Invalid --tailscale (use "off", "serve", or "funnel")');
+    defaultRuntime.error(
+      'Invalid --tailscale (use "off", "serve", or "funnel")',
+    );
     defaultRuntime.exit(1);
     return;
   }
