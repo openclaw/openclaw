@@ -220,6 +220,10 @@ Common options:
 - `--account <id>`: provider account id (default `default`)
 - `--name <label>`: display name for the account
 
+`providers list` options:
+- `--usage`: include provider usage/quota snapshots (OAuth/API-backed only).
+- `--json`: output JSON (includes usage when `--usage` is set).
+
 ### `pairing`
 Approve DM pairing requests across providers.
 

@@ -13,6 +13,10 @@ import {
 } from "../discord/accounts.js";
 import { callGateway } from "../gateway/call.js";
 import {
+  formatUsageReportLines,
+  loadProviderUsageSummary,
+} from "../infra/provider-usage.js";
+import {
   listIMessageAccountIds,
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
@@ -56,6 +60,7 @@ type ChatProvider = (typeof CHAT_PROVIDERS)[number];
 
 type ProvidersListOptions = {
   json?: boolean;
+  usage?: boolean;
 };
 
 type ProvidersStatusOptions = {
@@ -461,6 +466,7 @@ export async function providersListCommand(
         profileId === CODEX_CLI_PROFILE_ID,
     }),
   );
+  const usage = opts.usage ? await loadProviderUsageSummary() : undefined;
 
   if (opts.json) {
     const payload = {
@@ -473,6 +479,7 @@ export async function providersListCommand(
         imessage: imessageAccounts,
       },
       auth: authProfiles,
+      ...(usage ? { usage } : {}),
     };
     runtime.log(JSON.stringify(payload, null, 2));
     return;
@@ -565,6 +572,11 @@ export async function providersListCommand(
       const external = profile.isExternal ? " (synced)" : "";
       lines.push(`- ${profile.id} (${profile.type}${external})`);
     }
+  }
+
+  if (usage) {
+    lines.push("");
+    lines.push(...formatUsageReportLines(usage));
   }
 
   lines.push("");
