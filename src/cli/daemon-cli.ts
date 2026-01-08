@@ -207,6 +207,7 @@ async function probeGatewayStatus(opts: {
   password?: string;
   timeoutMs: number;
   json?: boolean;
+  configPath?: string;
 }) {
   try {
     await withProgress(
@@ -224,6 +225,7 @@ async function probeGatewayStatus(opts: {
           timeoutMs: opts.timeoutMs,
           clientName: "cli",
           mode: "cli",
+          ...(opts.configPath ? { configPath: opts.configPath } : {}),
         }),
     );
     return { ok: true } as const;
@@ -447,6 +449,7 @@ async function gatherDaemonStatus(opts: {
           daemonCfg.gateway?.auth?.password,
         timeoutMs,
         json: opts.rpc.json,
+        configPath: daemonConfigSummary.path,
       })
     : undefined;
   let lastError: string | undefined;

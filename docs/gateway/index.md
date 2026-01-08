@@ -170,13 +170,14 @@ clawdbot logs --follow
 ```
 
 Notes:
-- `daemon status` probes the Gateway RPC by default (same URL/token defaults as `gateway status`).
+- `daemon status` probes the Gateway RPC by default using the daemon’s resolved port/config (override with `--url`).
 - `daemon status --deep` adds system-level scans (LaunchDaemons/system units).
 - `daemon status` reports **supervisor runtime** (launchd/systemd running) separately from **RPC reachability** (WS connect + status RPC).
 - `daemon status` prints config path + probe target to avoid “localhost vs LAN bind” confusion and profile mismatches.
 - `logs` tails the Gateway file log via RPC (no manual `tail`/`grep` needed).
 - If other gateway-like services are detected, the CLI warns. We recommend **one gateway per machine**; one gateway can host multiple agents.
   - Cleanup: `clawdbot daemon uninstall` (current service) and `clawdbot doctor` (legacy migrations).
+- `daemon install` is a no-op when already installed; use `clawdbot daemon install --force` to reinstall (profile/env/path changes).
 
 Bundled mac app:
 - Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.

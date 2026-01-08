@@ -424,12 +424,12 @@ Subcommands:
 - `daemon restart`
 
 Notes:
-- `daemon status` uses the same URL/token defaults as `gateway status` unless you pass `--url/--token/--password`.
+- `daemon status` probes the Gateway RPC by default using the daemon’s resolved port/config (override with `--url/--token/--password`).
 - `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
 - `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans).
 - `daemon status` prints which config path the CLI uses vs which config the daemon likely uses (service env), plus the resolved probe target URL.
 - `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
-- `daemon install` options: `--port`, `--runtime`, `--token`.
+- `daemon install` options: `--port`, `--runtime`, `--token`, `--force`.
 
 ### `logs`
 Tail Gateway file logs via RPC.
