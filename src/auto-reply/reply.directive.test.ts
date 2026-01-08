@@ -254,6 +254,51 @@ describe("directive parsing", () => {
     });
   });
 
+  it("shows current think level when /think has no argument", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            thinkingDefault: "high",
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current thinking level: high");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows off when /think has no argument and no default set", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        { Body: "/think", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+          },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Current thinking level: off");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("extracts reply_to_current tag", () => {
     const res = extractReplyToTag("ok [[reply_to_current]]", "msg-1");
     expect(res.replyToId).toBe("msg-1");
