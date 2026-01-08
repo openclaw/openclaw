@@ -1,12 +1,11 @@
 import fs from "node:fs/promises";
-
+import { getResolvedLoggerSettings } from "../../logging.js";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validateLogsTailParams,
 } from "../protocol/index.js";
-import { getResolvedLoggerSettings } from "../../logging.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_LIMIT = 500;
@@ -86,7 +85,7 @@ async function readLogSlice(params: {
     const length = Math.max(0, size - start);
     const buffer = Buffer.alloc(length);
     const readResult = await handle.read(buffer, 0, length, start);
-    let text = buffer.toString("utf8", 0, readResult.bytesRead);
+    const text = buffer.toString("utf8", 0, readResult.bytesRead);
     let lines = text.split("\n");
     if (start > 0 && prefix !== "\n") {
       lines = lines.slice(1);
@@ -140,10 +139,7 @@ export const logsHandlers: GatewayRequestHandlers = {
       respond(
         false,
         undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `log read failed: ${String(err)}`,
-        ),
+        errorShape(ErrorCodes.UNAVAILABLE, `log read failed: ${String(err)}`),
       );
     }
   },
