@@ -12,11 +12,6 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
     label: "Node (recommended)",
     hint: "Required for WhatsApp (Baileys WebSocket). Bun can corrupt memory on reconnect.",
   },
-  {
-    value: "bun",
-    label: "Bun (faster)",
-    hint: "Use only when WhatsApp is disabled",
-  },
 ];
 
 export function isGatewayDaemonRuntime(

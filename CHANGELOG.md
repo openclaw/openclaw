@@ -12,6 +12,7 @@
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
+- Daemon runtime: remove Bun from selection options.
 
 ## 2026.1.8
 
