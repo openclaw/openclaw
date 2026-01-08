@@ -90,18 +90,27 @@ export function chunkText(text: string, limit: number): string[] {
   while (remaining.length > limit) {
     const window = remaining.slice(0, limit);
 
-    // 1) Prefer a newline break inside the window.
-    let breakIdx = window.lastIndexOf("\n");
+    // 1) Prefer a newline break inside the window (outside parentheses).
+    let lastNewline = -1;
+    let lastWhitespace = -1;
+    let depth = 0;
+    for (let i = 0; i < window.length; i++) {
+      const char = window[i];
+      if (char === "(") {
+        depth += 1;
+        continue;
+      }
+      if (char === ")" && depth > 0) {
+        depth -= 1;
+        continue;
+      }
+      if (depth !== 0) continue;
+      if (char === "\n") lastNewline = i;
+      else if (/\s/.test(char)) lastWhitespace = i;
+    }
 
     // 2) Otherwise prefer the last whitespace (word boundary) inside the window.
-    if (breakIdx <= 0) {
-      for (let i = window.length - 1; i >= 0; i--) {
-        if (/\s/.test(window[i])) {
-          breakIdx = i;
-          break;
-        }
-      }
-    }
+    let breakIdx = lastNewline > 0 ? lastNewline : lastWhitespace;
 
     // 3) Fallback: hard break exactly at the limit.
     if (breakIdx <= 0) breakIdx = limit;
@@ -234,15 +243,27 @@ function pickSafeBreakIndex(
   window: string,
   spans: ReturnType<typeof parseFenceSpans>,
 ): number {
-  let newlineIdx = window.lastIndexOf("\n");
-  while (newlineIdx > 0) {
-    if (isSafeFenceBreak(spans, newlineIdx)) return newlineIdx;
-    newlineIdx = window.lastIndexOf("\n", newlineIdx - 1);
+  let lastNewline = -1;
+  let lastWhitespace = -1;
+  let depth = 0;
+
+  for (let i = 0; i < window.length; i++) {
+    if (!isSafeFenceBreak(spans, i)) continue;
+    const char = window[i];
+    if (char === "(") {
+      depth += 1;
+      continue;
+    }
+    if (char === ")" && depth > 0) {
+      depth -= 1;
+      continue;
+    }
+    if (depth !== 0) continue;
+    if (char === "\n") lastNewline = i;
+    else if (/\s/.test(char)) lastWhitespace = i;
   }
 
-  for (let i = window.length - 1; i > 0; i--) {
-    if (/\s/.test(window[i]) && isSafeFenceBreak(spans, i)) return i;
-  }
-
+  if (lastNewline > 0) return lastNewline;
+  if (lastWhitespace > 0) return lastWhitespace;
   return -1;
 }

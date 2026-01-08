@@ -60,6 +60,7 @@ import {
   saveSkillApiKey,
   updateSkillEdit,
   updateSkillEnabled,
+  type SkillMessage,
 } from "./controllers/skills";
 import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
@@ -166,6 +167,7 @@ export type AppViewState = {
   skillsError: string | null;
   skillsFilter: string;
   skillEdits: Record<string, string>;
+  skillMessages: Record<string, SkillMessage>;
   skillsBusyKey: string | null;
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
@@ -391,13 +393,15 @@ export function renderApp(state: AppViewState) {
               error: state.skillsError,
               filter: state.skillsFilter,
               edits: state.skillEdits,
+              messages: state.skillMessages,
               busyKey: state.skillsBusyKey,
               onFilterChange: (next) => (state.skillsFilter = next),
-              onRefresh: () => loadSkills(state),
+              onRefresh: () => loadSkills(state, { clearMessages: true }),
               onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
               onEdit: (key, value) => updateSkillEdit(state, key, value),
               onSaveKey: (key) => saveSkillApiKey(state, key),
-              onInstall: (name, installId) => installSkill(state, name, installId),
+              onInstall: (skillKey, name, installId) =>
+                installSkill(state, skillKey, name, installId),
             })
           : nothing}
 

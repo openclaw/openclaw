@@ -221,12 +221,30 @@ if [ -d "$SPARKLE_FRAMEWORK_PRIMARY" ]; then
   chmod -R a+rX "$APP_ROOT/Contents/Frameworks/Sparkle.framework"
 fi
 
+echo "📦 Copying Swift 6.2 compatibility libraries"
+SWIFT_COMPAT_LIB="$(xcode-select -p)/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift-6.2/macosx/libswiftCompatibilitySpan.dylib"
+if [ -f "$SWIFT_COMPAT_LIB" ]; then
+  cp "$SWIFT_COMPAT_LIB" "$APP_ROOT/Contents/Frameworks/"
+  chmod +x "$APP_ROOT/Contents/Frameworks/libswiftCompatibilitySpan.dylib"
+else
+  echo "WARN: Swift compatibility library not found at $SWIFT_COMPAT_LIB (continuing)" >&2
+fi
+
 echo "🖼  Copying app icon"
 cp "$ROOT_DIR/apps/macos/Sources/Clawdbot/Resources/Clawdbot.icns" "$APP_ROOT/Contents/Resources/Clawdbot.icns"
 
 echo "📦 Copying device model resources"
 rm -rf "$APP_ROOT/Contents/Resources/DeviceModels"
 cp -R "$ROOT_DIR/apps/macos/Sources/Clawdbot/Resources/DeviceModels" "$APP_ROOT/Contents/Resources/DeviceModels"
+
+echo "📦 Copying ClawdbotKit resources"
+CLAWDBOTKIT_BUNDLE="$(build_path_for_arch "$PRIMARY_ARCH")/$BUILD_CONFIG/ClawdbotKit_ClawdbotKit.bundle"
+if [ -d "$CLAWDBOTKIT_BUNDLE" ]; then
+  rm -rf "$APP_ROOT/Contents/Resources/ClawdbotKit_ClawdbotKit.bundle"
+  cp -R "$CLAWDBOTKIT_BUNDLE" "$APP_ROOT/Contents/Resources/ClawdbotKit_ClawdbotKit.bundle"
+else
+  echo "WARN: ClawdbotKit resource bundle not found at $CLAWDBOTKIT_BUNDLE (continuing)" >&2
+fi
 
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
