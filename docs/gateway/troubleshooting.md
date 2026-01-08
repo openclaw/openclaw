@@ -281,7 +281,7 @@ clawdbot providers login --verbose
 | Log | Location |
 |-----|----------|
 | Gateway file logs (structured) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or `logging.file`) |
-| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br>Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br>Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
+| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br />Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br />Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
 | Session files | `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/` |
 | Media cache | `$CLAWDBOT_STATE_DIR/media/` |
 | Credentials | `$CLAWDBOT_STATE_DIR/credentials/` |
