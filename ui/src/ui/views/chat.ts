@@ -22,9 +22,7 @@ export type ChatProps = {
   disabledReason: string | null;
   error: string | null;
   sessions: SessionsListResult | null;
-  focusMode: boolean;
   onRefresh: () => void;
-  onToggleFocusMode: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
 };
@@ -66,14 +64,6 @@ export function renderChat(props: ChatProps) {
         </div>
         <div class="chat-header__right">
           <div class="muted">Thinking: ${props.thinkingLevel ?? "inherit"}</div>
-          <button
-            class="btn ${props.focusMode ? "active" : ""}"
-            @click=${props.onToggleFocusMode}
-            aria-pressed=${props.focusMode}
-            title="Toggle focus mode (hide header + sidebar)"
-          >
-            Focus
-          </button>
         </div>
       </div>
 
