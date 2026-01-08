@@ -150,6 +150,11 @@ missing or outdated defaults (e.g., systemd network-online dependencies and
 restart delay). When it finds a mismatch, it recommends an update and can
 rewrite the service file/task to the current defaults.
 
+Notes:
+- `clawdbot doctor` prompts before rewriting supervisor config.
+- `clawdbot doctor --yes` accepts the default repair prompts.
+- You can always force a full rewrite via `clawdbot daemon install --force`.
+
 ### 12) Gateway runtime + port diagnostics
 Doctor inspects the daemon runtime (PID, last exit status) and warns when the
 service is installed but not actually running. It also checks for port collisions

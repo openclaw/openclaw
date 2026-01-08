@@ -36,12 +36,6 @@ clawdbot daemon install
 Or:
 
 ```
-clawdbot daemon install
-```
-
-Or:
-
-```
 clawdbot configure
 ```
 

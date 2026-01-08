@@ -55,6 +55,10 @@ the Gateway likely refused to bind.
 - If they don’t, you’re almost certainly editing one config while the daemon is running another.
 - Fix: rerun `clawdbot daemon install --force` from the same `--profile` / `CLAWDBOT_STATE_DIR` you want the daemon to use.
 
+**If `clawdbot daemon status` reports service config issues**
+- The supervisor config (launchd/systemd/schtasks) is missing current defaults.
+- Fix: run `clawdbot doctor` to update it (or `clawdbot daemon install --force` for a full rewrite).
+
 **If `Last gateway error:` mentions “refusing to bind … without auth”**
 - You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`auto`) but left auth off.
 - Fix: set `gateway.auth.mode` + `gateway.auth.token` (or export `CLAWDBOT_GATEWAY_TOKEN`) and restart the daemon.
