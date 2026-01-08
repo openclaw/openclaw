@@ -118,7 +118,9 @@ describe("callGateway error details", () => {
     startMode = "close";
     closeCode = 1006;
     closeReason = "";
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
@@ -137,7 +139,9 @@ describe("callGateway error details", () => {
 
   it("includes connection details on timeout", async () => {
     startMode = "silent";
-    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
     resolveGatewayPort.mockReturnValue(18789);
     pickPrimaryTailnetIPv4.mockReturnValue(undefined);
 
