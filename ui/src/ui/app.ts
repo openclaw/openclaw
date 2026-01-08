@@ -888,7 +888,9 @@ export class ClawdbotApp extends LitElement {
       this.eventLog = this.eventLogBuffer;
     }
     if (this.tab === "logs") {
+      this.logsAtBottom = true;
       await loadLogs(this, { reset: true });
+      this.scheduleLogsScroll(true);
     }
   }
 
