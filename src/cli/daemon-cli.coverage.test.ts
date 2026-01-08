@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 const callGateway = vi.fn(async () => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async () => ({
-  programArguments: ["/bin/node", "cli", "gateway-daemon", "--port", "18789"],
+  programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
 }));
 const serviceInstall = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);

@@ -36,7 +36,7 @@ clawdbot daemon install
 Or:
 
 ```
-clawdbot gateway install
+clawdbot daemon install
 ```
 
 Or:

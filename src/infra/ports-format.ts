@@ -34,7 +34,7 @@ export function buildPortHints(
   const hints: string[] = [];
   if (kinds.has("gateway")) {
     hints.push(
-      "Gateway already running locally. Stop it (clawdbot gateway stop) or use a different port.",
+      "Gateway already running locally. Stop it (clawdbot daemon stop) or use a different port.",
     );
   }
   if (kinds.has("ssh")) {
