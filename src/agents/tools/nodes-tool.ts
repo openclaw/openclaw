@@ -158,6 +158,7 @@ const NodesToolSchema = Type.Union([
     cwd: Type.Optional(Type.String()),
     env: Type.Optional(Type.Array(Type.String())),
     commandTimeoutMs: Type.Optional(Type.Number()),
+    invokeTimeoutMs: Type.Optional(Type.Number()),
     needsScreenRecording: Type.Optional(Type.Boolean()),
   }),
 ]);
@@ -534,6 +535,11 @@ export function createNodesTool(): AnyAgentTool {
             Number.isFinite(params.commandTimeoutMs)
               ? params.commandTimeoutMs
               : undefined;
+          const invokeTimeoutMs =
+            typeof params.invokeTimeoutMs === "number" &&
+            Number.isFinite(params.invokeTimeoutMs)
+              ? params.invokeTimeoutMs
+              : undefined;
           const needsScreenRecording =
             typeof params.needsScreenRecording === "boolean"
               ? params.needsScreenRecording
@@ -548,6 +554,7 @@ export function createNodesTool(): AnyAgentTool {
               timeoutMs: commandTimeoutMs,
               needsScreenRecording,
             },
+            timeoutMs: invokeTimeoutMs,
             idempotencyKey: crypto.randomUUID(),
           })) as { payload?: unknown };
           return jsonResult(raw?.payload ?? {});

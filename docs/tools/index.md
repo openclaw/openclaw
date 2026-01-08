@@ -109,6 +109,7 @@ Core actions:
 - `status`, `describe`
 - `pending`, `approve`, `reject` (pairing)
 - `notify` (macOS `system.notify`)
+- `run` (macOS `system.run`)
 - `camera_snap`, `camera_clip`, `screen_record`
 - `location_get`
 
