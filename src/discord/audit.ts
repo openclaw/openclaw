@@ -27,7 +27,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function shouldAuditChannelConfig(config: DiscordGuildChannelConfig | undefined) {
+function shouldAuditChannelConfig(
+  config: DiscordGuildChannelConfig | undefined,
+) {
   if (!config) return true;
   if (config.allow === false) return false;
   if (config.enabled === false) return false;
@@ -46,7 +48,11 @@ function listConfiguredGuildChannelKeys(
     for (const [key, value] of Object.entries(channelsRaw)) {
       const channelId = String(key).trim();
       if (!channelId) continue;
-      if (!shouldAuditChannelConfig(value as DiscordGuildChannelConfig | undefined))
+      if (
+        !shouldAuditChannelConfig(
+          value as DiscordGuildChannelConfig | undefined,
+        )
+      )
         continue;
       ids.add(channelId);
     }
@@ -119,4 +125,3 @@ export async function auditDiscordChannelPermissions(params: {
     elapsedMs: Date.now() - started,
   };
 }
-

@@ -79,11 +79,13 @@ export function formatGatewayProvidersStatusLines(
         bits.push(account.connected ? "connected" : "disconnected");
       }
       const inboundAt =
-        typeof account.lastInboundAt === "number" && Number.isFinite(account.lastInboundAt)
+        typeof account.lastInboundAt === "number" &&
+        Number.isFinite(account.lastInboundAt)
           ? account.lastInboundAt
           : null;
       const outboundAt =
-        typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
+        typeof account.lastOutboundAt === "number" &&
+        Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
       if (inboundAt) bits.push(`in:${formatAge(Date.now() - inboundAt)}`);

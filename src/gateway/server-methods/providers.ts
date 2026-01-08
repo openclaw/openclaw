@@ -1,15 +1,19 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import type { TelegramGroupConfig } from "../../config/types.js";
 import {
   loadConfig,
   readConfigFileSnapshot,
   writeConfigFile,
 } from "../../config/config.js";
+import type { TelegramGroupConfig } from "../../config/types.js";
 import {
   listDiscordAccountIds,
   resolveDefaultDiscordAccountId,
   resolveDiscordAccount,
 } from "../../discord/accounts.js";
+import {
+  auditDiscordChannelPermissions,
+  collectDiscordAuditChannelIds,
+} from "../../discord/audit.js";
 import { type DiscordProbe, probeDiscord } from "../../discord/probe.js";
 import {
   listIMessageAccountIds,
@@ -17,6 +21,7 @@ import {
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
 import { type IMessageProbe, probeIMessage } from "../../imessage/probe.js";
+import { getProviderActivity } from "../../infra/provider-activity.js";
 import {
   listSignalAccountIds,
   resolveDefaultSignalAccountId,
@@ -34,6 +39,10 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "../../telegram/accounts.js";
+import {
+  auditTelegramGroupMembership,
+  collectTelegramUnmentionedGroupIds,
+} from "../../telegram/audit.js";
 import { probeTelegram, type TelegramProbe } from "../../telegram/probe.js";
 import {
   listEnabledWhatsAppAccounts,
@@ -52,15 +61,6 @@ import {
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { getProviderActivity } from "../../infra/provider-activity.js";
-import {
-  auditDiscordChannelPermissions,
-  collectDiscordAuditChannelIds,
-} from "../../discord/audit.js";
-import {
-  auditTelegramGroupMembership,
-  collectTelegramUnmentionedGroupIds,
-} from "../../telegram/audit.js";
 
 export const providersHandlers: GatewayRequestHandlers = {
   "providers.status": async ({ params, respond, context }) => {

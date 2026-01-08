@@ -50,4 +50,3 @@ export function getProviderActivity(params: {
 export function resetProviderActivityForTest() {
   activity.clear();
 }
-

@@ -391,7 +391,12 @@ describe("providers command", () => {
             hasWildcardUnmentionedGroups: true,
             unresolvedGroups: 1,
             groups: [
-              { chatId: "-1001", ok: false, status: "left", error: "not in group" },
+              {
+                chatId: "-1001",
+                ok: false,
+                status: "left",
+                error: "not in group",
+              },
             ],
           },
         },

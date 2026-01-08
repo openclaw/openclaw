@@ -18,6 +18,7 @@ import {
 } from "discord-api-types/v10";
 
 import { loadConfig } from "../config/config.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import {
   createDiscordRetryRunner,
@@ -32,7 +33,6 @@ import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
 import { normalizeDiscordToken } from "./token.js";
-import { recordProviderActivity } from "../infra/provider-activity.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;

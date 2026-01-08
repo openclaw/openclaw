@@ -27,11 +27,16 @@ describe("discord audit", () => {
       },
     } as unknown as import("../config/config.js").ClawdbotConfig;
 
-    const collected = collectDiscordAuditChannelIds({ cfg, accountId: "default" });
+    const collected = collectDiscordAuditChannelIds({
+      cfg,
+      accountId: "default",
+    });
     expect(collected.channelIds).toEqual(["111"]);
     expect(collected.unresolvedChannels).toBe(1);
 
-    (fetchChannelPermissionsDiscord as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+    (
+      fetchChannelPermissionsDiscord as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValueOnce({
       channelId: "111",
       permissions: ["ViewChannel"],
       raw: "0",
@@ -49,4 +54,3 @@ describe("discord audit", () => {
     expect(audit.channels[0]?.missing).toContain("SendMessages");
   });
 });
-
