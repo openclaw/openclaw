@@ -23,6 +23,7 @@ and process access when the model does something dumb.
 Not sandboxed:
 - The Gateway process itself.
 - Any tool explicitly allowed to run on the host (e.g. `agent.elevated`).
+  - **Elevated bash runs on the host and bypasses sandboxing.**
 
 ## Modes
 `agent.sandbox.mode` controls **when** sandboxing is used:

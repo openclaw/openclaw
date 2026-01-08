@@ -66,6 +66,7 @@ group messages, so use admin if you need full visibility.
 ## How it works (behavior)
 - Inbound messages are normalized into the shared provider envelope with reply context and media placeholders.
 - Group replies require a mention by default (native @mention or `routing.groupChat.mentionPatterns`).
+- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
 - Replies always route back to the same Telegram chat.
 - Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agent.maxConcurrent`.
 
@@ -279,5 +280,6 @@ Provider options:
 
 Related global options:
 - `routing.groupChat.mentionPatterns` (mention gating patterns).
+- `routing.agents.<agentId>.mentionPatterns` overrides for multi-agent setups.
 - `commands.native`, `commands.text`, `commands.useAccessGroups` (command behavior).
 - `messages.responsePrefix`, `messages.ackReaction`, `messages.ackReactionScope`.

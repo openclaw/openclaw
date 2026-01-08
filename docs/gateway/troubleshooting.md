@@ -114,6 +114,7 @@ Look for `AllowFrom: ...` in the output.
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
+# Multi-agent: `routing.agents.<agentId>.mentionPatterns` overrides global patterns.
 grep -n "routing\\|groupChat\\|mentionPatterns\\|whatsapp\\.groups\\|telegram\\.groups\\|imessage\\.groups\\|discord\\.guilds" \
   "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}"
 ```

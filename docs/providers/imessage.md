@@ -68,6 +68,7 @@ Groups:
 - `imessage.groupPolicy = open | allowlist | disabled`.
 - `imessage.groupAllowFrom` controls who can trigger in groups when `allowlist` is set.
 - Mention gating uses `routing.groupChat.mentionPatterns` (iMessage has no native mention metadata).
+- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
 
 ## How it works (behavior)
 - `imsg` streams message events; the gateway normalizes them into the shared provider envelope.

@@ -170,6 +170,7 @@ Recommended for personal numbers:
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `whatsapp.actions.reactions` (gate WhatsApp tool reactions).
 - `routing.groupChat.mentionPatterns`
+- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
 - `routing.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)
 - `messages.responsePrefix` (outbound prefix)

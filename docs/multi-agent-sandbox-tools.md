@@ -169,6 +169,14 @@ The filtering order is:
 Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
 If `routing.agents[id].sandbox.tools` is set, it replaces `agent.sandbox.tools` for that agent.
 
+### Elevated Mode (global)
+`agent.elevated` is **global** and **sender-based** (per-provider allowlist). It is **not** configurable per agent.
+
+Mitigation patterns:
+- Deny `bash` for untrusted agents (`routing.agents[id].tools.deny: ["bash"]`)
+- Avoid allowlisting senders that route to restricted agents
+- Disable elevated globally (`agent.elevated.enabled: false`) if you only want sandboxed execution
+
 ---
 
 ## Migration from Single Agent

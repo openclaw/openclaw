@@ -723,6 +723,8 @@ export type RoutingConfig = {
       workspace?: string;
       agentDir?: string;
       model?: string;
+      /** Per-agent override for group mention patterns. */
+      mentionPatterns?: string[];
       subagents?: {
         /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
         allowAgents?: string[];

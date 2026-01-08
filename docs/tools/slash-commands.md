@@ -7,7 +7,9 @@ read_when:
 # Slash commands
 
 Commands are handled by the Gateway. Send them as a **standalone** message that starts with `/`.
-Inline text like `hello /status` is ignored.
+Inline text like `hello /status` is ignored for commands.
+
+Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even when inline and are stripped from the message before the model sees it.
 
 ## Config
 
