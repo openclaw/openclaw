@@ -83,6 +83,7 @@ export async function monitorWebInbox(options: {
   accountId: string;
   authDir: string;
   onMessage: (msg: WebInboundMessage) => Promise<void>;
+  mediaMaxMb?: number;
 }) {
   const inboundLogger = getChildLogger({ module: "web-inbound" });
   const inboundConsoleLog = createSubsystemLogger(
@@ -375,9 +376,12 @@ export async function monitorWebInbox(options: {
       try {
         const inboundMedia = await downloadInboundMedia(msg, sock);
         if (inboundMedia) {
+          const maxBytes = (options.mediaMaxMb ?? 50) * 1024 * 1024;
           const saved = await saveMediaBuffer(
             inboundMedia.buffer,
             inboundMedia.mimetype,
+            "inbound",
+            maxBytes,
           );
           mediaPath = saved.path;
           mediaType = inboundMedia.mimetype;
