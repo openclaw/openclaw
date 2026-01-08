@@ -20,11 +20,11 @@ It answers you on the providers you already use (WhatsApp, Telegram, Slack, Disc
 
 If you want a personal, single-user assistant that feels local, fast, and always-on, this is it.
 
-[Website](https://clawdbot.com) · [Docs](https://docs.clawd.bot) · Getting Started: [https://docs.clawd.bot/getting-started](https://docs.clawd.bot/getting-started) · Updating: [https://docs.clawd.bot/updating](https://docs.clawd.bot/updating) · Showcase: [https://docs.clawd.bot/showcase](https://docs.clawd.bot/showcase) · FAQ: [https://docs.clawd.bot/faq](https://docs.clawd.bot/faq) · Wizard: [https://docs.clawd.bot/wizard](https://docs.clawd.bot/wizard) · Nix: [https://github.com/clawdbot/nix-clawdbot](https://github.com/clawdbot/nix-clawdbot) · Docker: [https://docs.clawd.bot/docker](https://docs.clawd.bot/docker) · Discord: [https://discord.gg/clawd](https://discord.gg/clawd)
+[Website](https://clawdbot.com) · [Docs](https://docs.clawd.bot) · [Getting Started](https://docs.clawd.bot/getting-started) · [Updating](https://docs.clawd.bot/updating) · [Showcase](https://docs.clawd.bot/showcase) · [FAQ](https://docs.clawd.bot/faq) · [Wizard](https://docs.clawd.bot/wizard) · [Nix](https://github.com/clawdbot/nix-clawdbot) · [Docker](https://docs.clawd.bot/docker) · [Discord](https://discord.gg/clawd)
 
 Preferred setup: run the onboarding wizard (`clawdbot onboard`). It walks through gateway, workspace, providers, and skills. The CLI wizard is the recommended path and works on **macOS, Linux, and Windows (via WSL2; strongly recommended)**.
 Works with npm, pnpm, or bun.
-New install? Start here: https://docs.clawd.bot/getting-started
+New install? Start here: [Getting started](https://docs.clawd.bot/getting-started)
 
 **Subscriptions (OAuth):**
 - **Anthropic** (Claude Pro/Max)
@@ -34,8 +34,8 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 
 ## Models (selection + auth)
 
-- Models config + CLI: https://docs.clawd.bot/models
-- Auth profile rotation (OAuth vs API keys) + fallbacks: https://docs.clawd.bot/model-failover
+- Models config + CLI: [Models](https://docs.clawd.bot/models)
+- Auth profile rotation (OAuth vs API keys) + fallbacks: [Model failover](https://docs.clawd.bot/model-failover)
 
 ## Recommended setup (from source)
 
@@ -61,7 +61,7 @@ Note: `pnpm clawdbot ...` runs TypeScript directly (via `tsx`). `pnpm build` pro
 
 Runtime: **Node ≥22**.
 
-Full beginner guide (auth, pairing, providers): https://docs.clawd.bot/getting-started
+Full beginner guide (auth, pairing, providers): [Getting started](https://docs.clawd.bot/getting-started)
 
 ```bash
 pnpm clawdbot onboard
@@ -78,7 +78,7 @@ pnpm clawdbot send --to +1234567890 --message "Hello from Clawdbot"
 pnpm clawdbot agent --message "Ship checklist" --thinking high
 ```
 
-Upgrading? https://docs.clawd.bot/updating (and run `clawdbot doctor`).
+Upgrading? [Updating guide](https://docs.clawd.bot/updating) (and run `clawdbot doctor`).
 
 If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
 
@@ -86,7 +86,7 @@ If you run from source, prefer `pnpm clawdbot …` (not global `clawdbot`).
 
 Clawdbot connects to real messaging surfaces. Treat inbound DMs as **untrusted input**.
 
-Full security guide: https://docs.clawd.bot/security
+Full security guide: [Security](https://docs.clawd.bot/security)
 
 Default behavior on Telegram/WhatsApp/Signal/iMessage/Discord/Slack:
 - **DM pairing** (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
@@ -219,7 +219,7 @@ Details: [Session tools](https://docs.clawd.bot/session-tool)
 
 ClawdHub is a minimal skill registry. With ClawdHub enabled, the agent can search for skills automatically and pull in new ones as needed.
 
-https://ClawdHub.com
+[ClawdHub](https://ClawdHub.com)
 
 ## Chat commands
 
@@ -435,9 +435,9 @@ clawdbot hooks gmail run
 Clawdbot was built for **Clawd**, a space lobster AI assistant. 🦞  
 by Peter Steinberger and the community.
 
-- https://clawd.me
-- https://soul.md
-- https://steipete.me
+- [Clawd](https://clawd.me)
+- [SOUL](https://soul.md)
+- [Peter](https://steipete.me)
 
 ## Community
 
