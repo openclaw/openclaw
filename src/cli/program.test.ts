@@ -6,8 +6,9 @@ const statusCommand = vi.fn();
 const configureCommand = vi.fn();
 const setupCommand = vi.fn();
 const onboardCommand = vi.fn();
-const loginWeb = vi.fn();
 const callGateway = vi.fn();
+const runProviderLogin = vi.fn();
+const runProviderLogout = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -23,8 +24,9 @@ vi.mock("../commands/configure.js", () => ({ configureCommand }));
 vi.mock("../commands/setup.js", () => ({ setupCommand }));
 vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
-vi.mock("../provider-web.js", () => ({
-  loginWeb,
+vi.mock("./provider-auth.js", () => ({
+  runProviderLogin,
+  runProviderLogout,
 }));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
@@ -75,6 +77,37 @@ describe("cli program", () => {
     });
     expect(onboardCommand).toHaveBeenCalled();
     expect(setupCommand).not.toHaveBeenCalled();
+  });
+
+  it("runs providers login", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["providers", "login", "--account", "work"], {
+      from: "user",
+    });
+    expect(runProviderLogin).toHaveBeenCalledWith(
+      { provider: undefined, account: "work", verbose: false },
+      runtime,
+    );
+  });
+
+  it("runs providers logout", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["providers", "logout", "--account", "work"], {
+      from: "user",
+    });
+    expect(runProviderLogout).toHaveBeenCalledWith(
+      { provider: undefined, account: "work" },
+      runtime,
+    );
+  });
+
+  it("runs hidden login alias", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["login", "--account", "work"], { from: "user" });
+    expect(runProviderLogin).toHaveBeenCalledWith(
+      { provider: undefined, account: "work", verbose: false },
+      runtime,
+    );
   });
 
   it("runs nodes list and calls node.pair.list", async () => {
