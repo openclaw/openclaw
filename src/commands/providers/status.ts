@@ -36,7 +36,8 @@ import {
   webAuthExists,
 } from "../../web/session.js";
 import { formatAge } from "../../infra/provider-summary.js";
-import type { ClawdbotConfig } from "../../config/config.js";
+import { normalizeE164 } from "../../utils.js";
+import { readConfigFileSnapshot, type ClawdbotConfig } from "../../config/config.js";
 
 export type ProvidersStatusOptions = {
   json?: boolean;
@@ -69,6 +70,12 @@ export function formatGatewayProvidersStatusLines(
       }
       if (typeof account.mode === "string" && account.mode.length > 0) {
         bits.push(`mode:${account.mode}`);
+      }
+      if (typeof account.dmPolicy === "string" && account.dmPolicy.length > 0) {
+        bits.push(`dm:${account.dmPolicy}`);
+      }
+      if (Array.isArray(account.allowFrom) && account.allowFrom.length > 0) {
+        bits.push(`allow:${account.allowFrom.slice(0, 2).join(",")}`);
       }
       if (typeof account.tokenSource === "string" && account.tokenSource) {
         bits.push(`token:${account.tokenSource}`);
@@ -136,9 +143,17 @@ export function formatGatewayProvidersStatusLines(
 
 async function formatConfigProvidersStatusLines(
   cfg: ClawdbotConfig,
+  meta: { path?: string; mode?: "local" | "remote" },
 ): Promise<string[]> {
   const lines: string[] = [];
   lines.push(theme.warn("Gateway not reachable; showing config-only status."));
+  if (meta.path) {
+    lines.push(`Config: ${meta.path}`);
+  }
+  if (meta.mode) {
+    lines.push(`Mode: ${meta.mode}`);
+  }
+  if (meta.path || meta.mode) lines.push("");
 
   const accountLines = (
     provider: ChatProvider,
@@ -184,12 +199,19 @@ async function formatConfigProvidersStatusLines(
   const accounts = {
     whatsapp: listWhatsAppAccountIds(cfg).map((accountId) => {
       const account = resolveWhatsAppAccount({ cfg, accountId });
+      const dmPolicy = account.dmPolicy ?? cfg.whatsapp?.dmPolicy ?? "pairing";
+      const allowFrom = (account.allowFrom ?? cfg.whatsapp?.allowFrom ?? [])
+        .map(normalizeE164)
+        .filter(Boolean)
+        .slice(0, 2);
       return {
         accountId: account.accountId,
         name: account.name,
         enabled: account.enabled,
         configured: true,
         linked: undefined,
+        dmPolicy,
+        allowFrom,
       };
     }),
     telegram: listTelegramAccountIds(cfg).map((accountId) => {
@@ -305,6 +327,15 @@ export async function providersStatusCommand(
     runtime.error(`Gateway not reachable: ${String(err)}`);
     const cfg = await requireValidConfig(runtime);
     if (!cfg) return;
-    runtime.log((await formatConfigProvidersStatusLines(cfg)).join("\n"));
+    const snapshot = await readConfigFileSnapshot();
+    const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
+    runtime.log(
+      (
+        await formatConfigProvidersStatusLines(cfg, {
+          path: snapshot.path,
+          mode,
+        })
+      ).join("\n"),
+    );
   }
 }
