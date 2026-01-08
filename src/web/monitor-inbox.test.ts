@@ -148,6 +148,10 @@ describe("web monitor inbox", () => {
 
     const listener = await monitorWebInbox({ verbose: false, onMessage });
     const sock = await createWaSocket();
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce(
       "999:0@s.whatsapp.net",
     );
@@ -166,9 +170,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(sock.signalRepository.lidMapping.getPNForLID).toHaveBeenCalledWith(
-      "999@lid",
-    );
+    expect(getPNForLID).toHaveBeenCalledWith("999@lid");
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
     );
@@ -183,6 +185,10 @@ describe("web monitor inbox", () => {
 
     const listener = await monitorWebInbox({ verbose: false, onMessage });
     const sock = await createWaSocket();
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
     sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce(
       "444:0@s.whatsapp.net",
     );
@@ -205,9 +211,7 @@ describe("web monitor inbox", () => {
     sock.ev.emit("messages.upsert", upsert);
     await new Promise((resolve) => setImmediate(resolve));
 
-    expect(sock.signalRepository.lidMapping.getPNForLID).toHaveBeenCalledWith(
-      "444@lid",
-    );
+    expect(getPNForLID).toHaveBeenCalledWith("444@lid");
     expect(onMessage).toHaveBeenCalledWith(
       expect.objectContaining({
         body: "ping",
