@@ -136,6 +136,7 @@ describe("browser chrome profile decoration", () => {
 
 describe("browser chrome helpers", () => {
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -157,6 +158,7 @@ describe("browser chrome helpers", () => {
   });
 
   it("picks the first existing Chrome candidate on Windows", () => {
+    vi.stubEnv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local");
     const exists = vi
       .spyOn(fs, "existsSync")
       .mockImplementation((p) => String(p).includes("Chrome SxS"));
@@ -167,8 +169,7 @@ describe("browser chrome helpers", () => {
   });
 
   it("finds Chrome in Program Files on Windows", () => {
-    // Use path.join to match how the function builds paths (cross-platform)
-    const marker = path.join("Program Files", "Google", "Chrome");
+    const marker = path.win32.join("Program Files", "Google", "Chrome");
     const exists = vi
       .spyOn(fs, "existsSync")
       .mockImplementation((p) => String(p).includes(marker));
