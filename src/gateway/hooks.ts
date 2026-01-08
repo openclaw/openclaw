@@ -147,6 +147,7 @@ export type HookAgentPayload = {
     | "signal"
     | "imessage";
   to?: string;
+  model?: string;
   thinking?: string;
   timeoutSeconds?: number;
 };
@@ -201,6 +202,14 @@ export function normalizeAgentPayload(
   const toRaw = payload.to;
   const to =
     typeof toRaw === "string" && toRaw.trim() ? toRaw.trim() : undefined;
+  const modelRaw = payload.model;
+  const model =
+    typeof modelRaw === "string" && modelRaw.trim()
+      ? modelRaw.trim()
+      : undefined;
+  if (modelRaw !== undefined && !model) {
+    return { ok: false, error: "model required" };
+  }
   const deliver = payload.deliver === true;
   const thinkingRaw = payload.thinking;
   const thinking =
@@ -224,6 +233,7 @@ export function normalizeAgentPayload(
       deliver,
       provider,
       to,
+      model,
       thinking,
       timeoutSeconds,
     },
