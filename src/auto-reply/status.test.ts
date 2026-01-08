@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildStatusMessage } from "./status.js";
+import { buildCommandsMessage, buildStatusMessage } from "./status.js";
 
 const HOME_ENV_KEYS = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
 type HomeEnvSnapshot = Record<
@@ -232,5 +232,18 @@ describe("buildStatusMessage", () => {
       restoreHomeEnv(previousHome);
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildCommandsMessage", () => {
+  it("lists commands with aliases and text-only hints", () => {
+    const text = buildCommandsMessage();
+    expect(text).toContain("/commands - List all slash commands.");
+    expect(text).toContain(
+      "/think (aliases: /thinking, /t) - Set thinking level.",
+    );
+    expect(text).toContain(
+      "/compact (text-only) - Compact the current session context.",
+    );
   });
 });

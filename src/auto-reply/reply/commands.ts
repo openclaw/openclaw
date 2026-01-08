@@ -43,6 +43,7 @@ import {
 } from "../group-activation.js";
 import { parseSendPolicyCommand } from "../send-policy.js";
 import {
+  buildCommandsMessage,
   buildHelpMessage,
   buildStatusMessage,
   formatContextUsageShort,
@@ -402,6 +403,17 @@ export async function handleCommands(params: {
       return { shouldContinue: false };
     }
     return { shouldContinue: false, reply: { text: buildHelpMessage() } };
+  }
+
+  const commandsRequested = command.commandBodyNormalized === "/commands";
+  if (allowTextCommands && commandsRequested) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /commands from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    return { shouldContinue: false, reply: { text: buildCommandsMessage() } };
   }
 
   const statusRequested =

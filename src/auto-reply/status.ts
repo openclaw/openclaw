@@ -21,6 +21,7 @@ import {
 } from "../config/sessions.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { VERSION } from "../version.js";
+import { listChatCommands } from "./commands-registry.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -302,5 +303,30 @@ export function buildHelpMessage(): string {
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink",
     "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id>",
+    "More: /commands for all slash commands",
   ].join("\n");
+}
+
+export function buildCommandsMessage(): string {
+  const lines = ["ℹ️ Slash commands"];
+  for (const command of listChatCommands()) {
+    const primary = `/${command.nativeName}`;
+    const seen = new Set<string>();
+    const aliases = command.textAliases
+      .map((alias) => alias.trim())
+      .filter(Boolean)
+      .filter((alias) => alias.toLowerCase() !== primary.toLowerCase())
+      .filter((alias) => {
+        const key = alias.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+    const aliasLabel = aliases.length
+      ? ` (aliases: ${aliases.join(", ")})`
+      : "";
+    const scopeLabel = command.supportsNative === false ? " (text-only)" : "";
+    lines.push(`${primary}${aliasLabel}${scopeLabel} - ${command.description}`);
+  }
+  return lines.join("\n");
 }

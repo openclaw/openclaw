@@ -6,6 +6,7 @@ export type ChatCommandDefinition = {
   description: string;
   textAliases: string[];
   acceptsArgs?: boolean;
+  supportsNative?: boolean;
 };
 
 export type NativeCommandSpec = {
@@ -20,6 +21,12 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     nativeName: "help",
     description: "Show available commands.",
     textAliases: ["/help"],
+  },
+  {
+    key: "commands",
+    nativeName: "commands",
+    description: "List all slash commands.",
+    textAliases: ["/commands"],
   },
   {
     key: "status",
@@ -64,6 +71,14 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     nativeName: "new",
     description: "Start a new session.",
     textAliases: ["/new"],
+  },
+  {
+    key: "compact",
+    nativeName: "compact",
+    description: "Compact the current session context.",
+    textAliases: ["/compact"],
+    acceptsArgs: true,
+    supportsNative: false,
   },
   {
     key: "think",
@@ -127,7 +142,9 @@ export function listChatCommands(): ChatCommandDefinition[] {
 }
 
 export function listNativeCommandSpecs(): NativeCommandSpec[] {
-  return CHAT_COMMANDS.map((command) => ({
+  return CHAT_COMMANDS.filter(
+    (command) => command.supportsNative !== false,
+  ).map((command) => ({
     name: command.nativeName,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),

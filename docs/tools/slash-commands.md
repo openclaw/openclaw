@@ -32,6 +32,7 @@ Inline text like `hello /status` is ignored.
 
 Text + native (when enabled):
 - `/help`
+- `/commands`
 - `/status`
 - `/stop`
 - `/restart`
