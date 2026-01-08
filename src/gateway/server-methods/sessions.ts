@@ -169,6 +169,24 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
 
+    if ("label" in p) {
+      const raw = p.label;
+      if (raw === null) {
+        delete next.label;
+      } else if (raw !== undefined) {
+        const trimmed = String(raw).trim();
+        if (!trimmed) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, "invalid label: empty"),
+          );
+          return;
+        }
+        next.label = trimmed;
+      }
+    }
+
     if ("thinkingLevel" in p) {
       const raw = p.thinkingLevel;
       if (raw === null) {
@@ -422,6 +440,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       model: entry?.model,
       contextTokens: entry?.contextTokens,
       sendPolicy: entry?.sendPolicy,
+      label: entry?.label,
       lastProvider: entry?.lastProvider,
       lastTo: entry?.lastTo,
       skillsSnapshot: entry?.skillsSnapshot,
