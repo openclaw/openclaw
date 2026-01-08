@@ -12,10 +12,15 @@ const VERSION_MANAGER_MARKERS = [
   "/nvs/",
 ];
 
+function getPathModule(platform: NodeJS.Platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
 function normalizeForCompare(input: string, platform: NodeJS.Platform): string {
-  const normalized = path.normalize(input);
+  const pathModule = getPathModule(platform);
+  const normalized = pathModule.normalize(input).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalized.replaceAll("\\", "/").toLowerCase();
+    return normalized.toLowerCase();
   }
   return normalized;
 }
@@ -31,12 +36,13 @@ function buildSystemNodeCandidates(
     return ["/usr/local/bin/node", "/usr/bin/node"];
   }
   if (platform === "win32") {
+    const pathModule = getPathModule(platform);
     const programFiles = env.ProgramFiles ?? "C:\\Program Files";
     const programFilesX86 =
       env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
     return [
-      path.join(programFiles, "nodejs", "node.exe"),
-      path.join(programFilesX86, "nodejs", "node.exe"),
+      pathModule.join(programFiles, "nodejs", "node.exe"),
+      pathModule.join(programFilesX86, "nodejs", "node.exe"),
     ];
   }
   return [];

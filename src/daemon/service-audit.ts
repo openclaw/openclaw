@@ -194,10 +194,15 @@ function isBunRuntime(execPath: string): boolean {
   return base === "bun" || base === "bun.exe";
 }
 
+function getPathModule(platform: NodeJS.Platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
 function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
-  const normalized = path.normalize(entry);
+  const pathModule = getPathModule(platform);
+  const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
   if (platform === "win32") {
-    return normalized.replaceAll("\\", "/").toLowerCase();
+    return normalized.toLowerCase();
   }
   return normalized;
 }
@@ -221,7 +226,7 @@ function auditGatewayServicePath(
 
   const expected = getMinimalServicePathParts({ platform });
   const parts = servicePath
-    .split(path.delimiter)
+    .split(getPathModule(platform).delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean);
   const normalizedParts = parts.map((entry) =>
