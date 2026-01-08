@@ -13,6 +13,12 @@ import {
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  buildMSTeamsAttachmentPlaceholder,
+  buildMSTeamsMediaPayload,
+  downloadMSTeamsImageAttachments,
+  type MSTeamsAttachmentLike,
+} from "./attachments.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
@@ -82,6 +88,11 @@ export async function monitorMSTeamsProvider(
 
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = resolveTextChunkLimit(cfg, "msteams");
+  const MB = 1024 * 1024;
+  const mediaMaxBytes =
+    typeof cfg.agent?.mediaMaxMb === "number" && cfg.agent.mediaMaxMb > 0
+      ? Math.floor(cfg.agent.mediaMaxMb * MB)
+      : 8 * MB;
   const conversationStore =
     opts.conversationStore ?? createMSTeamsConversationStoreFs();
 
@@ -94,6 +105,7 @@ export async function monitorMSTeamsProvider(
   const {
     ActivityHandler,
     CloudAdapter,
+    MsalTokenProvider,
     authorizeJWT,
     getAuthConfigWithDefaults,
   } = agentsHosting;
@@ -104,6 +116,7 @@ export async function monitorMSTeamsProvider(
     clientSecret: creds.appPassword,
     tenantId: creds.tenantId,
   });
+  const tokenProvider = new MsalTokenProvider(authConfig);
   const adapter = new CloudAdapter(authConfig);
 
   // Handler for incoming messages
@@ -111,17 +124,32 @@ export async function monitorMSTeamsProvider(
     const activity = context.activity;
     const rawText = activity.text?.trim() ?? "";
     const text = stripMSTeamsMentionTags(rawText);
+    const attachments = Array.isArray(activity.attachments)
+      ? (activity.attachments as unknown as MSTeamsAttachmentLike[])
+      : [];
+    const attachmentPlaceholder =
+      buildMSTeamsAttachmentPlaceholder(attachments);
+    const rawBody = text || attachmentPlaceholder;
     const from = activity.from;
     const conversation = activity.conversation;
+
+    const attachmentTypes = attachments
+      .map((att) =>
+        typeof att.contentType === "string" ? att.contentType : undefined,
+      )
+      .filter(Boolean)
+      .slice(0, 3);
 
     log.info("received message", {
       rawText: rawText.slice(0, 50),
       text: text.slice(0, 50),
+      attachments: attachments.length,
+      attachmentTypes,
       from: from?.id,
       conversation: conversation?.id,
     });
 
-    if (!text) {
+    if (!rawBody) {
       log.debug("skipping empty message after stripping mentions");
       return;
     }
@@ -189,7 +217,7 @@ export async function monitorMSTeamsProvider(
       },
     });
 
-    const preview = text.replace(/\s+/g, " ").slice(0, 160);
+    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
       ? `Teams DM from ${senderName}`
       : `Teams message in ${conversationType} from ${senderName}`;
@@ -274,11 +302,22 @@ export async function monitorMSTeamsProvider(
 
     // Format the message body with envelope
     const timestamp = parseMSTeamsActivityTimestamp(activity.timestamp);
+    const mediaList = await downloadMSTeamsImageAttachments({
+      attachments,
+      maxBytes: mediaMaxBytes,
+      tokenProvider: {
+        getAccessToken: (scope) => tokenProvider.getAccessToken(scope),
+      },
+    });
+    if (mediaList.length > 0) {
+      log.debug("downloaded image attachments", { count: mediaList.length });
+    }
+    const mediaPayload = buildMSTeamsMediaPayload(mediaList);
     const body = formatAgentEnvelope({
       provider: "Teams",
       from: senderName,
       timestamp,
-      body: text,
+      body: rawBody,
     });
 
     // Build context payload for agent
@@ -300,6 +339,7 @@ export async function monitorMSTeamsProvider(
       CommandAuthorized: true,
       OriginatingChannel: "msteams" as const,
       OriginatingTo: teamsTo,
+      ...mediaPayload,
     };
 
     if (shouldLogVerbose()) {
