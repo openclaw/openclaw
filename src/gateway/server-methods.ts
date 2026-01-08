@@ -5,6 +5,7 @@ import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
 import { cronHandlers } from "./server-methods/cron.js";
 import { healthHandlers } from "./server-methods/health.js";
+import { logsHandlers } from "./server-methods/logs.js";
 import { modelsHandlers } from "./server-methods/models.js";
 import { nodeHandlers } from "./server-methods/nodes.js";
 import { providersHandlers } from "./server-methods/providers.js";
@@ -25,6 +26,7 @@ import { wizardHandlers } from "./server-methods/wizard.js";
 
 const handlers: GatewayRequestHandlers = {
   ...connectHandlers,
+  ...logsHandlers,
   ...voicewakeHandlers,
   ...healthHandlers,
   ...providersHandlers,

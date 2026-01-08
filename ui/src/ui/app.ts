@@ -28,6 +28,8 @@ import type {
   CronRunLogEntry,
   CronStatus,
   HealthSnapshot,
+  LogEntry,
+  LogLevel,
   PresenceEntry,
   ProvidersStatusSnapshot,
   SessionsListResult,
@@ -77,6 +79,7 @@ import {
   loadSkills,
 } from "./controllers/skills";
 import { loadDebug } from "./controllers/debug";
+import { loadLogs } from "./controllers/logs";
 
 type EventLogEntry = {
   ts: number;
@@ -85,6 +88,14 @@ type EventLogEntry = {
 };
 
 const TOOL_STREAM_LIMIT = 50;
+const DEFAULT_LOG_LEVEL_FILTERS: Record<LogLevel, boolean> = {
+  trace: true,
+  debug: true,
+  info: true,
+  warn: true,
+  error: true,
+  fatal: true,
+};
 
 type AgentEventPayload = {
   runId: string;
@@ -343,11 +354,29 @@ export class ClawdbotApp extends LitElement {
   @state() debugCallResult: string | null = null;
   @state() debugCallError: string | null = null;
 
+  @state() logsLoading = false;
+  @state() logsError: string | null = null;
+  @state() logsFile: string | null = null;
+  @state() logsEntries: LogEntry[] = [];
+  @state() logsFilterText = "";
+  @state() logsLevelFilters: Record<LogLevel, boolean> = {
+    ...DEFAULT_LOG_LEVEL_FILTERS,
+  };
+  @state() logsAutoFollow = true;
+  @state() logsTruncated = false;
+  @state() logsCursor: number | null = null;
+  @state() logsLastFetchAt: number | null = null;
+  @state() logsLimit = 500;
+  @state() logsMaxBytes = 250_000;
+  @state() logsAtBottom = true;
+
   client: GatewayBrowserClient | null = null;
   private chatScrollFrame: number | null = null;
   private chatScrollTimeout: number | null = null;
   private chatHasAutoScrolled = false;
   private nodesPollInterval: number | null = null;
+  private logsPollInterval: number | null = null;
+  private logsScrollFrame: number | null = null;
   private toolStreamById = new Map<string, ToolStreamEntry>();
   private toolStreamOrder: string[] = [];
   basePath = "";
@@ -370,6 +399,7 @@ export class ClawdbotApp extends LitElement {
     this.applySettingsFromUrl();
     this.connect();
     this.startNodesPolling();
+    if (this.tab === "logs") this.startLogsPolling();
   }
 
   protected firstUpdated() {
@@ -379,6 +409,7 @@ export class ClawdbotApp extends LitElement {
   disconnectedCallback() {
     window.removeEventListener("popstate", this.popStateHandler);
     this.stopNodesPolling();
+    this.stopLogsPolling();
     this.detachThemeListener();
     this.topbarObserver?.disconnect();
     this.topbarObserver = null;
@@ -400,6 +431,14 @@ export class ClawdbotApp extends LitElement {
         changed.get("chatLoading") === true &&
         this.chatLoading === false;
       this.scheduleChatScroll(forcedByTab || forcedByLoad || !this.chatHasAutoScrolled);
+    }
+    if (
+      this.tab === "logs" &&
+      (changed.has("logsEntries") || changed.has("logsAutoFollow") || changed.has("tab"))
+    ) {
+      if (this.logsAutoFollow && this.logsAtBottom) {
+        this.scheduleLogsScroll(changed.has("tab") || changed.has("logsAutoFollow"));
+      }
     }
   }
 
@@ -503,6 +542,56 @@ export class ClawdbotApp extends LitElement {
     if (this.nodesPollInterval == null) return;
     clearInterval(this.nodesPollInterval);
     this.nodesPollInterval = null;
+  }
+
+  private startLogsPolling() {
+    if (this.logsPollInterval != null) return;
+    this.logsPollInterval = window.setInterval(() => {
+      if (this.tab !== "logs") return;
+      void loadLogs(this, { quiet: true });
+    }, 2000);
+  }
+
+  private stopLogsPolling() {
+    if (this.logsPollInterval == null) return;
+    clearInterval(this.logsPollInterval);
+    this.logsPollInterval = null;
+  }
+
+  private scheduleLogsScroll(force = false) {
+    if (this.logsScrollFrame) cancelAnimationFrame(this.logsScrollFrame);
+    void this.updateComplete.then(() => {
+      this.logsScrollFrame = requestAnimationFrame(() => {
+        this.logsScrollFrame = null;
+        const container = this.querySelector(".log-stream") as HTMLElement | null;
+        if (!container) return;
+        const distanceFromBottom =
+          container.scrollHeight - container.scrollTop - container.clientHeight;
+        const shouldStick = force || distanceFromBottom < 80;
+        if (!shouldStick) return;
+        container.scrollTop = container.scrollHeight;
+      });
+    });
+  }
+
+  handleLogsScroll(event: Event) {
+    const container = event.currentTarget as HTMLElement | null;
+    if (!container) return;
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    this.logsAtBottom = distanceFromBottom < 80;
+  }
+
+  exportLogs(lines: string[], label: string) {
+    if (lines.length === 0) return;
+    const blob = new Blob([`${lines.join("\n")}\n`], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+    anchor.href = url;
+    anchor.download = `clawdbot-logs-${label}-${stamp}.log`;
+    anchor.click();
+    URL.revokeObjectURL(url);
   }
 
   resetToolStream() {
@@ -713,6 +802,8 @@ export class ClawdbotApp extends LitElement {
   setTab(next: Tab) {
     if (this.tab !== next) this.tab = next;
     if (next === "chat") this.chatHasAutoScrolled = false;
+    if (next === "logs") this.startLogsPolling();
+    else this.stopLogsPolling();
     void this.refreshActiveTab();
     this.syncUrlWithTab(next, false);
   }
@@ -750,6 +841,9 @@ export class ClawdbotApp extends LitElement {
     if (this.tab === "debug") {
       await loadDebug(this);
       this.eventLog = this.eventLogBuffer;
+    }
+    if (this.tab === "logs") {
+      await loadLogs(this, { reset: true });
     }
   }
 
@@ -824,6 +918,8 @@ export class ClawdbotApp extends LitElement {
   private setTabFromRoute(next: Tab) {
     if (this.tab !== next) this.tab = next;
     if (next === "chat") this.chatHasAutoScrolled = false;
+    if (next === "logs") this.startLogsPolling();
+    else this.stopLogsPolling();
     if (this.connected) void this.refreshActiveTab();
   }
 

@@ -17,6 +17,8 @@ import type {
   CronRunLogEntry,
   CronStatus,
   HealthSnapshot,
+  LogEntry,
+  LogLevel,
   PresenceEntry,
   ProvidersStatusSnapshot,
   SessionsListResult,
@@ -37,6 +39,7 @@ import { renderConnections } from "./views/connections";
 import { renderCron } from "./views/cron";
 import { renderDebug } from "./views/debug";
 import { renderInstances } from "./views/instances";
+import { renderLogs } from "./views/logs";
 import { renderNodes } from "./views/nodes";
 import { renderOverview } from "./views/overview";
 import { renderSessions } from "./views/sessions";
@@ -69,6 +72,7 @@ import {
 } from "./controllers/config";
 import { loadCronRuns, toggleCronJob, runCronJob, removeCronJob, addCronJob } from "./controllers/cron";
 import { loadDebug, callDebugMethod } from "./controllers/debug";
+import { loadLogs } from "./controllers/logs";
 
 export type EventLogEntry = {
   ts: number;
@@ -172,6 +176,14 @@ export type AppViewState = {
   debugCallParams: string;
   debugCallResult: string | null;
   debugCallError: string | null;
+  logsLoading: boolean;
+  logsError: string | null;
+  logsFile: string | null;
+  logsEntries: LogEntry[];
+  logsFilterText: string;
+  logsLevelFilters: Record<LogLevel, boolean>;
+  logsAutoFollow: boolean;
+  logsTruncated: boolean;
   client: GatewayBrowserClient | null;
   connect: () => void;
   setTab: (tab: Tab) => void;
@@ -185,6 +197,8 @@ export type AppViewState = {
   handleTelegramSave: () => Promise<void>;
   handleSendChat: () => Promise<void>;
   resetToolStream: () => void;
+  handleLogsScroll: (event: Event) => void;
+  exportLogs: (lines: string[], label: string) => void;
 };
 
 export function renderApp(state: AppViewState) {
@@ -476,6 +490,27 @@ export function renderApp(state: AppViewState) {
               onCallParamsChange: (next) => (state.debugCallParams = next),
               onRefresh: () => loadDebug(state),
               onCall: () => callDebugMethod(state),
+            })
+          : nothing}
+
+        ${state.tab === "logs"
+          ? renderLogs({
+              loading: state.logsLoading,
+              error: state.logsError,
+              file: state.logsFile,
+              entries: state.logsEntries,
+              filterText: state.logsFilterText,
+              levelFilters: state.logsLevelFilters,
+              autoFollow: state.logsAutoFollow,
+              truncated: state.logsTruncated,
+              onFilterTextChange: (next) => (state.logsFilterText = next),
+              onLevelToggle: (level, enabled) => {
+                state.logsLevelFilters = { ...state.logsLevelFilters, [level]: enabled };
+              },
+              onToggleAutoFollow: (next) => (state.logsAutoFollow = next),
+              onRefresh: () => loadLogs(state, { reset: true }),
+              onExport: (lines, label) => state.exportLogs(lines, label),
+              onScroll: (event) => state.handleLogsScroll(event),
             })
           : nothing}
       </main>

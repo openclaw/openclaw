@@ -808,6 +808,27 @@ export const CronRunLogEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const LogsTailParamsSchema = Type.Object(
+  {
+    cursor: Type.Optional(Type.Integer({ minimum: 0 })),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
+    maxBytes: Type.Optional(Type.Integer({ minimum: 1, maximum: 1_000_000 })),
+  },
+  { additionalProperties: false },
+);
+
+export const LogsTailResultSchema = Type.Object(
+  {
+    file: NonEmptyString,
+    cursor: Type.Integer({ minimum: 0 }),
+    size: Type.Integer({ minimum: 0 }),
+    lines: Type.Array(Type.String()),
+    truncated: Type.Optional(Type.Boolean()),
+    reset: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 // WebChat/WebSocket-native chat methods
 export const ChatHistoryParamsSchema = Type.Object(
   {
@@ -920,6 +941,8 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   CronRunParams: CronRunParamsSchema,
   CronRunsParams: CronRunsParamsSchema,
   CronRunLogEntry: CronRunLogEntrySchema,
+  LogsTailParams: LogsTailParamsSchema,
+  LogsTailResult: LogsTailResultSchema,
   ChatHistoryParams: ChatHistoryParamsSchema,
   ChatSendParams: ChatSendParamsSchema,
   ChatAbortParams: ChatAbortParamsSchema,
@@ -991,6 +1014,8 @@ export type CronRemoveParams = Static<typeof CronRemoveParamsSchema>;
 export type CronRunParams = Static<typeof CronRunParamsSchema>;
 export type CronRunsParams = Static<typeof CronRunsParamsSchema>;
 export type CronRunLogEntry = Static<typeof CronRunLogEntrySchema>;
+export type LogsTailParams = Static<typeof LogsTailParamsSchema>;
+export type LogsTailResult = Static<typeof LogsTailResultSchema>;
 export type ChatAbortParams = Static<typeof ChatAbortParamsSchema>;
 export type ChatEvent = Static<typeof ChatEventSchema>;
 export type UpdateRunParams = Static<typeof UpdateRunParamsSchema>;
