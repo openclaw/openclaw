@@ -95,6 +95,7 @@
 - Telegram: honor `/activation` session mode for group mention gating and clarify group activation docs. Thanks @julianengel for PR #377.
 - Telegram: isolate forum topic transcripts per thread and validate Gemini turn ordering in multi-topic sessions. Thanks @hsrvc for PR #407.
 - Telegram: render Telegram-safe HTML for outbound formatting and fall back to plain text on parse errors. Thanks @RandyVentures for PR #435.
+- Telegram: add `[[audio_as_voice]]` tag to send audio as voice notes (audio files remain default); docs updated. Thanks @manmal for PR #188.
 - iMessage: ignore disconnect errors during shutdown (avoid unhandled promise rejections). Thanks @antons for PR #359.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.

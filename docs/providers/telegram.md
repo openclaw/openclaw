@@ -153,6 +153,15 @@ Telegram supports optional threaded replies via tags:
 Controlled by `telegram.replyToMode`:
 - `first` (default), `all`, `off`.
 
+## Audio messages (voice vs file)
+Telegram distinguishes **voice notes** (round bubble) from **audio files** (metadata card).
+Clawdbot defaults to audio files for backward compatibility.
+
+To force a voice note bubble in agent replies, include this tag anywhere in the reply:
+- `[[audio_as_voice]]` — send audio as a voice note instead of a file.
+
+The tag is stripped from the delivered text. Other providers ignore this tag.
+
 ## Streaming (drafts)
 Telegram can stream **draft bubbles** while the agent is generating a response.
 Clawdbot uses Bot API `sendMessageDraft` (not real messages) and then sends the

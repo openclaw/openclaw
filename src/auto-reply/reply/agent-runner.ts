@@ -23,6 +23,7 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { extractAudioTag } from "./audio-tags.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
   enqueueFollowupRun,
@@ -30,14 +31,12 @@ import {
   type QueueSettings,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { extractAudioTag } from "./audio-tags.js";
 import {
   applyReplyTagsToPayload,
   applyReplyThreading,
   filterMessagingToolDuplicates,
   isRenderablePayload,
 } from "./reply-payloads.js";
-import { extractReplyToTag } from "./reply-tags.js";
 import {
   createReplyToModeFilter,
   resolveReplyToMode,
@@ -341,6 +340,7 @@ export async function runReplyAgent(params: {
                     const hasMedia =
                       Boolean(taggedPayload.mediaUrl) ||
                       (taggedPayload.mediaUrls?.length ?? 0) > 0;
+                    if (!cleaned && !hasMedia) return;
                     if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia)
                       return;
                     const blockPayload: ReplyPayload = applyReplyToMode({

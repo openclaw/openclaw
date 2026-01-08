@@ -317,7 +317,7 @@ describe("partial reply gating", () => {
       undefined,
       {},
     );
-    expect(allowed).toEqual({ text: "ok" });
+    expect(allowed).toMatchObject({ text: "ok", audioAsVoice: false });
     expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
   });
 });
