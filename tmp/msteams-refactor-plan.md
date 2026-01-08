@@ -123,6 +123,7 @@ Acceptance: `monitor.ts` is mostly wiring and orchestration; logic-heavy parts a
 4. Refactor `src/msteams/send.ts` to use messenger (no behavior change).
 5. Extract inbound helpers (`stripMentionTags`, mention detection, conversation ID normalization) into `src/msteams/inbound.ts` + tests.
 6. Ensure `pnpm lint && pnpm build && pnpm test` pass.
+7. If testing manifest/RSC updates, fully quit/relaunch Teams and reinstall the app to flush cached app metadata.
 
 ### Phase 2 (store hardening)
 
@@ -154,3 +155,4 @@ Acceptance: `monitor.ts` is mostly wiring and orchestration; logic-heavy parts a
 - “Channel config” keys: currently based on `conversation.id` (e.g. `19:…@thread.tacv2`). Preserve that.
 - `replyStyle="top-level"` correctness: ensure the conversation reference normalization is centralized and tested.
 - Mention-gating: preserve current detection behavior (`entities` mention matching `recipient.id`), but isolate it for future improvements.
+- Teams client caches app manifests; after uploading a new package or changing RSC permissions, fully quit/relaunch Teams (not just close the window) and reinstall the app to force the version + permission refresh.
