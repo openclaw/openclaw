@@ -1388,6 +1388,7 @@ async function deliverReplies(params: {
         });
       } else if (kind === "audio") {
         const useVoice = reply.audioAsVoice === true; // default false (backward compatible)
+        log.warn(`[DEBUG] Audio media: audioAsVoice=${reply.audioAsVoice}, useVoice=${useVoice}`);
         if (useVoice) {
           // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
           await bot.api.sendVoice(chatId, file, {
