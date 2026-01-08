@@ -68,8 +68,9 @@ export function createTypingSignaler(params: {
 
   const signalToolStart = async () => {
     if (disabled) return;
-    // Keep typing indicator alive during tool execution
-    await typing.startTypingLoop();
+    if (!typing.isActive()) return;
+    // Keep typing indicator alive during tool execution without changing mode semantics.
+    typing.refreshTypingTtl();
   };
 
   return {

@@ -3,6 +3,7 @@ export type TypingController = {
   startTypingLoop: () => Promise<void>;
   startTypingOnText: (text?: string) => Promise<void>;
   refreshTypingTtl: () => void;
+  isActive: () => boolean;
   markRunComplete: () => void;
   markDispatchIdle: () => void;
   cleanup: () => void;
@@ -76,6 +77,8 @@ export function createTypingController(params: {
     }, typingTtlMs);
   };
 
+  const isActive = () => active && !sealed;
+
   const triggerTyping = async () => {
     if (sealed) return;
     await onReplyStart?.();
@@ -138,6 +141,7 @@ export function createTypingController(params: {
     startTypingLoop,
     startTypingOnText,
     refreshTypingTtl,
+    isActive,
     markRunComplete,
     markDispatchIdle,
     cleanup,
