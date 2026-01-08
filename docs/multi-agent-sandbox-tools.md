@@ -248,7 +248,7 @@ After configuring multi-agent sandbox and tools:
 
 1. **Check agent resolution:**
    ```bash
-   clawdbot agents list
+   clawdbot agents list --bindings
    ```
 
 2. **Verify sandbox containers:**

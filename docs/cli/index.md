@@ -330,13 +330,20 @@ List configured agents.
 
 Options:
 - `--json`
+- `--bindings`
 
 #### `agents add [name]`
-Add a new isolated agent. Runs the guided wizard unless flags are passed; `--workspace` is required in non-interactive mode.
+Add a new isolated agent. Runs the guided wizard unless flags (or `--non-interactive`) are passed; `--workspace` is required in non-interactive mode.
 
 Options:
 - `--workspace <dir>`
+- `--model <id>`
+- `--agent-dir <dir>`
+- `--bind <provider[:accountId]>` (repeatable)
+- `--non-interactive`
 - `--json`
+
+Binding specs use `provider[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
 
 #### `agents delete <id>`
 Delete an agent and prune its workspace + state.
@@ -420,6 +427,7 @@ Notes:
 - `daemon status` uses the same URL/token defaults as `gateway status` unless you pass `--url/--token/--password`.
 - `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
 - `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans).
+- `daemon status` prints which config path the CLI uses vs which config the daemon likely uses (service env), plus the resolved probe target URL.
 - `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
 - `daemon install` options: `--port`, `--runtime`, `--token`.
 
