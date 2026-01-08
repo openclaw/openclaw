@@ -6,7 +6,7 @@ import {
 } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { withProgress } from "../cli/progress.js";
-import { loadConfig } from "../config/config.js";
+import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
@@ -29,6 +29,7 @@ import {
   logWebSelfId,
   webAuthExists,
 } from "../web/session.js";
+import { resolveControlUiLinks } from "./onboard-helpers.js";
 import type { HealthSummary } from "./health.js";
 
 export type SessionStatus = {
@@ -265,6 +266,7 @@ export async function statusCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  const cfg = loadConfig();
   const summary = await getStatusSummary();
   const usage = opts.usage
     ? await withProgress(
@@ -311,11 +313,21 @@ export async function statusCommand(
     }
   }
 
+  const controlUiEnabled = cfg.gateway?.controlUi?.enabled ?? true;
+  if (!controlUiEnabled) {
+    runtime.log(info("Dashboard: disabled"));
+  } else {
+    const links = resolveControlUiLinks({
+      port: resolveGatewayPort(cfg),
+      bind: cfg.gateway?.bind,
+      basePath: cfg.gateway?.controlUi?.basePath,
+    });
+    runtime.log(info(`Dashboard: ${links.httpUrl}`));
+  }
   runtime.log(
     `Web session: ${summary.web.linked ? "linked" : "not linked"}${summary.web.linked ? ` (last refreshed ${formatAge(summary.web.authAgeMs)})` : ""}`,
   );
   if (summary.web.linked) {
-    const cfg = loadConfig();
     const account = resolveWhatsAppAccount({ cfg });
     logWebSelfId(account.authDir, runtime, true);
   }
