@@ -59,7 +59,9 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { callGateway } = await import("./call.js");
+const { buildGatewayConnectionDetails, callGateway } = await import(
+  "./call.js"
+);
 
 describe("callGateway url resolution", () => {
   beforeEach(() => {
@@ -100,6 +102,70 @@ describe("callGateway url resolution", () => {
     await callGateway({ method: "health" });
 
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
+  });
+});
+
+describe("buildGatewayConnectionDetails", () => {
+  beforeEach(() => {
+    loadConfig.mockReset();
+    resolveGatewayPort.mockReset();
+    pickPrimaryTailnetIPv4.mockReset();
+  });
+
+  it("uses explicit url overrides and omits bind details", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.1");
+
+    const details = buildGatewayConnectionDetails({
+      url: "wss://example.com/ws",
+    });
+
+    expect(details.url).toBe("wss://example.com/ws");
+    expect(details.urlSource).toBe("cli --url");
+    expect(details.bindDetail).toBeUndefined();
+    expect(details.remoteFallbackNote).toBeUndefined();
+    expect(details.message).toContain("Gateway target: wss://example.com/ws");
+    expect(details.message).toContain("Source: cli --url");
+  });
+
+  it("emits a remote fallback note when remote url is missing", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", bind: "loopback", remote: {} },
+    });
+    resolveGatewayPort.mockReturnValue(18789);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://127.0.0.1:18789");
+    expect(details.urlSource).toBe("local loopback");
+    expect(details.bindDetail).toBe("Bind: loopback");
+    expect(details.remoteFallbackNote).toContain(
+      "gateway.mode=remote but gateway.remote.url is missing",
+    );
+    expect(details.message).toContain("Gateway target: ws://127.0.0.1:18789");
+  });
+
+  it("prefers remote url when configured", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        bind: "tailnet",
+        remote: { url: "wss://remote.example.com/ws" },
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue("100.64.0.9");
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("wss://remote.example.com/ws");
+    expect(details.urlSource).toBe("config gateway.remote.url");
+    expect(details.bindDetail).toBeUndefined();
+    expect(details.remoteFallbackNote).toBeUndefined();
   });
 });
 
