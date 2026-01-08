@@ -48,6 +48,10 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
 {
   // Environment + shell
   env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: {
+      GROQ_API_KEY: "gsk-..."
+    },
     shellEnv: {
       enabled: true,
       timeoutMs: 15000

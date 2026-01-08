@@ -91,6 +91,22 @@ Additionally, it loads:
 
 Neither `.env` file overrides existing env vars.
 
+You can also provide inline env vars in config. These are only applied if the
+process env is missing the key (same non-overriding rule):
+
+```json5
+{
+  env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: {
+      GROQ_API_KEY: "gsk-..."
+    }
+  }
+}
+```
+
+See [/environment](/environment) for full precedence and sources.
+
 ### `env.shellEnv` (optional)
 
 Opt-in convenience: if enabled and none of the expected keys are set yet, CLAWDBOT runs your login shell and imports only the missing expected keys (never overrides).
@@ -1177,6 +1193,12 @@ Example:
   }
 }
 ```
+
+Notes:
+- `agent.elevated` is **global** (not per-agent). Availability is based on sender allowlists.
+- `/elevated on|off` stores state per session key; inline directives apply to a single message.
+- Elevated `bash` runs on the host and bypasses sandboxing.
+- Tool policy still applies; if `bash` is denied, elevated cannot be used.
 
 `agent.maxConcurrent` sets the maximum number of embedded agent runs that can
 execute in parallel across sessions. Each session is still serialized (one run

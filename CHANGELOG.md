@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete

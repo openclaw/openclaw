@@ -793,7 +793,9 @@ export const ClawdbotSchema = z.object({
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
+      vars: z.record(z.string()).optional(),
     })
+    .catchall(z.string())
     .optional(),
   identity: z
     .object({
