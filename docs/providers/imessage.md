@@ -6,7 +6,7 @@ read_when:
 ---
 # iMessage (imsg)
 
-Updated: 2026-01-06
+Updated: 2026-01-08
 
 Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 
@@ -19,7 +19,7 @@ Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio
 - macOS with Messages signed in.
 - Full Disk Access for Clawdbot + `imsg` (Messages DB access).
 - Automation permission when sending.
- - `imessage.cliPath` can point to a wrapper script (for example, an SSH hop to another Mac that runs `imsg rpc`).
+- `imessage.cliPath` can point to a wrapper script (for example, an SSH hop to another Mac that runs `imsg rpc`).
 
 ## Setup (fast path)
 1) Ensure Messages is signed in on this Mac.
@@ -33,7 +33,7 @@ stdio stream; `imsg` still runs on the remote macOS host.
 Example wrapper (save somewhere in your PATH and `chmod +x`):
 ```bash
 #!/usr/bin/env bash
-exec ssh -T mac-mini "imsg rpc"
+exec ssh -T mac-mini imsg "$@"
 ```
 
 Notes:
