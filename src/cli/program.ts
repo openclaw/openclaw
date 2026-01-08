@@ -232,9 +232,10 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: oauth|claude-cli|openai-codex|codex-cli|antigravity|apiKey|minimax|skip",
+      "Auth: oauth|claude-cli|openai-codex|codex-cli|antigravity|gemini-api-key|apiKey|minimax|skip",
     )
     .option("--anthropic-api-key <key>", "Anthropic API key")
+    .option("--gemini-api-key <key>", "Gemini API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|lan|tailnet|auto")
     .option("--gateway-auth <mode>", "Gateway auth: off|token|password")
@@ -263,11 +264,13 @@ export function buildProgram() {
               | "openai-codex"
               | "codex-cli"
               | "antigravity"
+              | "gemini-api-key"
               | "apiKey"
               | "minimax"
               | "skip"
               | undefined,
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
+            geminiApiKey: opts.geminiApiKey as string | undefined,
             gatewayPort:
               typeof opts.gatewayPort === "string"
                 ? Number.parseInt(opts.gatewayPort, 10)
