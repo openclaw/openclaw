@@ -131,6 +131,7 @@ export function registerCronCli(program: Command) {
   addGatewayClientOptions(
     cron
       .command("add")
+      .alias("create")
       .description("Add a cron job")
       .requiredOption("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
@@ -315,6 +316,8 @@ export function registerCronCli(program: Command) {
   addGatewayClientOptions(
     cron
       .command("rm")
+      .alias("remove")
+      .alias("delete")
       .description("Remove a cron job")
       .argument("<id>", "Job id")
       .option("--json", "Output JSON", false)
