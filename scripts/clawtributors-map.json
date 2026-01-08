@@ -9,6 +9,7 @@
     "jdrhyne": "Jonathan D. Rhyne (DJ-D)"
   },
   "nameToLogin": {
+    "peter steinberger": "steipete",
     "eng. juan combetto": "omniwired",
     "mariano belinky": "mbelinky",
     "vasanth rao naik sabavat": "vsabavat",
@@ -16,6 +17,7 @@
     "django navarro": "djangonavarro220"
   },
   "emailToLogin": {
+    "steipete@gmail.com": "steipete",
     "rltorres26+github@gmail.com": "RandyVentures",
     "hixvac@gmail.com": "VACInc"
   }
