@@ -168,10 +168,36 @@ export async function monitorIMessageProvider(
     const chatId = message.chat_id ?? undefined;
     const chatGuid = message.chat_guid ?? undefined;
     const chatIdentifier = message.chat_identifier ?? undefined;
-    const isGroup = Boolean(message.is_group);
+
+    const groupIdCandidate = chatId !== undefined ? String(chatId) : undefined;
+    const groupListPolicy = groupIdCandidate
+      ? resolveProviderGroupPolicy({
+          cfg,
+          provider: "imessage",
+          accountId: accountInfo.accountId,
+          groupId: groupIdCandidate,
+        })
+      : {
+          allowlistEnabled: false,
+          allowed: true,
+          groupConfig: undefined,
+          defaultConfig: undefined,
+        };
+
+    // Some iMessage threads can have multiple participants but still report
+    // is_group=false depending on how Messages stores the identifier.
+    // If the owner explicitly configures a chat_id under imessage.groups, treat
+    // that thread as a "group" for permission gating and session isolation.
+    const treatAsGroupByConfig = Boolean(
+      groupIdCandidate &&
+        groupListPolicy.allowlistEnabled &&
+        groupListPolicy.groupConfig,
+    );
+
+    const isGroup = Boolean(message.is_group) || treatAsGroupByConfig;
     if (isGroup && !chatId) return;
 
-    const groupId = isGroup ? String(chatId) : undefined;
+    const groupId = isGroup ? groupIdCandidate : undefined;
     const storeAllowFrom = await readProviderAllowFromStore("imessage").catch(
       () => [],
     );
@@ -212,12 +238,6 @@ export async function monitorIMessageProvider(
           return;
         }
       }
-      const groupListPolicy = resolveProviderGroupPolicy({
-        cfg,
-        provider: "imessage",
-        accountId: accountInfo.accountId,
-        groupId,
-      });
       if (groupListPolicy.allowlistEnabled && !groupListPolicy.allowed) {
         logVerbose(
           `imessage: skipping group message (${groupId ?? "unknown"}) not in allowlist`,
