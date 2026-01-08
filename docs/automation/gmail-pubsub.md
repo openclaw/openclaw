@@ -49,6 +49,7 @@ that sets `deliver` + optional `provider`/`to`:
         sessionKey: "hook:gmail:{{messages[0].id}}",
         messageTemplate:
           "New email from {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}\n{{messages[0].body}}",
+        model: "openai/gpt-5.2-mini",
         deliver: true,
         provider: "last"
         // to: "+15551234567"
@@ -60,6 +61,9 @@ that sets `deliver` + optional `provider`/`to`:
 
 If you want a fixed channel, set `provider` + `to`. Otherwise `provider: "last"`
 uses the last delivery route (falls back to WhatsApp).
+
+To force a cheaper model for Gmail runs, set `model` in the mapping
+(`provider/model` or alias). If you enforce `agent.models`, include it there.
 
 To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
 under `hooks.transformsDir` (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).

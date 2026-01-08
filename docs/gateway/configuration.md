@@ -1692,6 +1692,7 @@ Defaults:
           "From: {{messages[0].from}}\nSubject: {{messages[0].subject}}\n{{messages[0].snippet}}",
         deliver: true,
         provider: "last",
+        model: "openai/gpt-5.2-mini",
       },
     ],
   }
@@ -1705,7 +1706,7 @@ Requests must include the hook token:
 
 Endpoints:
 - `POST /hooks/wake` → `{ text, mode?: "now"|"next-heartbeat" }`
-- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, provider?, to?, thinking?, timeoutSeconds? }`
+- `POST /hooks/agent` → `{ message, name?, sessionKey?, wakeMode?, deliver?, provider?, to?, model?, thinking?, timeoutSeconds? }`
 - `POST /hooks/<name>` → resolved via `hooks.mappings`
 
 `/hooks/agent` always posts a summary into the main session (and can optionally trigger an immediate heartbeat via `wakeMode: "now"`).
@@ -1717,6 +1718,7 @@ Mapping notes:
 - `transform` can point to a JS/TS module that returns a hook action.
 - `deliver: true` sends the final reply to a provider; `provider` defaults to `last` (falls back to WhatsApp).
 - If there is no prior delivery route, set `provider` + `to` explicitly (required for Telegram/Discord/Slack/Signal/iMessage).
+- `model` overrides the LLM for this hook run (`provider/model` or alias; must be allowed if `agent.models` is set).
 
 Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
 
