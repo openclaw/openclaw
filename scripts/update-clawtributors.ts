@@ -10,6 +10,17 @@ type MapConfig = {
   displayName?: Record<string, string>;
   nameToLogin?: Record<string, string>;
   emailToLogin?: Record<string, string>;
+  placeholderAvatar?: string;
+  seedCommit?: string;
+};
+
+type ApiContributor = {
+  login?: string;
+  html_url?: string;
+  avatar_url?: string;
+  name?: string;
+  email?: string;
+  contributions?: number;
 };
 
 type User = {
@@ -19,7 +30,8 @@ type User = {
 };
 
 type Entry = {
-  login: string;
+  key: string;
+  login?: string;
   display: string;
   html_url: string;
   avatar_url: string;
@@ -34,13 +46,21 @@ const nameToLogin = normalizeMap(mapConfig.nameToLogin ?? {});
 const emailToLogin = normalizeMap(mapConfig.emailToLogin ?? {});
 const ensureLogins = (mapConfig.ensureLogins ?? []).map((login) => login.toLowerCase());
 
+const readmePath = resolve("README.md");
+const placeholderAvatar = mapConfig.placeholderAvatar ?? "assets/avatar-placeholder.svg";
+const seedCommit = mapConfig.seedCommit ?? null;
+const seedEntries = seedCommit ? parseReadmeEntries(run(`git show ${seedCommit}:README.md`)) : [];
 const raw = run(`gh api "repos/${REPO}/contributors?per_page=100&anon=1" --paginate`);
-const contributors = parsePaginatedJson(raw);
+const contributors = parsePaginatedJson(raw) as ApiContributor[];
 const apiByLogin = new Map<string, User>();
+const contributionsByLogin = new Map<string, number>();
 
 for (const item of contributors) {
   if (!item?.login || !item?.html_url || !item?.avatar_url) {
     continue;
+  }
+  if (typeof item.contributions === "number") {
+    contributionsByLogin.set(item.login.toLowerCase(), item.contributions);
   }
   apiByLogin.set(item.login.toLowerCase(), {
     login: item.login,
@@ -107,24 +127,116 @@ for (const login of ensureLogins) {
   }
 }
 
-const entries: Entry[] = [];
+const entriesByKey = new Map<string, Entry>();
+
+for (const seed of seedEntries) {
+  const login = loginFromUrl(seed.html_url);
+  const key = login ? login.toLowerCase() : `name:${normalizeName(seed.display)}`;
+  if (entriesByKey.has(key)) {
+    continue;
+  }
+  const avatar = seed.avatar_url && !isGhostAvatar(seed.avatar_url)
+    ? normalizeAvatar(seed.avatar_url)
+    : placeholderAvatar;
+  entriesByKey.set(key, {
+    key,
+    login: login ?? undefined,
+    display: seed.display,
+    html_url: seed.html_url,
+    avatar_url: avatar,
+    lines: 0,
+  });
+}
+
+for (const item of contributors) {
+  const baseName = item.name?.trim() || item.email?.trim() || item.login?.trim();
+  if (!baseName) {
+    continue;
+  }
+
+  const resolvedLogin = item.login
+    ? item.login
+    : resolveLogin(baseName, item.email ?? null, apiByLogin, nameToLogin, emailToLogin);
+
+  if (resolvedLogin) {
+    const key = resolvedLogin.toLowerCase();
+    const existing = entriesByKey.get(key);
+    if (!existing) {
+      let user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
+      if (user) {
+        const lines = linesByLogin.get(key) ?? 0;
+        const contributions = contributionsByLogin.get(key) ?? 0;
+        entriesByKey.set(key, {
+          key,
+          login: user.login,
+          display: pickDisplay(baseName, user.login, existing?.display),
+          html_url: user.html_url,
+          avatar_url: normalizeAvatar(user.avatar_url),
+          lines: lines > 0 ? lines : contributions,
+        });
+      }
+    } else if (existing) {
+      existing.login = existing.login ?? resolvedLogin;
+      existing.display = pickDisplay(baseName, existing.login, existing.display);
+      if (existing.avatar_url === placeholderAvatar || !existing.avatar_url) {
+        const user = apiByLogin.get(key) ?? fetchUser(resolvedLogin);
+        if (user) {
+          existing.html_url = user.html_url;
+          existing.avatar_url = normalizeAvatar(user.avatar_url);
+        }
+      }
+      const lines = linesByLogin.get(key) ?? 0;
+      const contributions = contributionsByLogin.get(key) ?? 0;
+      existing.lines = Math.max(existing.lines, lines > 0 ? lines : contributions);
+    }
+    continue;
+  }
+
+  const anonKey = `name:${normalizeName(baseName)}`;
+  const existingAnon = entriesByKey.get(anonKey);
+  if (!existingAnon) {
+    entriesByKey.set(anonKey, {
+      key: anonKey,
+      display: baseName,
+      html_url: fallbackHref(baseName),
+      avatar_url: placeholderAvatar,
+      lines: item.contributions ?? 0,
+    });
+  } else {
+    existingAnon.lines = Math.max(existingAnon.lines, item.contributions ?? 0);
+  }
+}
+
 for (const [login, lines] of linesByLogin.entries()) {
+  if (entriesByKey.has(login)) {
+    continue;
+  }
   let user = apiByLogin.get(login);
   if (!user) {
     user = fetchUser(login);
   }
-  if (!user || !user.avatar_url) {
-    continue;
+  if (user) {
+    const contributions = contributionsByLogin.get(login) ?? 0;
+    entriesByKey.set(login, {
+      key: login,
+      login: user.login,
+      display: displayName[user.login.toLowerCase()] ?? user.login,
+      html_url: user.html_url,
+      avatar_url: normalizeAvatar(user.avatar_url),
+      lines: lines > 0 ? lines : contributions,
+    });
+  } else {
+    entriesByKey.set(login, {
+      key: login,
+      display: login,
+      html_url: fallbackHref(login),
+      avatar_url: placeholderAvatar,
+      lines,
+    });
   }
-
-  entries.push({
-    login: user.login,
-    display: displayName[user.login.toLowerCase()] ?? user.login,
-    html_url: user.html_url,
-    avatar_url: normalizeAvatar(user.avatar_url),
-    lines,
-  });
 }
+
+const entries = Array.from(entriesByKey.values());
 
 entries.sort((a, b) => {
   if (b.lines !== a.lines) {
@@ -143,7 +255,6 @@ for (let i = 0; i < entries.length; i += PER_LINE) {
 }
 
 const block = `${lines.join("\n")}\n`;
-const readmePath = resolve("README.md");
 const readme = readFileSync(readmePath, "utf8");
 const start = readme.indexOf('<p align="left">');
 const end = readme.indexOf("</p>", start);
@@ -198,12 +309,19 @@ function parseCount(value: string): number {
 }
 
 function normalizeAvatar(url: string): string {
+  if (!/^https?:/i.test(url)) {
+    return url;
+  }
   const lower = url.toLowerCase();
   if (lower.includes("s=") || lower.includes("size=")) {
     return url;
   }
   const sep = url.includes("?") ? "&" : "?";
   return `${url}${sep}s=48`;
+}
+
+function isGhostAvatar(url: string): boolean {
+  return url.toLowerCase().includes("ghost.png");
 }
 
 function fetchUser(login: string): User | null {
@@ -269,4 +387,67 @@ function resolveLogin(
   }
 
   return null;
+}
+
+function parseReadmeEntries(
+  content: string
+): Array<{ display: string; html_url: string; avatar_url: string }> {
+  const start = content.indexOf('<p align="left">');
+  const end = content.indexOf("</p>", start);
+  if (start === -1 || end === -1) {
+    return [];
+  }
+  const block = content.slice(start, end);
+  const entries: Array<{ display: string; html_url: string; avatar_url: string }> = [];
+  const linked = /<a href=\"([^\"]+)\"><img src=\"([^\"]+)\"[^>]*alt=\"([^\"]+)\"[^>]*>/g;
+  for (const match of block.matchAll(linked)) {
+    const [, href, src, alt] = match;
+    if (!href || !src || !alt) {
+      continue;
+    }
+    entries.push({ html_url: href, avatar_url: src, display: alt });
+  }
+  const standalone = /<img src=\"([^\"]+)\"[^>]*alt=\"([^\"]+)\"[^>]*>/g;
+  for (const match of block.matchAll(standalone)) {
+    const [, src, alt] = match;
+    if (!src || !alt) {
+      continue;
+    }
+    if (entries.some((entry) => entry.display === alt && entry.avatar_url === src)) {
+      continue;
+    }
+    entries.push({ html_url: fallbackHref(alt), avatar_url: src, display: alt });
+  }
+  return entries;
+}
+
+function loginFromUrl(url: string): string | null {
+  const match = /^https?:\/\/github\.com\/([^\/?#]+)/i.exec(url);
+  if (!match) {
+    return null;
+  }
+  const login = match[1];
+  if (!login || login.toLowerCase() === "search") {
+    return null;
+  }
+  return login;
+}
+
+function fallbackHref(value: string): string {
+  const encoded = encodeURIComponent(value.trim());
+  return encoded ? `https://github.com/search?q=${encoded}` : "https://github.com";
+}
+
+function pickDisplay(baseName: string | null | undefined, login: string, existing?: string): string {
+  const key = login.toLowerCase();
+  if (displayName[key]) {
+    return displayName[key];
+  }
+  if (existing) {
+    return existing;
+  }
+  if (baseName) {
+    return baseName;
+  }
+  return login;
 }
