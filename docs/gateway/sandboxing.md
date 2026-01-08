@@ -8,7 +8,10 @@ status: active
 # Sandboxing
 
 Clawdbot can run **tools inside Docker containers** to reduce blast radius.
-The Gateway stays on the host; tool execution runs in an isolated sandbox.
+This is **optional** and controlled by configuration (`agent.sandbox` or
+`routing.agents[id].sandbox`). If sandboxing is off, tools run on the host.
+The Gateway stays on the host; tool execution runs in an isolated sandbox
+when enabled.
 
 This is not a perfect security boundary, but it materially limits filesystem
 and process access when the model does something dumb.
