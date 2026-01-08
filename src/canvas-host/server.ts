@@ -271,6 +271,7 @@ export async function createCanvasHostHandler(
     ? chokidar.watch(rootReal, {
         ignoreInitial: true,
         awaitWriteFinish: { stabilityThreshold: 75, pollInterval: 10 },
+        usePolling: opts.allowInTests === true,
         ignored: [
           /(^|[\\/])\../, // dotfiles
           /(^|[\\/])node_modules([\\/]|$)/,
