@@ -1,7 +1,7 @@
 import AppKit
+import ClawdbotProtocol
 import Foundation
 import Testing
-import ClawdbotProtocol
 
 @testable import Clawdbot
 
@@ -98,17 +98,17 @@ struct LowCoverageHelperTests {
             [
                 "CLAWDBOT_GATEWAY_BIND": "Lan",
                 "CLAWDBOT_GATEWAY_TOKEN": " secret ",
-            ])
-        {
-            #expect(GatewayLaunchAgentManager._testPreferredGatewayBind() == "lan")
-            #expect(GatewayLaunchAgentManager._testPreferredGatewayToken() == "secret")
-            #expect(
-                GatewayLaunchAgentManager._testEscapePlistValue("a&b<c>\"'") ==
-                    "a&amp;b&lt;c&gt;&quot;&apos;")
+            ]) {
+                #expect(GatewayLaunchAgentManager._testPreferredGatewayBind() == "lan")
+                #expect(GatewayLaunchAgentManager._testPreferredGatewayToken() == "secret")
+                #expect(
+                    GatewayLaunchAgentManager._testEscapePlistValue("a&b<c>\"'") ==
+                        "a&amp;b&lt;c&gt;&quot;&apos;")
 
-            #expect(GatewayLaunchAgentManager._testGatewayExecutablePath(bundlePath: "/App") == "/App/Contents/Resources/Relay/clawdbot")
-            #expect(GatewayLaunchAgentManager._testRelayDir(bundlePath: "/App") == "/App/Contents/Resources/Relay")
-        }
+                #expect(GatewayLaunchAgentManager
+                    ._testGatewayExecutablePath(bundlePath: "/App") == "/App/Contents/Resources/Relay/clawdbot")
+                #expect(GatewayLaunchAgentManager._testRelayDir(bundlePath: "/App") == "/App/Contents/Resources/Relay")
+            }
     }
 
     @Test func portGuardianParsesListenersAndBuildsReports() {

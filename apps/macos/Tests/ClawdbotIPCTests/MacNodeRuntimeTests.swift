@@ -15,7 +15,7 @@ struct MacNodeRuntimeTests {
     @Test func handleInvokeRejectsEmptySystemRun() async throws {
         let runtime = MacNodeRuntime()
         let params = ClawdbotSystemRunParams(command: [])
-        let json = String(data: try JSONEncoder().encode(params), encoding: .utf8)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-2", command: ClawdbotSystemCommand.run.rawValue, paramsJSON: json))
         #expect(response.ok == false)
@@ -24,7 +24,7 @@ struct MacNodeRuntimeTests {
     @Test func handleInvokeRejectsEmptyNotification() async throws {
         let runtime = MacNodeRuntime()
         let params = ClawdbotSystemNotifyParams(title: "", body: "")
-        let json = String(data: try JSONEncoder().encode(params), encoding: .utf8)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-3", command: ClawdbotSystemCommand.notify.rawValue, paramsJSON: json))
         #expect(response.ok == false)
@@ -71,7 +71,7 @@ struct MacNodeRuntimeTests {
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
         let params = MacNodeScreenRecordParams(durationMs: 250)
-        let json = String(data: try JSONEncoder().encode(params), encoding: .utf8)
+        let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let response = await runtime.handleInvoke(
             BridgeInvokeRequest(id: "req-5", command: MacNodeScreenCommand.record.rawValue, paramsJSON: json))
         #expect(response.ok == true)

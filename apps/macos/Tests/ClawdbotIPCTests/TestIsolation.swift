@@ -98,14 +98,14 @@ enum TestIsolation {
         _ values: [String: String?],
         _ body: () async throws -> T) async rethrows -> T
     {
-        try await Self.withIsolatedState(env: values, defaults: [:], body)
+        try await self.withIsolatedState(env: values, defaults: [:], body)
     }
 
     static func withUserDefaultsValues<T>(
         _ values: [String: Any?],
         _ body: () async throws -> T) async rethrows -> T
     {
-        try await Self.withIsolatedState(env: [:], defaults: values, body)
+        try await self.withIsolatedState(env: [:], defaults: values, body)
     }
 
     nonisolated static func tempConfigPath() -> String {

@@ -1,5 +1,5 @@
-import Testing
 import ClawdbotProtocol
+import Testing
 @testable import Clawdbot
 
 @Suite(.serialized)

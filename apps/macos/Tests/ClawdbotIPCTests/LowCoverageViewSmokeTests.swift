@@ -1,7 +1,7 @@
 import AppKit
+import ClawdbotProtocol
 import SwiftUI
 import Testing
-import ClawdbotProtocol
 
 @testable import Clawdbot
 
