@@ -13,3 +13,18 @@ export function isTelegramVoiceCompatible(opts: {
   const ext = path.extname(fileName).toLowerCase();
   return ext === ".ogg" || ext === ".opus" || ext === ".oga";
 }
+
+export function resolveTelegramVoiceDecision(opts: {
+  wantsVoice: boolean;
+  contentType?: string | null;
+  fileName?: string | null;
+}): { useVoice: boolean; reason?: string } {
+  if (!opts.wantsVoice) return { useVoice: false };
+  if (isTelegramVoiceCompatible(opts)) return { useVoice: true };
+  const contentType = opts.contentType ?? "unknown";
+  const fileName = opts.fileName ?? "unknown";
+  return {
+    useVoice: false,
+    reason: `media is ${contentType} (${fileName})`,
+  };
+}

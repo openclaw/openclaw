@@ -60,7 +60,7 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
-import { isTelegramVoiceCompatible } from "./voice.js";
+import { resolveTelegramVoiceDecision } from "./voice.js";
 import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
@@ -1388,17 +1388,14 @@ async function deliverReplies(params: {
           ...mediaParams,
         });
       } else if (kind === "audio") {
-        const wantsVoice = reply.audioAsVoice === true; // default false (backward compatible)
-        const canVoice = wantsVoice
-          ? isTelegramVoiceCompatible({
-              contentType: media.contentType,
-              fileName,
-            })
-          : false;
-        const useVoice = wantsVoice && canVoice;
-        if (wantsVoice && !canVoice) {
+        const { useVoice, reason } = resolveTelegramVoiceDecision({
+          wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
+          contentType: media.contentType,
+          fileName,
+        });
+        if (reason) {
           logVerbose(
-            `Telegram voice requested but media is ${media.contentType ?? "unknown"} (${fileName}); sending as audio file instead.`,
+            `Telegram voice requested but ${reason}; sending as audio file instead.`,
           );
         }
         if (useVoice) {
