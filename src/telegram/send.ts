@@ -115,7 +115,8 @@ export async function sendMessageTelegram(
   const fetchImpl = resolveTelegramFetch();
   const api =
     opts.api ??
-    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined).api;
+    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined)
+      .api;
   const mediaUrl = opts.mediaUrl?.trim();
 
   // Build optional params for forum topics and reply threading.
@@ -272,7 +273,8 @@ export async function reactMessageTelegram(
   const fetchImpl = resolveTelegramFetch();
   const api =
     opts.api ??
-    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined).api;
+    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined)
+      .api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
     configRetry: account.config.retry,

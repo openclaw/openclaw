@@ -73,9 +73,11 @@ describe("agents_list", () => {
     if (!tool) throw new Error("missing agents_list tool");
 
     const result = await tool.execute("call2", {});
-    const agents = (result.details as {
-      agents?: Array<{ id: string }>;
-    }).agents;
+    const agents = (
+      result.details as {
+        agents?: Array<{ id: string }>;
+      }
+    ).agents;
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
   });
 
@@ -111,9 +113,11 @@ describe("agents_list", () => {
     expect(result.details).toMatchObject({
       allowAny: true,
     });
-    const agents = (result.details as {
-      agents?: Array<{ id: string }>;
-    }).agents;
+    const agents = (
+      result.details as {
+        agents?: Array<{ id: string }>;
+      }
+    ).agents;
     expect(agents?.map((agent) => agent.id)).toEqual([
       "main",
       "coder",
@@ -144,9 +148,11 @@ describe("agents_list", () => {
     if (!tool) throw new Error("missing agents_list tool");
 
     const result = await tool.execute("call4", {});
-    const agents = (result.details as {
-      agents?: Array<{ id: string; configured: boolean }>;
-    }).agents;
+    const agents = (
+      result.details as {
+        agents?: Array<{ id: string; configured: boolean }>;
+      }
+    ).agents;
     expect(agents?.map((agent) => agent.id)).toEqual(["main", "research"]);
     const research = agents?.find((agent) => agent.id === "research");
     expect(research?.configured).toBe(false);

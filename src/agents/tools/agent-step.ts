@@ -28,14 +28,14 @@ export async function runAgentStep(params: {
   const stepIdem = crypto.randomUUID();
   const response = (await callGateway({
     method: "agent",
-      params: {
-        message: params.message,
-        sessionKey: params.sessionKey,
-        idempotencyKey: stepIdem,
-        deliver: false,
-        lane: params.lane ?? "nested",
-        extraSystemPrompt: params.extraSystemPrompt,
-      },
+    params: {
+      message: params.message,
+      sessionKey: params.sessionKey,
+      idempotencyKey: stepIdem,
+      deliver: false,
+      lane: params.lane ?? "nested",
+      extraSystemPrompt: params.extraSystemPrompt,
+    },
     timeoutMs: 10_000,
   })) as { runId?: string; acceptedAt?: number };
 
