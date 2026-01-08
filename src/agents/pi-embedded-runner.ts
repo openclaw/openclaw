@@ -1044,6 +1044,7 @@ export async function runEmbeddedPiAgent(params: {
   onBlockReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
+    audioAsVoice?: boolean;
   }) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
@@ -1640,6 +1641,7 @@ export async function runEmbeddedPiAgent(params: {
             text: string;
             media?: string[];
             isError?: boolean;
+            audioAsVoice?: boolean;
           }> = [];
 
           const errorText = lastAssistant
@@ -1656,10 +1658,10 @@ export async function runEmbeddedPiAgent(params: {
           if (inlineToolResults) {
             for (const { toolName, meta } of toolMetas) {
               const agg = formatToolAggregate(toolName, meta ? [meta] : []);
-              const { text: cleanedText, mediaUrls } =
+              const { text: cleanedText, mediaUrls, audioAsVoice } =
                 splitMediaFromOutput(agg);
               if (cleanedText)
-                replyItems.push({ text: cleanedText, media: mediaUrls });
+                replyItems.push({ text: cleanedText, media: mediaUrls, audioAsVoice });
             }
           }
 
@@ -1678,11 +1680,21 @@ export async function runEmbeddedPiAgent(params: {
               ? [fallbackAnswerText]
               : [];
           for (const text of answerTexts) {
-            const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
-            if (!cleanedText && (!mediaUrls || mediaUrls.length === 0))
+            const { text: cleanedText, mediaUrls, audioAsVoice } =
+              splitMediaFromOutput(text);
+            if (
+              !cleanedText &&
+              (!mediaUrls || mediaUrls.length === 0) &&
+              !audioAsVoice
+            )
               continue;
-            replyItems.push({ text: cleanedText, media: mediaUrls });
+            replyItems.push({ text: cleanedText, media: mediaUrls, audioAsVoice });
           }
+
+          // Check if any replyItem has audioAsVoice tag - if so, apply to all media payloads
+          const hasAudioAsVoiceTag = replyItems.some(
+            (item) => item.audioAsVoice,
+          );
 
           const payloads = replyItems
             .map((item) => ({
@@ -1690,6 +1702,9 @@ export async function runEmbeddedPiAgent(params: {
               mediaUrls: item.media?.length ? item.media : undefined,
               mediaUrl: item.media?.[0],
               isError: item.isError,
+              // Apply audioAsVoice to media payloads if tag was found anywhere in response
+              audioAsVoice:
+                item.audioAsVoice || (hasAudioAsVoiceTag && item.media?.length),
             }))
             .filter(
               (p) =>
