@@ -16,7 +16,7 @@ host configuration.
 - **Provider**: `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `webchat`.
 - **AccountId**: per‑provider account instance (when supported).
 - **AgentId**: an isolated workspace + session store (“brain”).
-- **SessionKey**: the internal bucket key used to store context and control concurrency.
+- **SessionKey**: the bucket key used to store context and control concurrency.
 
 ## Session key shapes (examples)
 

@@ -20,11 +20,11 @@ read_when:
   <a href="https://github.com/clawdbot/clawdbot">GitHub</a> ·
   <a href="https://github.com/clawdbot/clawdbot/releases">Releases</a> ·
   <a href="https://docs.clawd.bot">Docs</a> ·
-  <a href="https://docs.clawd.bot/start/clawd">Clawd setup</a>
+  <a href="https://docs.clawd.bot/start/clawd">Clawdbot assistant setup</a>
 </p>
 
 CLAWDBOT bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
-It’s built for [Clawd](https://clawd.me), a space lobster who needed a TARDIS.
+Clawdbot also powers [Clawd](https://clawd.me), the space‑lobster assistant.
 
 ## Start here
 
@@ -169,7 +169,7 @@ Example:
   - [Updating / rollback](https://docs.clawd.bot/install/updating)
   - [Pairing (DM + nodes)](https://docs.clawd.bot/start/pairing)
   - [Nix mode](https://docs.clawd.bot/install/nix)
-  - [Clawd personal assistant setup](https://docs.clawd.bot/start/clawd)
+  - [Clawdbot assistant setup (Clawd)](https://docs.clawd.bot/start/clawd)
   - [Skills](https://docs.clawd.bot/tools/skills)
   - [Skills config](https://docs.clawd.bot/tools/skills-config)
   - [Workspace templates](https://docs.clawd.bot/reference/templates/AGENTS)

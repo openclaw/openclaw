@@ -6,9 +6,9 @@ read_when:
 ---
 # Linux App
 
-Clawdbot core is fully supported on Linux. The core is written in TypeScript, so it runs anywhere Node or Bun runs.
+The Gateway is fully supported on Linux. The core is written in TypeScript, so it runs anywhere Node or Bun runs.
 
-We do not have a Linux companion app yet. It is planned, and we would love contributions to make it happen.
+Native Linux companion apps are planned. Contributions are welcome if you want to help build one.
 
 ## Beginner quick path (VPS)
 

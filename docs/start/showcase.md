@@ -1,6 +1,7 @@
 ---
 title: "Showcase"
 description: "Real-world Clawdbot projects from the community"
+summary: "Community-built projects and integrations powered by Clawdbot"
 ---
 
 # Showcase
