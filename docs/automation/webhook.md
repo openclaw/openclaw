@@ -60,6 +60,7 @@ Payload:
   "deliver": false,
   "provider": "last",
   "to": "+15551234567",
+  "model": "openai/gpt-5.2-mini",
   "thinking": "low",
   "timeoutSeconds": 120
 }
@@ -72,6 +73,7 @@ Payload:
 - `deliver` optional (default `false`)
 - `provider` optional: `last` | `whatsapp` | `telegram`
 - `to` optional (provider-specific target)
+- `model` optional (model override, `provider/model` or alias; must be allowed if `agent.models` is set)
 - `thinking` optional (override)
 - `timeoutSeconds` optional
 
@@ -120,6 +122,19 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
   -H 'Content-Type: application/json' \
   -d '{"message":"Summarize inbox","name":"Email","wakeMode":"next-heartbeat"}'
 ```
+
+### Use a different model
+
+Add `model` to the agent payload (or mapping) to override the model for that run:
+
+```bash
+curl -X POST http://127.0.0.1:18789/hooks/agent \
+  -H 'x-clawdbot-token: SECRET' \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
+```
+
+If you enforce `agent.models`, make sure the override model is included there.
 
 ```bash
 curl -X POST http://127.0.0.1:18789/hooks/gmail \
