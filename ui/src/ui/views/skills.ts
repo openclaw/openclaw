@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 
 import { clampText } from "../format";
 import type { SkillStatusEntry, SkillStatusReport } from "../types";
+import type { SkillMessageMap } from "../controllers/skills";
 
 export type SkillsProps = {
   loading: boolean;
@@ -10,12 +11,13 @@ export type SkillsProps = {
   filter: string;
   edits: Record<string, string>;
   busyKey: string | null;
+  messages: SkillMessageMap;
   onFilterChange: (next: string) => void;
   onRefresh: () => void;
   onToggle: (skillKey: string, enabled: boolean) => void;
   onEdit: (skillKey: string, value: string) => void;
   onSaveKey: (skillKey: string) => void;
-  onInstall: (name: string, installId: string) => void;
+  onInstall: (skillKey: string, name: string, installId: string) => void;
 };
 
 export function renderSkills(props: SkillsProps) {
@@ -71,8 +73,11 @@ export function renderSkills(props: SkillsProps) {
 }
 
 function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
-  const busy = props.busyKey === skill.skillKey || props.busyKey === skill.name;
+  const busy = props.busyKey === skill.skillKey;
   const apiKey = props.edits[skill.skillKey] ?? "";
+  const message = props.messages[skill.skillKey] ?? null;
+  const canInstall =
+    skill.install.length > 0 && skill.missing.bins.length > 0;
   const missing = [
     ...skill.missing.bins.map((b) => `bin:${b}`),
     ...skill.missing.env.map((e) => `env:${e}`),
@@ -120,16 +125,29 @@ function renderSkill(skill: SkillStatusEntry, props: SkillsProps) {
           >
             ${skill.disabled ? "Enable" : "Disable"}
           </button>
-          ${skill.install.length > 0
+          ${canInstall
             ? html`<button
                 class="btn"
                 ?disabled=${busy}
-                @click=${() => props.onInstall(skill.name, skill.install[0].id)}
+                @click=${() =>
+                  props.onInstall(skill.skillKey, skill.name, skill.install[0].id)}
               >
-                ${skill.install[0].label}
+                ${busy ? "Installing…" : skill.install[0].label}
               </button>`
             : nothing}
         </div>
+        ${message
+          ? html`<div
+              class="muted"
+              style="margin-top: 8px; color: ${
+                message.kind === "error"
+                  ? "var(--danger-color, #d14343)"
+                  : "var(--success-color, #0a7f5a)"
+              };"
+            >
+              ${message.message}
+            </div>`
+          : nothing}
         ${skill.primaryEnv
           ? html`
               <div class="field" style="margin-top: 10px;">

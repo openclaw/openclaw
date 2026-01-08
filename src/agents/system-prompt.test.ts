@@ -78,7 +78,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["gateway", "bash"],
     });
 
-    expect(prompt).toContain("## ClaudeBot Self-Update");
+    expect(prompt).toContain("## Clawdbot Self-Update");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("update.run");
   });
