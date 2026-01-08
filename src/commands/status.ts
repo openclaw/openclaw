@@ -20,6 +20,7 @@ import {
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
@@ -200,6 +201,38 @@ const classifyKey = (
   return "direct";
 };
 
+const formatDaemonRuntimeShort = (runtime?: {
+  status?: string;
+  pid?: number;
+  state?: string;
+  detail?: string;
+}) => {
+  if (!runtime) return null;
+  const status = runtime.status ?? "unknown";
+  const details: string[] = [];
+  if (runtime.pid) details.push(`pid ${runtime.pid}`);
+  if (runtime.state && runtime.state.toLowerCase() !== status) {
+    details.push(`state ${runtime.state}`);
+  }
+  if (runtime.detail) details.push(runtime.detail);
+  return details.length > 0 ? `${status} (${details.join(", ")})` : status;
+};
+
+async function getDaemonShortLine(): Promise<string | null> {
+  try {
+    const service = resolveGatewayService();
+    const [loaded, runtime] = await Promise.all([
+      service.isLoaded({ env: process.env }).catch(() => false),
+      service.readRuntime(process.env).catch(() => undefined),
+    ]);
+    const loadedText = loaded ? service.loadedText : service.notLoadedText;
+    const runtimeShort = formatDaemonRuntimeShort(runtime);
+    return `Daemon: ${service.label} ${loadedText}${runtimeShort ? `, ${runtimeShort}` : ""}. Details: clawdbot daemon status`;
+  } catch {
+    return "Daemon: unknown. Details: clawdbot daemon status";
+  }
+}
+
 const buildFlags = (entry: SessionEntry): string[] => {
   const flags: string[] = [];
   const think = entry?.thinkingLevel;
@@ -290,6 +323,10 @@ export async function statusCommand(
   for (const line of summary.providerSummary) {
     runtime.log(`  ${line}`);
   }
+  const daemonLine = await getDaemonShortLine();
+  if (daemonLine) {
+    runtime.log(info(daemonLine));
+  }
   if (health) {
     runtime.log(info("Gateway health: reachable"));
 
@@ -350,4 +387,6 @@ export async function statusCommand(
       runtime.log(line);
     }
   }
+  runtime.log("FAQ: https://docs.clawd.bot/faq");
+  runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
 }
