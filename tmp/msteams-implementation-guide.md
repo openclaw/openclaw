@@ -901,6 +901,8 @@ Add the `webApplicationInfo` and `authorization` sections to your `manifest.json
 }
 ```
 
+**Note:** Teams clients cache app manifests. After uploading a new package or changing RSC permissions, fully quit/relaunch Teams (not just close the window) and reinstall the app to force the updated version + permissions to load.
+
 **Key points:**
 - `webApplicationInfo.id` must match your bot's Microsoft App ID
 - `webApplicationInfo.resource` should be `https://RscPermission`
