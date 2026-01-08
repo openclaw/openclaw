@@ -240,15 +240,15 @@ export async function doctorCommand(
     }
   }
 
-  if (healthOk) {
-    try {
-      const status = await callGateway<Record<string, unknown>>({
-        method: "providers.status",
-        params: { probe: false, timeoutMs: 5000 },
-        timeoutMs: 6000,
-      });
-      const issues = collectProvidersStatusIssues(status);
-      if (issues.length > 0) {
+    if (healthOk) {
+      try {
+        const status = await callGateway<Record<string, unknown>>({
+          method: "providers.status",
+          params: { probe: true, timeoutMs: 5000 },
+          timeoutMs: 6000,
+        });
+        const issues = collectProvidersStatusIssues(status);
+        if (issues.length > 0) {
         note(
           issues
             .map(

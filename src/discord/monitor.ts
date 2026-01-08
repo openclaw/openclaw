@@ -45,6 +45,7 @@ import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatDurationSeconds } from "../infra/format-duration.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -575,6 +576,11 @@ export function createDiscordMessageHandler(params: {
       }
       const botId = botUserId;
       const baseText = resolveDiscordMessageText(message);
+      recordProviderActivity({
+        provider: "discord",
+        accountId,
+        direction: "inbound",
+      });
       const route = resolveAgentRoute({
         cfg,
         provider: "discord",

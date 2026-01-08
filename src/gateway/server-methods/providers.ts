@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import type { TelegramGroupConfig } from "../../config/types.js";
 import {
   loadConfig,
   readConfigFileSnapshot,
@@ -51,6 +52,15 @@ import {
 } from "../protocol/index.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { getProviderActivity } from "../../infra/provider-activity.js";
+import {
+  auditDiscordChannelPermissions,
+  collectDiscordAuditChannelIds,
+} from "../../discord/audit.js";
+import {
+  auditTelegramGroupMembership,
+  collectTelegramUnmentionedGroupIds,
+} from "../../telegram/audit.js";
 
 export const providersHandlers: GatewayRequestHandlers = {
   "providers.status": async ({ params, respond, context }) => {
@@ -89,6 +99,16 @@ export const providersHandlers: GatewayRequestHandlers = {
         const configured = Boolean(account.token);
         let telegramProbe: TelegramProbe | undefined;
         let lastProbeAt: number | null = null;
+        const groups =
+          cfg.telegram?.accounts?.[account.accountId]?.groups ??
+          cfg.telegram?.groups;
+        const { groupIds, unresolvedGroups, hasWildcardUnmentionedGroups } =
+          collectTelegramUnmentionedGroupIds(
+            groups as Record<string, TelegramGroupConfig> | undefined,
+          );
+        let audit:
+          | Awaited<ReturnType<typeof auditTelegramGroupMembership>>
+          | undefined;
         if (probe && configured && account.enabled) {
           telegramProbe = await probeTelegram(
             account.token,
@@ -96,10 +116,34 @@ export const providersHandlers: GatewayRequestHandlers = {
             account.config.proxy,
           );
           lastProbeAt = Date.now();
+          const botId =
+            telegramProbe.ok && telegramProbe.bot?.id != null
+              ? telegramProbe.bot.id
+              : null;
+          if (botId && (groupIds.length > 0 || unresolvedGroups > 0)) {
+            const auditRes = await auditTelegramGroupMembership({
+              token: account.token,
+              botId,
+              groupIds,
+              proxyUrl: account.config.proxy,
+              timeoutMs,
+            });
+            audit = {
+              ...auditRes,
+              unresolvedGroups,
+              hasWildcardUnmentionedGroups,
+            };
+          } else if (unresolvedGroups > 0 || hasWildcardUnmentionedGroups) {
+            audit = {
+              ok: unresolvedGroups === 0 && !hasWildcardUnmentionedGroups,
+              checkedGroups: 0,
+              unresolvedGroups,
+              hasWildcardUnmentionedGroups,
+              groups: [],
+              elapsedMs: 0,
+            };
+          }
         }
-        const groups =
-          cfg.telegram?.accounts?.[account.accountId]?.groups ??
-          cfg.telegram?.groups;
         const allowUnmentionedGroups =
           Boolean(
             groups?.["*"] &&
@@ -126,7 +170,16 @@ export const providersHandlers: GatewayRequestHandlers = {
           lastError: rt?.lastError ?? null,
           probe: telegramProbe,
           lastProbeAt,
+          audit,
           allowUnmentionedGroups,
+          lastInboundAt: getProviderActivity({
+            provider: "telegram",
+            accountId: account.accountId,
+          }).inboundAt,
+          lastOutboundAt: getProviderActivity({
+            provider: "telegram",
+            accountId: account.accountId,
+          }).outboundAt,
         };
       }),
     );
@@ -146,11 +199,25 @@ export const providersHandlers: GatewayRequestHandlers = {
         const configured = Boolean(account.token);
         let discordProbe: DiscordProbe | undefined;
         let lastProbeAt: number | null = null;
+        const { channelIds: auditChannelIds, unresolvedChannels } =
+          collectDiscordAuditChannelIds({ cfg, accountId: account.accountId });
+        let audit:
+          | Awaited<ReturnType<typeof auditDiscordChannelPermissions>>
+          | undefined;
         if (probe && configured && account.enabled) {
           discordProbe = await probeDiscord(account.token, timeoutMs, {
             includeApplication: true,
           });
           lastProbeAt = Date.now();
+          if (auditChannelIds.length > 0 || unresolvedChannels > 0) {
+            const auditRes = await auditDiscordChannelPermissions({
+              token: account.token,
+              accountId: account.accountId,
+              channelIds: auditChannelIds,
+              timeoutMs,
+            });
+            audit = { ...auditRes, unresolvedChannels };
+          }
         }
         return {
           accountId: account.accountId,
@@ -166,6 +233,15 @@ export const providersHandlers: GatewayRequestHandlers = {
           lastError: rt?.lastError ?? null,
           probe: discordProbe,
           lastProbeAt,
+          audit,
+          lastInboundAt: getProviderActivity({
+            provider: "discord",
+            accountId: account.accountId,
+          }).inboundAt,
+          lastOutboundAt: getProviderActivity({
+            provider: "discord",
+            accountId: account.accountId,
+          }).outboundAt,
         };
       }),
     );
@@ -323,6 +399,14 @@ export const providersHandlers: GatewayRequestHandlers = {
           lastMessageAt: rt.lastMessageAt ?? null,
           lastEventAt: rt.lastEventAt ?? null,
           lastError: rt.lastError ?? null,
+          lastInboundAt: getProviderActivity({
+            provider: "whatsapp",
+            accountId: account.accountId,
+          }).inboundAt,
+          lastOutboundAt: getProviderActivity({
+            provider: "whatsapp",
+            accountId: account.accountId,
+          }).outboundAt,
         };
       }),
     );

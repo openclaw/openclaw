@@ -50,6 +50,7 @@ import {
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -300,6 +301,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     storeAllowFrom: string[],
   ) => {
     const msg = primaryCtx.message;
+    recordProviderActivity({
+      provider: "telegram",
+      accountId: account.accountId,
+      direction: "inbound",
+    });
     const chatId = msg.chat.id;
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const messageThreadId = (msg as { message_thread_id?: number })

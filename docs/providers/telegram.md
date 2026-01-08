@@ -232,6 +232,7 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 - If you set `telegram.groups.*.requireMention=false`, Telegram’s Bot API **privacy mode** must be disabled.
   - BotFather: `/setprivacy` → **Disable** (then remove + re-add the bot to the group)
 - `clawdbot providers status` shows a warning when config expects unmentioned group messages.
+- `clawdbot providers status --probe` can additionally check membership for explicit numeric group IDs (it can’t audit wildcard `"*"` rules).
 - Quick test: `/activation always` (session-only; use config for persistence)
 
 **Bot not seeing group messages at all:**

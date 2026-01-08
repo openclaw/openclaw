@@ -32,6 +32,7 @@ import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
 import { normalizeDiscordToken } from "./token.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
 const DISCORD_MAX_STICKERS = 3;
@@ -589,6 +590,11 @@ export async function sendMessageDiscord(
     });
   }
 
+  recordProviderActivity({
+    provider: "discord",
+    accountId: accountInfo.accountId,
+    direction: "outbound",
+  });
   return {
     messageId: result.id ? String(result.id) : "unknown",
     channelId: String(result.channel_id ?? channelId),

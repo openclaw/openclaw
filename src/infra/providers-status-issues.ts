@@ -19,6 +19,7 @@ type DiscordAccountStatus = {
   enabled?: unknown;
   configured?: unknown;
   application?: unknown;
+  audit?: unknown;
 };
 
 type TelegramAccountStatus = {
@@ -26,6 +27,7 @@ type TelegramAccountStatus = {
   enabled?: unknown;
   configured?: unknown;
   allowUnmentionedGroups?: unknown;
+  audit?: unknown;
 };
 
 type WhatsAppAccountStatus = {
@@ -55,6 +57,7 @@ function readDiscordAccountStatus(value: unknown): DiscordAccountStatus | null {
     enabled: value.enabled,
     configured: value.configured,
     application: value.application,
+    audit: value.audit,
   };
 }
 
@@ -76,6 +79,49 @@ function readDiscordApplicationSummary(
   };
 }
 
+type DiscordPermissionsAuditSummary = {
+  unresolvedChannels?: number;
+  channels?: Array<{
+    channelId: string;
+    ok?: boolean;
+    missing?: string[];
+    error?: string | null;
+  }>;
+};
+
+function readDiscordPermissionsAuditSummary(
+  value: unknown,
+): DiscordPermissionsAuditSummary {
+  if (!isRecord(value)) return {};
+  const unresolvedChannels =
+    typeof value.unresolvedChannels === "number" &&
+    Number.isFinite(value.unresolvedChannels)
+      ? value.unresolvedChannels
+      : undefined;
+  const channelsRaw = value.channels;
+  const channels = Array.isArray(channelsRaw)
+    ? (channelsRaw
+        .map((entry) => {
+          if (!isRecord(entry)) return null;
+          const channelId = asString(entry.channelId);
+          if (!channelId) return null;
+          const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
+          const missing = Array.isArray(entry.missing)
+            ? entry.missing.map((v) => asString(v)).filter(Boolean)
+            : undefined;
+          const error = asString(entry.error) ?? null;
+          return {
+            channelId,
+            ok,
+            missing: missing?.length ? missing : undefined,
+            error,
+          };
+        })
+        .filter(Boolean) as DiscordPermissionsAuditSummary["channels"])
+    : undefined;
+  return { unresolvedChannels, channels };
+}
+
 function readTelegramAccountStatus(
   value: unknown,
 ): TelegramAccountStatus | null {
@@ -85,7 +131,49 @@ function readTelegramAccountStatus(
     enabled: value.enabled,
     configured: value.configured,
     allowUnmentionedGroups: value.allowUnmentionedGroups,
+    audit: value.audit,
   };
+}
+
+type TelegramGroupMembershipAuditSummary = {
+  unresolvedGroups?: number;
+  hasWildcardUnmentionedGroups?: boolean;
+  groups?: Array<{
+    chatId: string;
+    ok?: boolean;
+    status?: string | null;
+    error?: string | null;
+  }>;
+};
+
+function readTelegramGroupMembershipAuditSummary(
+  value: unknown,
+): TelegramGroupMembershipAuditSummary {
+  if (!isRecord(value)) return {};
+  const unresolvedGroups =
+    typeof value.unresolvedGroups === "number" &&
+    Number.isFinite(value.unresolvedGroups)
+      ? value.unresolvedGroups
+      : undefined;
+  const hasWildcardUnmentionedGroups =
+    typeof value.hasWildcardUnmentionedGroups === "boolean"
+      ? value.hasWildcardUnmentionedGroups
+      : undefined;
+  const groupsRaw = value.groups;
+  const groups = Array.isArray(groupsRaw)
+    ? (groupsRaw
+        .map((entry) => {
+          if (!isRecord(entry)) return null;
+          const chatId = asString(entry.chatId);
+          if (!chatId) return null;
+          const ok = typeof entry.ok === "boolean" ? entry.ok : undefined;
+          const status = asString(entry.status) ?? null;
+          const error = asString(entry.error) ?? null;
+          return { chatId, ok, status, error };
+        })
+        .filter(Boolean) as TelegramGroupMembershipAuditSummary["groups"])
+    : undefined;
+  return { unresolvedGroups, hasWildcardUnmentionedGroups, groups };
 }
 
 function readWhatsAppAccountStatus(
@@ -107,6 +195,7 @@ export function collectProvidersStatusIssues(
   payload: Record<string, unknown>,
 ): ProviderStatusIssue[] {
   const issues: ProviderStatusIssue[] = [];
+
   const discordAccountsRaw = payload.discordAccounts;
   if (Array.isArray(discordAccountsRaw)) {
     for (const entry of discordAccountsRaw) {
@@ -128,6 +217,31 @@ export function collectProvidersStatusIssues(
           fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
         });
       }
+
+      const audit = readDiscordPermissionsAuditSummary(account.audit);
+      if (audit.unresolvedChannels && audit.unresolvedChannels > 0) {
+        issues.push({
+          provider: "discord",
+          accountId,
+          kind: "config",
+          message: `Some configured guild channels are not numeric IDs (unresolvedChannels=${audit.unresolvedChannels}). Permission audit can only check numeric channel IDs.`,
+          fix: "Use numeric channel IDs as keys in discord.guilds.*.channels (then rerun providers status --probe).",
+        });
+      }
+      for (const channel of audit.channels ?? []) {
+        if (channel.ok === true) continue;
+        const missing = channel.missing?.length
+          ? ` missing ${channel.missing.join(", ")}`
+          : "";
+        const error = channel.error ? `: ${channel.error}` : "";
+        issues.push({
+          provider: "discord",
+          accountId,
+          kind: "permissions",
+          message: `Channel ${channel.channelId} permission check failed.${missing}${error}`,
+          fix: "Ensure the bot role can view + send in this channel (and that channel overrides don't deny it).",
+        });
+      }
     }
   }
 
@@ -140,6 +254,7 @@ export function collectProvidersStatusIssues(
       const enabled = account.enabled !== false;
       const configured = account.configured === true;
       if (!enabled || !configured) continue;
+
       if (account.allowUnmentionedGroups === true) {
         issues.push({
           provider: "telegram",
@@ -148,6 +263,39 @@ export function collectProvidersStatusIssues(
           message:
             "Config allows unmentioned group messages (requireMention=false). Telegram Bot API privacy mode will block most group messages unless disabled.",
           fix: "In BotFather run /setprivacy → Disable for this bot (then restart the gateway).",
+        });
+      }
+
+      const audit = readTelegramGroupMembershipAuditSummary(account.audit);
+      if (audit.hasWildcardUnmentionedGroups === true) {
+        issues.push({
+          provider: "telegram",
+          accountId,
+          kind: "config",
+          message:
+            'Telegram groups config uses "*" with requireMention=false; membership probing is not possible without explicit group IDs.',
+          fix: "Add explicit numeric group ids under telegram.groups (or per-account groups) to enable probing.",
+        });
+      }
+      if (audit.unresolvedGroups && audit.unresolvedGroups > 0) {
+        issues.push({
+          provider: "telegram",
+          accountId,
+          kind: "config",
+          message: `Some configured Telegram groups are not numeric IDs (unresolvedGroups=${audit.unresolvedGroups}). Membership probe can only check numeric group IDs.`,
+          fix: "Use numeric chat IDs (e.g. -100...) as keys in telegram.groups for requireMention=false groups.",
+        });
+      }
+      for (const group of audit.groups ?? []) {
+        if (group.ok === true) continue;
+        const status = group.status ? ` status=${group.status}` : "";
+        const err = group.error ? `: ${group.error}` : "";
+        issues.push({
+          provider: "telegram",
+          accountId,
+          kind: "runtime",
+          message: `Group ${group.chatId} not reachable by bot.${status}${err}`,
+          fix: "Invite the bot to the group, then DM the bot once (/start) and restart the gateway.",
         });
       }
     }
@@ -195,3 +343,4 @@ export function collectProvidersStatusIssues(
 
   return issues;
 }
+

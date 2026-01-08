@@ -340,6 +340,31 @@ describe("providers command", () => {
     expect(lines.join("\n")).toMatch(/Run: clawdbot doctor/);
   });
 
+  it("surfaces Discord permission audit issues in providers status output", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      discordAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          audit: {
+            unresolvedChannels: 1,
+            channels: [
+              {
+                channelId: "111",
+                ok: false,
+                missing: ["ViewChannel", "SendMessages"],
+              },
+            ],
+          },
+        },
+      ],
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/permission audit/i);
+    expect(lines.join("\n")).toMatch(/Channel 111/i);
+  });
+
   it("surfaces Telegram privacy-mode hints when allowUnmentionedGroups is enabled", () => {
     const lines = formatGatewayProvidersStatusLines({
       telegramAccounts: [
@@ -353,6 +378,28 @@ describe("providers command", () => {
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
     expect(lines.join("\n")).toMatch(/Telegram Bot API privacy mode/i);
+  });
+
+  it("surfaces Telegram group membership audit issues in providers status output", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      telegramAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          audit: {
+            hasWildcardUnmentionedGroups: true,
+            unresolvedGroups: 1,
+            groups: [
+              { chatId: "-1001", ok: false, status: "left", error: "not in group" },
+            ],
+          },
+        },
+      ],
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/membership probing is not possible/i);
+    expect(lines.join("\n")).toMatch(/Group -1001/i);
   });
 
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {

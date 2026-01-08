@@ -14,6 +14,7 @@ import {
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
@@ -171,6 +172,11 @@ export async function monitorWebInbox(options: {
   }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") return;
     for (const msg of upsert.messages ?? []) {
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
       const id = msg.key?.id ?? undefined;
       // De-dupe on message id; Baileys can emit retries.
       if (id && seen.has(id)) continue;
@@ -573,6 +579,11 @@ export async function monitorWebInbox(options: {
         payload = { text };
       }
       const result = await sock.sendMessage(jid, payload);
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "outbound",
+      });
       return { messageId: result?.key?.id ?? "unknown" };
     },
     /**
@@ -590,6 +601,11 @@ export async function monitorWebInbox(options: {
           values: poll.options,
           selectableCount: poll.maxSelections ?? 1,
         },
+      });
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "outbound",
       });
       return { messageId: result?.key?.id ?? "unknown" };
     },

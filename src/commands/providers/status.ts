@@ -78,6 +78,16 @@ export function formatGatewayProvidersStatusLines(
       if (typeof account.connected === "boolean") {
         bits.push(account.connected ? "connected" : "disconnected");
       }
+      const inboundAt =
+        typeof account.lastInboundAt === "number" && Number.isFinite(account.lastInboundAt)
+          ? account.lastInboundAt
+          : null;
+      const outboundAt =
+        typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
+          ? account.lastOutboundAt
+          : null;
+      if (inboundAt) bits.push(`in:${formatAge(Date.now() - inboundAt)}`);
+      if (outboundAt) bits.push(`out:${formatAge(Date.now() - outboundAt)}`);
       if (typeof account.mode === "string" && account.mode.length > 0) {
         bits.push(`mode:${account.mode}`);
       }
@@ -122,6 +132,10 @@ export function formatGatewayProvidersStatusLines(
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
         bits.push(probe.ok ? "works" : "probe failed");
+      }
+      const audit = account.audit as { ok?: boolean } | undefined;
+      if (audit && typeof audit.ok === "boolean") {
+        bits.push(audit.ok ? "audit ok" : "audit failed");
       }
       if (typeof account.lastError === "string" && account.lastError) {
         bits.push(`error:${account.lastError}`);
