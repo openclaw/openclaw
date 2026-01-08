@@ -27,7 +27,7 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 **Logs:**
 - Preferred: `clawdbot logs --follow`
 - File logs (always): `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
-- macOS LaunchAgent (if installed): `~/.clawdbot/logs/gateway.log` and `gateway.err.log`
+- macOS LaunchAgent (if installed): `$CLAWDBOT_STATE_DIR/logs/gateway.log` and `gateway.err.log`
 - Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
 
@@ -49,6 +49,23 @@ the Gateway likely refused to bind.
   `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - `gateway.remote.token` is for remote CLI calls only; it does **not** enable local auth.
 - `gateway.token` is ignored; use `gateway.auth.token`.
+
+**If `clawdbot daemon status` shows a config mismatch**
+- `Config (cli): ...` and `Config (daemon): ...` should normally match.
+- If they don’t, you’re almost certainly editing one config while the daemon is running another.
+- Fix: rerun `clawdbot daemon install --force` from the same `--profile` / `CLAWDBOT_STATE_DIR` you want the daemon to use.
+
+**If `Last gateway error:` mentions “refusing to bind … without auth”**
+- You set `gateway.bind` to a non-loopback mode (`lan`/`tailnet`/`auto`) but left auth off.
+- Fix: set `gateway.auth.mode` + `gateway.auth.token` (or export `CLAWDBOT_GATEWAY_TOKEN`) and restart the daemon.
+
+**If `clawdbot daemon status` says `bind=tailnet` but no tailnet interface was found**
+- The gateway tried to bind to a Tailscale IP (100.64.0.0/10) but none were detected on the host.
+- Fix: bring up Tailscale on that machine (or change `gateway.bind` to `loopback`/`lan`).
+
+**If `Probe note:` says the probe uses loopback**
+- That’s expected for `bind=lan`: the gateway listens on `0.0.0.0` (all interfaces), and loopback should still connect locally.
+- For remote clients, use a real LAN IP (not `0.0.0.0`) plus the port, and ensure auth is configured.
 
 ### Address Already in Use (Port 18789)
 
@@ -84,15 +101,17 @@ The agent was interrupted mid-response.
 
 ### Messages Not Triggering
 
-**Check 1:** Is the sender in `whatsapp.allowFrom`?
+**Check 1:** Is the sender allowlisted?
 ```bash
-cat "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}" | jq '.whatsapp.allowFrom'
+clawdbot status
 ```
+Look for `AllowFrom: ...` in the output.
 
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
-cat "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}" | jq '.routing.groupChat, .whatsapp.groups, .telegram.groups, .imessage.groups, .discord.guilds'
+grep -n "routing\\|groupChat\\|mentionPatterns\\|whatsapp\\.groups\\|telegram\\.groups\\|imessage\\.groups\\|discord\\.guilds" \
+  "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}"
 ```
 
 **Check 3:** Check the logs
@@ -265,8 +284,13 @@ clawdbot providers login --verbose
 ## Health Check
 
 ```bash
+# Supervisor + probe target + config paths
+clawdbot daemon status
+
 # Is the gateway reachable?
 clawdbot health --json
+# If it fails, rerun with connection details:
+clawdbot health --verbose
 
 # Is something listening on the default port?
 lsof -nP -iTCP:18789 -sTCP:LISTEN
