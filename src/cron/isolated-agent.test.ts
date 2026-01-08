@@ -716,4 +716,20 @@ describe("parseTelegramTarget", () => {
       topicId: undefined,
     });
   });
+
+  it("strips internal telegram prefix", () => {
+    expect(parseTelegramTarget("telegram:123")).toEqual({
+      chatId: "123",
+      topicId: undefined,
+    });
+  });
+
+  it("strips internal telegram + group prefixes before parsing topic", () => {
+    expect(parseTelegramTarget("telegram:group:-1001234567890:topic:456")).toEqual(
+      {
+        chatId: "-1001234567890",
+        topicId: 456,
+      },
+    );
+  });
 });
