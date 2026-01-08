@@ -42,7 +42,7 @@ export function extractModelDirective(
   }
 
   const cleaned = match
-    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    ? body.replace(match[0], " ").replace(/\s+/g, " ").trim()
     : body.trim();
 
   return {
