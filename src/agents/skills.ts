@@ -11,6 +11,8 @@ import {
 import type { ClawdbotConfig, SkillConfig } from "../config/config.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
+const fsp = fs.promises;
+
 export type SkillInstallSpec = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv";
@@ -617,6 +619,41 @@ export function loadWorkspaceSkillEntries(
   },
 ): SkillEntry[] {
   return loadSkillEntries(workspaceDir, opts);
+}
+
+export async function syncSkillsToWorkspace(params: {
+  sourceWorkspaceDir: string;
+  targetWorkspaceDir: string;
+  config?: ClawdbotConfig;
+  managedSkillsDir?: string;
+  bundledSkillsDir?: string;
+}) {
+  const sourceDir = resolveUserPath(params.sourceWorkspaceDir);
+  const targetDir = resolveUserPath(params.targetWorkspaceDir);
+  if (sourceDir === targetDir) return;
+  const targetSkillsDir = path.join(targetDir, "skills");
+
+  const entries = loadSkillEntries(sourceDir, {
+    config: params.config,
+    managedSkillsDir: params.managedSkillsDir,
+    bundledSkillsDir: params.bundledSkillsDir,
+  });
+
+  await fsp.rm(targetSkillsDir, { recursive: true, force: true });
+  await fsp.mkdir(targetSkillsDir, { recursive: true });
+
+  for (const entry of entries) {
+    const dest = path.join(targetSkillsDir, entry.skill.name);
+    try {
+      await fsp.cp(entry.skill.baseDir, dest, { recursive: true, force: true });
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : JSON.stringify(error);
+      console.warn(
+        `[skills] Failed to copy ${entry.skill.name} to sandbox: ${message}`,
+      );
+    }
+  }
 }
 
 export function filterWorkspaceSkillEntries(
