@@ -66,6 +66,7 @@ cat ~/.clawdbot/clawdbot.json
 - Legacy service migration and extra gateway detection.
 - Gateway runtime checks (service installed but not running; cached launchd label).
 - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
+- Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
 - Gateway port collision diagnostics (default `18789`).
 - Security warnings for open DM policies.
 - systemd linger check on Linux.
@@ -179,11 +180,18 @@ service is installed but not actually running. It also checks for port collision
 on the gateway port (default `18789`) and reports likely causes (gateway already
 running, SSH tunnel).
 
-### 13) Config write + wizard metadata
+### 13) Gateway runtime best practices
+Doctor warns when the gateway service runs on Bun or a version-managed Node path
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram providers require Node,
+and version-manager paths can break after upgrades because the daemon does not
+load your shell init. Doctor offers to migrate to a system Node install when
+available (Homebrew/apt/choco).
+
+### 14) Config write + wizard metadata
 Doctor persists any config changes and stamps wizard metadata to record the
 doctor run.
 
-### 14) Workspace tips (backup + memory system)
+### 15) Workspace tips (backup + memory system)
 Doctor suggests a workspace memory system when missing and prints a backup tip
 if the workspace is not already under git.
 

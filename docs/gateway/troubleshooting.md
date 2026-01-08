@@ -31,6 +31,21 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 - Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
 
+### Service Environment (PATH + runtime)
+
+The gateway daemon runs with a **minimal PATH** to avoid shell/manager cruft:
+- macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
+- Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
+
+This intentionally excludes version managers (nvm/fnm/volta/asdf) and package
+managers (pnpm/npm) because the daemon does not load your shell init. Runtime
+variables like `DISPLAY` should live in `~/.clawdbot/.env` (loaded early by the
+gateway).
+
+WhatsApp + Telegram providers require **Node**; Bun is unsupported. If your
+service was installed with Bun or a version-managed Node path, run `clawdbot doctor`
+to migrate to a system Node install.
+
 ### Service Running but Port Not Listening
 
 If the service reports **running** but nothing is listening on the gateway port,

@@ -14,8 +14,16 @@ import {
   uninstallLegacyGatewayServices,
 } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import {
+  resolvePreferredNodePath,
+  resolveSystemNodePath,
+} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { auditGatewayServiceConfig } from "../daemon/service-audit.js";
+import {
+  auditGatewayServiceConfig,
+  needsNodeRuntimeMigration,
+} from "../daemon/service-audit.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -103,19 +111,24 @@ export async function maybeMigrateLegacyGatewayService(
     process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
     process.argv[1]?.endsWith(".ts");
   const port = resolveGatewayPort(cfg, process.env);
+  const nodePath = await resolvePreferredNodePath({
+    env: process.env,
+    runtime: daemonRuntime,
+  });
   const { programArguments, workingDirectory } =
     await resolveGatewayProgramArguments({
       port,
       dev: devMode,
       runtime: daemonRuntime,
+      nodePath,
     });
-  const environment: Record<string, string | undefined> = {
-    PATH: process.env.PATH,
-    CLAWDBOT_GATEWAY_TOKEN:
-      cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    CLAWDBOT_LAUNCHD_LABEL:
+  const environment = buildServiceEnvironment({
+    env: process.env,
+    port,
+    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    launchdLabel:
       process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-  };
+  });
   await service.install({
     env: process.env,
     stdout: process.stdout,
@@ -191,6 +204,17 @@ export async function maybeRepairGatewayServiceConfig(
       });
   if (!repair) return;
 
+  const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
+  const systemNodePath = needsNodeRuntime
+    ? await resolveSystemNodePath(process.env)
+    : null;
+  if (needsNodeRuntime && !systemNodePath) {
+    note(
+      "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+      "Gateway runtime",
+    );
+  }
+
   const devMode =
     process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
     process.argv[1]?.endsWith(".ts");
@@ -200,19 +224,16 @@ export async function maybeRepairGatewayServiceConfig(
     await resolveGatewayProgramArguments({
       port,
       dev: devMode,
-      runtime: runtimeChoice,
+      runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
+      nodePath: systemNodePath ?? undefined,
     });
-  const environment: Record<string, string | undefined> = {
-    PATH: process.env.PATH,
-    CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
-    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
-    CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
-    CLAWDBOT_GATEWAY_PORT: String(port),
-    CLAWDBOT_GATEWAY_TOKEN:
-      cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    CLAWDBOT_LAUNCHD_LABEL:
+  const environment = buildServiceEnvironment({
+    env: process.env,
+    port,
+    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    launchdLabel:
       process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-  };
+  });
 
   try {
     await service.install({

@@ -10,7 +10,7 @@ export const GATEWAY_DAEMON_RUNTIME_OPTIONS: Array<{
   {
     value: "node",
     label: "Node (recommended)",
-    hint: "Required for WhatsApp (Baileys WebSocket). Bun can corrupt memory on reconnect.",
+    hint: "Required for WhatsApp + Telegram. Bun can corrupt memory on reconnect.",
   },
 ];
 
