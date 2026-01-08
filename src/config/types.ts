@@ -125,6 +125,8 @@ export type WhatsAppConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Disable block streaming for this account. */
+  blockStreaming?: boolean;
   /** Per-action tool gating (default: true for all). */
   actions?: WhatsAppActionConfig;
   groups?: Record<
@@ -150,6 +152,7 @@ export type WhatsAppAccountConfig = {
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
+  blockStreaming?: boolean;
   groups?: Record<
     string,
     {
@@ -301,6 +304,8 @@ export type TelegramAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Disable block streaming for this account. */
+  blockStreaming?: boolean;
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
@@ -422,6 +427,8 @@ export type DiscordAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /** Disable block streaming for this account. */
+  blockStreaming?: boolean;
   /**
    * Soft max line count per Discord message.
    * Discord clients can clip/collapse very tall messages; splitting by lines
@@ -517,6 +524,7 @@ export type SlackAccountConfig = {
    */
   groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
+  blockStreaming?: boolean;
   mediaMaxMb?: number;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: SlackReactionNotificationMode;
@@ -570,6 +578,7 @@ export type SignalAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  blockStreaming?: boolean;
   mediaMaxMb?: number;
 };
 
@@ -668,6 +677,7 @@ export type IMessageAccountConfig = {
   mediaMaxMb?: number;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  blockStreaming?: boolean;
   groups?: Record<
     string,
     {
