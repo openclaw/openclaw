@@ -42,8 +42,8 @@ Model note: while any model is supported, I strongly recommend **Anthropic Pro/M
 Runtime: **Node ≥22**.
 
 ```bash
-pnpm add -g clawdbot@latest
-# or: npm install -g clawdbot@latest
+npm install -g clawdbot@latest
+# or: pnpm add -g clawdbot@latest
 
 clawdbot onboard --install-daemon
 ```

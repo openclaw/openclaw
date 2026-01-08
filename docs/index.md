@@ -99,8 +99,8 @@ Runtime requirement: **Node ≥ 22**.
 
 ```bash
 # Recommended: global install (npm/pnpm)
-pnpm add -g clawdbot@latest
-# or: npm install -g clawdbot@latest
+npm install -g clawdbot@latest
+# or: pnpm add -g clawdbot@latest
 
 # Onboard + install the daemon (launchd/systemd user service)
 clawdbot onboard --install-daemon

@@ -27,8 +27,8 @@ Start conservative:
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ```bash
-pnpm add -g clawdbot@latest
-# or: npm install -g clawdbot@latest
+npm install -g clawdbot@latest
+# or: pnpm add -g clawdbot@latest
 ```
 
 From source (development):
