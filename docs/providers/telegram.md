@@ -41,6 +41,12 @@ Multi-account support: use `telegram.accounts` with per-account tokens and optio
 - Replies always route back to the same Telegram chat.
 - Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agent.maxConcurrent`.
 
+## Formatting (Telegram HTML)
+- Outbound Telegram text uses `parse_mode: "HTML"` (Telegram’s supported tag subset).
+- Markdown-ish input is rendered into **Telegram-safe HTML** (bold/italic/strike/code/links); block elements are flattened to text with newlines/bullets.
+- Raw HTML from models is escaped to avoid Telegram parse errors.
+- If Telegram rejects the HTML payload, Clawdbot retries the same message as plain text.
+
 ## Group activation modes
 
 By default, the bot only responds to mentions in groups (`@botname` or patterns in `routing.groupChat.mentionPatterns`). To change this behavior:

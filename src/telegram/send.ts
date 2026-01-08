@@ -8,6 +8,7 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { markdownToTelegramHtml } from "./format.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -204,20 +205,21 @@ export async function sendMessageTelegram(
   if (!text || !text.trim()) {
     throw new Error("Message must be non-empty for Telegram sends");
   }
+  const htmlText = markdownToTelegramHtml(text);
   const textParams = hasThreadParams
-    ? { parse_mode: "Markdown" as const, ...threadParams }
-    : { parse_mode: "Markdown" as const };
+    ? { parse_mode: "HTML" as const, ...threadParams }
+    : { parse_mode: "HTML" as const };
   const res = await request(
-    () => api.sendMessage(chatId, text, textParams),
+    () => api.sendMessage(chatId, htmlText, textParams),
     "message",
   ).catch(async (err) => {
-    // Telegram rejects malformed Markdown (e.g., unbalanced '_' or '*').
+    // Telegram rejects malformed HTML (e.g., unsupported tags or entities).
     // When that happens, fall back to plain text so the message still delivers.
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
       if (opts.verbose) {
         console.warn(
-          `telegram markdown parse failed, retrying as plain text: ${errText}`,
+          `telegram HTML parse failed, retrying as plain text: ${errText}`,
         );
       }
       return await request(

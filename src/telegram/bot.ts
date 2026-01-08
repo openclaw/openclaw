@@ -52,6 +52,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { markdownToTelegramHtml } from "./format.js";
 import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
@@ -1427,9 +1428,10 @@ async function sendTelegramText(
   if (threadParams) {
     baseParams.message_thread_id = threadParams.message_thread_id;
   }
+  const htmlText = markdownToTelegramHtml(text);
   try {
-    const res = await bot.api.sendMessage(chatId, text, {
-      parse_mode: "Markdown",
+    const res = await bot.api.sendMessage(chatId, htmlText, {
+      parse_mode: "HTML",
       ...baseParams,
     });
     return res.message_id;
@@ -1437,7 +1439,7 @@ async function sendTelegramText(
     const errText = formatErrorMessage(err);
     if (PARSE_ERR_RE.test(errText)) {
       runtime.log?.(
-        `telegram markdown parse failed; retrying without formatting: ${errText}`,
+        `telegram HTML parse failed; retrying without formatting: ${errText}`,
       );
       const res = await bot.api.sendMessage(chatId, text, {
         ...baseParams,

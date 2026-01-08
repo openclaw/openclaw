@@ -15,7 +15,7 @@ describe("sendMessageTelegram", () => {
     loadWebMedia.mockReset();
   });
 
-  it("falls back to plain text when Telegram rejects Markdown", async () => {
+  it("falls back to plain text when Telegram rejects HTML", async () => {
     const chatId = "123";
     const parseErr = new Error(
       "400: Bad Request: can't parse entities: Can't find end of the entity starting at byte offset 9",
@@ -37,8 +37,8 @@ describe("sendMessageTelegram", () => {
       verbose: true,
     });
 
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "_oops_", {
-      parse_mode: "Markdown",
+    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "<i>oops</i>", {
+      parse_mode: "HTML",
     });
     expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_oops_");
     expect(res.chatId).toBe(chatId);
@@ -60,7 +60,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith("123", "hi", {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
     });
   });
 
@@ -175,7 +175,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       message_thread_id: 271,
     });
   });
@@ -197,7 +197,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith(chatId, "reply text", {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       reply_to_message_id: 100,
     });
   });
@@ -220,7 +220,7 @@ describe("sendMessageTelegram", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledWith(chatId, "forum reply", {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
       message_thread_id: 271,
       reply_to_message_id: 500,
     });
@@ -249,12 +249,17 @@ describe("sendMessageTelegram", () => {
       replyToMessageId: 100,
     });
 
-    // First call: with Markdown + thread params
-    expect(sendMessage).toHaveBeenNthCalledWith(1, chatId, "_bad markdown_", {
-      parse_mode: "Markdown",
-      message_thread_id: 271,
-      reply_to_message_id: 100,
-    });
+    // First call: with HTML + thread params
+    expect(sendMessage).toHaveBeenNthCalledWith(
+      1,
+      chatId,
+      "<i>bad markdown</i>",
+      {
+        parse_mode: "HTML",
+        message_thread_id: 271,
+        reply_to_message_id: 100,
+      },
+    );
     // Second call: plain text BUT still with thread params (critical!)
     expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_bad markdown_", {
       message_thread_id: 271,

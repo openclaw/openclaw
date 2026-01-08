@@ -51,7 +51,7 @@ vi.mock("./bot.js", () => ({
       const text = ctx.message.text ?? ctx.message.caption ?? "";
       if (isGroup && !text.includes("@mybot")) return;
       if (!text.trim()) return;
-      await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "Markdown" });
+      await api.sendMessage(chatId, `echo:${text}`, { parse_mode: "HTML" });
     };
     return {
       on: vi.fn(),
@@ -102,7 +102,7 @@ describe("monitorTelegramProvider (grammY)", () => {
       getFile: vi.fn(async () => ({})),
     });
     expect(api.sendMessage).toHaveBeenCalledWith(123, "echo:hi", {
-      parse_mode: "Markdown",
+      parse_mode: "HTML",
     });
   });
 
