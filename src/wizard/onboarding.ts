@@ -113,8 +113,7 @@ export async function runOnboardingWizard(
   }
 
   const quickstartHint = "Configure details later via clawdbot configure.";
-  const advancedHint =
-    "Configure port, network, Tailscale, and auth options.";
+  const advancedHint = "Configure port, network, Tailscale, and auth options.";
   let flow = (await prompter.select({
     message: "Onboarding mode",
     options: [
