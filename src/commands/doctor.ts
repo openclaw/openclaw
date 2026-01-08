@@ -9,6 +9,7 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
+import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
@@ -216,21 +217,31 @@ export async function doctorCommand(
   }
 
   if (!healthOk) {
+    const service = resolveGatewayService();
+    const loaded = await service.isLoaded({ env: process.env });
+    let serviceRuntime:
+      | Awaited<ReturnType<typeof service.readRuntime>>
+      | undefined;
+    if (loaded) {
+      serviceRuntime = await service
+        .readRuntime(process.env)
+        .catch(() => undefined);
+    }
     if (resolveMode(cfg) === "local") {
       const port = resolveGatewayPort(cfg, process.env);
       const diagnostics = await inspectPortUsage(port);
       if (diagnostics.status === "busy") {
         note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
+      } else if (loaded && serviceRuntime?.status === "running") {
+        const lastError = await readLastGatewayErrorLine(process.env);
+        if (lastError) {
+          note(`Last gateway error: ${lastError}`, "Gateway");
+        }
       }
     }
-    const service = resolveGatewayService();
-    const loaded = await service.isLoaded({ env: process.env });
     if (!loaded) {
       note("Gateway daemon not installed.", "Gateway");
     } else {
-      const serviceRuntime = await service
-        .readRuntime(process.env)
-        .catch(() => undefined);
       const summary = formatGatewayRuntimeSummary(serviceRuntime);
       const hints = buildGatewayRuntimeHints(serviceRuntime, {
         platform: process.platform,

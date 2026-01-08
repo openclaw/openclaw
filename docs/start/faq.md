@@ -3,7 +3,40 @@ summary: "Frequently asked questions about Clawdbot setup, configuration, and us
 ---
 # FAQ
 
-Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For the full config reference, see [Configuration](/gateway/configuration).
+Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS, multi-agent, OAuth/API keys, model failover). For runtime diagnostics, see [Troubleshooting](/gateway/troubleshooting). For the full config reference, see [Configuration](/gateway/configuration).
+
+## First 60 seconds if something's broken
+
+1) **Run the doctor**
+   ```bash
+   clawdbot doctor
+   ```
+   Repairs/migrates config/state + runs health checks. See [Doctor](/gateway/doctor).
+
+2) **Daemon + port state**
+   ```bash
+   clawdbot daemon status
+   ```
+   Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the daemon likely used.
+
+3) **Local probes**
+   ```bash
+   clawdbot status --deep
+   ```
+   Checks provider connectivity and local health. See [Health](/gateway/health).
+
+4) **Gateway snapshot**
+   ```bash
+   clawdbot health --json
+   clawdbot health --verbose   # shows the target URL + config path on errors
+   ```
+   Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
+
+5) **Tail the latest log**
+   ```bash
+   tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)"
+   ```
+   File logs are separate from service logs; see [Logging](/gateway/logging) and [Troubleshooting](/gateway/troubleshooting).
 
 ## What is Clawdbot?
 
@@ -60,34 +93,58 @@ Bun is supported for faster TypeScript execution, but **WhatsApp requires Node**
 
 ### Where does Clawdbot store its data?
 
-Everything lives under `~/.clawdbot/` (or `$CLAWDBOT_STATE_DIR` if you override the state dir):
+Everything lives under `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`):
 
 | Path | Purpose |
 |------|---------|
-| `~/.clawdbot/clawdbot.json` | Main config (JSON5) |
-| `~/.clawdbot/credentials/oauth.json` | Legacy OAuth import (copied into auth profiles on first use) |
-| `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
-| `~/.clawdbot/agents/<agentId>/agent/auth.json` | Runtime auth cache (managed automatically) |
-| `~/.clawdbot/credentials/` | Provider state (e.g. `whatsapp/<accountId>/creds.json`) |
-| `~/.clawdbot/agents/` | Per‑agent state (agentDir + sessions) |
-| `~/.clawdbot/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
-| `~/.clawdbot/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
+| `$CLAWDBOT_STATE_DIR/clawdbot.json` | Main config (JSON5) |
+| `$CLAWDBOT_STATE_DIR/credentials/oauth.json` | Legacy OAuth import (copied into auth profiles on first use) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/agent/auth-profiles.json` | Auth profiles (OAuth + API keys) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/agent/auth.json` | Runtime auth cache (managed automatically) |
+| `$CLAWDBOT_STATE_DIR/credentials/` | Provider state (e.g. `whatsapp/<accountId>/creds.json`) |
+| `$CLAWDBOT_STATE_DIR/agents/` | Per‑agent state (agentDir + sessions) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/` | Conversation history & state (per agent) |
+| `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/sessions.json` | Session metadata (per agent) |
 
 Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`).
 
 Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agent.workspace` (default: `~/clawd`).
 
+### I’m in remote mode — where is the session store?
+
+Session state is owned by the **gateway host**. If you’re in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
+
 ## Config basics
 
 ### What format is the config? Where is it?
 
-Clawdbot reads an optional **JSON5** config from:
+Clawdbot reads an optional **JSON5** config from `$CLAWDBOT_CONFIG_PATH` (default: `~/.clawdbot/clawdbot.json`):
 
 ```
-~/.clawdbot/clawdbot.json
+$CLAWDBOT_CONFIG_PATH
 ```
 
 If the file is missing, it uses safe‑ish defaults (including a default workspace of `~/clawd`).
+
+### I set `gateway.bind: "lan"` (or `"tailnet"`) and now nothing listens / the UI says unauthorized
+
+Non-loopback binds **require auth**. Configure `gateway.auth.mode` + `gateway.auth.token` (or use `CLAWDBOT_GATEWAY_TOKEN`).
+
+```json5
+{
+  gateway: {
+    bind: "lan",
+    auth: {
+      mode: "token",
+      token: "replace-me"
+    }
+  }
+}
+```
+
+Notes:
+- `gateway.remote.token` is for **remote CLI calls** only; it does not enable local gateway auth.
+- The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
 
 ### Do I have to restart after changing config?
 
@@ -144,6 +201,16 @@ Two common fixes:
 
 This runs your login shell and imports only missing expected keys (never overrides). Env var equivalents:
 `CLAWDBOT_LOAD_SHELL_ENV=1`, `CLAWDBOT_SHELL_ENV_TIMEOUT_MS=15000`.
+
+## Sessions & multiple chats
+
+### How do I start a fresh conversation?
+
+Send `/new` or `/reset` as a standalone message. See [Session management](/concepts/session).
+
+### Do groups/threads share context with DMs?
+
+Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/concepts/groups) and [Group messages](/concepts/group-messages).
 
 ## Models: defaults, selection, aliases, switching
 
@@ -313,6 +380,25 @@ Precedence:
 --port > CLAWDBOT_GATEWAY_PORT > gateway.port > default 18789
 ```
 
+### Why does `clawdbot daemon status` say `Runtime: running` but `RPC probe: failed`?
+
+Because “running” is the **supervisor’s** view (launchd/systemd/schtasks). The RPC probe is the CLI actually connecting to the gateway WebSocket and calling `status`.
+
+Use `clawdbot daemon status` and trust these lines:
+- `Probe target:` (the URL the probe actually used)
+- `Listening:` (what’s actually bound on the port)
+- `Last gateway error:` (common root cause when the process is alive but the port isn’t listening)
+
+### Why does `clawdbot daemon status` show `Config (cli)` and `Config (daemon)` different?
+
+You’re editing one config file while the daemon is running another (often a `--profile` / `CLAWDBOT_STATE_DIR` mismatch).
+
+Fix:
+```bash
+clawdbot daemon install --force
+```
+Run that from the same `--profile` / environment you want the daemon to use.
+
 ### What does “another gateway instance is already listening” mean?
 
 Clawdbot enforces a runtime lock by binding the WebSocket listener immediately on startup (default `ws://127.0.0.1:18789`). If the bind fails with `EADDRINUSE`, it throws `GatewayLockError` indicating another instance is already listening.
@@ -340,6 +426,26 @@ Notes:
 - `clawdbot gateway` only starts when `gateway.mode` is `local` (or you pass the override flag).
 - The macOS app watches the config file and switches modes live when these values change.
 
+### The Control UI says “unauthorized” (or keeps reconnecting). What now?
+
+Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not sending the matching token/password.
+
+Facts (from code):
+- The Control UI stores the token in browser localStorage key `clawdbot.control.settings.v1`.
+- The UI can import `?token=...` (and/or `?password=...`) once, then strips it from the URL.
+
+Fix:
+- Set `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`) on the gateway host.
+- In the Control UI settings, paste the same token (or refresh with a one-time `?token=...` link).
+
+### I set `gateway.bind: "tailnet"` but it can’t bind / nothing listens
+
+`tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine isn’t on Tailscale (or the interface is down), there’s nothing to bind to.
+
+Fix:
+- Start Tailscale on that host (so it has a 100.x address), or
+- Switch to `gateway.bind: "loopback"` / `"lan"`.
+
 ### Can I run multiple Gateways on the same host?
 
 Yes, but you must isolate:
@@ -355,7 +461,7 @@ There are convenience CLI flags like `--dev` and `--profile <name>` that shift s
 
 ### Where are logs?
 
-Default log file:
+File logs (structured):
 
 ```
 /tmp/clawdbot/clawdbot-YYYY-MM-DD.log
@@ -369,9 +475,41 @@ Fastest log tail:
 clawdbot logs --follow
 ```
 
+Service/supervisor logs (when the gateway runs via launchd/systemd):
+- macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)
+- Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
+- Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
+
+See [Troubleshooting](/gateway/troubleshooting#log-locations) for more.
+
+### How do I start/stop/restart the Gateway daemon?
+
+Use the daemon helpers:
+
+```bash
+clawdbot daemon status
+clawdbot daemon restart
+```
+
+If you run the gateway manually, `clawdbot gateway --force` can reclaim the port. See [Gateway](/gateway).
+
 ### What’s the fastest way to get more details when something fails?
 
 Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for provider auth, model routing, and RPC errors.
+
+## Media & attachments
+
+### My skill generated an image/PDF, but nothing was sent
+
+Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [Clawd setup](/start/clawd) and [Agent send](/tools/agent-send).
+
+CLI sending:
+
+```bash
+clawdbot send --to +15555550123 --message "Here you go" --media /path/to/file.png
+```
+
+Note: images are resized/recompressed (max side 2048px) to hit size limits. See [Images](/nodes/images).
 
 ## Security and access control
 
@@ -430,6 +568,22 @@ You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
 - **Model routing**: confirm `agent.model.primary` and fallbacks are models you can access.
 - **Gateway logs** in `/tmp/clawdbot/…` for the exact provider error.
 - **`/model status`** to see current configured models + shorthands.
+
+### I’m running on my personal WhatsApp number — why is self-chat weird?
+
+Enable self-chat mode and allowlist your own number:
+
+```json5
+{
+  whatsapp: {
+    selfChatMode: true,
+    dmPolicy: "allowlist",
+    allowFrom: ["+15555550123"]
+  }
+}
+```
+
+See [WhatsApp setup](/providers/whatsapp).
 
 ### WhatsApp logged me out. How do I re‑auth?
 

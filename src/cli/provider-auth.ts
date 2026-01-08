@@ -38,7 +38,7 @@ export async function runProviderLogout(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  normalizeProvider(opts.provider);
+  const _provider = normalizeProvider(opts.provider);
   // Auth-only flow: resolve account + clear session state only.
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({

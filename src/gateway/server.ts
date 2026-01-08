@@ -103,6 +103,7 @@ import {
   assertGatewayAuthConfigured,
   authorizeGatewayConnect,
   type ResolvedGatewayAuth,
+  resolveGatewayAuth,
 } from "./auth.js";
 import {
   type GatewayReloadPlan,
@@ -434,21 +435,12 @@ export async function startGatewayServer(
     ...tailscaleOverrides,
   };
   const tailscaleMode = tailscaleConfig.mode ?? "off";
-  const token =
-    authConfig.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN ?? undefined;
-  const password =
-    authConfig.password ?? process.env.CLAWDBOT_GATEWAY_PASSWORD ?? undefined;
-  const authMode: ResolvedGatewayAuth["mode"] =
-    authConfig.mode ?? (password ? "password" : token ? "token" : "none");
-  const allowTailscale =
-    authConfig.allowTailscale ??
-    (tailscaleMode === "serve" && authMode !== "password");
-  const resolvedAuth: ResolvedGatewayAuth = {
-    mode: authMode,
-    token,
-    password,
-    allowTailscale,
-  };
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig,
+    env: process.env,
+    tailscaleMode,
+  });
+  const authMode: ResolvedGatewayAuth["mode"] = resolvedAuth.mode;
   let hooksConfig = resolveHooksConfig(cfgAtStart);
   const canvasHostEnabled =
     process.env.CLAWDBOT_SKIP_CANVAS_HOST !== "1" &&
@@ -466,7 +458,7 @@ export async function startGatewayServer(
   }
   if (!isLoopbackHost(bindHost) && authMode === "none") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth or CLAWDBOT_GATEWAY_TOKEN)`,
+      `refusing to bind gateway to ${bindHost}:${port} without auth (set gateway.auth.token or CLAWDBOT_GATEWAY_TOKEN, or pass --token)`,
     );
   }
 

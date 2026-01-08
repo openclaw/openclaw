@@ -10,7 +10,7 @@ export function mergeConfigSection<T extends Record<string, unknown>>(
   patch: Partial<T>,
   options: MergeSectionOptions<T> = {},
 ): T {
-  const next: Record<string, unknown> = { ...(base ?? {}) };
+  const next: Record<string, unknown> = { ...(base ?? undefined) };
   for (const [key, value] of Object.entries(patch) as [keyof T, T[keyof T]][]) {
     if (value === undefined) {
       if (options.unsetOnUndefined?.includes(key)) {

@@ -134,6 +134,9 @@ Parameters:
 Allowlist:
 - `routing.agents.<agentId>.subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
+Discovery:
+- Use `agents_list` to discover which agent ids are allowed for `sessions_spawn`.
+
 Behavior:
 - Starts a new `agent:<agentId>:subagent:<uuid>` session with `deliver: false`.
 - Sub-agents default to the full tool set **minus session tools** (configurable via `agent.subagents.tools`).

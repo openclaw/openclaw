@@ -3,7 +3,9 @@ import fs from "node:fs";
 import type { Command } from "commander";
 import {
   CONFIG_PATH_CLAWDBOT,
+  type GatewayAuthMode,
   loadConfig,
+  readConfigFileSnapshot,
   resolveGatewayPort,
 } from "../config/config.js";
 import {
@@ -12,6 +14,7 @@ import {
   GATEWAY_WINDOWS_TASK_NAME,
 } from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { resolveGatewayAuth } from "../gateway/auth.js";
 import { callGateway } from "../gateway/call.js";
 import { startGatewayServer } from "../gateway/server.js";
 import {
@@ -68,6 +71,26 @@ function describeUnknownError(err: unknown): string {
     }
   }
   return "Unknown error";
+}
+
+function extractGatewayMiskeys(parsed: unknown): {
+  hasGatewayToken: boolean;
+  hasRemoteToken: boolean;
+} {
+  if (!parsed || typeof parsed !== "object") {
+    return { hasGatewayToken: false, hasRemoteToken: false };
+  }
+  const gateway = (parsed as Record<string, unknown>).gateway;
+  if (!gateway || typeof gateway !== "object") {
+    return { hasGatewayToken: false, hasRemoteToken: false };
+  }
+  const hasGatewayToken = "token" in (gateway as Record<string, unknown>);
+  const remote = (gateway as Record<string, unknown>).remote;
+  const hasRemoteToken =
+    remote && typeof remote === "object"
+      ? "token" in (remote as Record<string, unknown>)
+      : false;
+  return { hasGatewayToken, hasRemoteToken };
 }
 
 function renderGatewayServiceStopHints(): string[] {
@@ -336,7 +359,7 @@ export function registerGatewayCli(program: Command) {
         process.env.CLAWDBOT_GATEWAY_TOKEN = String(opts.token);
       }
       const authModeRaw = opts.auth ? String(opts.auth) : undefined;
-      const authMode =
+      const authMode: GatewayAuthMode | null =
         authModeRaw === "token" || authModeRaw === "password"
           ? authModeRaw
           : null;
@@ -368,7 +391,7 @@ export function registerGatewayCli(program: Command) {
           );
         } else {
           defaultRuntime.error(
-            "Gateway start blocked: set gateway.mode=local (or pass --allow-unconfigured).",
+            `Gateway start blocked: set gateway.mode=local (current: ${mode ?? "unset"}) or pass --allow-unconfigured.`,
           );
         }
         defaultRuntime.exit(1);
@@ -390,6 +413,73 @@ export function registerGatewayCli(program: Command) {
         return;
       }
 
+      const snapshot = await readConfigFileSnapshot().catch(() => null);
+      const miskeys = extractGatewayMiskeys(snapshot?.parsed);
+      const authConfig = {
+        ...cfg.gateway?.auth,
+        ...(authMode ? { mode: authMode } : {}),
+        ...(opts.password ? { password: String(opts.password) } : {}),
+        ...(opts.token ? { token: String(opts.token) } : {}),
+      };
+      const resolvedAuth = resolveGatewayAuth({
+        authConfig,
+        env: process.env,
+        tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+      });
+      const resolvedAuthMode = resolvedAuth.mode;
+      const tokenValue = resolvedAuth.token;
+      const passwordValue = resolvedAuth.password;
+      const authHints: string[] = [];
+      if (miskeys.hasGatewayToken) {
+        authHints.push(
+          'Found "gateway.token" in config. Use "gateway.auth.token" instead.',
+        );
+      }
+      if (miskeys.hasRemoteToken) {
+        authHints.push(
+          '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
+        );
+      }
+      if (resolvedAuthMode === "token" && !tokenValue) {
+        defaultRuntime.error(
+          [
+            "Gateway auth is set to token, but no token is configured.",
+            "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN), or pass --token.",
+            ...authHints,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      if (resolvedAuthMode === "password" && !passwordValue) {
+        defaultRuntime.error(
+          [
+            "Gateway auth is set to password, but no password is configured.",
+            "Set gateway.auth.password (or CLAWDBOT_GATEWAY_PASSWORD), or pass --password.",
+            ...authHints,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+      if (bind !== "loopback" && resolvedAuthMode === "none") {
+        defaultRuntime.error(
+          [
+            `Refusing to bind gateway to ${bind} without auth.`,
+            "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) or pass --token.",
+            ...authHints,
+          ]
+            .filter(Boolean)
+            .join("\n"),
+        );
+        defaultRuntime.exit(1);
+        return;
+      }
+
       try {
         await runGatewayLoop({
           runtime: defaultRuntime,
@@ -397,9 +487,10 @@ export function registerGatewayCli(program: Command) {
             await startGatewayServer(port, {
               bind,
               auth:
-                authMode || opts.password || authModeRaw
+                authMode || opts.password || opts.token || authModeRaw
                   ? {
                       mode: authMode ?? undefined,
+                      token: opts.token ? String(opts.token) : undefined,
                       password: opts.password
                         ? String(opts.password)
                         : undefined,

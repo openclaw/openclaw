@@ -20,6 +20,8 @@
 
 ### Fixes
 - CLI/Daemon: add `clawdbot logs` tailing and improve restart/service hints across platforms.
+- Gateway/CLI/Doctor: tighten LAN bind auth checks, warn/migrate mis-keyed gateway tokens, and surface last gateway error when daemon looks running but the port is closed.
+- CLI/Daemon: add `clawdbot daemon install --force` and expand daemon status guidance for config mismatches and probe targets.
 - Auto-reply: keep typing indicators alive during tool execution without changing typing-mode semantics. Thanks @thesash for PR #452.
 - macOS: harden Voice Wake tester/runtime (pause trigger, mic persistence, local-only tester) and keep transcript logs private. Thanks @xadenryan for PR #438.
 - macOS: preserve node bridge tunnel port override so remote nodes connect on the bridge port. Thanks @sircrumpet for PR #364.
@@ -70,6 +72,7 @@
 - Gateway/CLI: add daemon runtime selection (Node recommended; Bun optional) and document WhatsApp/Baileys Bun WebSocket instability on reconnect.
 - CLI: add `clawdbot docs` live docs search with pretty output.
 - CLI: add `clawdbot agents` (list/add/delete) with wizarded workspace/setup, provider login, and full prune on delete.
+- CLI: add non-interactive flags for `agents add`, support `agents list --bindings`, and keep JSON output clean for scripting.
 - Discord/Slack: fork thread sessions (agent-scoped) and inject thread starters for context. Thanks @thewilloftheshadow for PR #400.
 - Agent: treat compaction retry AbortError as a fallback trigger without swallowing non-abort errors. Thanks @erikpr1994 for PR #341.
 - Agent: add opt-in session pruning for tool results to reduce context bloat. Thanks @maxsumrall for PR #381.
@@ -80,6 +83,8 @@
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
 - Sub-agents: skip invalid model overrides with a warning and keep the run alive; tool exceptions now return tool errors instead of crashing the agent.
 - Sub-agents: allow `sessions_spawn` to target other agents via per-agent allowlists (`routing.agents.<agentId>.subagents.allowAgents`).
+- Sub-agents: treat `sessions_spawn` allowlists as case-insensitive.
+- Tools: add `agents_list` to reveal allowed `sessions_spawn` targets for the current agent.
 - Sessions: forward explicit sessionKey through gateway/chat/node bridge to avoid sub-agent sessionId mixups.
 - Heartbeat: default interval 30m; clarified default prompt usage and HEARTBEAT.md template behavior.
 - Onboarding: write auth profiles to the multi-agent path (`~/.clawdbot/agents/main/agent/`) so the gateway finds credentials on first startup. Thanks @minghinmatthewlam for PR #327.
@@ -104,7 +109,7 @@
 - Telegram: honor `/activation` session mode for group mention gating and clarify group activation docs. Thanks @julianengel for PR #377.
 - Telegram: isolate forum topic transcripts per thread and validate Gemini turn ordering in multi-topic sessions. Thanks @hsrvc for PR #407.
 - Telegram: render Telegram-safe HTML for outbound formatting and fall back to plain text on parse errors. Thanks @RandyVentures for PR #435.
-- Telegram: force grammY to use native fetch under Bun for BAN compatibility (avoids TLS chain errors).
+- Telegram: prefer native fetch when available (Node 18+ + Bun) for BAN compatibility; still respects proxy override.
 - iMessage: ignore disconnect errors during shutdown (avoid unhandled promise rejections). Thanks @antons for PR #359.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.

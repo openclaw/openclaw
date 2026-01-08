@@ -44,6 +44,8 @@ To add more isolated agents (separate workspace + sessions + auth), use:
 clawdbot agents add <name>
 ```
 
+Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (and `--workspace`) for scripts.
+
 ## Flow details (local)
 
 1) **Existing config detection**
@@ -131,6 +133,7 @@ What it sets:
 Notes:
 - Default workspaces follow `~/clawd-<agentId>`.
 - Add `routing.bindings` to route inbound messages (the wizard can do this).
+ - Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
 
 ## Non‑interactive mode
 
@@ -153,7 +156,12 @@ Add `--json` for a machine‑readable summary.
 Add agent (non‑interactive) example:
 
 ```bash
-clawdbot agents add work --workspace ~/clawd-work
+clawdbot agents add work \
+  --workspace ~/clawd-work \
+  --model openai/gpt-5.2 \
+  --bind whatsapp:biz \
+  --non-interactive \
+  --json
 ```
 
 ## Gateway wizard RPC
