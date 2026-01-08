@@ -28,6 +28,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 4) **Gateway snapshot**
    ```bash
    clawdbot health --json
+   clawdbot health --verbose   # shows the target URL + config path on errors
    ```
    Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
 
@@ -379,6 +380,25 @@ Precedence:
 --port > CLAWDBOT_GATEWAY_PORT > gateway.port > default 18789
 ```
 
+### Why does `clawdbot daemon status` say `Runtime: running` but `RPC probe: failed`?
+
+Because “running” is the **supervisor’s** view (launchd/systemd/schtasks). The RPC probe is the CLI actually connecting to the gateway WebSocket and calling `status`.
+
+Use `clawdbot daemon status` and trust these lines:
+- `Probe target:` (the URL the probe actually used)
+- `Listening:` (what’s actually bound on the port)
+- `Last gateway error:` (common root cause when the process is alive but the port isn’t listening)
+
+### Why does `clawdbot daemon status` show `Config (cli)` and `Config (daemon)` different?
+
+You’re editing one config file while the daemon is running another (often a `--profile` / `CLAWDBOT_STATE_DIR` mismatch).
+
+Fix:
+```bash
+clawdbot daemon install --force
+```
+Run that from the same `--profile` / environment you want the daemon to use.
+
 ### What does “another gateway instance is already listening” mean?
 
 Clawdbot enforces a runtime lock by binding the WebSocket listener immediately on startup (default `ws://127.0.0.1:18789`). If the bind fails with `EADDRINUSE`, it throws `GatewayLockError` indicating another instance is already listening.
@@ -405,6 +425,26 @@ Set `gateway.mode: "remote"` and point to a remote WebSocket URL, optionally wit
 Notes:
 - `clawdbot gateway` only starts when `gateway.mode` is `local` (or you pass the override flag).
 - The macOS app watches the config file and switches modes live when these values change.
+
+### The Control UI says “unauthorized” (or keeps reconnecting). What now?
+
+Your gateway is running with auth enabled (`gateway.auth.*`), but the UI is not sending the matching token/password.
+
+Facts (from code):
+- The Control UI stores the token in browser localStorage key `clawdbot.control.settings.v1`.
+- The UI can import `?token=...` (and/or `?password=...`) once, then strips it from the URL.
+
+Fix:
+- Set `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`) on the gateway host.
+- In the Control UI settings, paste the same token (or refresh with a one-time `?token=...` link).
+
+### I set `gateway.bind: "tailnet"` but it can’t bind / nothing listens
+
+`tailnet` bind picks a Tailscale IP from your network interfaces (100.64.0.0/10). If the machine isn’t on Tailscale (or the interface is down), there’s nothing to bind to.
+
+Fix:
+- Start Tailscale on that host (so it has a 100.x address), or
+- Switch to `gateway.bind: "loopback"` / `"lan"`.
 
 ### Can I run multiple Gateways on the same host?
 
