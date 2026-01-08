@@ -55,7 +55,13 @@ import {
   DEFAULT_WORKSPACE,
   printWizardHeader,
 } from "./onboard-helpers.js";
+import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
+import {
+  DEFAULT_GATEWAY_DAEMON_RUNTIME,
+  GATEWAY_DAEMON_RUNTIME_OPTIONS,
+  type GatewayDaemonRuntime,
+} from "./daemon-runtime.js";
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
@@ -241,6 +247,52 @@ export async function doctorCommand(
     }
     if (!loaded) {
       note("Gateway daemon not installed.", "Gateway");
+      if (resolveMode(cfg) === "local") {
+        const install = await prompter.confirmSkipInNonInteractive({
+          message: "Install gateway daemon now?",
+          initialValue: true,
+        });
+        if (install) {
+          const daemonRuntime = await prompter.select<GatewayDaemonRuntime>(
+            {
+              message: "Gateway daemon runtime",
+              options: GATEWAY_DAEMON_RUNTIME_OPTIONS,
+              initialValue: DEFAULT_GATEWAY_DAEMON_RUNTIME,
+            },
+            DEFAULT_GATEWAY_DAEMON_RUNTIME,
+          );
+          const devMode =
+            process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
+            process.argv[1]?.endsWith(".ts");
+          const port = resolveGatewayPort(cfg, process.env);
+          const { programArguments, workingDirectory } =
+            await resolveGatewayProgramArguments({
+              port,
+              dev: devMode,
+              runtime: daemonRuntime,
+            });
+          const environment: Record<string, string | undefined> = {
+            PATH: process.env.PATH,
+            CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
+            CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
+            CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
+            CLAWDBOT_GATEWAY_PORT: String(port),
+            CLAWDBOT_GATEWAY_TOKEN:
+              cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+            CLAWDBOT_LAUNCHD_LABEL:
+              process.platform === "darwin"
+                ? GATEWAY_LAUNCH_AGENT_LABEL
+                : undefined,
+          };
+          await service.install({
+            env: process.env,
+            stdout: process.stdout,
+            programArguments,
+            workingDirectory,
+            environment,
+          });
+        }
+      }
     } else {
       const summary = formatGatewayRuntimeSummary(serviceRuntime);
       const hints = buildGatewayRuntimeHints(serviceRuntime, {
@@ -253,28 +305,40 @@ export async function doctorCommand(
         lines.push(...hints);
         note(lines.join("\n"), "Gateway");
       }
+      if (serviceRuntime?.status !== "running") {
+        const start = await prompter.confirmSkipInNonInteractive({
+          message: "Start gateway daemon now?",
+          initialValue: true,
+        });
+        if (start) {
+          await service.restart({ stdout: process.stdout });
+          await sleep(1500);
+        }
+      }
       if (process.platform === "darwin") {
         note(
           `LaunchAgent loaded; stopping requires "clawdbot daemon stop" or launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}.`,
           "Gateway",
         );
       }
-      const restart = await prompter.confirmSkipInNonInteractive({
-        message: "Restart gateway daemon now?",
-        initialValue: true,
-      });
-      if (restart) {
-        await service.restart({ stdout: process.stdout });
-        await sleep(1500);
-        try {
-          await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-        } catch (err) {
-          const message = String(err);
-          if (message.includes("gateway closed")) {
-            note("Gateway not running.", "Gateway");
-            note(gatewayDetails.message, "Gateway connection");
-          } else {
-            runtime.error(`Health check failed: ${message}`);
+      if (serviceRuntime?.status === "running") {
+        const restart = await prompter.confirmSkipInNonInteractive({
+          message: "Restart gateway daemon now?",
+          initialValue: true,
+        });
+        if (restart) {
+          await service.restart({ stdout: process.stdout });
+          await sleep(1500);
+          try {
+            await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+          } catch (err) {
+            const message = String(err);
+            if (message.includes("gateway closed")) {
+              note("Gateway not running.", "Gateway");
+              note(gatewayDetails.message, "Gateway connection");
+            } else {
+              runtime.error(`Health check failed: ${message}`);
+            }
           }
         }
       }
