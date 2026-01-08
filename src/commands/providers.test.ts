@@ -16,7 +16,11 @@ vi.mock("../config/config.js", async (importOriginal) => {
   };
 });
 
-import { providersAddCommand, providersRemoveCommand } from "./providers.js";
+import {
+  formatGatewayProvidersStatusLines,
+  providersAddCommand,
+  providersRemoveCommand,
+} from "./providers.js";
 
 const runtime: RuntimeEnv = {
   log: vi.fn(),
@@ -110,5 +114,84 @@ describe("providers command", () => {
     };
     expect(next.discord?.accounts?.work).toBeUndefined();
     expect(next.discord?.accounts?.default?.token).toBe("d0");
+  });
+
+  it("stores default account names in accounts when multiple accounts exist", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: {
+        telegram: {
+          name: "Legacy Name",
+          accounts: {
+            work: { botToken: "t0" },
+          },
+        },
+      },
+    });
+
+    await providersAddCommand(
+      {
+        provider: "telegram",
+        account: "default",
+        token: "123:abc",
+        name: "Primary Bot",
+      },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      telegram?: {
+        name?: string;
+        accounts?: Record<string, { botToken?: string; name?: string }>;
+      };
+    };
+    expect(next.telegram?.name).toBeUndefined();
+    expect(next.telegram?.accounts?.default?.name).toBe("Primary Bot");
+  });
+
+  it("migrates base names when adding non-default accounts", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseSnapshot,
+      config: {
+        discord: {
+          name: "Primary Bot",
+          token: "d0",
+        },
+      },
+    });
+
+    await providersAddCommand(
+      { provider: "discord", account: "work", token: "d1" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      discord?: {
+        name?: string;
+        accounts?: Record<string, { name?: string; token?: string }>;
+      };
+    };
+    expect(next.discord?.name).toBeUndefined();
+    expect(next.discord?.accounts?.default?.name).toBe("Primary Bot");
+    expect(next.discord?.accounts?.work?.token).toBe("d1");
+  });
+
+  it("formats gateway provider status lines in registry order", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      telegramAccounts: [{ accountId: "default", configured: true }],
+      whatsappAccounts: [{ accountId: "default", linked: true }],
+    });
+
+    const telegramIndex = lines.findIndex((line) =>
+      line.includes("Telegram default"),
+    );
+    const whatsappIndex = lines.findIndex((line) =>
+      line.includes("WhatsApp default"),
+    );
+    expect(telegramIndex).toBeGreaterThan(-1);
+    expect(whatsappIndex).toBeGreaterThan(-1);
+    expect(telegramIndex).toBeLessThan(whatsappIndex);
   });
 });

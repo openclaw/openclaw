@@ -654,7 +654,8 @@
           "platforms/ios",
           "platforms/android",
           "platforms/windows",
-          "platforms/linux"
+          "platforms/linux",
+          "platforms/exe-dev"
         ]
       },
       {

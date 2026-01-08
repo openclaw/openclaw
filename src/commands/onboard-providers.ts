@@ -14,6 +14,11 @@ import {
 } from "../imessage/accounts.js";
 import { loginWeb } from "../provider-web.js";
 import {
+  formatProviderPrimerLine,
+  formatProviderSelectionLine,
+  listChatProviders,
+} from "../providers/registry.js";
+import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../routing/session-key.js";
@@ -33,7 +38,8 @@ import {
   resolveDefaultTelegramAccountId,
   resolveTelegramAccount,
 } from "../telegram/accounts.js";
-import { formatTerminalLink, normalizeE164 } from "../utils.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { normalizeE164 } from "../utils.js";
 import {
   listWhatsAppAccountIds,
   resolveDefaultWhatsAppAccountId,
@@ -43,14 +49,6 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { detectBinary } from "./onboard-helpers.js";
 import type { ProviderChoice } from "./onboard-types.js";
 import { installSignalCli } from "./signal-install.js";
-
-const DOCS_BASE = "https://docs.clawd.bot";
-
-function docsLink(path: string, label?: string): string {
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  const url = `${DOCS_BASE}${cleanPath}`;
-  return formatTerminalLink(label ?? url, url, { fallback: url });
-}
 
 async function promptAccountId(params: {
   cfg: ClawdbotConfig;
@@ -118,19 +116,17 @@ async function detectWhatsAppLinked(
 }
 
 async function noteProviderPrimer(prompter: WizardPrompter): Promise<void> {
+  const providerLines = listChatProviders().map((meta) =>
+    formatProviderPrimerLine(meta),
+  );
   await prompter.note(
     [
       "DM security: default is pairing; unknown DMs get a pairing code.",
       "Approve with: clawdbot pairing approve --provider <provider> <code>",
       'Public DMs require dmPolicy="open" + allowFrom=["*"].',
-      `Docs: ${docsLink("/start/pairing", "start/pairing")}`,
+      `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
       "",
-      "Telegram: simplest way to get started — register a bot with @BotFather and get going.",
-      "WhatsApp: works with your own number; recommend a separate phone + eSIM.",
-      "Discord: very well supported right now.",
-      "Slack: supported (Socket Mode).",
-      'Signal: signal-cli linked device; more setup (David Reagans: "Hop on Discord.").',
-      "iMessage: this is still a work in progress.",
+      ...providerLines,
     ].join("\n"),
     "How providers work",
   );
@@ -143,7 +139,7 @@ async function noteTelegramTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Run /newbot (or /mybots)",
       "3) Copy the token (looks like 123456:ABC...)",
       "Tip: you can also set TELEGRAM_BOT_TOKEN in your env.",
-      `Docs: ${docsLink("/telegram", "telegram")}`,
+      `Docs: ${formatDocsLink("/telegram", "telegram")}`,
     ].join("\n"),
     "Telegram bot token",
   );
@@ -156,7 +152,7 @@ async function noteDiscordTokenHelp(prompter: WizardPrompter): Promise<void> {
       "2) Bot → Add Bot → Reset Token → copy token",
       "3) OAuth2 → URL Generator → scope 'bot' → invite to your server",
       "Tip: enable Message Content Intent if you need message text.",
-      `Docs: ${docsLink("/discord", "discord")}`,
+      `Docs: ${formatDocsLink("/discord", "discord")}`,
     ].join("\n"),
     "Discord bot token",
   );
@@ -244,7 +240,7 @@ async function noteSlackTokenHelp(
       "4) Enable Event Subscriptions (socket) for message events",
       "5) App Home → enable the Messages tab for DMs",
       "Tip: set SLACK_BOT_TOKEN + SLACK_APP_TOKEN in your env.",
-      `Docs: ${docsLink("/slack", "slack")}`,
+      `Docs: ${formatDocsLink("/slack", "slack")}`,
       "",
       "Manifest (JSON):",
       manifest,
@@ -417,7 +413,7 @@ async function maybeConfigureDmPolicies(params: {
         "Default: pairing (unknown DMs get a pairing code).",
         `Approve: clawdbot pairing approve --provider ${params.provider} <code>`,
         `Public DMs: ${params.policyKey}="open" + ${params.allowFromKey} includes "*".`,
-        `Docs: ${docsLink("/start/pairing", "start/pairing")}`,
+        `Docs: ${formatDocsLink("/start/pairing", "start/pairing")}`,
       ].join("\n"),
       `${params.label} DM access`,
     );
@@ -504,7 +500,7 @@ async function promptWhatsAppAllowFrom(
       "- disabled: ignore WhatsApp DMs",
       "",
       `Current: dmPolicy=${existingPolicy}, allowFrom=${existingLabel}`,
-      `Docs: ${docsLink("/whatsapp", "whatsapp")}`,
+      `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
     ].join("\n"),
     "WhatsApp DM access",
   );
@@ -712,42 +708,57 @@ export async function setupProviders(
 
   await noteProviderPrimer(prompter);
 
+  const selectionOptions = listChatProviders().map((meta) => {
+    switch (meta.id) {
+      case "telegram":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: telegramConfigured
+            ? "recommended · configured"
+            : "recommended · newcomer-friendly",
+        };
+      case "whatsapp":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: whatsappLinked ? "linked" : "not linked",
+        };
+      case "discord":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: discordConfigured ? "configured" : "needs token",
+        };
+      case "slack":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: slackConfigured ? "configured" : "needs tokens",
+        };
+      case "signal":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: signalCliDetected ? "signal-cli found" : "signal-cli missing",
+        };
+      case "imessage":
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+          hint: imessageCliDetected ? "imsg found" : "imsg missing",
+        };
+      default:
+        return {
+          value: meta.id,
+          label: meta.selectionLabel,
+        };
+    }
+  });
+
   const selection = (await prompter.multiselect({
     message: "Select providers",
-    options: [
-      {
-        value: "telegram",
-        label: "Telegram (Bot API)",
-        hint: telegramConfigured
-          ? "recommended · configured"
-          : "recommended · newcomer-friendly",
-      },
-      {
-        value: "whatsapp",
-        label: "WhatsApp (QR link)",
-        hint: whatsappLinked ? "linked" : "not linked",
-      },
-      {
-        value: "discord",
-        label: "Discord (Bot API)",
-        hint: discordConfigured ? "configured" : "needs token",
-      },
-      {
-        value: "slack",
-        label: "Slack (Socket Mode)",
-        hint: slackConfigured ? "configured" : "needs tokens",
-      },
-      {
-        value: "signal",
-        label: "Signal (signal-cli)",
-        hint: signalCliDetected ? "signal-cli found" : "signal-cli missing",
-      },
-      {
-        value: "imessage",
-        label: "iMessage (imsg)",
-        hint: imessageCliDetected ? "imsg found" : "imsg missing",
-      },
-    ],
+    options: selectionOptions,
   })) as ProviderChoice[];
 
   options?.onSelection?.(selection);
@@ -764,17 +775,15 @@ export async function setupProviders(
     }
   };
 
-  const selectionNotes: Record<ProviderChoice, string> = {
-    telegram: `Telegram — simplest way to get started: register a bot with @BotFather and get going. Docs: ${docsLink("/telegram", "telegram")}`,
-    whatsapp: `WhatsApp — works with your own number; recommend a separate phone + eSIM. Docs: ${docsLink("/whatsapp", "whatsapp")}`,
-    discord: `Discord — very well supported right now. Docs: ${docsLink("/discord", "discord")}`,
-    slack: `Slack — supported (Socket Mode). Docs: ${docsLink("/slack", "slack")}`,
-    signal: `Signal — signal-cli linked device; more setup (David Reagans: "Hop on Discord."). Docs: ${docsLink("/signal", "signal")}`,
-    imessage: `iMessage — this is still a work in progress. Docs: ${docsLink("/imessage", "imessage")}`,
-  };
+  const selectionNotes = new Map(
+    listChatProviders().map((meta) => [
+      meta.id,
+      formatProviderSelectionLine(meta, formatDocsLink),
+    ]),
+  );
   const selectedLines = selection
-    .map((provider) => selectionNotes[provider])
-    .filter(Boolean);
+    .map((provider) => selectionNotes.get(provider))
+    .filter((line): line is string => Boolean(line));
   if (selectedLines.length > 0) {
     await prompter.note(selectedLines.join("\n"), "Selected providers");
   }
@@ -827,7 +836,7 @@ export async function setupProviders(
         [
           "Scan the QR with WhatsApp on your phone.",
           `Credentials are stored under ${authDir}/ for future runs.`,
-          `Docs: ${docsLink("/whatsapp", "whatsapp")}`,
+          `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
         ].join("\n"),
         "WhatsApp linking",
       );
@@ -844,7 +853,7 @@ export async function setupProviders(
       } catch (err) {
         runtime.error(`WhatsApp login failed: ${String(err)}`);
         await prompter.note(
-          `Docs: ${docsLink("/whatsapp", "whatsapp")}`,
+          `Docs: ${formatDocsLink("/whatsapp", "whatsapp")}`,
           "WhatsApp help",
         );
       }
@@ -1328,7 +1337,7 @@ export async function setupProviders(
         'Link device with: signal-cli link -n "Clawdbot"',
         "Scan QR in Signal → Linked Devices",
         "Then run: clawdbot gateway call providers.status --params '{\"probe\":true}'",
-        `Docs: ${docsLink("/signal", "signal")}`,
+        `Docs: ${formatDocsLink("/signal", "signal")}`,
       ].join("\n"),
       "Signal next steps",
     );
@@ -1409,7 +1418,7 @@ export async function setupProviders(
         "Ensure Clawdbot has Full Disk Access to Messages DB.",
         "Grant Automation permission for Messages when prompted.",
         "List chats with: imsg chats --limit 20",
-        `Docs: ${docsLink("/imessage", "imessage")}`,
+        `Docs: ${formatDocsLink("/imessage", "imessage")}`,
       ].join("\n"),
       "iMessage next steps",
     );

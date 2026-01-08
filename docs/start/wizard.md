@@ -30,7 +30,7 @@ clawdbot configure
 - Model/auth (Anthropic or OpenAI Codex OAuth recommended, API key optional, Minimax M2.1 via LM Studio)
 - Workspace location + bootstrap files
 - Gateway settings (port/bind/auth/tailscale)
-- Providers (WhatsApp, Telegram, Discord, Signal)
+- Providers (Telegram, WhatsApp, Discord, Signal)
 - Daemon install (LaunchAgent / systemd user unit)
 - Health check
 - Skills (recommended)

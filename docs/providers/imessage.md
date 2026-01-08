@@ -19,7 +19,7 @@ Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio
 - macOS with Messages signed in.
 - Full Disk Access for Clawdbot + `imsg` (Messages DB access).
 - Automation permission when sending.
-- `imessage.cliPath` can point to a wrapper script (for example, an SSH hop to another Mac that runs `imsg rpc`).
+- `imessage.cliPath` can point to any command that proxies stdin/stdout (for example, a wrapper script that SSHes to another Mac and runs `imsg rpc`).
 
 ## Setup (fast path)
 1) Ensure Messages is signed in on this Mac.
@@ -46,7 +46,7 @@ Example:
 {
   imessage: {
     enabled: true,
-    cliPath: "imsg",
+    cliPath: "/usr/local/bin/imessage-remote",
     dmPolicy: "pairing",
     allowFrom: ["+15555550123"]
   }

@@ -4,8 +4,11 @@ import {
   loadAuthProfileStore,
 } from "../agents/auth-profiles.js";
 import { withProgress } from "../cli/progress.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import {
+  type ClawdbotConfig,
+  readConfigFileSnapshot,
+  writeConfigFile,
+} from "../config/config.js";
 import {
   listDiscordAccountIds,
   resolveDiscordAccount,
@@ -20,11 +23,16 @@ import {
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
 import {
+  type ChatProviderId,
+  getChatProviderMeta,
+  listChatProviders,
+  normalizeChatProviderId,
+} from "../providers/registry.js";
+import {
   DEFAULT_ACCOUNT_ID,
   normalizeAccountId,
 } from "../routing/session-key.js";
-import type { RuntimeEnv } from "../runtime.js";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
   listSignalAccountIds,
   resolveSignalAccount,
@@ -34,8 +42,8 @@ import {
   listTelegramAccountIds,
   resolveTelegramAccount,
 } from "../telegram/accounts.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { formatTerminalLink } from "../utils.js";
 import {
   listWhatsAppAccountIds,
   resolveWhatsAppAuthDir,
@@ -45,23 +53,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { setupProviders } from "./onboard-providers.js";
 import type { ProviderChoice } from "./onboard-types.js";
 
-const DOCS_ROOT = "https://docs.clawd.bot";
-
-const CHAT_PROVIDERS = [
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-] as const;
-
-type ChatProvider = (typeof CHAT_PROVIDERS)[number];
-
-function docsLink(path: string, label?: string): string {
-  const url = `${DOCS_ROOT}${path}`;
-  return formatTerminalLink(label ?? url, url, { fallback: url });
-}
+type ChatProvider = ChatProviderId;
 
 type ProvidersListOptions = {
   json?: boolean;
@@ -100,15 +92,6 @@ export type ProvidersRemoveOptions = {
   delete?: boolean;
 };
 
-function normalizeChatProvider(raw?: string): ChatProvider | null {
-  const trimmed = (raw ?? "").trim().toLowerCase();
-  if (!trimmed) return null;
-  const normalized = trimmed === "imsg" ? "imessage" : trimmed;
-  return CHAT_PROVIDERS.includes(normalized as ChatProvider)
-    ? (normalized as ChatProvider)
-    : null;
-}
-
 async function requireValidConfig(
   runtime: RuntimeEnv,
 ): Promise<ClawdbotConfig | null> {
@@ -133,6 +116,9 @@ function formatAccountLabel(params: { accountId: string; name?: string }) {
   if (params.name?.trim()) return `${base} (${params.name.trim()})`;
   return base;
 }
+
+const providerLabel = (provider: ChatProvider) =>
+  getChatProviderMeta(provider).label;
 
 const colorValue = (value: string) => {
   if (value === "none") return theme.error(value);
@@ -162,6 +148,55 @@ function formatLinked(value: boolean): string {
   return value ? theme.success("linked") : theme.warn("not linked");
 }
 
+function shouldUseWizard(params?: { hasFlags?: boolean }) {
+  return params?.hasFlags === false;
+}
+
+function providerHasAccounts(cfg: ClawdbotConfig, provider: ChatProvider) {
+  if (provider === "whatsapp") return true;
+  const base = (cfg as Record<string, unknown>)[provider] as
+    | { accounts?: Record<string, unknown> }
+    | undefined;
+  return Boolean(base?.accounts && Object.keys(base.accounts).length > 0);
+}
+
+function shouldStoreNameInAccounts(
+  cfg: ClawdbotConfig,
+  provider: ChatProvider,
+  accountId: string,
+): boolean {
+  if (provider === "whatsapp") return true;
+  if (accountId !== DEFAULT_ACCOUNT_ID) return true;
+  return providerHasAccounts(cfg, provider);
+}
+
+function migrateBaseNameToDefaultAccount(
+  cfg: ClawdbotConfig,
+  provider: ChatProvider,
+): ClawdbotConfig {
+  if (provider === "whatsapp") return cfg;
+  const base = (cfg as Record<string, unknown>)[provider] as
+    | { name?: string; accounts?: Record<string, Record<string, unknown>> }
+    | undefined;
+  const baseName = base?.name?.trim();
+  if (!baseName) return cfg;
+  const accounts: Record<string, Record<string, unknown>> = {
+    ...base?.accounts,
+  };
+  const defaultAccount = accounts[DEFAULT_ACCOUNT_ID] ?? {};
+  if (!defaultAccount.name) {
+    accounts[DEFAULT_ACCOUNT_ID] = { ...defaultAccount, name: baseName };
+  }
+  const { name: _ignored, ...rest } = base ?? {};
+  return {
+    ...cfg,
+    [provider]: {
+      ...rest,
+      accounts,
+    },
+  } as ClawdbotConfig;
+}
+
 function applyAccountName(params: {
   cfg: ClawdbotConfig;
   provider: ChatProvider;
@@ -187,7 +222,8 @@ function applyAccountName(params: {
     };
   }
   const key = params.provider;
-  if (accountId === DEFAULT_ACCOUNT_ID) {
+  const useAccounts = shouldStoreNameInAccounts(params.cfg, key, accountId);
+  if (!useAccounts && accountId === DEFAULT_ACCOUNT_ID) {
     const baseConfig = (params.cfg as Record<string, unknown>)[key];
     const safeBase =
       typeof baseConfig === "object" && baseConfig
@@ -202,17 +238,21 @@ function applyAccountName(params: {
     } as ClawdbotConfig;
   }
   const base = (params.cfg as Record<string, unknown>)[key] as
-    | { accounts?: Record<string, Record<string, unknown>> }
+    | { name?: string; accounts?: Record<string, Record<string, unknown>> }
     | undefined;
   const baseAccounts: Record<
     string,
     Record<string, unknown>
   > = base?.accounts ?? {};
   const existingAccount = baseAccounts[accountId] ?? {};
+  const baseWithoutName =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? (({ name: _ignored, ...rest }) => rest)(base ?? {})
+      : (base ?? {});
   return {
     ...params.cfg,
     [key]: {
-      ...base,
+      ...baseWithoutName,
       accounts: {
         ...baseAccounts,
         [accountId]: {
@@ -246,19 +286,22 @@ function applyProviderAccountConfig(params: {
 }): ClawdbotConfig {
   const accountId = normalizeAccountId(params.accountId);
   const name = params.name?.trim() || undefined;
-  const next = applyAccountName({
+  const namedConfig = applyAccountName({
     cfg: params.cfg,
     provider: params.provider,
     accountId,
     name,
   });
+  const next =
+    accountId !== DEFAULT_ACCOUNT_ID
+      ? migrateBaseNameToDefaultAccount(namedConfig, params.provider)
+      : namedConfig;
 
   if (params.provider === "whatsapp") {
     const entry = {
       ...next.whatsapp?.accounts?.[accountId],
       ...(params.authDir ? { authDir: params.authDir } : {}),
       enabled: true,
-      ...(name ? { name } : {}),
     };
     return {
       ...next,
@@ -286,7 +329,6 @@ function applyProviderAccountConfig(params: {
               : params.token
                 ? { botToken: params.token }
                 : {}),
-          ...(name ? { name } : {}),
         },
       };
     }
@@ -305,7 +347,6 @@ function applyProviderAccountConfig(params: {
               : params.token
                 ? { botToken: params.token }
                 : {}),
-            ...(name ? { name } : {}),
           },
         },
       },
@@ -320,7 +361,6 @@ function applyProviderAccountConfig(params: {
           ...next.discord,
           enabled: true,
           ...(params.useEnv ? {} : params.token ? { token: params.token } : {}),
-          ...(name ? { name } : {}),
         },
       };
     }
@@ -335,7 +375,6 @@ function applyProviderAccountConfig(params: {
             ...next.discord?.accounts?.[accountId],
             enabled: true,
             ...(params.token ? { token: params.token } : {}),
-            ...(name ? { name } : {}),
           },
         },
       },
@@ -355,7 +394,6 @@ function applyProviderAccountConfig(params: {
                 ...(params.botToken ? { botToken: params.botToken } : {}),
                 ...(params.appToken ? { appToken: params.appToken } : {}),
               }),
-          ...(name ? { name } : {}),
         },
       };
     }
@@ -371,7 +409,6 @@ function applyProviderAccountConfig(params: {
             enabled: true,
             ...(params.botToken ? { botToken: params.botToken } : {}),
             ...(params.appToken ? { appToken: params.appToken } : {}),
-            ...(name ? { name } : {}),
           },
         },
       },
@@ -390,7 +427,6 @@ function applyProviderAccountConfig(params: {
           ...(params.httpUrl ? { httpUrl: params.httpUrl } : {}),
           ...(params.httpHost ? { httpHost: params.httpHost } : {}),
           ...(params.httpPort ? { httpPort: Number(params.httpPort) } : {}),
-          ...(name ? { name } : {}),
         },
       };
     }
@@ -409,7 +445,6 @@ function applyProviderAccountConfig(params: {
             ...(params.httpUrl ? { httpUrl: params.httpUrl } : {}),
             ...(params.httpHost ? { httpHost: params.httpHost } : {}),
             ...(params.httpPort ? { httpPort: Number(params.httpPort) } : {}),
-            ...(name ? { name } : {}),
           },
         },
       },
@@ -427,7 +462,6 @@ function applyProviderAccountConfig(params: {
           ...(params.dbPath ? { dbPath: params.dbPath } : {}),
           ...(params.service ? { service: params.service } : {}),
           ...(params.region ? { region: params.region } : {}),
-          ...(name ? { name } : {}),
         },
       };
     }
@@ -445,7 +479,6 @@ function applyProviderAccountConfig(params: {
             ...(params.dbPath ? { dbPath: params.dbPath } : {}),
             ...(params.service ? { service: params.service } : {}),
             ...(params.region ? { region: params.region } : {}),
-            ...(name ? { name } : {}),
           },
         },
       },
@@ -502,12 +535,26 @@ export async function providersListCommand(
   const lines: string[] = [];
   lines.push(theme.heading("Chat providers:"));
 
+  for (const accountId of telegramAccounts) {
+    const account = resolveTelegramAccount({ cfg, accountId });
+    lines.push(
+      `- ${theme.accent(providerLabel("telegram"))} ${theme.heading(
+        formatAccountLabel({
+          accountId,
+          name: account.name,
+        }),
+      )}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
+        account.tokenSource,
+      )}, ${formatEnabled(account.enabled)}`,
+    );
+  }
+
   for (const accountId of whatsappAccounts) {
     const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
     const linked = await webAuthExists(authDir);
     const name = cfg.whatsapp?.accounts?.[accountId]?.name;
     lines.push(
-      `- ${theme.accent("WhatsApp")} ${theme.heading(
+      `- ${theme.accent(providerLabel("whatsapp"))} ${theme.heading(
         formatAccountLabel({
           accountId,
           name,
@@ -520,24 +567,10 @@ export async function providersListCommand(
     );
   }
 
-  for (const accountId of telegramAccounts) {
-    const account = resolveTelegramAccount({ cfg, accountId });
-    lines.push(
-      `- ${theme.accent("Telegram")} ${theme.heading(
-        formatAccountLabel({
-          accountId,
-          name: account.name,
-        }),
-      )}: ${formatConfigured(Boolean(account.token))}, ${formatTokenSource(
-        account.tokenSource,
-      )}, ${formatEnabled(account.enabled)}`,
-    );
-  }
-
   for (const accountId of discordAccounts) {
     const account = resolveDiscordAccount({ cfg, accountId });
     lines.push(
-      `- ${theme.accent("Discord")} ${theme.heading(
+      `- ${theme.accent(providerLabel("discord"))} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -552,7 +585,7 @@ export async function providersListCommand(
     const account = resolveSlackAccount({ cfg, accountId });
     const configured = Boolean(account.botToken && account.appToken);
     lines.push(
-      `- ${theme.accent("Slack")} ${theme.heading(
+      `- ${theme.accent(providerLabel("slack"))} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -569,7 +602,7 @@ export async function providersListCommand(
   for (const accountId of signalAccounts) {
     const account = resolveSignalAccount({ cfg, accountId });
     lines.push(
-      `- ${theme.accent("Signal")} ${theme.heading(
+      `- ${theme.accent(providerLabel("signal"))} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -583,7 +616,7 @@ export async function providersListCommand(
   for (const accountId of imessageAccounts) {
     const account = resolveIMessageAccount({ cfg, accountId });
     lines.push(
-      `- ${theme.accent("iMessage")} ${theme.heading(
+      `- ${theme.accent(providerLabel("imessage"))} ${theme.heading(
         formatAccountLabel({
           accountId,
           name: account.name,
@@ -621,9 +654,7 @@ export async function providersListCommand(
 
   runtime.log("");
   runtime.log(
-    `Docs: gateway/configuration -> ${formatTerminalLink(DOCS_ROOT, DOCS_ROOT, {
-      fallback: DOCS_ROOT,
-    })}`,
+    `Docs: ${formatDocsLink("/gateway/configuration", "gateway/configuration")}`,
   );
 }
 
@@ -639,6 +670,80 @@ async function loadUsageWithProgress(
     runtime.error(String(err));
     return null;
   }
+}
+
+export function formatGatewayProvidersStatusLines(
+  payload: Record<string, unknown>,
+): string[] {
+  const lines: string[] = [];
+  lines.push(theme.success("Gateway reachable."));
+  const accountLines = (
+    label: string,
+    accounts: Array<Record<string, unknown>>,
+  ) =>
+    accounts.map((account) => {
+      const bits: string[] = [];
+      if (typeof account.enabled === "boolean") {
+        bits.push(account.enabled ? "enabled" : "disabled");
+      }
+      if (typeof account.configured === "boolean") {
+        bits.push(account.configured ? "configured" : "not configured");
+      }
+      if (typeof account.linked === "boolean") {
+        bits.push(account.linked ? "linked" : "not linked");
+      }
+      if (typeof account.running === "boolean") {
+        bits.push(account.running ? "running" : "stopped");
+      }
+      const probe = account.probe as { ok?: boolean } | undefined;
+      if (probe && typeof probe.ok === "boolean") {
+        bits.push(probe.ok ? "works" : "probe failed");
+      }
+      const accountId =
+        typeof account.accountId === "string" ? account.accountId : "default";
+      const name = typeof account.name === "string" ? account.name.trim() : "";
+      const labelText = `${label} ${formatAccountLabel({
+        accountId,
+        name: name || undefined,
+      })}`;
+      return `- ${labelText}: ${bits.join(", ")}`;
+    });
+
+  const accountPayloads: Partial<
+    Record<ChatProvider, Array<Record<string, unknown>>>
+  > = {
+    whatsapp: Array.isArray(payload.whatsappAccounts)
+      ? (payload.whatsappAccounts as Array<Record<string, unknown>>)
+      : undefined,
+    telegram: Array.isArray(payload.telegramAccounts)
+      ? (payload.telegramAccounts as Array<Record<string, unknown>>)
+      : undefined,
+    discord: Array.isArray(payload.discordAccounts)
+      ? (payload.discordAccounts as Array<Record<string, unknown>>)
+      : undefined,
+    slack: Array.isArray(payload.slackAccounts)
+      ? (payload.slackAccounts as Array<Record<string, unknown>>)
+      : undefined,
+    signal: Array.isArray(payload.signalAccounts)
+      ? (payload.signalAccounts as Array<Record<string, unknown>>)
+      : undefined,
+    imessage: Array.isArray(payload.imessageAccounts)
+      ? (payload.imessageAccounts as Array<Record<string, unknown>>)
+      : undefined,
+  };
+
+  for (const meta of listChatProviders()) {
+    const accounts = accountPayloads[meta.id];
+    if (accounts && accounts.length > 0) {
+      lines.push(...accountLines(meta.label, accounts));
+    }
+  }
+
+  lines.push("");
+  lines.push(
+    `Tip: ${formatDocsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
+  );
+  return lines;
 }
 
 export async function providersStatusCommand(
@@ -664,96 +769,11 @@ export async function providersStatusCommand(
       runtime.log(JSON.stringify(payload, null, 2));
       return;
     }
-    const data = payload as Record<string, unknown>;
-    const lines: string[] = [];
-    lines.push(theme.success("Gateway reachable."));
-    const accountLines = (
-      label: string,
-      accounts: Array<Record<string, unknown>>,
-    ) =>
-      accounts.map((account) => {
-        const bits: string[] = [];
-        if (typeof account.enabled === "boolean") {
-          bits.push(account.enabled ? "enabled" : "disabled");
-        }
-        if (typeof account.configured === "boolean") {
-          bits.push(account.configured ? "configured" : "not configured");
-        }
-        if (typeof account.linked === "boolean") {
-          bits.push(account.linked ? "linked" : "not linked");
-        }
-        if (typeof account.running === "boolean") {
-          bits.push(account.running ? "running" : "stopped");
-        }
-        const probe = account.probe as { ok?: boolean } | undefined;
-        if (probe && typeof probe.ok === "boolean") {
-          bits.push(probe.ok ? "works" : "probe failed");
-        }
-        const accountId =
-          typeof account.accountId === "string" ? account.accountId : "default";
-        const name =
-          typeof account.name === "string" ? account.name.trim() : "";
-        const labelText = `${label} ${formatAccountLabel({
-          accountId,
-          name: name || undefined,
-        })}`;
-        return `- ${labelText}: ${bits.join(", ")}`;
-      });
-
-    if (Array.isArray(data.whatsappAccounts)) {
-      lines.push(
-        ...accountLines(
-          "WhatsApp",
-          data.whatsappAccounts as Array<Record<string, unknown>>,
-        ),
-      );
-    }
-    if (Array.isArray(data.telegramAccounts)) {
-      lines.push(
-        ...accountLines(
-          "Telegram",
-          data.telegramAccounts as Array<Record<string, unknown>>,
-        ),
-      );
-    }
-    if (Array.isArray(data.discordAccounts)) {
-      lines.push(
-        ...accountLines(
-          "Discord",
-          data.discordAccounts as Array<Record<string, unknown>>,
-        ),
-      );
-    }
-    if (Array.isArray(data.slackAccounts)) {
-      lines.push(
-        ...accountLines(
-          "Slack",
-          data.slackAccounts as Array<Record<string, unknown>>,
-        ),
-      );
-    }
-    if (Array.isArray(data.signalAccounts)) {
-      lines.push(
-        ...accountLines(
-          "Signal",
-          data.signalAccounts as Array<Record<string, unknown>>,
-        ),
-      );
-    }
-    if (Array.isArray(data.imessageAccounts)) {
-      lines.push(
-        ...accountLines(
-          "iMessage",
-          data.imessageAccounts as Array<Record<string, unknown>>,
-        ),
-      );
-    }
-
-    lines.push("");
-    lines.push(
-      `Tip: ${docsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
+    runtime.log(
+      formatGatewayProvidersStatusLines(
+        payload as Record<string, unknown>,
+      ).join("\n"),
     );
-    runtime.log(lines.join("\n"));
   } catch (err) {
     runtime.error(`Gateway not reachable: ${String(err)}`);
     runtime.exit(1);
@@ -768,7 +788,7 @@ export async function providersAddCommand(
   const cfg = await requireValidConfig(runtime);
   if (!cfg) return;
 
-  const useWizard = params?.hasFlags === false;
+  const useWizard = shouldUseWizard(params);
   if (useWizard) {
     const prompter = createClackPrompter();
     let selection: ProviderChoice[] = [];
@@ -836,7 +856,7 @@ export async function providersAddCommand(
     return;
   }
 
-  const provider = normalizeChatProvider(opts.provider);
+  const provider = normalizeChatProviderId(opts.provider);
   if (!provider) {
     runtime.error(`Unknown provider: ${String(opts.provider ?? "")}`);
     runtime.exit(1);
@@ -930,7 +950,7 @@ export async function providersAddCommand(
   });
 
   await writeConfigFile(nextConfig);
-  runtime.log(`Added ${provider} account "${accountId}".`);
+  runtime.log(`Added ${providerLabel(provider)} account "${accountId}".`);
 }
 
 export async function providersRemoveCommand(
@@ -941,9 +961,9 @@ export async function providersRemoveCommand(
   const cfg = await requireValidConfig(runtime);
   if (!cfg) return;
 
-  const useWizard = params?.hasFlags === false;
+  const useWizard = shouldUseWizard(params);
   const prompter = useWizard ? createClackPrompter() : null;
-  let provider = normalizeChatProvider(opts.provider);
+  let provider = normalizeChatProviderId(opts.provider);
   let accountId = normalizeAccountId(opts.account);
   const deleteConfig = Boolean(opts.delete);
 
@@ -951,9 +971,9 @@ export async function providersRemoveCommand(
     await prompter.intro("Remove provider account");
     provider = (await prompter.select({
       message: "Provider",
-      options: CHAT_PROVIDERS.map((value) => ({
-        value,
-        label: value,
+      options: listChatProviders().map((meta) => ({
+        value: meta.id,
+        label: meta.label,
       })),
     })) as ChatProvider;
 
@@ -983,7 +1003,7 @@ export async function providersRemoveCommand(
     })();
 
     const wantsDisable = await prompter.confirm({
-      message: `Disable ${provider} account "${accountId}"? (keeps config)`,
+      message: `Disable ${providerLabel(provider)} account "${accountId}"? (keeps config)`,
       initialValue: true,
     });
     if (!wantsDisable) {
@@ -999,7 +1019,7 @@ export async function providersRemoveCommand(
     if (!deleteConfig) {
       const confirm = createClackPrompter();
       const ok = await confirm.confirm({
-        message: `Disable ${provider} account "${accountId}"? (keeps config)`,
+        message: `Disable ${providerLabel(provider)} account "${accountId}"? (keeps config)`,
         initialValue: true,
       });
       if (!ok) {
@@ -1147,14 +1167,14 @@ export async function providersRemoveCommand(
   if (useWizard && prompter) {
     await prompter.outro(
       deleteConfig
-        ? `Deleted ${provider} account "${accountKey}".`
-        : `Disabled ${provider} account "${accountKey}".`,
+        ? `Deleted ${providerLabel(provider)} account "${accountKey}".`
+        : `Disabled ${providerLabel(provider)} account "${accountKey}".`,
     );
   } else {
     runtime.log(
       deleteConfig
-        ? `Deleted ${provider} account "${accountKey}".`
-        : `Disabled ${provider} account "${accountKey}".`,
+        ? `Deleted ${providerLabel(provider)} account "${accountKey}".`
+        : `Disabled ${providerLabel(provider)} account "${accountKey}".`,
     );
   }
 }

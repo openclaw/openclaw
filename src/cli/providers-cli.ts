@@ -6,6 +6,7 @@ import {
   providersRemoveCommand,
   providersStatusCommand,
 } from "../commands/providers.js";
+import { listChatProviders } from "../providers/registry.js";
 import { defaultRuntime } from "../runtime.js";
 import { hasExplicitOptions } from "./command-options.js";
 
@@ -30,6 +31,10 @@ const optionNamesAdd = [
 ] as const;
 
 const optionNamesRemove = ["provider", "account", "delete"] as const;
+
+const providerNames = listChatProviders()
+  .map((meta) => meta.id)
+  .join("|");
 
 export function registerProvidersCli(program: Command) {
   const providers = program
@@ -69,10 +74,7 @@ export function registerProvidersCli(program: Command) {
   providers
     .command("add")
     .description("Add or update a provider account")
-    .option(
-      "--provider <name>",
-      "Provider (whatsapp|telegram|discord|slack|signal|imessage)",
-    )
+    .option("--provider <name>", `Provider (${providerNames})`)
     .option("--account <id>", "Account id (default when omitted)")
     .option("--name <name>", "Display name for this account")
     .option("--token <token>", "Bot token (Telegram/Discord)")
@@ -102,10 +104,7 @@ export function registerProvidersCli(program: Command) {
   providers
     .command("remove")
     .description("Disable or delete a provider account")
-    .option(
-      "--provider <name>",
-      "Provider (whatsapp|telegram|discord|slack|signal|imessage)",
-    )
+    .option("--provider <name>", `Provider (${providerNames})`)
     .option("--account <id>", "Account id (default when omitted)")
     .option("--delete", "Delete config entries (no prompt)", false)
     .action(async (opts, command) => {
