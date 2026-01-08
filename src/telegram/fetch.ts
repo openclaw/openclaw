@@ -1,4 +1,4 @@
-// BAN compatibility: force native fetch under Bun; keep grammY defaults on Node.
+// Bun compatibility: force native fetch under Bun; keep grammY defaults on Node.
 export function resolveTelegramFetch(
   proxyFetch?: typeof fetch,
 ): typeof fetch | undefined {
