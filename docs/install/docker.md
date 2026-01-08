@@ -13,6 +13,8 @@ This guide covers:
 - Containerized Gateway (full Clawdbot in Docker)
 - Per-session Agent Sandbox (host gateway + Docker-isolated agent tools)
 
+Sandboxing details: [Sandboxing](/gateway/sandboxing)
+
 ## Requirements
 
 - Docker Desktop (or Docker Engine) + Docker Compose v2
@@ -91,6 +93,8 @@ pnpm test:docker:qr
 - The gateway container is the source of truth for sessions (`~/.clawdbot/agents/<agentId>/sessions/`).
 
 ## Agent Sandbox (host gateway + Docker tools)
+
+Deep dive: [Sandboxing](/gateway/sandboxing)
 
 ### What it does
 
