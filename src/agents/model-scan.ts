@@ -79,6 +79,11 @@ export type OpenRouterScanOptions = {
   maxAgeDays?: number;
   providerFilter?: string;
   probe?: boolean;
+  onProgress?: (update: {
+    phase: "catalog" | "probe";
+    completed: number;
+    total: number;
+  }) => void;
 };
 
 type OpenAIModel = Model<"openai-completions">;
@@ -333,10 +338,12 @@ async function mapWithConcurrency<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T, index: number) => Promise<R>,
+  opts?: { onProgress?: (completed: number, total: number) => void },
 ): Promise<R[]> {
   const limit = Math.max(1, Math.floor(concurrency));
   const results = Array.from({ length: items.length }) as R[];
   let nextIndex = 0;
+  let completed = 0;
 
   const worker = async () => {
     while (true) {
@@ -344,8 +351,15 @@ async function mapWithConcurrency<T, R>(
       nextIndex += 1;
       if (current >= items.length) return;
       results[current] = await fn(items[current] as T, current);
+      completed += 1;
+      opts?.onProgress?.(completed, items.length);
     }
   };
+
+  if (items.length === 0) {
+    opts?.onProgress?.(0, 0);
+    return results;
+  }
 
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, () => worker()),
@@ -400,7 +414,16 @@ export async function scanOpenRouterModels(
 
   const baseModel = getModel("openrouter", "openrouter/auto") as OpenAIModel;
 
-  return mapWithConcurrency(filtered, concurrency, async (entry) => {
+  options.onProgress?.({
+    phase: "probe",
+    completed: 0,
+    total: filtered.length,
+  });
+
+  return mapWithConcurrency(
+    filtered,
+    concurrency,
+    async (entry) => {
     const isFree = isFreeOpenRouterModel(entry);
     if (!probe) {
       return {
@@ -454,7 +477,16 @@ export async function scanOpenRouterModels(
       tool: toolResult,
       image: imageResult,
     } satisfies ModelScanResult;
-  });
+  },
+    {
+      onProgress: (completed, total) =>
+        options.onProgress?.({
+          phase: "probe",
+          completed,
+          total,
+        }),
+    },
+  );
 }
 
 export { OPENROUTER_MODELS_URL };

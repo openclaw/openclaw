@@ -53,7 +53,11 @@ describe("scanOpenRouterModels", () => {
       "acme/free-by-suffix:free",
     ]);
 
-    const byPricing = results[0]!;
+    const [byPricing] = results;
+    expect(byPricing).toBeTruthy();
+    if (!byPricing) {
+      throw new Error("Expected pricing-based model result.");
+    }
     expect(byPricing.supportsToolsMeta).toBe(true);
     expect(byPricing.supportedParametersCount).toBe(3);
     expect(byPricing.isFree).toBe(true);

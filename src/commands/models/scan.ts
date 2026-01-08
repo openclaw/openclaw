@@ -4,6 +4,7 @@ import {
   type ModelScanResult,
   scanOpenRouterModels,
 } from "../../agents/model-scan.js";
+import { withProgress } from "../../cli/progress.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
@@ -188,15 +189,30 @@ export async function modelsScanCommand(
       storedKey = undefined;
     }
   }
-  const results = await scanOpenRouterModels({
-    apiKey: storedKey ?? undefined,
-    minParamB: minParams,
-    maxAgeDays,
-    providerFilter: opts.provider,
-    timeoutMs: timeout,
-    concurrency,
-    probe,
-  });
+  const results = await withProgress(
+    {
+      label: "Scanning OpenRouter models...",
+      indeterminate: false,
+      enabled: opts.json !== true,
+    },
+    async (progress) =>
+      await scanOpenRouterModels({
+        apiKey: storedKey ?? undefined,
+        minParamB: minParams,
+        maxAgeDays,
+        providerFilter: opts.provider,
+        timeoutMs: timeout,
+        concurrency,
+        probe,
+        onProgress: ({ phase, completed, total }) => {
+          if (phase !== "probe") return;
+          if (total <= 0) return;
+          const labelBase = probe ? "Probing models" : "Scanning models";
+          progress.setLabel(`${labelBase} (${completed}/${total})`);
+          progress.setPercent((completed / total) * 100);
+        },
+      }),
+  );
 
   if (!probe) {
     if (!opts.json) {
