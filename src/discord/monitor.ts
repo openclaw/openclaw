@@ -319,7 +319,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       publicKey: "a",
       token,
       autoDeploy: nativeEnabled,
-      eventQueue: { logSlowListeners: false },
     },
     {
       commands,
