@@ -227,6 +227,7 @@ const METHODS = [
   "wizard.status",
   "talk.mode",
   "models.list",
+  "agents.list",
   "skills.status",
   "skills.install",
   "skills.update",

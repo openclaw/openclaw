@@ -39,6 +39,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - Ctrl+C: clear input (press twice to exit)
 - Ctrl+D: exit
 - Ctrl+L: model picker
+- Ctrl+G: agent picker
 - Ctrl+P: session picker
 - Ctrl+O: toggle tool output expansion
 - Ctrl+T: toggle thinking visibility
@@ -46,6 +47,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 ## Slash commands
 - `/help`
 - `/status`
+- `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model>` (or `/model list`, `/models`)
 - `/think <off|minimal|low|medium|high>`
