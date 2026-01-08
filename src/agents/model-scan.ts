@@ -27,10 +27,22 @@ type OpenRouterModelMeta = {
   name: string;
   contextLength: number | null;
   maxCompletionTokens: number | null;
+  supportedParameters: string[];
   supportedParametersCount: number;
+  supportsToolsMeta: boolean;
   modality: string | null;
   inferredParamB: number | null;
   createdAtMs: number | null;
+  pricing: OpenRouterModelPricing | null;
+};
+
+type OpenRouterModelPricing = {
+  prompt: number;
+  completion: number;
+  request: number;
+  image: number;
+  webSearch: number;
+  internalReasoning: number;
 };
 
 export type ProbeResult = {
@@ -48,9 +60,12 @@ export type ModelScanResult = {
   contextLength: number | null;
   maxCompletionTokens: number | null;
   supportedParametersCount: number;
+  supportsToolsMeta: boolean;
   modality: string | null;
   inferredParamB: number | null;
   createdAtMs: number | null;
+  pricing: OpenRouterModelPricing | null;
+  isFree: boolean;
   tool: ProbeResult;
   image: ProbeResult;
 };
@@ -63,6 +78,7 @@ export type OpenRouterScanOptions = {
   minParamB?: number;
   maxAgeDays?: number;
   providerFilter?: string;
+  probe?: boolean;
 };
 
 type OpenAIModel = Model<"openai-completions">;
@@ -96,6 +112,43 @@ function parseModality(modality: string | null): Array<"text" | "image"> {
   const parts = normalized.split(/[^a-z]+/).filter(Boolean);
   const hasImage = parts.includes("image");
   return hasImage ? ["text", "image"] : ["text"];
+}
+
+function parseNumberString(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const num = Number(trimmed);
+  if (!Number.isFinite(num)) return null;
+  return num;
+}
+
+function parseOpenRouterPricing(value: unknown): OpenRouterModelPricing | null {
+  if (!value || typeof value !== "object") return null;
+  const obj = value as Record<string, unknown>;
+  const prompt = parseNumberString(obj.prompt);
+  const completion = parseNumberString(obj.completion);
+  const request = parseNumberString(obj.request) ?? 0;
+  const image = parseNumberString(obj.image) ?? 0;
+  const webSearch = parseNumberString(obj.web_search) ?? 0;
+  const internalReasoning = parseNumberString(obj.internal_reasoning) ?? 0;
+
+  if (prompt === null || completion === null) return null;
+  return {
+    prompt,
+    completion,
+    request,
+    image,
+    webSearch,
+    internalReasoning,
+  };
+}
+
+function isFreeOpenRouterModel(entry: OpenRouterModelMeta): boolean {
+  if (entry.id.endsWith(":free")) return true;
+  if (!entry.pricing) return false;
+  return entry.pricing.prompt === 0 && entry.pricing.completion === 0;
 }
 
 async function withTimeout<T>(
@@ -147,9 +200,15 @@ async function fetchOpenRouterModels(
             ? obj.max_output_tokens
             : null;
 
-      const supportedParametersCount = Array.isArray(obj.supported_parameters)
-        ? obj.supported_parameters.length
-        : 0;
+      const supportedParameters = Array.isArray(obj.supported_parameters)
+        ? obj.supported_parameters
+            .filter((value): value is string => typeof value === "string")
+            .map((value) => value.trim())
+            .filter(Boolean)
+        : [];
+
+      const supportedParametersCount = supportedParameters.length;
+      const supportsToolsMeta = supportedParameters.includes("tools");
 
       const modality =
         typeof obj.modality === "string" && obj.modality.trim()
@@ -158,16 +217,20 @@ async function fetchOpenRouterModels(
 
       const inferredParamB = inferParamBFromIdOrName(`${id} ${name}`);
       const createdAtMs = normalizeCreatedAtMs(obj.created_at);
+      const pricing = parseOpenRouterPricing(obj.pricing);
 
       return {
         id,
         name,
         contextLength,
         maxCompletionTokens,
+        supportedParameters,
         supportedParametersCount,
+        supportsToolsMeta,
         modality,
         inferredParamB,
         createdAtMs,
+        pricing,
       } satisfies OpenRouterModelMeta;
     })
     .filter((entry): entry is OpenRouterModelMeta => Boolean(entry));
@@ -294,8 +357,9 @@ export async function scanOpenRouterModels(
   options: OpenRouterScanOptions = {},
 ): Promise<ModelScanResult[]> {
   const fetchImpl = options.fetchImpl ?? fetch;
+  const probe = options.probe ?? true;
   const apiKey = options.apiKey?.trim() || getEnvApiKey("openrouter") || "";
-  if (!apiKey) {
+  if (probe && !apiKey) {
     throw new Error(
       "Missing OpenRouter API key. Set OPENROUTER_API_KEY to run models scan.",
     );
@@ -317,7 +381,7 @@ export async function scanOpenRouterModels(
   const now = Date.now();
 
   const filtered = catalog.filter((entry) => {
-    if (!entry.id.endsWith(":free")) return false;
+    if (!isFreeOpenRouterModel(entry)) return false;
     if (providerFilter) {
       const prefix = entry.id.split("/")[0]?.toLowerCase() ?? "";
       if (prefix !== providerFilter) return false;
@@ -337,6 +401,27 @@ export async function scanOpenRouterModels(
   const baseModel = getModel("openrouter", "openrouter/auto") as OpenAIModel;
 
   return mapWithConcurrency(filtered, concurrency, async (entry) => {
+    const isFree = isFreeOpenRouterModel(entry);
+    if (!probe) {
+      return {
+        id: entry.id,
+        name: entry.name,
+        provider: "openrouter",
+        modelRef: `openrouter/${entry.id}`,
+        contextLength: entry.contextLength,
+        maxCompletionTokens: entry.maxCompletionTokens,
+        supportedParametersCount: entry.supportedParametersCount,
+        supportsToolsMeta: entry.supportsToolsMeta,
+        modality: entry.modality,
+        inferredParamB: entry.inferredParamB,
+        createdAtMs: entry.createdAtMs,
+        pricing: entry.pricing,
+        isFree,
+        tool: { ok: false, latencyMs: null, skipped: true },
+        image: { ok: false, latencyMs: null, skipped: true },
+      } satisfies ModelScanResult;
+    }
+
     const model: OpenAIModel = {
       ...baseModel,
       id: entry.id,
@@ -360,9 +445,12 @@ export async function scanOpenRouterModels(
       contextLength: entry.contextLength,
       maxCompletionTokens: entry.maxCompletionTokens,
       supportedParametersCount: entry.supportedParametersCount,
+      supportsToolsMeta: entry.supportsToolsMeta,
       modality: entry.modality,
       inferredParamB: entry.inferredParamB,
       createdAtMs: entry.createdAtMs,
+      pricing: entry.pricing,
+      isFree,
       tool: toolResult,
       image: imageResult,
     } satisfies ModelScanResult;
@@ -370,4 +458,4 @@ export async function scanOpenRouterModels(
 }
 
 export { OPENROUTER_MODELS_URL };
-export type { OpenRouterModelMeta };
+export type { OpenRouterModelMeta, OpenRouterModelPricing };
