@@ -952,7 +952,6 @@
   margin-top: 0;
   padding-top: 12px;
   background: linear-gradient(180deg, rgba(0, 0, 0, 0) 0%, var(--panel) 35%);
-  border-top: 1px solid var(--border);
 }
 
 .shell--chat-focus .chat-compose {

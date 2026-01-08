@@ -27,6 +27,7 @@ export type ChatProps = {
   onRefresh: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onNewSession: () => void;
 };
 
 export function renderChat(props: ChatProps) {
@@ -116,6 +117,13 @@ export function renderChat(props: ChatProps) {
           ></textarea>
         </label>
         <div class="row chat-compose__actions">
+          <button
+            class="btn"
+            ?disabled=${!props.connected || props.sending}
+            @click=${props.onNewSession}
+          >
+            New session
+          </button>
           <button
             class="btn primary"
             ?disabled=${!props.connected || props.sending}

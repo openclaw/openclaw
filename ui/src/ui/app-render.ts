@@ -195,7 +195,7 @@ export type AppViewState = {
   handleWhatsAppWait: () => Promise<void>;
   handleWhatsAppLogout: () => Promise<void>;
   handleTelegramSave: () => Promise<void>;
-  handleSendChat: () => Promise<void>;
+  handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
   resetToolStream: () => void;
   handleLogsScroll: (event: Event) => void;
   exportLogs: (lines: string[], label: string) => void;
@@ -449,6 +449,8 @@ export function renderApp(state: AppViewState) {
               },
               onDraftChange: (next) => (state.chatMessage = next),
               onSend: () => state.handleSendChat(),
+              onNewSession: () =>
+                state.handleSendChat("/new", { restoreDraft: true }),
             })
           : nothing}
 
@@ -517,6 +519,14 @@ export function renderApp(state: AppViewState) {
             })
           : nothing}
       </main>
+      <a
+        class="docs-link"
+        href="https://docs.clawd.bot"
+        target="_blank"
+        rel="noreferrer"
+      >
+        Docs
+      </a>
     </div>
   `;
 }

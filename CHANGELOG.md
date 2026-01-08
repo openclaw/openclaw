@@ -5,6 +5,7 @@
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
+- Control UI: add Docs link, remove chat composer divider, and add New session button.
 
 ## 2026.1.8
 
