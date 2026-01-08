@@ -108,6 +108,7 @@
 - Telegram: isolate forum topic transcripts per thread and validate Gemini turn ordering in multi-topic sessions. Thanks @hsrvc for PR #407.
 - Telegram: render Telegram-safe HTML for outbound formatting and fall back to plain text on parse errors. Thanks @RandyVentures for PR #435.
 - Telegram: force grammY to use native fetch under Bun for BAN compatibility (avoids TLS chain errors).
+- Telegram: keep grammY default fetch on Node; only override under Bun to avoid Node 24 regressions.
 - iMessage: ignore disconnect errors during shutdown (avoid unhandled promise rejections). Thanks @antons for PR #359.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.

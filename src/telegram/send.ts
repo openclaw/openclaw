@@ -112,11 +112,10 @@ export async function sendMessageTelegram(
   const chatId = normalizeChatId(to);
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
+  const fetchImpl = resolveTelegramFetch();
   const api =
     opts.api ??
-    new Bot(token, {
-      client: { fetch: resolveTelegramFetch() },
-    }).api;
+    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined).api;
   const mediaUrl = opts.mediaUrl?.trim();
 
   // Build optional params for forum topics and reply threading.
@@ -270,11 +269,10 @@ export async function reactMessageTelegram(
   const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
+  const fetchImpl = resolveTelegramFetch();
   const api =
     opts.api ??
-    new Bot(token, {
-      client: { fetch: resolveTelegramFetch() },
-    }).api;
+    new Bot(token, fetchImpl ? { client: { fetch: fetchImpl } } : undefined).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
     configRetry: account.config.retry,

@@ -152,11 +152,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     },
   };
   const fetchImpl = resolveTelegramFetch(opts.proxyFetch);
-  const client: ApiClientOptions = {
-    fetch: fetchImpl as unknown as ApiClientOptions["fetch"],
-  };
+  const client: ApiClientOptions | undefined = fetchImpl
+    ? { fetch: fetchImpl as unknown as ApiClientOptions["fetch"] }
+    : undefined;
 
-  const bot = new Bot(opts.token, { client });
+  const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
 
