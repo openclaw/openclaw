@@ -63,6 +63,16 @@ export async function buildProviderSummary(
         const details: string[] = [];
         if (!account.enabled) details.push("disabled");
         if (account.selfChatMode) details.push("self-chat");
+        const dmPolicy =
+          account.dmPolicy ?? effective.whatsapp?.dmPolicy ?? "pairing";
+        details.push(`dm:${dmPolicy}`);
+        const allowFrom = (account.allowFrom ?? effective.whatsapp?.allowFrom ?? [])
+          .map(normalizeE164)
+          .filter(Boolean)
+          .slice(0, 2);
+        if (allowFrom.length > 0) {
+          details.push(`allow:${allowFrom.join(",")}`);
+        }
         lines.push(
           accountLine(
             formatAccountLabel({
