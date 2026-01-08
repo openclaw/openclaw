@@ -22,6 +22,7 @@
 - CLI: show colored table output for `clawdbot cron list` (JSON behind `--json`).
 - CLI: add cron `create`/`remove`/`delete` aliases for job management.
 - Agent: avoid duplicating context/skills when SDK rebuilds the system prompt. (#418)
+- Agent: replace SDK base system prompt with ClaudeBot prompt, add skills guidance, and document the layout.
 - Signal: reconnect SSE monitor with abortable backoff; log stream errors. Thanks @nexty5870 for PR #430.
 - Gateway: pass resolved provider as messageProvider for agent runs so provider-specific tools are available. Thanks @imfing for PR #389.
 - Doctor: add state integrity checks + repair prompts for missing sessions/state dirs, transcript mismatches, and permission issues; document full doctor flow and workspace backup tips.
