@@ -109,57 +109,61 @@ export function findChromeExecutableWindows(): BrowserExecutable | null {
   const programFilesX86 =
     process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
 
-  const candidates: Array<BrowserExecutable> = [
+  const joinWin = path.win32.join;
+  const candidates: Array<BrowserExecutable> = [];
+
+  if (localAppData) {
     // Chrome Canary (user install)
-    {
+    candidates.push({
       kind: "canary",
-      path: path.join(
+      path: joinWin(
         localAppData,
         "Google",
         "Chrome SxS",
         "Application",
         "chrome.exe",
       ),
-    },
+    });
     // Chromium (user install)
-    {
+    candidates.push({
       kind: "chromium",
-      path: path.join(localAppData, "Chromium", "Application", "chrome.exe"),
-    },
+      path: joinWin(localAppData, "Chromium", "Application", "chrome.exe"),
+    });
     // Chrome (user install)
-    {
+    candidates.push({
       kind: "chrome",
-      path: path.join(
+      path: joinWin(
         localAppData,
         "Google",
         "Chrome",
         "Application",
         "chrome.exe",
       ),
-    },
-    // Chrome (system install, 64-bit)
-    {
-      kind: "chrome",
-      path: path.join(
-        programFiles,
-        "Google",
-        "Chrome",
-        "Application",
-        "chrome.exe",
-      ),
-    },
-    // Chrome (system install, 32-bit on 64-bit Windows)
-    {
-      kind: "chrome",
-      path: path.join(
-        programFilesX86,
-        "Google",
-        "Chrome",
-        "Application",
-        "chrome.exe",
-      ),
-    },
-  ];
+    });
+  }
+
+  // Chrome (system install, 64-bit)
+  candidates.push({
+    kind: "chrome",
+    path: joinWin(
+      programFiles,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    ),
+  });
+  // Chrome (system install, 32-bit on 64-bit Windows)
+  candidates.push({
+    kind: "chrome",
+    path: joinWin(
+      programFilesX86,
+      "Google",
+      "Chrome",
+      "Application",
+      "chrome.exe",
+    ),
+  });
 
   for (const candidate of candidates) {
     if (exists(candidate.path)) return candidate;
