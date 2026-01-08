@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createMockTypingController } from "./test-helpers.js";
 import { createTypingSignaler, resolveTypingMode } from "./typing-mode.js";
@@ -121,6 +121,36 @@ describe("createTypingSignaler", () => {
 
     expect(typing.refreshTypingTtl).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
+  });
+
+  it("does not start typing on tool start when inactive", async () => {
+    const typing = createMockTypingController();
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalToolStart();
+
+    expect(typing.refreshTypingTtl).not.toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("refreshes ttl on tool start when active", async () => {
+    const typing = createMockTypingController({
+      isActive: vi.fn(() => true),
+    });
+    const signaler = createTypingSignaler({
+      typing,
+      mode: "message",
+      isHeartbeat: false,
+    });
+
+    await signaler.signalToolStart();
+
+    expect(typing.refreshTypingTtl).toHaveBeenCalled();
+    expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
   it("suppresses typing when disabled", async () => {

@@ -330,6 +330,7 @@ describe("typing controller idle", () => {
       startTypingLoop: vi.fn(async () => {}),
       startTypingOnText: vi.fn(async () => {}),
       refreshTypingTtl: vi.fn(),
+      isActive: vi.fn(() => false),
       markRunComplete: vi.fn(),
       markDispatchIdle,
       cleanup: vi.fn(),
