@@ -329,7 +329,11 @@ export function buildProgram() {
     )
     .option("--yes", "Accept defaults without prompting", false)
     .option("--repair", "Apply recommended repairs without prompting", false)
-    .option("--force", "Apply aggressive repairs (overwrites custom service config)", false)
+    .option(
+      "--force",
+      "Apply aggressive repairs (overwrites custom service config)",
+      false,
+    )
     .option(
       "--non-interactive",
       "Run without prompts (safe migrations only)",

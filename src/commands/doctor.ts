@@ -129,10 +129,13 @@ export async function doctorCommand(
   const legacyState = await detectLegacyStateMigrations({ cfg });
   if (legacyState.preview.length > 0) {
     note(legacyState.preview.join("\n"), "Legacy state detected");
-    const migrate = await prompter.confirm({
-      message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
-      initialValue: true,
-    });
+    const migrate =
+      options.nonInteractive === true
+        ? true
+        : await prompter.confirm({
+            message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+            initialValue: true,
+          });
     if (migrate) {
       const migrated = await runLegacyStateMigrations({
         detected: legacyState,
@@ -146,7 +149,11 @@ export async function doctorCommand(
     }
   }
 
-  await noteStateIntegrity(cfg, prompter, snapshot.path ?? CONFIG_PATH_CLAWDBOT);
+  await noteStateIntegrity(
+    cfg,
+    prompter,
+    snapshot.path ?? CONFIG_PATH_CLAWDBOT,
+  );
 
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
   noteSandboxScopeWarnings(cfg);
