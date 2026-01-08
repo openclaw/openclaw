@@ -4,6 +4,7 @@
 
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
 - Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223
+- Deps: bump Pi to 0.40.0 and drop pi-ai patch (upstream 429 fix). (#543) — thanks @mcinteerj
 - Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
