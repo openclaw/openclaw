@@ -14,6 +14,10 @@ import {
   resolveStateDir,
 } from "../config/config.js";
 import { resolveIsNixMode } from "../config/paths.js";
+import type {
+  BridgeBindMode,
+  GatewayControlUiConfig,
+} from "../config/types.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SYSTEMD_SERVICE_NAME,
@@ -48,14 +52,11 @@ type ConfigSummary = {
   exists: boolean;
   valid: boolean;
   issues?: Array<{ path: string; message: string }>;
-  controlUi?: {
-    enabled?: boolean;
-    basePath?: string;
-  };
+  controlUi?: GatewayControlUiConfig;
 };
 
 type GatewayStatusSummary = {
-  bindMode: "auto" | "lan" | "tailnet" | "loopback";
+  bindMode: BridgeBindMode;
   bindHost: string | null;
   port: number;
   portSource: "service args" | "env/config";
@@ -376,9 +377,7 @@ async function gatherDaemonStatus(opts: {
     exists: cliSnapshot?.exists ?? false,
     valid: cliSnapshot?.valid ?? true,
     ...(cliSnapshot?.issues?.length ? { issues: cliSnapshot.issues } : {}),
-    ...(cliCfg.gateway?.controlUi
-      ? { controlUi: cliCfg.gateway.controlUi }
-      : {}),
+    controlUi: cliCfg.gateway?.controlUi,
   };
   const daemonConfigSummary: ConfigSummary = {
     path: daemonSnapshot?.path ?? daemonConfigPath,
@@ -387,9 +386,7 @@ async function gatherDaemonStatus(opts: {
     ...(daemonSnapshot?.issues?.length
       ? { issues: daemonSnapshot.issues }
       : {}),
-    ...(daemonCfg.gateway?.controlUi
-      ? { controlUi: daemonCfg.gateway.controlUi }
-      : {}),
+    controlUi: daemonCfg.gateway?.controlUi,
   };
   const configMismatch = cliConfigSummary.path !== daemonConfigSummary.path;
 
