@@ -19,6 +19,7 @@
 - CLI: remove `update`, `gateway-daemon`, `gateway {install|uninstall|start|stop|restart|daemon status|wake|send|agent}`, and `telegram` commands; move `login/logout` to `providers login/logout` (top-level aliases hidden); use `daemon` for service control, `send`/`agent`/`wake` for RPC, and `nodes canvas` for canvas ops.
 
 ### Fixes
+- CLI/Daemon: add `clawdbot logs` tailing and improve restart/service hints across platforms.
 - Auto-reply: keep typing indicators alive during tool execution without changing typing-mode semantics. Thanks @thesash for PR #452.
 - macOS: harden Voice Wake tester/runtime (pause trigger, mic persistence, local-only tester) and keep transcript logs private. Thanks @xadenryan for PR #438.
 - macOS: preserve node bridge tunnel port override so remote nodes connect on the bridge port. Thanks @sircrumpet for PR #364.

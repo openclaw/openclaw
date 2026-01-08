@@ -23,6 +23,8 @@ launchctl kickstart -k gui/$UID/com.clawdbot.gateway
 launchctl bootout gui/$UID/com.clawdbot.gateway
 ```
 
+`launchctl` only works if the LaunchAgent is installed; otherwise run `clawdbot daemon install` first.
+
 Details: [Gateway runbook](/gateway) and [Bundled bun Gateway](/platforms/mac/bun).
 
 ## Purpose

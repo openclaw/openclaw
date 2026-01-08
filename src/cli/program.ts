@@ -37,6 +37,7 @@ import { registerDnsCli } from "./dns-cli.js";
 import { registerDocsCli } from "./docs-cli.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 import { registerHooksCli } from "./hooks-cli.js";
+import { registerLogsCli } from "./logs-cli.js";
 import { registerModelsCli } from "./models-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { registerPairingCli } from "./pairing-cli.js";
@@ -616,6 +617,7 @@ Examples:
 
   registerDaemonCli(program);
   registerGatewayCli(program);
+  registerLogsCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
   registerTuiCli(program);

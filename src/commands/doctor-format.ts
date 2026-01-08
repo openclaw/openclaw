@@ -1,6 +1,7 @@
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
+import { getResolvedLoggerSettings } from "../logging.js";
 
 type RuntimeHintOptions = {
   platform?: NodeJS.Platform;
@@ -42,19 +43,33 @@ export function buildGatewayRuntimeHints(
   if (!runtime) return hints;
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
+  const fileLog = (() => {
+    try {
+      return getResolvedLoggerSettings().file;
+    } catch {
+      return null;
+    }
+  })();
   if (runtime.cachedLabel && platform === "darwin") {
     hints.push(
       `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
     );
+    hints.push("Then reinstall: clawdbot daemon install");
+  }
+  if (runtime.missingUnit) {
+    hints.push("Service not installed. Run: clawdbot daemon install");
+    if (fileLog) hints.push(`File logs: ${fileLog}`);
+    return hints;
   }
   if (runtime.status === "stopped") {
     hints.push(
       "Service is loaded but not running (likely exited immediately).",
     );
+    if (fileLog) hints.push(`File logs: ${fileLog}`);
     if (platform === "darwin") {
       const logs = resolveGatewayLogPaths(env);
-      hints.push(`Logs: ${logs.stdoutPath}`);
-      hints.push(`Errors: ${logs.stderrPath}`);
+      hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
+      hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (platform === "linux") {
       hints.push(
         "Logs: journalctl --user -u clawdbot-gateway.service -n 200 --no-pager",

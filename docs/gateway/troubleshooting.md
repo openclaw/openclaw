@@ -23,8 +23,10 @@ clawdbot doctor
 Doctor/daemon will show runtime state (PID/last exit) and log hints.
 
 **Logs:**
-- macOS: `~/.clawdbot/logs/gateway.log` and `gateway.err.log`
-- Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
+- Preferred: `clawdbot logs --follow`
+- File logs (always): `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
+- macOS LaunchAgent (if installed): `~/.clawdbot/logs/gateway.log` and `gateway.err.log`
+- Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
 
 ### Address Already in Use (Port 18789)
@@ -74,6 +76,8 @@ cat ~/.clawdbot/clawdbot.json | jq '.routing.groupChat, .whatsapp.groups, .teleg
 
 **Check 3:** Check the logs
 ```bash
+clawdbot logs --follow
+# or if you want quick filters:
 tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
 ```
 
@@ -126,7 +130,7 @@ clawdbot status
 clawdbot status --deep
 
 # View recent connection events
-tail -100 /tmp/clawdbot/clawdbot-*.log | grep "connection\\|disconnect\\|logout"
+clawdbot logs --limit 200 | grep "connection\\|disconnect\\|logout"
 ```
 
 **Fix:** Usually reconnects automatically once the Gateway is running. If you’re stuck, restart the Gateway process (however you supervise it), or run it manually with verbose output:

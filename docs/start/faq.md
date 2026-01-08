@@ -363,6 +363,12 @@ Default log file:
 
 You can set a stable path via `logging.file`. File log level is controlled by `logging.level`. Console verbosity is controlled by `--verbose` and `logging.consoleLevel`.
 
+Fastest log tail:
+
+```bash
+clawdbot logs --follow
+```
+
 ### What’s the fastest way to get more details when something fails?
 
 Start the Gateway with `--verbose` to get more console detail. Then inspect the log file for provider auth, model routing, and RPC errors.

@@ -24,7 +24,10 @@ import {
   formatUsageSummaryLine,
   loadProviderUsageSummary,
 } from "../../infra/provider-usage.js";
-import { triggerClawdbotRestart } from "../../infra/restart.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  triggerClawdbotRestart,
+} from "../../infra/restart.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -360,11 +363,32 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
+    const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
+    if (hasSigusr1Listener) {
+      scheduleGatewaySigusr1Restart({ reason: "/restart" });
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚙️ Restarting clawdbot in-process (SIGUSR1); back in a few seconds.",
+        },
+      };
+    }
     const restartMethod = triggerClawdbotRestart();
+    if (!restartMethod.ok) {
+      const detail = restartMethod.detail
+        ? ` Details: ${restartMethod.detail}`
+        : "";
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
+        },
+      };
+    }
     return {
       shouldContinue: false,
       reply: {
-        text: `⚙️ Restarting clawdbot via ${restartMethod}; give me a few seconds to come back online.`,
+        text: `⚙️ Restarting clawdbot via ${restartMethod.method}; give me a few seconds to come back online.`,
       },
     };
   }

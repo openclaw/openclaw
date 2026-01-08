@@ -166,12 +166,14 @@ clawdbot daemon status
 clawdbot daemon install
 clawdbot daemon stop
 clawdbot daemon restart
+clawdbot logs --follow
 ```
 
 Notes:
 - `daemon status` probes the Gateway RPC by default (same URL/token defaults as `gateway status`).
 - `daemon status --deep` adds system-level scans (LaunchDaemons/system units).
 - `daemon status` now reports runtime state (PID/exit status) and port collisions when the gateway isn’t reachable.
+- `logs` tails the Gateway file log via RPC (no manual `tail`/`grep` needed).
 - If other gateway-like services are detected, the CLI warns. We recommend **one gateway per machine**; one gateway can host multiple agents.
   - Cleanup: `clawdbot daemon uninstall` (current service) and `clawdbot doctor` (legacy migrations).
 
@@ -179,6 +181,7 @@ Bundled mac app:
 - Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
 - To stop it cleanly, use `clawdbot daemon stop` (or `launchctl bootout gui/$UID/com.clawdbot.gateway`).
 - To restart, use `clawdbot daemon restart` (or `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`).
+  - `launchctl` only works if the LaunchAgent is installed; otherwise use `clawdbot daemon install` first.
 
 ## Supervision (systemd user unit)
 Create `~/.config/systemd/user/clawdbot-gateway.service`:

@@ -423,6 +423,15 @@ Notes:
 - `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
 - `daemon install` options: `--port`, `--runtime`, `--token`.
 
+### `logs`
+Tail Gateway file logs via RPC.
+
+Examples:
+```bash
+clawdbot logs --follow
+clawdbot logs --limit 200
+```
+
 ### `gateway <subcommand>`
 Gateway RPC helpers (use `--url`, `--token`, `--password`, `--timeout`, `--expect-final` for each).
 

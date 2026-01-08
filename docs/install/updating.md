@@ -90,12 +90,14 @@ CLI (works regardless of OS):
 clawdbot daemon stop
 clawdbot daemon restart
 clawdbot gateway --port 18789
+clawdbot logs --follow
 ```
 
 If you’re supervised:
 - macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`
 - Linux systemd user service: `systemctl --user restart clawdbot-gateway.service`
 - Windows (WSL2): `systemctl --user restart clawdbot-gateway.service`
+  - `launchctl`/`systemctl` only work if the service is installed; otherwise run `clawdbot daemon install`.
 
 Runbook + exact service labels: [Gateway runbook](/gateway)
 

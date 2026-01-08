@@ -28,6 +28,7 @@ import {
   type PortListener,
   type PortUsageStatus,
 } from "../infra/ports.js";
+import { getResolvedLoggerSettings } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDefaultDeps } from "./deps.js";
 import { withProgress } from "./progress.js";
@@ -171,11 +172,24 @@ function renderRuntimeHints(
 ): string[] {
   if (!runtime) return [];
   const hints: string[] = [];
+  const fileLog = (() => {
+    try {
+      return getResolvedLoggerSettings().file;
+    } catch {
+      return null;
+    }
+  })();
+  if (runtime.missingUnit) {
+    hints.push("Service not installed. Run: clawdbot daemon install");
+    if (fileLog) hints.push(`File logs: ${fileLog}`);
+    return hints;
+  }
   if (runtime.status === "stopped") {
+    if (fileLog) hints.push(`File logs: ${fileLog}`);
     if (process.platform === "darwin") {
       const logs = resolveGatewayLogPaths(process.env);
-      hints.push(`Logs: ${logs.stdoutPath}`);
-      hints.push(`Errors: ${logs.stderrPath}`);
+      hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
+      hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
       hints.push(
         "Logs: journalctl --user -u clawdbot-gateway.service -n 200 --no-pager",
@@ -188,17 +202,22 @@ function renderRuntimeHints(
 }
 
 function renderGatewayServiceStartHints(): string[] {
+  const base = ["clawdbot daemon install", "clawdbot gateway"];
   switch (process.platform) {
     case "darwin":
       return [
+        ...base,
         `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
       ];
     case "linux":
-      return [`systemctl --user start ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`];
+      return [
+        ...base,
+        `systemctl --user start ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
+      ];
     case "win32":
-      return [`schtasks /Run /TN "${GATEWAY_WINDOWS_TASK_NAME}"`];
+      return [...base, `schtasks /Run /TN "${GATEWAY_WINDOWS_TASK_NAME}"`];
     default:
-      return [];
+      return base;
   }
 }
 
@@ -261,6 +280,12 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   defaultRuntime.log(
     `Service: ${service.label} (${service.loaded ? service.loadedText : service.notLoadedText})`,
   );
+  try {
+    const logFile = getResolvedLoggerSettings().file;
+    defaultRuntime.log(`File logs: ${logFile}`);
+  } catch {
+    // ignore missing config/log resolution
+  }
   if (service.command?.programArguments?.length) {
     defaultRuntime.log(
       `Command: ${service.command.programArguments.join(" ")}`,
@@ -280,7 +305,12 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       defaultRuntime.error(`RPC probe: failed (${rpc.error})`);
     }
   }
-  if (service.loaded && service.runtime?.status === "stopped") {
+  if (service.runtime?.missingUnit) {
+    defaultRuntime.error("Service unit not found.");
+    for (const hint of renderRuntimeHints(service.runtime)) {
+      defaultRuntime.error(hint);
+    }
+  } else if (service.loaded && service.runtime?.status === "stopped") {
     defaultRuntime.error(
       "Service is loaded but not running (likely exited immediately).",
     );
@@ -292,6 +322,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     defaultRuntime.error(
       `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
     );
+    defaultRuntime.error("Then reinstall: clawdbot daemon install");
   }
   if (status.port && shouldReportPortUsage(status.port.status, rpc?.ok)) {
     for (const line of formatPortDiagnostics({

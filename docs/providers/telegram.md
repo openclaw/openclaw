@@ -208,7 +208,7 @@ Outbound Telegram API calls retry on transient network/429 errors with exponenti
 - If `telegram.groups` is set, the group must be listed or use `"*"`
 - Check Privacy Settings in @BotFather → "Group Privacy" should be **OFF**
 - Verify bot is actually a member (not just an admin with no read access)
-- Check gateway logs: `journalctl --user -u clawdbot -f` (look for "skipping group message")
+- Check gateway logs: `clawdbot logs --follow` (look for "skipping group message")
 
 **Bot responds to mentions but not `/activation always`:**
 - The `/activation` command updates session state but doesn't persist to config

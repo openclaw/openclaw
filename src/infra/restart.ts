@@ -1,38 +1,97 @@
 import { spawnSync } from "node:child_process";
+import {
+  GATEWAY_LAUNCH_AGENT_LABEL,
+  GATEWAY_SYSTEMD_SERVICE_NAME,
+} from "../daemon/constants.js";
 
-const DEFAULT_LAUNCHD_LABEL = "com.clawdbot.mac";
-const DEFAULT_SYSTEMD_UNIT = "clawdbot-gateway.service";
+export type RestartAttempt = {
+  ok: boolean;
+  method: "launchctl" | "systemd" | "supervisor";
+  detail?: string;
+  tried?: string[];
+};
 
-export function triggerClawdbotRestart():
-  | "launchctl"
-  | "systemd"
-  | "supervisor" {
+function formatSpawnDetail(result: {
+  error?: unknown;
+  status?: number | null;
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+}): string {
+  const clean = (value: string | Buffer | null | undefined) => {
+    const text =
+      typeof value === "string"
+        ? value
+        : value
+          ? value.toString()
+          : "";
+    return text.replace(/\s+/g, " ").trim();
+  };
+  if (result.error) return String(result.error);
+  const stderr = clean(result.stderr);
+  if (stderr) return stderr;
+  const stdout = clean(result.stdout);
+  if (stdout) return stdout;
+  if (typeof result.status === "number") return `exit ${result.status}`;
+  return "unknown error";
+}
+
+function normalizeSystemdUnit(raw?: string): string {
+  const unit = raw?.trim();
+  if (!unit) return `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
+  return unit.endsWith(".service") ? unit : `${unit}.service`;
+}
+
+export function triggerClawdbotRestart(): RestartAttempt {
+  const tried: string[] = [];
   if (process.platform !== "darwin") {
     if (process.platform === "linux") {
-      const unit = process.env.CLAWDBOT_SYSTEMD_UNIT || DEFAULT_SYSTEMD_UNIT;
-      const userRestart = spawnSync("systemctl", ["--user", "restart", unit], {
-        stdio: "ignore",
+      const unit = normalizeSystemdUnit(process.env.CLAWDBOT_SYSTEMD_UNIT);
+      const userArgs = ["--user", "restart", unit];
+      tried.push(`systemctl ${userArgs.join(" ")}`);
+      const userRestart = spawnSync("systemctl", userArgs, {
+        encoding: "utf8",
       });
       if (!userRestart.error && userRestart.status === 0) {
-        return "systemd";
+        return { ok: true, method: "systemd", tried };
       }
-      const systemRestart = spawnSync("systemctl", ["restart", unit], {
-        stdio: "ignore",
+      const systemArgs = ["restart", unit];
+      tried.push(`systemctl ${systemArgs.join(" ")}`);
+      const systemRestart = spawnSync("systemctl", systemArgs, {
+        encoding: "utf8",
       });
       if (!systemRestart.error && systemRestart.status === 0) {
-        return "systemd";
+        return { ok: true, method: "systemd", tried };
       }
-      return "systemd";
+      const detail = [
+        `user: ${formatSpawnDetail(userRestart)}`,
+        `system: ${formatSpawnDetail(systemRestart)}`,
+      ].join("; ");
+      return { ok: false, method: "systemd", detail, tried };
     }
-    return "supervisor";
+    return {
+      ok: false,
+      method: "supervisor",
+      detail: "unsupported platform restart",
+    };
   }
 
-  const label = process.env.CLAWDBOT_LAUNCHD_LABEL || DEFAULT_LAUNCHD_LABEL;
+  const label =
+    process.env.CLAWDBOT_LAUNCHD_LABEL || GATEWAY_LAUNCH_AGENT_LABEL;
   const uid =
     typeof process.getuid === "function" ? process.getuid() : undefined;
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;
-  spawnSync("launchctl", ["kickstart", "-k", target], { stdio: "ignore" });
-  return "launchctl";
+  const args = ["kickstart", "-k", target];
+  tried.push(`launchctl ${args.join(" ")}`);
+  const res = spawnSync("launchctl", args, { encoding: "utf8" });
+  if (!res.error && res.status === 0) {
+    return { ok: true, method: "launchctl", tried };
+  }
+  return {
+    ok: false,
+    method: "launchctl",
+    detail: formatSpawnDetail(res),
+    tried,
+  };
 }
 
 export type ScheduledRestart = {
