@@ -225,6 +225,8 @@ export const AgentParamsSchema = Type.Object(
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
+    label: Type.Optional(Type.String()),
+    spawnedBy: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -322,6 +324,7 @@ export const SessionsListParamsSchema = Type.Object(
 export const SessionsPatchParamsSchema = Type.Object(
   {
     key: NonEmptyString,
+    label: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

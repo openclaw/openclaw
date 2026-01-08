@@ -397,6 +397,25 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             }
           }
 
+          if ("label" in p) {
+            const raw = p.label;
+            if (raw === null) {
+              delete next.label;
+            } else if (raw !== undefined) {
+              const trimmed = String(raw).trim();
+              if (!trimmed) {
+                return {
+                  ok: false,
+                  error: {
+                    code: ErrorCodes.INVALID_REQUEST,
+                    message: "invalid label: empty",
+                  },
+                };
+              }
+              next.label = trimmed;
+            }
+          }
+
           if ("thinkingLevel" in p) {
             const raw = p.thinkingLevel;
             if (raw === null) {
@@ -628,6 +647,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             model: entry?.model,
             contextTokens: entry?.contextTokens,
             sendPolicy: entry?.sendPolicy,
+            label: entry?.label,
             displayName: entry?.displayName,
             chatType: entry?.chatType,
             provider: entry?.provider,

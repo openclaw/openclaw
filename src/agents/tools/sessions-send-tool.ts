@@ -30,7 +30,8 @@ import {
 } from "./sessions-send-helpers.js";
 
 const SessionsSendToolSchema = Type.Object({
-  sessionKey: Type.String(),
+  sessionKey: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
 });
@@ -43,15 +44,41 @@ export function createSessionsSendTool(opts?: {
   return {
     label: "Session Send",
     name: "sessions_send",
-    description: "Send a message into another session.",
+    description:
+      "Send a message into another session. Use sessionKey or label to identify the target.",
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const sessionKey = readStringParam(params, "sessionKey", {
-        required: true,
-      });
+      let sessionKey = readStringParam(params, "sessionKey");
+      const labelParam = readStringParam(params, "label");
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
+
+      // Lookup by label if sessionKey not provided
+      if (!sessionKey && labelParam) {
+        const listResult = (await callGateway({
+          method: "sessions.list",
+          params: { activeMinutes: 1440 }, // Last 24h
+          timeoutMs: 10_000,
+        })) as { sessions?: Array<{ key: string; label?: string }> };
+        const match = listResult.sessions?.find(
+          (s) => s.label === labelParam,
+        );
+        if (!match) {
+          return jsonResult({
+            status: "error",
+            error: `No session found with label: ${labelParam}`,
+          });
+        }
+        sessionKey = match.key;
+      }
+
+      if (!sessionKey) {
+        return jsonResult({
+          status: "error",
+          error: "Either sessionKey or label is required",
+        });
+      }
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const visibility =
         cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";

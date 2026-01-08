@@ -148,12 +148,23 @@ describe("gateway server sessions", () => {
     expect(sendPolicyPatched.ok).toBe(true);
     expect(sendPolicyPatched.payload?.entry.sendPolicy).toBe("deny");
 
+    const labelPatched = await rpcReq<{
+      ok: true;
+      entry: { label?: string };
+    }>(ws, "sessions.patch", {
+      key: "agent:main:subagent:one",
+      label: "Briefing",
+    });
+    expect(labelPatched.ok).toBe(true);
+    expect(labelPatched.payload?.entry.label).toBe("Briefing");
+
     const list2 = await rpcReq<{
       sessions: Array<{
         key: string;
         thinkingLevel?: string;
         verboseLevel?: string;
         sendPolicy?: string;
+        label?: string;
       }>;
     }>(ws, "sessions.list", {});
     expect(list2.ok).toBe(true);
@@ -163,6 +174,10 @@ describe("gateway server sessions", () => {
     expect(main2?.thinkingLevel).toBe("medium");
     expect(main2?.verboseLevel).toBeUndefined();
     expect(main2?.sendPolicy).toBe("deny");
+    const subagent = list2.payload?.sessions.find(
+      (s) => s.key === "agent:main:subagent:one",
+    );
+    expect(subagent?.label).toBe("Briefing");
 
     const spawnedOnly = await rpcReq<{
       sessions: Array<{ key: string }>;
