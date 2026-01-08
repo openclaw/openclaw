@@ -309,9 +309,13 @@ export async function runTui(opts: TuiOptions) {
         includeUnknown: false,
         agentId: listAgentId,
       });
-      const entry = result.sessions.find(
-        (row) => row.key === currentSessionKey,
-      );
+      const entry = result.sessions.find((row) => {
+        // Exact match
+        if (row.key === currentSessionKey) return true;
+        // Also match canonical keys like "agent:default:main" against "main"
+        const parsed = parseAgentSessionKey(row.key);
+        return parsed?.rest === currentSessionKey;
+      });
       sessionInfo = {
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
