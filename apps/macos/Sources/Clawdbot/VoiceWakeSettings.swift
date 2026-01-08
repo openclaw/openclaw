@@ -1,8 +1,8 @@
 import AppKit
 import AVFoundation
 import Observation
-import SwabbleKit
 import Speech
+import SwabbleKit
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -371,9 +371,9 @@ struct VoiceWakeSettings: View {
 
     private static func textOnlyCommand(from transcript: String, triggers: [String]) -> String? {
         guard !transcript.isEmpty else { return nil }
-        let normalized = normalizeToken(transcript)
+        let normalized = self.normalizeToken(transcript)
         guard !normalized.isEmpty else { return nil }
-        guard startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
+        guard self.startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
         let trimmed = WakeWordGate.stripWake(text: transcript, triggers: triggers)
         return trimmed.isEmpty ? nil : trimmed
@@ -382,13 +382,13 @@ struct VoiceWakeSettings: View {
     private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
         let tokens = transcript
             .split(whereSeparator: { $0.isWhitespace })
-            .map { normalizeToken(String($0)) }
+            .map { self.normalizeToken(String($0)) }
             .filter { !$0.isEmpty }
         guard !tokens.isEmpty else { return false }
         for trigger in triggers {
             let triggerTokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { normalizeToken(String($0)) }
+                .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
             if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
@@ -400,7 +400,7 @@ struct VoiceWakeSettings: View {
 
     private static func normalizeToken(_ token: String) -> String {
         token
-            .trimmingCharacters(in: Self.whitespaceAndPunctuation)
+            .trimmingCharacters(in: self.whitespaceAndPunctuation)
             .lowercased()
     }
 
@@ -528,14 +528,14 @@ struct VoiceWakeSettings: View {
 
     @MainActor
     private func loadMicsIfNeeded(force: Bool = false) async {
-        guard (force || self.availableMics.isEmpty), !self.loadingMics else { return }
+        guard force || self.availableMics.isEmpty, !self.loadingMics else { return }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],
             mediaType: .audio,
             position: .unspecified)
         let aliveUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
-        let connectedDevices = discovery.devices.filter { $0.isConnected }
+        let connectedDevices = discovery.devices.filter(\.isConnected)
         let devices = aliveUIDs.isEmpty
             ? connectedDevices
             : connectedDevices.filter { aliveUIDs.contains($0.uniqueID) }

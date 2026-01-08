@@ -263,7 +263,8 @@ final class VoiceWakeTester {
         segments: [WakeWordSegment],
         triggers: [String],
         match: WakeWordGateMatch?,
-        isFinal: Bool) {
+        isFinal: Bool)
+    {
         guard !transcript.isEmpty else { return }
         if transcript == self.lastLoggedText, !isFinal {
             if let last = self.lastLoggedAt, Date().timeIntervalSince(last) < 0.25 {
@@ -276,15 +277,15 @@ final class VoiceWakeTester {
         let textOnly = WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers)
         let gaps = Self.debugCandidateGaps(triggers: triggers, segments: segments)
         let segmentSummary = Self.debugSegments(segments)
-        let timingCount = segments.filter { $0.start > 0 || $0.duration > 0 }.count
+        let timingCount = segments.count(where: { $0.start > 0 || $0.duration > 0 })
         let matchSummary = match.map {
             "match=true gap=\(String(format: "%.2f", $0.postGap))s cmdLen=\($0.command.count)"
         } ?? "match=false"
 
         self.logger.info(
             "voicewake test transcript='\(transcript, privacy: .public)' textOnly=\(textOnly) " +
-            "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
-            "\(matchSummary) gaps=[\(gaps, privacy: .public)] segments=[\(segmentSummary, privacy: .public)]")
+                "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
+                "\(matchSummary) gaps=[\(gaps, privacy: .public)] segments=[\(segmentSummary, privacy: .public)]")
     }
 
     private static func debugSegments(_ segments: [WakeWordSegment]) -> String {
@@ -296,9 +297,9 @@ final class VoiceWakeTester {
     }
 
     private static func debugCandidateGaps(triggers: [String], segments: [WakeWordSegment]) -> String {
-        let tokens = normalizeSegments(segments)
+        let tokens = self.normalizeSegments(segments)
         guard !tokens.isEmpty else { return "" }
-        let triggerTokens = normalizeTriggers(triggers)
+        let triggerTokens = self.normalizeTriggers(triggers)
         var gaps: [String] = []
 
         for trigger in triggerTokens {
@@ -332,7 +333,7 @@ final class VoiceWakeTester {
         for trigger in triggers {
             let tokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { normalizeToken(String($0)) }
+                .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             if tokens.isEmpty { continue }
             output.append(DebugTriggerTokens(tokens: tokens))
@@ -342,7 +343,7 @@ final class VoiceWakeTester {
 
     private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [DebugToken] {
         segments.compactMap { segment in
-            let normalized = normalizeToken(segment.text)
+            let normalized = self.normalizeToken(segment.text)
             guard !normalized.isEmpty else { return nil }
             return DebugToken(
                 normalized: normalized,
@@ -353,7 +354,7 @@ final class VoiceWakeTester {
 
     private static func normalizeToken(_ token: String) -> String {
         token
-            .trimmingCharacters(in: Self.whitespaceAndPunctuation)
+            .trimmingCharacters(in: self.whitespaceAndPunctuation)
             .lowercased()
     }
 
@@ -363,8 +364,8 @@ final class VoiceWakeTester {
     private func textOnlyFallbackMatch(
         transcript: String,
         triggers: [String],
-        config: WakeWordGateConfig
-    ) -> WakeWordGateMatch? {
+        config: WakeWordGateConfig) -> WakeWordGateMatch?
+    {
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
         guard Self.startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
         let trimmed = WakeWordGate.stripWake(text: transcript, triggers: triggers)
@@ -375,13 +376,13 @@ final class VoiceWakeTester {
     private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
         let tokens = transcript
             .split(whereSeparator: { $0.isWhitespace })
-            .map { normalizeToken(String($0)) }
+            .map { self.normalizeToken(String($0)) }
             .filter { !$0.isEmpty }
         guard !tokens.isEmpty else { return false }
         for trigger in triggers {
             let triggerTokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { normalizeToken(String($0)) }
+                .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
             if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
@@ -418,8 +419,8 @@ final class VoiceWakeTester {
 
     private func scheduleSilenceCheck(
         triggers: [String],
-        onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void
-    ) {
+        onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void)
+    {
         self.silenceTask?.cancel()
         let lastSeenAt = self.lastTranscriptAt
         let lastText = self.lastTranscript
@@ -433,8 +434,7 @@ final class VoiceWakeTester {
             guard let match = self.textOnlyFallbackMatch(
                 transcript: lastText,
                 triggers: triggers,
-                config: WakeWordGateConfig(triggers: triggers)
-            ) else { return }
+                config: WakeWordGateConfig(triggers: triggers)) else { return }
             self.holdingAfterDetect = true
             self.detectedText = match.command
             self.logger.info("voice wake detected (test, silence) (len=\(match.command.count))")
@@ -455,7 +455,7 @@ final class VoiceWakeTester {
         let preferred = (preferredMicID?.isEmpty == false) ? preferredMicID! : "system-default"
         self.logger.info(
             "voicewake test input preferred=\(preferred, privacy: .public) " +
-            "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
+                "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
     }
 
     private nonisolated static func ensurePermissions() async throws -> Bool {

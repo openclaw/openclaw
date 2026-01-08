@@ -212,7 +212,7 @@ actor VoiceWakeRuntime {
             let preferred = config.micID?.isEmpty == false ? config.micID! : "system-default"
             self.logger.info(
                 "voicewake runtime input preferred=\(preferred, privacy: .public) " +
-                "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
+                    "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
             self.logger.info("voicewake runtime started")
             DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "started", fields: [
                 "locale": config.localeID ?? "",
@@ -377,8 +377,8 @@ actor VoiceWakeRuntime {
         isFinal: Bool,
         match: WakeWordGateMatch?,
         usedFallback: Bool,
-        capturing: Bool
-    ) {
+        capturing: Bool)
+    {
         guard !transcript.isEmpty else { return }
         if transcript == self.lastLoggedText, !isFinal {
             if let last = self.lastLoggedAt, Date().timeIntervalSince(last) < 0.25 {
@@ -389,7 +389,7 @@ actor VoiceWakeRuntime {
         self.lastLoggedAt = Date()
 
         let textOnly = WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers)
-        let timingCount = segments.filter { $0.start > 0 || $0.duration > 0 }.count
+        let timingCount = segments.count(where: { $0.start > 0 || $0.duration > 0 })
         let matchSummary = match.map {
             "match=true gap=\(String(format: "%.2f", $0.postGap))s cmdLen=\($0.command.count)"
         } ?? "match=false"
@@ -401,9 +401,9 @@ actor VoiceWakeRuntime {
 
         self.logger.info(
             "voicewake runtime transcript='\(transcript, privacy: .public)' textOnly=\(textOnly) " +
-            "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
-            "capturing=\(capturing) fallback=\(usedFallback) " +
-            "\(matchSummary) segments=[\(segmentSummary, privacy: .public)]")
+                "isFinal=\(isFinal) timing=\(timingCount)/\(segments.count) " +
+                "capturing=\(capturing) fallback=\(usedFallback) " +
+                "\(matchSummary) segments=[\(segmentSummary, privacy: .public)]")
     }
 
     private func noteAudioTap(rms: Double) {
@@ -471,8 +471,8 @@ actor VoiceWakeRuntime {
         lastSeenAt: Date?,
         lastText: String?,
         triggers: [String],
-        config: RuntimeConfig
-    ) async {
+        config: RuntimeConfig) async
+    {
         guard !Task.isCancelled else { return }
         guard !self.isCapturing else { return }
         guard let lastSeenAt, let lastText else { return }
@@ -488,8 +488,8 @@ actor VoiceWakeRuntime {
     private func textOnlyFallbackMatch(
         transcript: String,
         triggers: [String],
-        config: WakeWordGateConfig
-    ) -> WakeWordGateMatch? {
+        config: WakeWordGateConfig) -> WakeWordGateMatch?
+    {
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
         guard Self.startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
         let trimmed = Self.trimmedAfterTrigger(transcript, triggers: triggers)
@@ -745,13 +745,13 @@ actor VoiceWakeRuntime {
     private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
         let tokens = transcript
             .split(whereSeparator: { $0.isWhitespace })
-            .map { normalizeToken(String($0)) }
+            .map { self.normalizeToken(String($0)) }
             .filter { !$0.isEmpty }
         guard !tokens.isEmpty else { return false }
         for trigger in triggers {
             let triggerTokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { normalizeToken(String($0)) }
+                .map { self.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
             if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
@@ -763,7 +763,7 @@ actor VoiceWakeRuntime {
 
     private static func normalizeToken(_ token: String) -> String {
         token
-            .trimmingCharacters(in: Self.whitespaceAndPunctuation)
+            .trimmingCharacters(in: self.whitespaceAndPunctuation)
             .lowercased()
     }
 

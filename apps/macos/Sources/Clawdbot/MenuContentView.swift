@@ -526,7 +526,7 @@ struct MenuContent: View {
             deviceTypes: [.external, .microphone],
             mediaType: .audio,
             position: .unspecified)
-        let connectedDevices = discovery.devices.filter { $0.isConnected }
+        let connectedDevices = discovery.devices.filter(\.isConnected)
         self.availableMics = connectedDevices
             .sorted { lhs, rhs in
                 lhs.localizedName.localizedCaseInsensitiveCompare(rhs.localizedName) == .orderedAscending
