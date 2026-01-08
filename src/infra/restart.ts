@@ -19,14 +19,18 @@ function formatSpawnDetail(result: {
 }): string {
   const clean = (value: string | Buffer | null | undefined) => {
     const text =
-      typeof value === "string"
-        ? value
-        : value
-          ? value.toString()
-          : "";
+      typeof value === "string" ? value : value ? value.toString() : "";
     return text.replace(/\s+/g, " ").trim();
   };
-  if (result.error) return String(result.error);
+  if (result.error) {
+    if (result.error instanceof Error) return result.error.message;
+    if (typeof result.error === "string") return result.error;
+    try {
+      return JSON.stringify(result.error);
+    } catch {
+      return "unknown error";
+    }
+  }
   const stderr = clean(result.stderr);
   if (stderr) return stderr;
   const stdout = clean(result.stdout);
@@ -42,6 +46,9 @@ function normalizeSystemdUnit(raw?: string): string {
 }
 
 export function triggerClawdbotRestart(): RestartAttempt {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return { ok: true, method: "supervisor", detail: "test mode" };
+  }
   const tried: string[] = [];
   if (process.platform !== "darwin") {
     if (process.platform === "linux") {

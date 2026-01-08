@@ -106,15 +106,14 @@ export function createSessionsSpawnTool(opts?: {
         const allowAgents =
           resolveAgentConfig(cfg, requesterAgentId)?.subagents?.allowAgents ??
           [];
-        const allowAny = allowAgents.some(
-          (value) => value.trim() === "*",
-        );
+        const allowAny = allowAgents.some((value) => value.trim() === "*");
+        const normalizedTargetId = targetAgentId.toLowerCase();
         const allowSet = new Set(
           allowAgents
             .filter((value) => value.trim() && value.trim() !== "*")
-            .map((value) => normalizeAgentId(value)),
+            .map((value) => normalizeAgentId(value).toLowerCase()),
         );
-        if (!allowAny && !allowSet.has(targetAgentId)) {
+        if (!allowAny && !allowSet.has(normalizedTargetId)) {
           const allowedText = allowAny
             ? "*"
             : allowSet.size > 0

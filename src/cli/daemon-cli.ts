@@ -130,6 +130,7 @@ export type DaemonInstallOptions = {
   port?: string | number;
   runtime?: string;
   token?: string;
+  force?: boolean;
 };
 
 function parsePort(raw: unknown): number | null {
@@ -190,6 +191,14 @@ function safeDaemonEnv(env: Record<string, string> | undefined): string[] {
     lines.push(`${key}=${value.trim()}`);
   }
   return lines;
+}
+
+function normalizeListenerAddress(raw: string): string {
+  let value = raw.trim();
+  if (!value) return value;
+  value = value.replace(/^TCP\s+/i, "");
+  value = value.replace(/\s+\(LISTEN\)\s*$/i, "");
+  return value.trim();
 }
 
 async function probeGatewayStatus(opts: {
@@ -330,7 +339,7 @@ async function gatherDaemonStatus(opts: {
   const serviceEnv = command?.environment ?? undefined;
   const mergedDaemonEnv = {
     ...(process.env as Record<string, string | undefined>),
-    ...(serviceEnv ?? {}),
+    ...(serviceEnv ?? undefined),
   } satisfies Record<string, string | undefined>;
 
   const cliConfigPath = resolveConfigPath(
@@ -389,7 +398,7 @@ async function gatherDaemonStatus(opts: {
   const probeUrl = probeUrlOverride ?? `ws://${probeHost}:${daemonPort}`;
   const probeNote =
     !probeUrlOverride && bindMode === "lan"
-      ? "Local probe uses loopback (127.0.0.1); gateway bind=lan listens on 0.0.0.0."
+      ? "Local probe uses loopback (127.0.0.1). bind=lan listens on 0.0.0.0 (all interfaces); use a LAN IP for remote clients."
       : !probeUrlOverride && bindMode === "loopback"
         ? "Loopback-only gateway; only local clients can connect."
         : undefined;
@@ -539,6 +548,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       defaultRuntime.error(
         "Root cause: CLI and daemon are using different config paths (likely a profile/state-dir mismatch).",
       );
+      defaultRuntime.error(
+        "Fix: rerun `clawdbot daemon install --force` from the same --profile / CLAWDBOT_STATE_DIR you expect.",
+      );
     }
   }
   if (status.gateway) {
@@ -610,7 +622,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     const addrs = Array.from(
       new Set(
         status.port.listeners
-          .map((l) => l.address?.trim())
+          .map((l) => (l.address ? normalizeListenerAddress(l.address) : ""))
           .filter((v): v is string => Boolean(v)),
       ),
     );
@@ -729,8 +741,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     return;
   }
   if (loaded) {
-    defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
-    return;
+    if (!opts.force) {
+      defaultRuntime.log(`Gateway service already ${service.loadedText}.`);
+      defaultRuntime.log("Reinstall with: clawdbot daemon install --force");
+      return;
+    }
   }
 
   const devMode =
@@ -896,6 +911,7 @@ export function registerDaemonCli(program: Command) {
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
     .option("--token <token>", "Gateway token (token auth)")
+    .option("--force", "Reinstall/overwrite if already installed", false)
     .action(async (opts) => {
       await runDaemonInstall(opts);
     });
