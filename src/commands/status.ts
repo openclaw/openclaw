@@ -12,6 +12,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
@@ -20,7 +21,6 @@ import {
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
 import { peekSystemEvents } from "../infra/system-events.js";
-import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { resolveHeartbeatSeconds } from "../web/reconnect.js";
@@ -29,8 +29,8 @@ import {
   logWebSelfId,
   webAuthExists,
 } from "../web/session.js";
-import { resolveControlUiLinks } from "./onboard-helpers.js";
 import type { HealthSummary } from "./health.js";
+import { resolveControlUiLinks } from "./onboard-helpers.js";
 
 export type SessionStatus = {
   key: string;

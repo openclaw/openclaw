@@ -1,18 +1,33 @@
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import { resolveTelegramAccount, listTelegramAccountIds } from "../telegram/accounts.js";
-import { resolveDiscordAccount, listDiscordAccountIds } from "../discord/accounts.js";
-import { resolveSlackAccount, listSlackAccountIds } from "../slack/accounts.js";
-import { resolveSignalAccount, listSignalAccountIds } from "../signal/accounts.js";
-import { resolveIMessageAccount, listIMessageAccountIds } from "../imessage/accounts.js";
+import {
+  listDiscordAccountIds,
+  resolveDiscordAccount,
+} from "../discord/accounts.js";
+import {
+  listIMessageAccountIds,
+  resolveIMessageAccount,
+} from "../imessage/accounts.js";
+import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
+import {
+  listSignalAccountIds,
+  resolveSignalAccount,
+} from "../signal/accounts.js";
+import { listSlackAccountIds, resolveSlackAccount } from "../slack/accounts.js";
+import {
+  listTelegramAccountIds,
+  resolveTelegramAccount,
+} from "../telegram/accounts.js";
 import { theme } from "../terminal/theme.js";
 import { normalizeE164 } from "../utils.js";
+import {
+  listWhatsAppAccountIds,
+  resolveWhatsAppAccount,
+} from "../web/accounts.js";
 import {
   getWebAuthAgeMs,
   readWebSelfId,
   webAuthExists,
 } from "../web/session.js";
-import { listWhatsAppAccountIds, resolveWhatsAppAccount } from "../web/accounts.js";
-import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 export type ProviderSummaryOptions = {
   colorize?: boolean;
@@ -66,7 +81,11 @@ export async function buildProviderSummary(
         const dmPolicy =
           account.dmPolicy ?? effective.whatsapp?.dmPolicy ?? "pairing";
         details.push(`dm:${dmPolicy}`);
-        const allowFrom = (account.allowFrom ?? effective.whatsapp?.allowFrom ?? [])
+        const allowFrom = (
+          account.allowFrom ??
+          effective.whatsapp?.allowFrom ??
+          []
+        )
           .map(normalizeE164)
           .filter(Boolean)
           .slice(0, 2);
@@ -237,7 +256,15 @@ export async function buildProviderSummary(
     const accounts = listIMessageAccountIds(effective).map((accountId) =>
       resolveIMessageAccount({ cfg: effective, accountId }),
     );
-    const configuredAccounts = accounts.filter((account) => account.configured);
+    const configuredAccounts = accounts.filter((account) =>
+      Boolean(
+        account.config.cliPath ||
+          account.config.dbPath ||
+          account.config.allowFrom ||
+          account.config.service ||
+          account.config.region,
+      ),
+    );
     const imessageConfigured = configuredAccounts.length > 0;
     lines.push(
       imessageConfigured
