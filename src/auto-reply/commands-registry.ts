@@ -25,7 +25,7 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     key: "status",
     nativeName: "status",
     description: "Show current status.",
-    textAliases: ["/status"],
+    textAliases: ["/status", "/usage"],
   },
   {
     key: "debug",

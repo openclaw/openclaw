@@ -35,8 +35,7 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 
 Text + native (when enabled):
 - `/help`
-- `/status`
-- `/debug show|set|unset|reset` (runtime overrides, owner-only)
+- `/status` (alias: `/usage`)
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
 - `/restart`
@@ -47,7 +46,7 @@ Text + native (when enabled):
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
-- `/model <name>` (or `/<alias>` from `agents.defaults.models.*.alias`)
+- `/model <name>` (or `/<alias>` from `agent.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 
 Text-only:
@@ -59,24 +58,6 @@ Notes:
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
-
-## Debug overrides
-
-`/debug` lets you set **runtime-only** config overrides (memory, not disk). Owner-only.
-
-Examples:
-
-```
-/debug show
-/debug set messages.responsePrefix="[clawdbot]"
-/debug set whatsapp.allowFrom=["+1555","+4477"]
-/debug unset messages.responsePrefix
-/debug reset
-```
-
-Notes:
-- Overrides apply immediately to new config reads, but do **not** write to `clawdbot.json`.
-- Use `/debug reset` to clear all overrides and return to the on-disk config.
 
 ## Surface notes
 
