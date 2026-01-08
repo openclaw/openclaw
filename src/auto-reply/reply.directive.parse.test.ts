@@ -132,6 +132,12 @@ describe("directive parsing", () => {
     expect(res.cleaned).toBe("thats not /tmp/hello");
   });
 
+  it("preserves spacing when stripping reasoning directives before paths", () => {
+    const res = extractReasoningDirective("thats not /reasoning on/tmp/hello");
+    expect(res.hasDirective).toBe(true);
+    expect(res.cleaned).toBe("thats not /tmp/hello");
+  });
+
   it("preserves spacing when stripping status directives before paths", () => {
     const res = extractStatusDirective("thats not /status:/tmp/hello");
     expect(res.hasDirective).toBe(true);
