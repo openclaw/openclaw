@@ -143,12 +143,18 @@ export async function monitorMSTeamsProvider(
     const senderId = from.aadObjectId ?? from.id;
 
     // Save conversation reference for proactive messaging
+    const agent = activity.recipient
+      ? {
+          id: activity.recipient.id,
+          name: activity.recipient.name,
+          aadObjectId: activity.recipient.aadObjectId,
+        }
+      : undefined;
     const conversationRef: StoredConversationReference = {
       activityId: activity.id,
       user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
-      bot: activity.recipient
-        ? { id: activity.recipient.id, name: activity.recipient.name }
-        : undefined,
+      agent,
+      bot: agent ? { id: agent.id, name: agent.name } : undefined,
       conversation: {
         id: conversationId,
         conversationType,
