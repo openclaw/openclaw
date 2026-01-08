@@ -1,3 +1,4 @@
+import { spinner } from "@clack/prompts";
 import chalk from "chalk";
 
 import {
@@ -45,7 +46,7 @@ import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { setupProviders } from "./onboard-providers.js";
 import type { ProviderChoice } from "./onboard-types.js";
 
-const DOCS_BASE = "https://docs.clawd.bot";
+const DOCS_ROOT = "https://docs.clawd.bot";
 
 const CHAT_PROVIDERS = [
   "whatsapp",
@@ -94,12 +95,6 @@ export type ProvidersRemoveOptions = {
   account?: string;
   delete?: boolean;
 };
-
-function docsLink(path: string, label?: string): string {
-  const cleanPath = path.startsWith("/") ? path : `/${path}`;
-  const url = `${DOCS_BASE}${cleanPath}`;
-  return formatTerminalLink(label ?? url, url, { fallback: url });
-}
 
 function normalizeChatProvider(raw?: string): ChatProvider | null {
   const trimmed = (raw ?? "").trim().toLowerCase();
@@ -447,6 +442,7 @@ export async function providersListCommand(
 ) {
   const cfg = await requireValidConfig(runtime);
   if (!cfg) return;
+  const includeUsage = opts.usage !== false;
 
   const whatsappAccounts = listWhatsAppAccountIds(cfg);
   const telegramAccounts = listTelegramAccountIds(cfg);
@@ -466,9 +462,8 @@ export async function providersListCommand(
         profileId === CODEX_CLI_PROFILE_ID,
     }),
   );
-  const usage = opts.usage ? await loadProviderUsageSummary() : undefined;
-
   if (opts.json) {
+    const usage = includeUsage ? await loadProviderUsageSummary() : undefined;
     const payload = {
       chat: {
         whatsapp: whatsappAccounts,
@@ -574,17 +569,54 @@ export async function providersListCommand(
     }
   }
 
-  if (usage) {
-    lines.push("");
-    lines.push(...formatUsageReportLines(usage));
+  runtime.log(lines.join("\n"));
+
+  if (includeUsage) {
+    runtime.log("");
+    const usage = await loadUsageWithSpinner(runtime);
+    if (usage) {
+      const usageLines = formatUsageReportLines(usage);
+      if (usageLines.length > 0) {
+        usageLines[0] = chalk.cyan(usageLines[0]);
+        runtime.log(usageLines.join("\n"));
+      }
+    }
   }
 
-  lines.push("");
-  lines.push(
-    `Docs: ${docsLink("/gateway/configuration", "gateway/configuration")}`,
+  runtime.log("");
+  runtime.log(
+    `Docs: gateway/configuration -> ${formatTerminalLink(
+      DOCS_ROOT,
+      DOCS_ROOT,
+      { fallback: DOCS_ROOT },
+    )}`,
   );
+}
 
-  runtime.log(lines.join("\n"));
+async function loadUsageWithSpinner(
+  runtime: RuntimeEnv,
+): Promise<Awaited<ReturnType<typeof loadProviderUsageSummary>> | null> {
+  const rich = Boolean(process.stdout.isTTY);
+  if (!rich) {
+    try {
+      return await loadProviderUsageSummary();
+    } catch (err) {
+      runtime.error(String(err));
+      return null;
+    }
+  }
+
+  const spin = spinner();
+  spin.start(chalk.cyan("Fetching usage snapshot…"));
+  try {
+    const usage = await loadProviderUsageSummary();
+    spin.stop(chalk.green("Usage snapshot ready"));
+    return usage;
+  } catch (err) {
+    spin.stop(chalk.red("Usage snapshot failed"));
+    runtime.error(String(err));
+    return null;
+  }
 }
 
 export async function providersStatusCommand(
