@@ -6,6 +6,7 @@
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
+- Doctor: run legacy state migrations in non-interactive mode without prompts.
 - Cron: parse Telegram topic targets for isolated delivery. (#478) — thanks @nachoiacovino
 - Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos
 - Cron: allow Telegram delivery targets with topic/thread IDs (e.g. `-100…:topic:123`). (#474) — thanks @mitschabaude-bot
