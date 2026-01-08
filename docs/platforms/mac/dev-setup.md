@@ -97,4 +97,4 @@ clawdbot daemon stop
 # If you’re not using a LaunchAgent (dev mode / manual runs), find the listener:
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 ```
-Kill any existing `node` or `clawdbot` processes listening on that port and restart the app.
+If a manual run is holding the port, stop that process (Ctrl+C). As a last resort, kill the PID you found above.

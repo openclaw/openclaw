@@ -87,6 +87,7 @@ Details: [Doctor](/gateway/doctor)
 CLI (works regardless of OS):
 
 ```bash
+clawdbot daemon status
 clawdbot daemon stop
 clawdbot daemon restart
 clawdbot gateway --port 18789

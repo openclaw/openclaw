@@ -286,6 +286,8 @@ clawdbot providers login --verbose
 ```bash
 # Supervisor + probe target + config paths
 clawdbot daemon status
+# Include system-level scans (legacy/extra services, port listeners)
+clawdbot daemon status --deep
 
 # Is the gateway reachable?
 clawdbot health --json
@@ -295,7 +297,9 @@ clawdbot health --verbose
 # Is something listening on the default port?
 lsof -nP -iTCP:18789 -sTCP:LISTEN
 
-# Recent activity
+# Recent activity (RPC log tail)
+clawdbot logs --follow
+# Fallback if RPC is down
 tail -20 /tmp/clawdbot/clawdbot-*.log
 ```
 
@@ -304,9 +308,13 @@ tail -20 /tmp/clawdbot/clawdbot-*.log
 Nuclear option:
 
 ```bash
+clawdbot daemon stop
+# If you installed a service and want a clean install:
+# clawdbot daemon uninstall
+
 trash "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}"
 clawdbot providers login         # re-pair WhatsApp
-clawdbot gateway        # start the Gateway again
+clawdbot daemon restart           # or: clawdbot gateway
 ```
 
 ⚠️ This loses all sessions and requires re-pairing WhatsApp.

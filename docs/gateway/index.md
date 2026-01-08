@@ -172,8 +172,11 @@ clawdbot logs --follow
 Notes:
 - `daemon status` probes the Gateway RPC by default using the daemon’s resolved port/config (override with `--url`).
 - `daemon status --deep` adds system-level scans (LaunchDaemons/system units).
+- `daemon status --no-probe` skips the RPC probe (useful when networking is down).
+- `daemon status --json` is stable for scripts.
 - `daemon status` reports **supervisor runtime** (launchd/systemd running) separately from **RPC reachability** (WS connect + status RPC).
 - `daemon status` prints config path + probe target to avoid “localhost vs LAN bind” confusion and profile mismatches.
+- `daemon status` includes the last gateway error line when the service looks running but the port is closed.
 - `logs` tails the Gateway file log via RPC (no manual `tail`/`grep` needed).
 - If other gateway-like services are detected, the CLI warns. We recommend **one gateway per machine**; one gateway can host multiple agents.
   - Cleanup: `clawdbot daemon uninstall` (current service) and `clawdbot doctor` (legacy migrations).
