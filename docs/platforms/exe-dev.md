@@ -13,6 +13,15 @@ Goal: Clawdbot Gateway running on an exe.dev VM, reachable from your laptop via:
 
 This page assumes **Ubuntu/Debian**. If you picked a different distro, map packages accordingly.
 
+If you’re on any other Linux VPS, the same steps apply — you just won’t use the exe.dev proxy commands.
+
+## Beginner quick path
+
+1) Create VM → install Node 22 → install Clawdbot  
+2) Run `clawdbot onboard --install-daemon`  
+3) Tunnel from laptop (`ssh -N -L 18789:127.0.0.1:18789 …`)  
+4) Open `http://127.0.0.1:18789/` and paste your token
+
 ## What you need
 
 - exe.dev account + `ssh exe.dev` working on your laptop
