@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { Readable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -349,7 +350,9 @@ describe("Agent-specific sandbox config", () => {
     });
 
     expect(context).toBeDefined();
-    expect(context?.workspaceDir).toContain("/tmp/isolated-sandboxes");
+    expect(context?.workspaceDir).toContain(
+      path.resolve("/tmp/isolated-sandboxes"),
+    );
   });
 
   it("should prefer agent config over global for multiple agents", async () => {

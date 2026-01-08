@@ -202,12 +202,14 @@ export function resolveStorePath(store?: string, opts?: { agentId?: string }) {
   const agentId = normalizeAgentId(opts?.agentId ?? DEFAULT_AGENT_ID);
   if (!store) return resolveDefaultSessionStorePath(agentId);
   if (store.includes("{agentId}")) {
-    return path.resolve(
-      store.replaceAll("{agentId}", agentId).replace("~", os.homedir()),
-    );
+    const expanded = store.replaceAll("{agentId}", agentId);
+    if (expanded.startsWith("~")) {
+      return path.resolve(expanded.replace(/^~(?=$|[\\/])/, os.homedir()));
+    }
+    return path.resolve(expanded);
   }
   if (store.startsWith("~"))
-    return path.resolve(store.replace("~", os.homedir()));
+    return path.resolve(store.replace(/^~(?=$|[\\/])/, os.homedir()));
   return path.resolve(store);
 }
 
