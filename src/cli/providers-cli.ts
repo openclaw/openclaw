@@ -7,6 +7,7 @@ import {
   providersStatusCommand,
 } from "../commands/providers.js";
 import { defaultRuntime } from "../runtime.js";
+import { hasExplicitOptions } from "./command-options.js";
 
 const optionNamesAdd = [
   "provider",
@@ -30,18 +31,6 @@ const optionNamesAdd = [
 
 const optionNamesRemove = ["provider", "account", "delete"] as const;
 
-function hasExplicitOptions(
-  command: Command,
-  names: readonly string[],
-): boolean {
-  return names.some((name) => {
-    if (typeof command.getOptionValueSource !== "function") {
-      return false;
-    }
-    return command.getOptionValueSource(name) === "cli";
-  });
-}
-
 export function registerProvidersCli(program: Command) {
   const providers = program
     .command("providers")
@@ -64,7 +53,7 @@ export function registerProvidersCli(program: Command) {
 
   providers
     .command("status")
-    .description("Show gateway provider status")
+    .description("Show gateway provider status (use status --deep for local)")
     .option("--probe", "Probe provider credentials", false)
     .option("--timeout <ms>", "Timeout in ms", "10000")
     .option("--json", "Output JSON", false)
