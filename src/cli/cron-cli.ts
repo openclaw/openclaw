@@ -1,8 +1,8 @@
 import chalk from "chalk";
 import type { Command } from "commander";
+import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
 import { defaultRuntime } from "../runtime.js";
-import type { CronJob, CronSchedule } from "../cron/types.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
@@ -122,8 +122,11 @@ const formatStatus = (job: CronJob) => {
   return job.state.lastStatus ?? "idle";
 };
 
-const colorize = (rich: boolean, color: (msg: string) => string, msg: string) =>
-  rich ? color(msg) : msg;
+const colorize = (
+  rich: boolean,
+  color: (msg: string) => string,
+  msg: string,
+) => (rich ? color(msg) : msg);
 
 function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
   if (jobs.length === 0) {

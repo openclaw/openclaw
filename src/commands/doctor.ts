@@ -22,7 +22,10 @@ import {
   normalizeLegacyConfigValues,
 } from "./doctor-legacy-config.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
-import { maybeRepairSandboxImages } from "./doctor-sandbox.js";
+import {
+  maybeRepairSandboxImages,
+  noteSandboxScopeWarnings,
+} from "./doctor-sandbox.js";
 import { noteSecurityWarnings } from "./doctor-security.js";
 import {
   noteStateIntegrity,
@@ -124,6 +127,7 @@ export async function doctorCommand(
   await noteStateIntegrity(cfg, prompter);
 
   cfg = await maybeRepairSandboxImages(cfg, runtime, prompter);
+  noteSandboxScopeWarnings(cfg);
 
   await maybeMigrateLegacyGatewayService(
     cfg,

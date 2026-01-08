@@ -7,6 +7,7 @@ import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
   DEFAULT_SANDBOX_IMAGE,
+  resolveSandboxScope,
 } from "../agents/sandbox.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
@@ -247,4 +248,45 @@ export async function maybeRepairSandboxImages(
   }
 
   return next;
+}
+
+export function noteSandboxScopeWarnings(cfg: ClawdbotConfig) {
+  const globalSandbox = cfg.agent?.sandbox;
+  const agents = cfg.routing?.agents ?? {};
+  const warnings: string[] = [];
+
+  for (const [agentId, agent] of Object.entries(agents)) {
+    const agentSandbox = agent.sandbox;
+    if (!agentSandbox) continue;
+
+    const scope = resolveSandboxScope({
+      scope: agentSandbox.scope ?? globalSandbox?.scope,
+      perSession: agentSandbox.perSession ?? globalSandbox?.perSession,
+    });
+
+    if (scope !== "shared") continue;
+
+    const overrides: string[] = [];
+    if (agentSandbox.docker && Object.keys(agentSandbox.docker).length > 0) {
+      overrides.push("docker");
+    }
+    if (agentSandbox.browser && Object.keys(agentSandbox.browser).length > 0) {
+      overrides.push("browser");
+    }
+    if (agentSandbox.prune && Object.keys(agentSandbox.prune).length > 0) {
+      overrides.push("prune");
+    }
+
+    if (overrides.length === 0) continue;
+
+    warnings.push(
+      `- routing.agents.${agentId}.sandbox: ${overrides.join(
+        "/",
+      )} overrides ignored (scope resolves to "shared").`,
+    );
+  }
+
+  if (warnings.length > 0) {
+    note(warnings.join("\n"), "Sandbox");
+  }
 }
