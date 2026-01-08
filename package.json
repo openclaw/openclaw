@@ -66,6 +66,7 @@
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
     "format:fix": "biome format src --write",
     "test": "vitest",
+    "test:ui": "pnpm --dir ui test",
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
