@@ -11,6 +11,8 @@ export type RestartAttempt = {
   tried?: string[];
 };
 
+const SPAWN_TIMEOUT_MS = 2000;
+
 function formatSpawnDetail(result: {
   error?: unknown;
   status?: number | null;
@@ -57,6 +59,7 @@ export function triggerClawdbotRestart(): RestartAttempt {
       tried.push(`systemctl ${userArgs.join(" ")}`);
       const userRestart = spawnSync("systemctl", userArgs, {
         encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
       });
       if (!userRestart.error && userRestart.status === 0) {
         return { ok: true, method: "systemd", tried };
@@ -65,6 +68,7 @@ export function triggerClawdbotRestart(): RestartAttempt {
       tried.push(`systemctl ${systemArgs.join(" ")}`);
       const systemRestart = spawnSync("systemctl", systemArgs, {
         encoding: "utf8",
+        timeout: SPAWN_TIMEOUT_MS,
       });
       if (!systemRestart.error && systemRestart.status === 0) {
         return { ok: true, method: "systemd", tried };
@@ -89,7 +93,10 @@ export function triggerClawdbotRestart(): RestartAttempt {
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;
   const args = ["kickstart", "-k", target];
   tried.push(`launchctl ${args.join(" ")}`);
-  const res = spawnSync("launchctl", args, { encoding: "utf8" });
+  const res = spawnSync("launchctl", args, {
+    encoding: "utf8",
+    timeout: SPAWN_TIMEOUT_MS,
+  });
   if (!res.error && res.status === 0) {
     return { ok: true, method: "launchctl", tried };
   }
