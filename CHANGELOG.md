@@ -202,6 +202,7 @@
 - Auth: rotate across multiple OAuth profiles with cooldown tracking and email-based profile IDs. Thanks @mukhtharcm for PR #269.
 - Auth: fix multi-account OAuth rotation so round-robin alternates instead of pinning to lastGood. Thanks @mukhtharcm for PR #281.
 - Auth: lock auth profile usage updates and fail fast on 429s during rotation. Thanks @mukhtharcm for PR #342.
+- Antigravity: inject CLIProxyAPI v6.6.89 request metadata to avoid Cloud Code Assist 429s. Thanks @mukhtharcm for PR #454.
 - Configure: stop auto-writing `auth.order` for newly added auth profiles (round-robin default unless explicitly pinned).
 - Telegram: honor routing.groupChat.mentionPatterns for group mention gating. Thanks Kevin Kern (@regenrek) for PR #242.
 - Telegram: gate groups via `telegram.groups` allowlist (align with WhatsApp/iMessage). Thanks @kitze for PR #241.
