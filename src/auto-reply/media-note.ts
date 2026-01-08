@@ -18,9 +18,13 @@ function formatMediaAttachedLine(params: {
 }
 
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
-  const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
-  const paths = hasPathsArray
+  const hasPathsArray =
+    Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
+  const pathsFromArray = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths
+    : undefined;
+  const paths = pathsFromArray && pathsFromArray.length > 0
+    ? pathsFromArray
     : ctx.MediaPath?.trim()
       ? [ctx.MediaPath.trim()]
       : [];
@@ -58,4 +62,3 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   }
   return lines.join("\n");
 }
-

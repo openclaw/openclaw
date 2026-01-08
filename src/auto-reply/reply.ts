@@ -857,8 +857,11 @@ async function stageSandboxMedia(params: {
 }) {
   const { ctx, sessionCtx, cfg, sessionKey, workspaceDir } = params;
   const hasPathsArray = Array.isArray(ctx.MediaPaths) && ctx.MediaPaths.length > 0;
-  const rawPaths = hasPathsArray
+  const pathsFromArray = Array.isArray(ctx.MediaPaths)
     ? ctx.MediaPaths
+    : undefined;
+  const rawPaths = pathsFromArray && pathsFromArray.length > 0
+    ? pathsFromArray
     : ctx.MediaPath?.trim()
       ? [ctx.MediaPath.trim()]
       : [];
