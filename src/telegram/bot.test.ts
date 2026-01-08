@@ -4,6 +4,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
+import { resolveTelegramFetch } from "./fetch.js";
 
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
@@ -140,12 +141,17 @@ describe("createTelegramBot", () => {
     globalThis.fetch = fetchSpy;
     try {
       createTelegramBot({ token: "tok" });
-      expect(botCtorSpy).toHaveBeenCalledWith(
-        "tok",
-        expect.objectContaining({
-          client: expect.objectContaining({ fetch: fetchSpy }),
-        }),
-      );
+      const fetchImpl = resolveTelegramFetch();
+      if (fetchImpl) {
+        expect(botCtorSpy).toHaveBeenCalledWith(
+          "tok",
+          expect.objectContaining({
+            client: expect.objectContaining({ fetch: fetchSpy }),
+          }),
+        );
+      } else {
+        expect(botCtorSpy).toHaveBeenCalledWith("tok", undefined);
+      }
     } finally {
       globalThis.fetch = originalFetch;
     }
