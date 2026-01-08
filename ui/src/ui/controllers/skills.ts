@@ -9,7 +9,23 @@ export type SkillsState = {
   skillsError: string | null;
   skillsBusyKey: string | null;
   skillEdits: Record<string, string>;
+  skillMessages: SkillMessageMap;
 };
+
+export type SkillMessage = {
+  kind: "success" | "error";
+  message: string;
+};
+
+export type SkillMessageMap = Record<string, SkillMessage>;
+
+function setSkillMessage(state: SkillsState, key: string, message?: SkillMessage) {
+  if (!key.trim()) return;
+  const next = { ...state.skillMessages };
+  if (message) next[key] = message;
+  else delete next[key];
+  state.skillMessages = next;
+}
 
 export async function loadSkills(state: SkillsState) {
   if (!state.client || !state.connected) return;
@@ -47,8 +63,16 @@ export async function updateSkillEnabled(
   try {
     await state.client.request("skills.update", { skillKey, enabled });
     await loadSkills(state);
+    setSkillMessage(state, skillKey, {
+      kind: "success",
+      message: enabled ? "Skill enabled" : "Skill disabled",
+    });
   } catch (err) {
     state.skillsError = String(err);
+    setSkillMessage(state, skillKey, {
+      kind: "error",
+      message: String(err),
+    });
   } finally {
     state.skillsBusyKey = null;
   }
@@ -62,8 +86,16 @@ export async function saveSkillApiKey(state: SkillsState, skillKey: string) {
     const apiKey = state.skillEdits[skillKey] ?? "";
     await state.client.request("skills.update", { skillKey, apiKey });
     await loadSkills(state);
+    setSkillMessage(state, skillKey, {
+      kind: "success",
+      message: "API key saved",
+    });
   } catch (err) {
     state.skillsError = String(err);
+    setSkillMessage(state, skillKey, {
+      kind: "error",
+      message: String(err),
+    });
   } finally {
     state.skillsBusyKey = null;
   }
@@ -78,16 +110,23 @@ export async function installSkill(
   state.skillsBusyKey = name;
   state.skillsError = null;
   try {
-    await state.client.request("skills.install", {
+    const result = (await state.client.request("skills.install", {
       name,
       installId,
       timeoutMs: 120000,
-    });
+    })) as { ok?: boolean; message?: string };
     await loadSkills(state);
+    setSkillMessage(state, name, {
+      kind: "success",
+      message: result?.message ?? "Installed",
+    });
   } catch (err) {
     state.skillsError = String(err);
+    setSkillMessage(state, name, {
+      kind: "error",
+      message: String(err),
+    });
   } finally {
     state.skillsBusyKey = null;
   }
 }
-
