@@ -208,6 +208,16 @@ export function renderApp(state: AppViewState) {
             <span>Health</span>
             <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
+          ${isChat
+            ? renderChatFocusToggle(
+                state.settings.chatFocusMode,
+                () =>
+                  state.applySettings({
+                    ...state.settings,
+                    chatFocusMode: !state.settings.chatFocusMode,
+                  }),
+              )
+            : nothing}
           ${renderThemeToggle(state)}
         </div>
       </header>
@@ -416,16 +426,10 @@ export function renderApp(state: AppViewState) {
               disabledReason: chatDisabledReason,
               error: state.lastError,
               sessions: state.sessionsResult,
-              focusMode: state.settings.chatFocusMode,
               onRefresh: () => {
                 state.resetToolStream();
                 return loadChatHistory(state);
               },
-              onToggleFocusMode: () =>
-                state.applySettings({
-                  ...state.settings,
-                  chatFocusMode: !state.settings.chatFocusMode,
-                }),
               onDraftChange: (next) => (state.chatMessage = next),
               onSend: () => state.handleSendChat(),
             })
@@ -552,6 +556,19 @@ function renderThemeToggle(state: AppViewState) {
         </button>
       </div>
     </div>
+  `;
+}
+
+function renderChatFocusToggle(focusMode: boolean, onToggle: () => void) {
+  return html`
+    <button
+      class="btn ${focusMode ? "active" : ""}"
+      @click=${onToggle}
+      aria-pressed=${focusMode}
+      title="Toggle focus mode (hide sidebar + page header)"
+    >
+      Focus
+    </button>
   `;
 }
 

@@ -22,7 +22,7 @@
   --shell-pad: 8px;
   --shell-gap: 0px;
   --shell-nav-col: 0px;
-  --shell-topbar-row: 0px;
+  --shell-topbar-row: auto;
 }
 
 .shell--chat-focus .content {
@@ -52,15 +52,6 @@
     padding var(--shell-focus-duration) var(--shell-focus-ease),
     border-width var(--shell-focus-duration) var(--shell-focus-ease);
   max-height: max(0px, var(--topbar-height, 92px));
-}
-
-.shell--chat-focus .topbar {
-  opacity: 0;
-  transform: translateY(-10px);
-  max-height: 0px;
-  padding: 0;
-  border-width: 0;
-  pointer-events: none;
 }
 
 .brand {
