@@ -22,6 +22,15 @@ export type BlockStreamingCoalesceConfig = {
   idleMs?: number;
 };
 
+export type HumanDelayConfig = {
+  /** Delay style for block replies (off|natural|custom). */
+  mode?: "off" | "natural" | "custom";
+  /** Minimum delay in milliseconds (default: 800). */
+  minMs?: number;
+  /** Maximum delay in milliseconds (default: 2500). */
+  maxMs?: number;
+};
+
 export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   provider?: string;
@@ -922,6 +931,8 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: string;
+  /** Human-like delay between block replies for this agent. */
+  humanDelay?: HumanDelayConfig;
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {
@@ -1317,6 +1328,8 @@ export type AgentDefaultsConfig = {
    * idleMs: wait time before flushing when idle.
    */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Human-like delay between block replies. */
+  humanDelay?: HumanDelayConfig;
   timeoutSeconds?: number;
   /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
   mediaMaxMb?: number;
@@ -1426,6 +1439,7 @@ export type ClawdbotConfig = {
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;
+  routing?: RoutingConfig;
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   session?: SessionConfig;

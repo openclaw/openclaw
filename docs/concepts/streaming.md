@@ -71,6 +71,16 @@ progressive output.
 - Provider overrides are available via `*.blockStreamingCoalesce` (including per-account configs).
 - Default coalesce `minChars` is bumped to 1500 for Signal/Slack/Discord unless overridden.
 
+## Human-like pacing between blocks
+
+When block streaming is enabled, you can add a **randomized pause** between
+block replies (after the first block). This makes multi-bubble responses feel
+more natural.
+
+- Config: `agents.defaults.humanDelay` (override per agent via `agents.list[].humanDelay`).
+- Modes: `off` (default), `natural` (800–2500ms), `custom` (`minMs`/`maxMs`).
+- Applies only to **block replies**, not final replies or tool summaries.
+
 ## “Stream chunks or everything”
 
 This maps to:
