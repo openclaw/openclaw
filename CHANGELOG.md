@@ -10,6 +10,7 @@
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
+- Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
