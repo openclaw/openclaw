@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { botApi, botCtorSpy } = vi.hoisted(() => ({
+  botApi: {
+    sendMessage: vi.fn(),
+    setMessageReaction: vi.fn(),
+  },
+  botCtorSpy: vi.fn(),
+}));
+
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -8,11 +16,26 @@ vi.mock("../web/media.js", () => ({
   loadWebMedia,
 }));
 
+vi.mock("grammy", () => ({
+  Bot: class {
+    api = botApi;
+    constructor(
+      public token: string,
+      public options?: { client?: { fetch?: typeof fetch } },
+    ) {
+      botCtorSpy(token, options);
+    }
+  },
+  InputFile: class {},
+}));
+
 import { reactMessageTelegram, sendMessageTelegram } from "./send.js";
 
 describe("sendMessageTelegram", () => {
   beforeEach(() => {
     loadWebMedia.mockReset();
+    botApi.sendMessage.mockReset();
+    botCtorSpy.mockReset();
   });
 
   it("falls back to plain text when Telegram rejects HTML", async () => {
@@ -43,6 +66,27 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenNthCalledWith(2, chatId, "_oops_");
     expect(res.chatId).toBe(chatId);
     expect(res.messageId).toBe("42");
+  });
+
+  it("uses native fetch for BAN compatibility when api is omitted", async () => {
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.fn() as unknown as typeof fetch;
+    globalThis.fetch = fetchSpy;
+    botApi.sendMessage.mockResolvedValue({
+      message_id: 1,
+      chat: { id: "123" },
+    });
+    try {
+      await sendMessageTelegram("123", "hi", { token: "tok" });
+      expect(botCtorSpy).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({
+          client: expect.objectContaining({ fetch: fetchSpy }),
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("normalizes chat ids with internal prefixes", async () => {

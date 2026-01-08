@@ -44,6 +44,7 @@ const middlewareUseSpy = vi.fn();
 const onSpy = vi.fn();
 const stopSpy = vi.fn();
 const commandSpy = vi.fn();
+const botCtorSpy = vi.fn();
 const sendChatActionSpy = vi.fn();
 const setMessageReactionSpy = vi.fn(async () => undefined);
 const setMyCommandsSpy = vi.fn(async () => undefined);
@@ -76,7 +77,12 @@ vi.mock("grammy", () => ({
     on = onSpy;
     stop = stopSpy;
     command = commandSpy;
-    constructor(public token: string) {}
+    constructor(
+      public token: string,
+      public options?: { client?: { fetch?: typeof fetch } },
+    ) {
+      botCtorSpy(token, options);
+    }
   },
   InputFile: class {},
   webhookCallback: vi.fn(),
@@ -118,6 +124,7 @@ describe("createTelegramBot", () => {
     setMyCommandsSpy.mockReset();
     middlewareUseSpy.mockReset();
     sequentializeSpy.mockReset();
+    botCtorSpy.mockReset();
     sequentializeKey = undefined;
   });
 
@@ -125,6 +132,23 @@ describe("createTelegramBot", () => {
     createTelegramBot({ token: "tok" });
     expect(throttlerSpy).toHaveBeenCalledTimes(1);
     expect(useSpy).toHaveBeenCalledWith("throttler");
+  });
+
+  it("forces native fetch for BAN compatibility", () => {
+    const originalFetch = globalThis.fetch;
+    const fetchSpy = vi.fn() as unknown as typeof fetch;
+    globalThis.fetch = fetchSpy;
+    try {
+      createTelegramBot({ token: "tok" });
+      expect(botCtorSpy).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({
+          client: expect.objectContaining({ fetch: fetchSpy }),
+        }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 
   it("sequentializes updates by chat and thread", () => {

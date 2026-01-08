@@ -8,6 +8,7 @@ import { mediaKindFromMime } from "../media/constants.js";
 import { isGifMedia } from "../media/mime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
 
 type TelegramSendOpts = {
@@ -111,7 +112,11 @@ export async function sendMessageTelegram(
   const chatId = normalizeChatId(to);
   // Use provided api or create a new Bot instance. The nullish coalescing
   // operator ensures api is always defined (Bot.api is always non-null).
-  const api = opts.api ?? new Bot(token).api;
+  const api =
+    opts.api ??
+    new Bot(token, {
+      client: { fetch: resolveTelegramFetch() },
+    }).api;
   const mediaUrl = opts.mediaUrl?.trim();
 
   // Build optional params for forum topics and reply threading.
@@ -265,7 +270,11 @@ export async function reactMessageTelegram(
   const token = resolveToken(opts.token, account);
   const chatId = normalizeChatId(String(chatIdInput));
   const messageId = normalizeMessageId(messageIdInput);
-  const api = opts.api ?? new Bot(token).api;
+  const api =
+    opts.api ??
+    new Bot(token, {
+      client: { fetch: resolveTelegramFetch() },
+    }).api;
   const request = createTelegramRetryRunner({
     retry: opts.retry,
     configRetry: account.config.retry,

@@ -52,6 +52,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
+import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";
 import {
   readTelegramAllowFromStore,
@@ -150,9 +151,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       throw new Error(`exit ${code}`);
     },
   };
-  const client: ApiClientOptions | undefined = opts.proxyFetch
-    ? { fetch: opts.proxyFetch as unknown as ApiClientOptions["fetch"] }
-    : undefined;
+  const fetchImpl = resolveTelegramFetch(opts.proxyFetch);
+  const client: ApiClientOptions = {
+    fetch: fetchImpl as unknown as ApiClientOptions["fetch"],
+  };
 
   const bot = new Bot(opts.token, { client });
   bot.api.config.use(apiThrottler());

@@ -51,7 +51,6 @@
 - Web UI: allow reconnect + password URL auth for the control UI and always scrub auth params from the URL. Thanks @oswalpalash for PR #414.
 - Web UI: add Connect button on Overview to apply connection changes. Thanks @wizaj for PR #385.
 - Web UI: keep Focus toggle on the top bar (swap with theme toggle) so it stays visible. Thanks @RobOK2050 for reporting. (#440)
-- Web UI: add Logs tab for gateway file logs with filtering, auto-follow, and export.
 - ClawdbotKit: fix SwiftPM resource bundling path for `tool-display.json`. Thanks @fcatuhe for PR #398.
 - Tools: add Telegram/WhatsApp reaction tools (with per-provider gating). Thanks @zats for PR #353.
 - Tools: flatten literal-union schemas for Claude on Vertex AI. Thanks @carlulsoe for PR #409.
@@ -70,7 +69,6 @@
 - Agent: deliver final replies for non-streaming models when block chunking is enabled. Thank you @mneves75 for PR #369!
 - Agent: trim bootstrap context injections and keep group guidance concise (emoji reactions allowed). Thanks @tobiasbischoff for PR #370.
 - Agent: return a friendly context overflow response (413/request_too_large). Thanks @alejandroOPI for PR #395.
-- Agent: auto-enable Z.AI GLM-4.x thinking params (preserved for 4.7, interleaved for 4.5/4.6) unless disabled. Thanks @mneves75 for PR #443.
 - Sub-agents: allow `sessions_spawn` model overrides and error on invalid models. Thanks @azade-c for PR #298.
 - Sub-agents: skip invalid model overrides with a warning and keep the run alive; tool exceptions now return tool errors instead of crashing the agent.
 - Sessions: forward explicit sessionKey through gateway/chat/node bridge to avoid sub-agent sessionId mixups.
@@ -96,7 +94,7 @@
 - Telegram: honor `/activation` session mode for group mention gating and clarify group activation docs. Thanks @julianengel for PR #377.
 - Telegram: isolate forum topic transcripts per thread and validate Gemini turn ordering in multi-topic sessions. Thanks @hsrvc for PR #407.
 - Telegram: render Telegram-safe HTML for outbound formatting and fall back to plain text on parse errors. Thanks @RandyVentures for PR #435.
-- Telegram: add `[[audio_as_voice]]` tag to send audio as voice notes (audio files remain default); docs updated. Thanks @manmal for PR #188.
+- Telegram: force grammY to use native fetch under Bun for BAN compatibility (avoids TLS chain errors).
 - iMessage: ignore disconnect errors during shutdown (avoid unhandled promise rejections). Thanks @antons for PR #359.
 - Messages: stop defaulting ack reactions to 👀 when identity emoji is missing.
 - Auto-reply: require slash for control commands to avoid false triggers in normal text.
