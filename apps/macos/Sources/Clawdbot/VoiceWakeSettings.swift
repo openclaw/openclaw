@@ -18,6 +18,8 @@ struct VoiceWakeSettings: View {
     @State private var meterLevel: Double = 0
     @State private var meterError: String?
     private let meter = MicLevelMonitor()
+    @State private var micObserver = AudioInputDeviceObserver()
+    @State private var micRefreshTask: Task<Void, Never>?
     @State private var availableLocales: [Locale] = []
     private let fieldLabelWidth: CGFloat = 140
     private let controlWidth: CGFloat = 240
@@ -100,8 +102,13 @@ struct VoiceWakeSettings: View {
             guard !self.isPreview else { return }
             await self.restartMeter()
         }
+        .onAppear {
+            guard !self.isPreview else { return }
+            self.startMicObserver()
+        }
         .onChange(of: self.state.voiceWakeMicID) { _, _ in
             guard !self.isPreview else { return }
+            self.updateSelectedMicName()
             Task { await self.restartMeter() }
         }
         .onChange(of: self.isActive) { _, active in
@@ -111,7 +118,12 @@ struct VoiceWakeSettings: View {
                 self.isTesting = false
                 self.testState = .idle
                 self.testTimeoutTask?.cancel()
+                self.micRefreshTask?.cancel()
+                self.micRefreshTask = nil
                 Task { await self.meter.stop() }
+                self.micObserver.stop()
+            } else {
+                self.startMicObserver()
             }
         }
         .onDisappear {
@@ -120,6 +132,9 @@ struct VoiceWakeSettings: View {
             self.isTesting = false
             self.testState = .idle
             self.testTimeoutTask?.cancel()
+            self.micRefreshTask?.cancel()
+            self.micRefreshTask = nil
+            self.micObserver.stop()
             Task { await self.meter.stop() }
         }
     }
@@ -400,12 +415,25 @@ struct VoiceWakeSettings: View {
                     .frame(width: self.fieldLabelWidth, alignment: .leading)
                 Picker("Microphone", selection: self.$state.voiceWakeMicID) {
                     Text("System default").tag("")
+                    if self.isSelectedMicUnavailable {
+                        Text(self.state.voiceWakeMicName.isEmpty ? "Unavailable" : self.state.voiceWakeMicName)
+                            .tag(self.state.voiceWakeMicID)
+                    }
                     ForEach(self.availableMics) { mic in
                         Text(mic.name).tag(mic.uid)
                     }
                 }
                 .labelsHidden()
                 .frame(width: self.controlWidth)
+            }
+            if self.isSelectedMicUnavailable {
+                HStack(spacing: 10) {
+                    Color.clear.frame(width: self.fieldLabelWidth, height: 1)
+                    Text("Disconnected (using System default)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             if self.loadingMics {
                 ProgressView().controlSize(.small)
@@ -499,15 +527,58 @@ struct VoiceWakeSettings: View {
     }
 
     @MainActor
-    private func loadMicsIfNeeded() async {
-        guard self.availableMics.isEmpty, !self.loadingMics else { return }
+    private func loadMicsIfNeeded(force: Bool = false) async {
+        guard (force || self.availableMics.isEmpty), !self.loadingMics else { return }
         self.loadingMics = true
         let discovery = AVCaptureDevice.DiscoverySession(
             deviceTypes: [.external, .microphone],
             mediaType: .audio,
             position: .unspecified)
-        self.availableMics = discovery.devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        let aliveUIDs = AudioInputDeviceObserver.aliveInputDeviceUIDs()
+        let connectedDevices = discovery.devices.filter { $0.isConnected }
+        let devices = aliveUIDs.isEmpty
+            ? connectedDevices
+            : connectedDevices.filter { aliveUIDs.contains($0.uniqueID) }
+        self.availableMics = devices.map { AudioInputDevice(uid: $0.uniqueID, name: $0.localizedName) }
+        self.updateSelectedMicName()
         self.loadingMics = false
+    }
+
+    private var isSelectedMicUnavailable: Bool {
+        let selected = self.state.voiceWakeMicID
+        guard !selected.isEmpty else { return false }
+        return !self.availableMics.contains(where: { $0.uid == selected })
+    }
+
+    @MainActor
+    private func updateSelectedMicName() {
+        let selected = self.state.voiceWakeMicID
+        if selected.isEmpty {
+            self.state.voiceWakeMicName = ""
+            return
+        }
+        if let match = self.availableMics.first(where: { $0.uid == selected }) {
+            self.state.voiceWakeMicName = match.name
+        }
+    }
+
+    private func startMicObserver() {
+        self.micObserver.start {
+            Task { @MainActor in
+                self.scheduleMicRefresh()
+            }
+        }
+    }
+
+    @MainActor
+    private func scheduleMicRefresh() {
+        self.micRefreshTask?.cancel()
+        self.micRefreshTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            await self.loadMicsIfNeeded(force: true)
+            await self.restartMeter()
+        }
     }
 
     @MainActor

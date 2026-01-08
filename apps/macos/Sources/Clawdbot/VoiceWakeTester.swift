@@ -15,7 +15,7 @@ enum VoiceWakeTestState: Equatable {
 
 final class VoiceWakeTester {
     private let recognizer: SFSpeechRecognizer?
-    private let audioEngine = AVAudioEngine()
+    private var audioEngine: AVAudioEngine?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var isStopping = false
@@ -86,22 +86,33 @@ final class VoiceWakeTester {
                 userInfo: [NSLocalizedDescriptionKey: "Microphone or speech permission denied"])
         }
 
+        self.logInputSelection(preferredMicID: micID)
         self.configureSession(preferredMicID: micID)
+
+        let engine = AVAudioEngine()
+        self.audioEngine = engine
 
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         self.recognitionRequest?.shouldReportPartialResults = true
         self.recognitionRequest?.taskHint = .dictation
         let request = self.recognitionRequest
 
-        let inputNode = self.audioEngine.inputNode
+        let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        guard format.channelCount > 0, format.sampleRate > 0 else {
+            self.audioEngine = nil
+            throw NSError(
+                domain: "VoiceWakeTester",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
+        }
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak request] buffer, _ in
             request?.append(buffer)
         }
 
-        self.audioEngine.prepare()
-        try self.audioEngine.start()
+        engine.prepare()
+        try engine.start()
         DispatchQueue.main.async {
             onUpdate(.listening)
         }
@@ -156,9 +167,11 @@ final class VoiceWakeTester {
             return
         }
         self.isFinalizing = true
-        self.audioEngine.inputNode.removeTap(onBus: 0)
         self.recognitionRequest?.endAudio()
-        self.audioEngine.stop()
+        if let engine = self.audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
         Task { [weak self] in
             guard let self else { return }
             try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
@@ -171,12 +184,15 @@ final class VoiceWakeTester {
     private func stop(force: Bool) {
         if force { self.isStopping = true }
         self.isFinalizing = false
-        self.audioEngine.stop()
         self.recognitionRequest?.endAudio()
         self.recognitionTask?.cancel()
         self.recognitionTask = nil
         self.recognitionRequest = nil
-        self.audioEngine.inputNode.removeTap(onBus: 0)
+        if let engine = self.audioEngine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        self.audioEngine = nil
         self.holdingAfterDetect = false
         self.detectedText = nil
         self.lastHeard = nil
@@ -433,6 +449,13 @@ final class VoiceWakeTester {
 
     private func configureSession(preferredMicID: String?) {
         _ = preferredMicID
+    }
+
+    private func logInputSelection(preferredMicID: String?) {
+        let preferred = (preferredMicID?.isEmpty == false) ? preferredMicID! : "system-default"
+        self.logger.info(
+            "voicewake test input preferred=\(preferred, privacy: .public) " +
+            "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
     }
 
     private nonisolated static func ensurePermissions() async throws -> Bool {

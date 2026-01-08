@@ -139,6 +139,12 @@ actor VoiceWakeRuntime {
 
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
+            guard format.channelCount > 0, format.sampleRate > 0 else {
+                throw NSError(
+                    domain: "VoiceWakeRuntime",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "No audio input available"])
+            }
             input.removeTap(onBus: 0)
             input.installTap(onBus: 0, bufferSize: 2048, format: format) { [weak self, weak request] buffer, _ in
                 request?.append(buffer)
@@ -173,6 +179,10 @@ actor VoiceWakeRuntime {
                 Task { await self.handleRecognition(update, config: config) }
             }
 
+            let preferred = config.micID?.isEmpty == false ? config.micID! : "system-default"
+            self.logger.info(
+                "voicewake runtime input preferred=\(preferred, privacy: .public) " +
+                "\(AudioInputDeviceObserver.defaultInputDeviceSummary(), privacy: .public)")
             self.logger.info("voicewake runtime started")
             DiagnosticsFileLog.shared.log(category: "voicewake.runtime", event: "started", fields: [
                 "locale": config.localeID ?? "",
