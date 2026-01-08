@@ -196,6 +196,10 @@ Tokens can also be supplied via env vars:
 Ack reactions are controlled globally via `messages.ackReaction` +
 `messages.ackReactionScope`.
 
+## Limits
+- Outbound text is chunked to `slack.textChunkLimit` (default 4000).
+- Media uploads are capped by `slack.mediaMaxMb` (default 20).
+
 ## Reply threading
 Slack supports optional threaded replies via tags:
 - `[[reply_to_current]]` — reply to the triggering message.

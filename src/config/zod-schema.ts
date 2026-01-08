@@ -254,6 +254,7 @@ const DiscordAccountSchema = z.object({
   token: z.string().optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
+  maxLinesPerMessage: z.number().int().positive().optional(),
   mediaMaxMb: z.number().positive().optional(),
   historyLimit: z.number().int().min(0).optional(),
   retry: RetryConfigSchema,

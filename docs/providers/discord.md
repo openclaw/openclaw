@@ -156,7 +156,7 @@ Notes:
 
 ## Capabilities & limits
 - DMs and guild text channels (threads are treated as separate channels; voice not supported).
-- Typing indicators sent best-effort; message chunking honors Discord’s 2k character limit.
+- Typing indicators sent best-effort; message chunking uses `discord.textChunkLimit` (default 2000) and splits tall replies by line count (`discord.maxLinesPerMessage`, default 17).
 - File uploads supported up to the configured `discord.mediaMaxMb` (default 8 MB).
 - Mention-gated guild replies by default to avoid noisy bots.
 - Reply context is injected when a message references another message (quoted content + ids).
@@ -244,6 +244,8 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - `guilds.<id>.channels`: channel rules (keys are channel slugs or ids).
 - `guilds.<id>.requireMention`: per-guild mention requirement (overridable per channel).
 - `guilds.<id>.reactionNotifications`: reaction system event mode (`off`, `own`, `all`, `allowlist`).
+- `textChunkLimit`: outbound text chunk size (chars). Default: 2000.
+- `maxLinesPerMessage`: soft max line count per message. Default: 17.
 - `mediaMaxMb`: clamp inbound media saved to disk.
 - `historyLimit`: number of recent guild messages to include as context when replying to a mention (default 20, `0` disables).
 - `retry`: retry policy for outbound Discord API calls (attempts, minDelayMs, maxDelayMs, jitter).

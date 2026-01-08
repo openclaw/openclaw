@@ -17,7 +17,6 @@ import {
   Routes,
 } from "discord-api-types/v10";
 
-import { chunkMarkdownText } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
 import type { RetryConfig } from "../infra/retry.js";
 import {
@@ -31,6 +30,7 @@ import {
 } from "../polls.js";
 import { loadWebMedia, loadWebMediaRaw } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
+import { chunkDiscordText } from "./chunk.js";
 import { normalizeDiscordToken } from "./token.js";
 
 const DISCORD_TEXT_LIMIT = 2000;
@@ -425,6 +425,7 @@ async function sendDiscordText(
   text: string,
   replyTo: string | undefined,
   request: DiscordRequest,
+  maxLinesPerMessage?: number,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
@@ -432,17 +433,20 @@ async function sendDiscordText(
   const messageReference = replyTo
     ? { message_id: replyTo, fail_if_not_exists: false }
     : undefined;
-  if (text.length <= DISCORD_TEXT_LIMIT) {
+  const chunks = chunkDiscordText(text, {
+    maxChars: DISCORD_TEXT_LIMIT,
+    maxLines: maxLinesPerMessage,
+  });
+  if (chunks.length === 1) {
     const res = (await request(
       () =>
         rest.post(Routes.channelMessages(channelId), {
-          body: { content: text, message_reference: messageReference },
+          body: { content: chunks[0], message_reference: messageReference },
         }) as Promise<{ id: string; channel_id: string }>,
       "text",
     )) as { id: string; channel_id: string };
     return res;
   }
-  const chunks = chunkMarkdownText(text, DISCORD_TEXT_LIMIT);
   let last: { id: string; channel_id: string } | null = null;
   let isFirst = true;
   for (const chunk of chunks) {
@@ -471,10 +475,16 @@ async function sendDiscordMedia(
   mediaUrl: string,
   replyTo: string | undefined,
   request: DiscordRequest,
+  maxLinesPerMessage?: number,
 ) {
   const media = await loadWebMedia(mediaUrl);
-  const caption =
-    text.length > DISCORD_TEXT_LIMIT ? text.slice(0, DISCORD_TEXT_LIMIT) : text;
+  const chunks = text
+    ? chunkDiscordText(text, {
+        maxChars: DISCORD_TEXT_LIMIT,
+        maxLines: maxLinesPerMessage,
+      })
+    : [];
+  const caption = chunks[0] ?? "";
   const messageReference = replyTo
     ? { message_id: replyTo, fail_if_not_exists: false }
     : undefined;
@@ -494,11 +504,16 @@ async function sendDiscordMedia(
       }) as Promise<{ id: string; channel_id: string }>,
     "media",
   )) as { id: string; channel_id: string };
-  if (text.length > DISCORD_TEXT_LIMIT) {
-    const remaining = text.slice(DISCORD_TEXT_LIMIT).trim();
-    if (remaining) {
-      await sendDiscordText(rest, channelId, remaining, undefined, request);
-    }
+  for (const chunk of chunks.slice(1)) {
+    if (!chunk.trim()) continue;
+    await sendDiscordText(
+      rest,
+      channelId,
+      chunk,
+      undefined,
+      request,
+      maxLinesPerMessage,
+    );
   }
   return res;
 }
@@ -534,6 +549,10 @@ export async function sendMessageDiscord(
   opts: DiscordSendOpts = {},
 ): Promise<DiscordSendResult> {
   const cfg = loadConfig();
+  const accountInfo = resolveDiscordAccount({
+    cfg,
+    accountId: opts.accountId,
+  });
   const { token, rest, request } = createDiscordClient(opts, cfg);
   const recipient = parseRecipient(to);
   const { channelId } = await resolveChannelId(rest, recipient, request);
@@ -549,6 +568,7 @@ export async function sendMessageDiscord(
         opts.mediaUrl,
         opts.replyTo,
         request,
+        accountInfo.config.maxLinesPerMessage,
       );
     } else {
       result = await sendDiscordText(
@@ -557,6 +577,7 @@ export async function sendMessageDiscord(
         text,
         opts.replyTo,
         request,
+        accountInfo.config.maxLinesPerMessage,
       );
     }
   } catch (err) {

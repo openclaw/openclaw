@@ -689,6 +689,8 @@ Multi-account support lives under `discord.accounts` (see the multi-account sect
       }
     },
     historyLimit: 20,                       // include last N guild messages as context
+    textChunkLimit: 2000,                   // optional outbound text chunk size (chars)
+    maxLinesPerMessage: 17,                 // soft max lines per message (Discord UI clipping)
     retry: {                                // outbound retry policy
       attempts: 3,
       minDelayMs: 500,
@@ -706,6 +708,7 @@ Reaction notification modes:
 - `own`: reactions on the bot's own messages (default).
 - `all`: all reactions on all messages.
 - `allowlist`: reactions from `guilds.<id>.users` on all messages (empty list disables).
+Outbound text is chunked by `discord.textChunkLimit` (default 2000). Discord clients can clip very tall messages, so `discord.maxLinesPerMessage` (default 17) splits long multi-line replies even when under 2000 chars.
 Retry policy defaults and behavior are documented in [Retry policy](/concepts/retry).
 
 ### `slack` (socket mode)

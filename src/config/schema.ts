@@ -121,6 +121,7 @@ const FIELD_LABELS: Record<string, string> = {
   "discord.retry.minDelayMs": "Discord Retry Min Delay (ms)",
   "discord.retry.maxDelayMs": "Discord Retry Max Delay (ms)",
   "discord.retry.jitter": "Discord Retry Jitter",
+  "discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "slack.dm.policy": "Slack DM Policy",
   "discord.token": "Discord Bot Token",
   "slack.botToken": "Slack Bot Token",
@@ -193,6 +194,8 @@ const FIELD_HELP: Record<string, string> = {
     "Maximum retry delay cap in ms for Discord outbound calls.",
   "discord.retry.jitter":
     "Jitter factor (0-1) applied to Discord retry delays.",
+  "discord.maxLinesPerMessage":
+    "Soft max line count per Discord message (default: 17).",
   "slack.dm.policy":
     'Direct message access control ("pairing" recommended). "open" requires slack.dm.allowFrom=["*"].',
 };

@@ -47,6 +47,10 @@ Multi-account support: use `telegram.accounts` with per-account tokens and optio
 - Raw HTML from models is escaped to avoid Telegram parse errors.
 - If Telegram rejects the HTML payload, Clawdbot retries the same message as plain text.
 
+## Limits
+- Outbound text is chunked to `telegram.textChunkLimit` (default 4000).
+- Media downloads/uploads are capped by `telegram.mediaMaxMb` (default 5).
+
 ## Group activation modes
 
 By default, the bot only responds to mentions in groups (`@botname` or patterns in `routing.groupChat.mentionPatterns`). To change this behavior:

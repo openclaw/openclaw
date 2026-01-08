@@ -60,8 +60,9 @@ Groups:
 - Replies always route back to the same number or group.
 
 ## Media + limits
+- Outbound text is chunked to `signal.textChunkLimit` (default 4000).
 - Attachments supported (base64 fetched from `signal-cli`).
-- Default cap: `signal.mediaMaxMb`.
+- Default media cap: `signal.mediaMaxMb` (default 8).
 - Use `signal.ignoreAttachments` to skip downloading media.
 
 ## Delivery targets (CLI/cron)

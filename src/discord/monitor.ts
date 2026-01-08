@@ -17,10 +17,7 @@ import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIAttachment } from "discord-api-types/v10";
 import { ApplicationCommandOptionType, Routes } from "discord-api-types/v10";
 
-import {
-  chunkMarkdownText,
-  resolveTextChunkLimit,
-} from "../auto-reply/chunk.js";
+import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildCommandText,
@@ -63,6 +60,7 @@ import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
+import { chunkDiscordText } from "./chunk.js";
 import { fetchDiscordApplicationId } from "./probe.js";
 import { reactMessageDiscord, sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -1009,6 +1007,7 @@ export function createDiscordMessageHandler(params: {
               runtime,
               replyToMode,
               textLimit,
+              maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             });
             didSendReply = true;
           },
@@ -1485,7 +1484,8 @@ function createDiscordNativeCommand(params: {
           await deliverDiscordInteractionReply({
             interaction,
             payload,
-            textLimit: resolveTextChunkLimit(cfg, "discord"),
+            textLimit: resolveTextChunkLimit(cfg, "discord", accountId),
+            maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             preferFollowUp: didReply,
           });
           didReply = true;
@@ -1517,13 +1517,21 @@ async function deliverDiscordInteractionReply(params: {
   interaction: CommandInteraction;
   payload: ReplyPayload;
   textLimit: number;
+  maxLinesPerMessage?: number;
   preferFollowUp: boolean;
 }) {
-  const { interaction, payload, textLimit, preferFollowUp } = params;
+  const {
+    interaction,
+    payload,
+    textLimit,
+    maxLinesPerMessage,
+    preferFollowUp,
+  } = params;
   const mediaList =
     payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
   const text = payload.text ?? "";
 
+  let hasReplied = false;
   const sendMessage = async (
     content: string,
     files?: { name: string; data: Buffer }[],
@@ -1541,11 +1549,13 @@ async function deliverDiscordInteractionReply(params: {
             }),
           }
         : { content };
-    if (!preferFollowUp) {
+    if (!preferFollowUp && !hasReplied) {
       await interaction.reply(payload);
+      hasReplied = true;
       return;
     }
     await interaction.followUp(payload);
+    hasReplied = true;
   };
 
   if (mediaList.length > 0) {
@@ -1558,21 +1568,26 @@ async function deliverDiscordInteractionReply(params: {
         };
       }),
     );
-    const caption = text.length > textLimit ? text.slice(0, textLimit) : text;
+    const chunks = chunkDiscordText(text, {
+      maxChars: textLimit,
+      maxLines: maxLinesPerMessage,
+    });
+    const caption = chunks[0] ?? "";
     await sendMessage(caption, media);
-    if (text.length > textLimit) {
-      const remaining = text.slice(textLimit).trim();
-      if (remaining) {
-        for (const chunk of chunkMarkdownText(remaining, textLimit)) {
-          await interaction.followUp({ content: chunk });
-        }
-      }
+    for (const chunk of chunks.slice(1)) {
+      if (!chunk.trim()) continue;
+      await interaction.followUp({ content: chunk });
     }
     return;
   }
 
   if (!text.trim()) return;
-  for (const chunk of chunkMarkdownText(text, textLimit)) {
+  const chunks = chunkDiscordText(text, {
+    maxChars: textLimit,
+    maxLines: maxLinesPerMessage,
+  });
+  for (const chunk of chunks) {
+    if (!chunk.trim()) continue;
     await sendMessage(chunk);
   }
 }
@@ -1585,6 +1600,7 @@ async function deliverDiscordReply(params: {
   rest?: RequestClient;
   runtime: RuntimeEnv;
   textLimit: number;
+  maxLinesPerMessage?: number;
   replyToMode: ReplyToMode;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
@@ -1595,7 +1611,10 @@ async function deliverDiscordReply(params: {
     if (!text && mediaList.length === 0) continue;
 
     if (mediaList.length === 0) {
-      for (const chunk of chunkMarkdownText(text, chunkLimit)) {
+      for (const chunk of chunkDiscordText(text, {
+        maxChars: chunkLimit,
+        maxLines: params.maxLinesPerMessage,
+      })) {
         const trimmed = chunk.trim();
         if (!trimmed) continue;
         await sendMessageDiscord(params.target, trimmed, {

@@ -77,6 +77,10 @@ Groups:
 - Optional attachment ingestion via `imessage.includeAttachments`.
 - Media cap via `imessage.mediaMaxMb`.
 
+## Limits
+- Outbound text is chunked to `imessage.textChunkLimit` (default 4000).
+- Media uploads are capped by `imessage.mediaMaxMb` (default 16).
+
 ## Addressing / delivery targets
 Prefer `chat_id` for stable routing:
 - `chat_id:123` (preferred)

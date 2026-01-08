@@ -411,6 +411,12 @@ export type DiscordAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 2000. */
   textChunkLimit?: number;
+  /**
+   * Soft max line count per Discord message.
+   * Discord clients can clip/collapse very tall messages; splitting by lines
+   * keeps replies readable in-channel. Default: 17.
+   */
+  maxLinesPerMessage?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
   /** Retry policy for outbound Discord API calls. */

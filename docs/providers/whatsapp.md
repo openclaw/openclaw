@@ -126,9 +126,13 @@ Recommended for personal numbers:
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
 - Tool gating: `whatsapp.actions.reactions` (default: enabled).
 
+## Limits
+- Outbound text is chunked to `whatsapp.textChunkLimit` (default 4000).
+- Media items are capped by `agent.mediaMaxMb` (default 5 MB).
+
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
-- Text chunking: 4k max per message.
+- Text chunking: 4k max per message (configurable via `whatsapp.textChunkLimit`).
 - Media:
   - Image/video/audio/document supported.
   - Audio sent as PTT; `audio/ogg` => `audio/ogg; codecs=opus`.
