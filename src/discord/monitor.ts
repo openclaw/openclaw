@@ -1150,7 +1150,14 @@ export function createDiscordMessageHandler(params: {
         ctx: ctxPayload,
         cfg,
         dispatcher,
-        replyOptions: { ...replyOptions, skillFilter: channelConfig?.skills },
+        replyOptions: {
+          ...replyOptions,
+          skillFilter: channelConfig?.skills,
+          disableBlockStreaming:
+            typeof discordConfig?.blockStreaming === "boolean"
+              ? !discordConfig.blockStreaming
+              : undefined,
+        },
       });
       markDispatchIdle();
       if (!queuedFinal) {

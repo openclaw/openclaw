@@ -191,6 +191,7 @@ const TelegramAccountSchemaBase = z.object({
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
+  blockStreaming: z.boolean().optional(),
   streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
   mediaMaxMb: z.number().positive().optional(),
   retry: RetryConfigSchema,
@@ -275,6 +276,7 @@ const DiscordAccountSchema = z.object({
   token: z.string().optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
+  blockStreaming: z.boolean().optional(),
   maxLinesPerMessage: z.number().int().positive().optional(),
   mediaMaxMb: z.number().positive().optional(),
   historyLimit: z.number().int().min(0).optional(),
@@ -344,6 +346,7 @@ const SlackAccountSchema = z.object({
   allowBots: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
+  blockStreaming: z.boolean().optional(),
   mediaMaxMb: z.number().positive().optional(),
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -394,6 +397,7 @@ const SignalAccountSchemaBase = z.object({
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
+  blockStreaming: z.boolean().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
 });
 
@@ -438,6 +442,7 @@ const IMessageAccountSchemaBase = z.object({
   includeAttachments: z.boolean().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
   textChunkLimit: z.number().int().positive().optional(),
+  blockStreaming: z.boolean().optional(),
   groups: z
     .record(
       z.string(),
@@ -1209,6 +1214,7 @@ export const ClawdbotSchema = z.object({
               groupAllowFrom: z.array(z.string()).optional(),
               groupPolicy: GroupPolicySchema.optional().default("open"),
               textChunkLimit: z.number().int().positive().optional(),
+              blockStreaming: z.boolean().optional(),
               groups: z
                 .record(
                   z.string(),
@@ -1242,6 +1248,7 @@ export const ClawdbotSchema = z.object({
       groupAllowFrom: z.array(z.string()).optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
+      blockStreaming: z.boolean().optional(),
       actions: z
         .object({
           reactions: z.boolean().optional(),

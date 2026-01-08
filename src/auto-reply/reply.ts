@@ -440,7 +440,13 @@ export async function getReplyFromConfig(
       "on")
     : "off";
   const resolvedBlockStreaming =
-    agentCfg?.blockStreamingDefault === "off" ? "off" : "on";
+    opts?.disableBlockStreaming === true
+      ? "off"
+      : opts?.disableBlockStreaming === false
+        ? "on"
+        : agentCfg?.blockStreamingDefault === "off"
+          ? "off"
+          : "on";
   const resolvedBlockStreamingBreak: "text_end" | "message_end" =
     agentCfg?.blockStreamingBreak === "message_end"
       ? "message_end"

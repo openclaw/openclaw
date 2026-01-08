@@ -788,6 +788,7 @@ export async function monitorWebProvider(
       groupAllowFrom: account.groupAllowFrom,
       groupPolicy: account.groupPolicy,
       textChunkLimit: account.textChunkLimit,
+      blockStreaming: account.blockStreaming,
       groups: account.groups,
     },
   } satisfies ReturnType<typeof loadConfig>;
@@ -1276,7 +1277,13 @@ export async function monitorWebProvider(
         cfg,
         dispatcher,
         replyResolver,
-        replyOptions,
+        replyOptions: {
+          ...replyOptions,
+          disableBlockStreaming:
+            typeof cfg.whatsapp?.blockStreaming === "boolean"
+              ? !cfg.whatsapp.blockStreaming
+              : undefined,
+        },
       });
       markDispatchIdle();
       if (!queuedFinal) {
