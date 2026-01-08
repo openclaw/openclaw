@@ -10,6 +10,7 @@ import {
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -111,6 +112,10 @@ export async function doctorCommand(
   }
 
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
+  const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
+  if (gatewayDetails.remoteFallbackNote) {
+    note(gatewayDetails.remoteFallbackNote, "Gateway");
+  }
 
   const legacyState = await detectLegacyStateMigrations({ cfg });
   if (legacyState.preview.length > 0) {
@@ -204,6 +209,7 @@ export async function doctorCommand(
     const message = String(err);
     if (message.includes("gateway closed")) {
       note("Gateway not running.", "Gateway");
+      note(gatewayDetails.message, "Gateway connection");
     } else {
       runtime.error(`Health check failed: ${message}`);
     }
@@ -255,6 +261,7 @@ export async function doctorCommand(
           const message = String(err);
           if (message.includes("gateway closed")) {
             note("Gateway not running.", "Gateway");
+            note(gatewayDetails.message, "Gateway connection");
           } else {
             runtime.error(`Health check failed: ${message}`);
           }

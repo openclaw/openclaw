@@ -653,6 +653,7 @@ Examples:
     )
     .option("--timeout <ms>", "Probe timeout in milliseconds", "10000")
     .option("--verbose", "Verbose logging", false)
+    .option("--debug", "Alias for --verbose", false)
     .addHelpText(
       "after",
       `
@@ -664,7 +665,8 @@ Examples:
   clawdbot status --deep --timeout 5000 # tighten probe timeout`,
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
+      const verbose = Boolean(opts.verbose || opts.debug);
+      setVerbose(verbose);
       const timeout = opts.timeout
         ? Number.parseInt(String(opts.timeout), 10)
         : undefined;
@@ -682,6 +684,7 @@ Examples:
             deep: Boolean(opts.deep),
             usage: Boolean(opts.usage),
             timeoutMs: timeout,
+            verbose,
           },
           defaultRuntime,
         );
@@ -697,8 +700,10 @@ Examples:
     .option("--json", "Output JSON instead of text", false)
     .option("--timeout <ms>", "Connection timeout in milliseconds", "10000")
     .option("--verbose", "Verbose logging", false)
+    .option("--debug", "Alias for --verbose", false)
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
+      const verbose = Boolean(opts.verbose || opts.debug);
+      setVerbose(verbose);
       const timeout = opts.timeout
         ? Number.parseInt(String(opts.timeout), 10)
         : undefined;
@@ -714,6 +719,7 @@ Examples:
           {
             json: Boolean(opts.json),
             timeoutMs: timeout,
+            verbose,
           },
           defaultRuntime,
         );

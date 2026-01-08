@@ -1,7 +1,7 @@
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { type DiscordProbe, probeDiscord } from "../discord/probe.js";
-import { callGateway } from "../gateway/call.js";
+import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { probeTelegram, type TelegramProbe } from "../telegram/probe.js";
@@ -110,7 +110,7 @@ export async function getHealthSnapshot(
 }
 
 export async function healthCommand(
-  opts: { json?: boolean; timeoutMs?: number },
+  opts: { json?: boolean; timeoutMs?: number; verbose?: boolean },
   runtime: RuntimeEnv,
 ) {
   // Always query the running gateway; do not open a direct Baileys socket here.
@@ -124,6 +124,13 @@ export async function healthCommand(
   if (opts.json) {
     runtime.log(JSON.stringify(summary, null, 2));
   } else {
+    if (opts.verbose) {
+      const details = buildGatewayConnectionDetails();
+      runtime.log(info("Gateway connection:"));
+      for (const line of details.message.split("\n")) {
+        runtime.log(`  ${line}`);
+      }
+    }
     runtime.log(
       summary.web.linked
         ? `Web: linked (auth age ${summary.web.authAgeMs ? `${Math.round(summary.web.authAgeMs / 60000)}m` : "unknown"})`

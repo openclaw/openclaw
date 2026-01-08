@@ -11,7 +11,7 @@ import {
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
-import { callGateway } from "../gateway/call.js";
+import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { info } from "../globals.js";
 import { buildProviderSummary } from "../infra/provider-summary.js";
 import {
@@ -222,7 +222,13 @@ const buildFlags = (entry: SessionEntry): string[] => {
 };
 
 export async function statusCommand(
-  opts: { json?: boolean; deep?: boolean; usage?: boolean; timeoutMs?: number },
+  opts: {
+    json?: boolean;
+    deep?: boolean;
+    usage?: boolean;
+    timeoutMs?: number;
+    verbose?: boolean;
+  },
   runtime: RuntimeEnv,
 ) {
   const summary = await getStatusSummary();
@@ -245,6 +251,14 @@ export async function statusCommand(
       ),
     );
     return;
+  }
+
+  if (opts.verbose) {
+    const details = buildGatewayConnectionDetails();
+    runtime.log(info("Gateway connection:"));
+    for (const line of details.message.split("\n")) {
+      runtime.log(`  ${line}`);
+    }
   }
 
   runtime.log(
