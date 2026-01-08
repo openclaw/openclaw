@@ -502,7 +502,7 @@ Manage scheduled jobs (Gateway RPC). See [/automation/cron-jobs](/automation/cro
 
 Subcommands:
 - `cron status [--json]`
-- `cron list [--all] [--json]`
+- `cron list [--all] [--json]` (table output by default; use `--json` for raw)
 - `cron add` (alias: `create`; requires `--name` and exactly one of `--at` | `--every` | `--cron`, and exactly one payload of `--system-event` | `--message`)
 - `cron edit <id>` (patch fields)
 - `cron rm <id>` (aliases: `remove`, `delete`)
