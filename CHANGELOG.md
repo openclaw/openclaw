@@ -21,6 +21,7 @@
 - macOS: harden Voice Wake tester/runtime (pause trigger, mic persistence, local-only tester) and keep transcript logs private. Thanks @xadenryan for PR #438.
 - Doctor/Daemon: surface gateway runtime state + port collision diagnostics; warn on legacy workspace dirs.
 - Gateway/CLI: include gateway target/source details in close/timeout errors and verbose health/status output.
+- Gateway/CLI: honor `gateway.auth.password` for local CLI calls when env is unset. Thanks @jeffersonwarrior for PR #301.
 - Discord: format slow listener logs in seconds to match shared duration style.
 - CLI: show colored table output for `clawdbot cron list` (JSON behind `--json`).
 - CLI: add cron `create`/`remove`/`delete` aliases for job management.

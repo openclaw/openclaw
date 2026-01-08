@@ -29,6 +29,7 @@ export async function callGateway<T = unknown>(
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const authToken = config.gateway?.auth?.token;
+  const authPassword = config.gateway?.auth?.password;
   const localPort = resolveGatewayPort(config);
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
   const bindMode = config.gateway?.bind ?? "loopback";
@@ -64,9 +65,13 @@ export async function callGateway<T = unknown>(
       ? opts.password.trim()
       : undefined) ||
     process.env.CLAWDBOT_GATEWAY_PASSWORD?.trim() ||
-    (typeof remote?.password === "string" && remote.password.trim().length > 0
-      ? remote.password.trim()
-      : undefined);
+    (isRemoteMode
+      ? typeof remote?.password === "string" && remote.password.trim().length > 0
+        ? remote.password.trim()
+        : undefined
+      : typeof authPassword === "string" && authPassword.trim().length > 0
+        ? authPassword.trim()
+        : undefined);
   const urlSource = urlOverride
     ? "cli --url"
     : remoteUrl
