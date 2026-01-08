@@ -1,5 +1,4 @@
-const DEFAULT_TAGLINE =
-  "Send, receive, and auto-reply on WhatsApp (web) and Telegram (bot).";
+const DEFAULT_TAGLINE = "All your chats, one ClawdBot.";
 
 const TAGLINES: string[] = [];
 

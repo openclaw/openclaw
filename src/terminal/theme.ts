@@ -1,5 +1,6 @@
 import chalk from "chalk";
 
+// Semantic palette for CLI output. Keep in sync with docs/cli/index.md.
 export const LOBSTER_PALETTE = {
   accent: "#FF5A2D",
   accentBright: "#FF7A3D",
