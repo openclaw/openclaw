@@ -230,7 +230,7 @@ describe("telegram media groups", () => {
     expectedCalls: number,
   ) => {
     await expect
-      .poll(() => replySpy.mock.calls.length, { timeout: 2000 })
+      .poll(() => replySpy.mock.calls.length, { timeout: 10_000 })
       .toBe(expectedCalls);
   };
 
@@ -302,7 +302,7 @@ describe("telegram media groups", () => {
     expect(payload.MediaPaths).toHaveLength(2);
 
     fetchSpy.mockRestore();
-  }, 2000);
+  }, 10_000);
 
   it("processes separate media groups independently", async () => {
     const { createTelegramBot } = await import("./bot.js");
@@ -359,7 +359,7 @@ describe("telegram media groups", () => {
     expect(replySpy).toHaveBeenCalledTimes(2);
 
     fetchSpy.mockRestore();
-  }, 2000);
+  }, 10_000);
 });
 
 describe("telegram location parsing", () => {

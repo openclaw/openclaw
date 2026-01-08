@@ -32,15 +32,6 @@ jobs:
           - runtime: bun
             task: build
             command: bunx tsc -p tsconfig.json
-          - runtime: bun
-            task: lint
-            command: bunx biome check src
-          - runtime: bun
-            task: test
-            command: bunx vitest run
-          - runtime: bun
-            task: build
-            command: bunx tsc -p tsconfig.json
     steps:
       - name: Checkout
         uses: actions/checkout@v4
