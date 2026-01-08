@@ -47,6 +47,7 @@
 - When working on an issue: reference the issue in the changelog entry.
 - When merging a PR: leave a PR comment that explains exactly what we did and include the SHA hashes.
 - When merging a PR from a new contributor: add their avatar to the README “Thanks to all clawtributors” thumbnail list.
+- After merging a PR: run `bun scripts/update-clawtributors.ts` if the contributor is missing, then commit the regenerated README.
 
 ### PR Workflow (Review vs Land)
 - **Review mode (PR link only):** read `gh pr view/diff`; **do not** switch branches; **do not** change code.
