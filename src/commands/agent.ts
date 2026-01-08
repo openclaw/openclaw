@@ -28,8 +28,11 @@ import { hasNonzeroUsage } from "../agents/usage.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
+  formatThinkingLevels,
+  formatXHighModelHint,
   normalizeThinkLevel,
   normalizeVerboseLevel,
+  supportsXHighThinking,
   type ThinkLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
@@ -214,17 +217,26 @@ export async function agentCommand(
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
+  const configuredModel = resolveConfiguredModelRef({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  const thinkingLevelsHint = formatThinkingLevels(
+    configuredModel.provider,
+    configuredModel.model,
+  );
 
   const thinkOverride = normalizeThinkLevel(opts.thinking);
   const thinkOnce = normalizeThinkLevel(opts.thinkingOnce);
   if (opts.thinking && !thinkOverride) {
     throw new Error(
-      "Invalid thinking level. Use one of: off, minimal, low, medium, high.",
+      `Invalid thinking level. Use one of: ${thinkingLevelsHint}.`,
     );
   }
   if (opts.thinkingOnce && !thinkOnce) {
     throw new Error(
-      "Invalid one-shot thinking level. Use one of: off, minimal, low, medium, high.",
+      `Invalid one-shot thinking level. Use one of: ${thinkingLevelsHint}.`,
     );
   }
 
@@ -422,6 +434,29 @@ export async function agentCommand(
       model,
       catalog: catalogForThinking,
     });
+  }
+  if (
+    resolvedThinkLevel === "xhigh" &&
+    !supportsXHighThinking(provider, model)
+  ) {
+    const explicitThink = Boolean(thinkOnce || thinkOverride);
+    if (explicitThink) {
+      throw new Error(
+        `Thinking level "xhigh" is only supported for ${formatXHighModelHint()}.`,
+      );
+    }
+    resolvedThinkLevel = "high";
+    if (
+      sessionEntry &&
+      sessionStore &&
+      sessionKey &&
+      sessionEntry.thinkingLevel === "xhigh"
+    ) {
+      sessionEntry.thinkingLevel = "high";
+      sessionEntry.updatedAt = Date.now();
+      sessionStore[sessionKey] = sessionEntry;
+      await saveSessionStore(storePath, sessionStore);
+    }
   }
   const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
     agentId: sessionAgentId,

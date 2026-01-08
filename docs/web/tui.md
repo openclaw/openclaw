@@ -50,7 +50,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
 - `/model <provider/model>` (or `/model list`, `/models`)
-- `/think <off|minimal|low|medium|high>`
+- `/think <off|minimal|low|medium|high|xhigh>` (GPT-5.2 + Codex models only)
 - `/verbose <on|off>`
 - `/reasoning <on|off|stream>` (stream = Telegram draft only)
 - `/cost <on|off>`
