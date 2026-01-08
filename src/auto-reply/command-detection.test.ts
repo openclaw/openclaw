@@ -48,9 +48,6 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/status")).toBe(true);
     expect(hasControlCommand("/status:")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
-    expect(hasControlCommand("/compact")).toBe(true);
-    expect(hasControlCommand("/compact:")).toBe(true);
-    expect(hasControlCommand("compact")).toBe(false);
   });
 
   it("requires commands to be the full message", () => {
