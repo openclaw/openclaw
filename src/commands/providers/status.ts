@@ -372,10 +372,15 @@ export async function providersStatusCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const timeoutMs = Number(opts.timeout ?? 10_000);
+  const statusLabel = opts.probe
+    ? "Checking provider status (probe)…"
+    : "Checking provider status…";
+  const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
+  if (shouldLogStatus) runtime.log(statusLabel);
   try {
     const payload = await withProgress(
       {
-        label: "Checking provider status…",
+        label: statusLabel,
         indeterminate: true,
         enabled: opts.json !== true,
       },
