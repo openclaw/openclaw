@@ -78,6 +78,7 @@ import {
 } from "./controllers/cron";
 import {
   loadSkills,
+  type SkillMessage,
 } from "./controllers/skills";
 import { loadDebug } from "./controllers/debug";
 import { loadLogs } from "./controllers/logs";
@@ -356,6 +357,7 @@ export class ClawdbotApp extends LitElement {
   @state() skillsFilter = "";
   @state() skillEdits: Record<string, string> = {};
   @state() skillsBusyKey: string | null = null;
+  @state() skillMessages: Record<string, SkillMessage> = {};
 
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
