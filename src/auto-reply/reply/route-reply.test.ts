@@ -31,6 +31,22 @@ vi.mock("../../web/outbound.js", () => ({
 const { routeReply } = await import("./route-reply.js");
 
 describe("routeReply", () => {
+  it("skips sends when abort signal is already aborted", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const controller = new AbortController();
+    controller.abort();
+    const res = await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+      abortSignal: controller.signal,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toContain("aborted");
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
   it("no-ops on empty payload", async () => {
     mocks.sendMessageSlack.mockClear();
     const res = await routeReply({
