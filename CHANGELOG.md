@@ -2,17 +2,31 @@
 
 ## Unreleased
 
+- Doctor/Daemon: audit supervisor configs, recommend doctor from daemon status, and document user vs system services. (#?) — thanks @steipete
+- Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
+- Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos
+- Cron: allow Telegram delivery targets with topic/thread IDs (e.g. `-100…:topic:123`). (#474) — thanks @mitschabaude-bot
+- Heartbeat: resolve Telegram account IDs from config-only tokens; cron tool accepts canonical `jobId` and legacy `id` for job actions. (#516) — thanks @YuriNachos
+- Discord: stop provider when gateway reconnects are exhausted and surface errors. (#514) — thanks @joshp123
+- Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
+- Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
+- Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
+- Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
+- macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
+- Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Daemon runtime: remove Bun from selection options.
+- CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
+- Control UI: show skill install progress + per-skill results, hide install once binaries present. (#445) — thanks @pkrmf
 
 ## 2026.1.8
 

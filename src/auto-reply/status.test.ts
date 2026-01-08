@@ -102,6 +102,18 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("🧠 Model: openai/gpt-4.1-mini");
   });
 
+  it("keeps provider prefix from configured model", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "google-antigravity/claude-sonnet-4-5",
+      },
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(text).toContain("🧠 Model: google-antigravity/claude-sonnet-4-5");
+  });
+
   it("handles missing agent config gracefully", () => {
     const text = buildStatusMessage({
       agent: {},

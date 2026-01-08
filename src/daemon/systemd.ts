@@ -33,6 +33,12 @@ function resolveSystemdUnitPath(
   return resolveSystemdUnitPathForName(env, GATEWAY_SYSTEMD_SERVICE_NAME);
 }
 
+export function resolveSystemdUserUnitPath(
+  env: Record<string, string | undefined>,
+): string {
+  return resolveSystemdUnitPath(env);
+}
+
 function resolveLoginctlUser(
   env: Record<string, string | undefined>,
 ): string | null {
@@ -141,10 +147,13 @@ function buildSystemdUnit({
   return [
     "[Unit]",
     "Description=Clawdbot Gateway",
+    "After=network-online.target",
+    "Wants=network-online.target",
     "",
     "[Service]",
     `ExecStart=${execStart}`,
     "Restart=always",
+    "RestartSec=5",
     workingDirLine,
     ...envLines,
     "",

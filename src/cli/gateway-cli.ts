@@ -37,6 +37,25 @@ type GatewayRpcOpts = {
   expectFinal?: boolean;
 };
 
+type GatewayRunOpts = {
+  port?: unknown;
+  bind?: unknown;
+  token?: unknown;
+  auth?: unknown;
+  password?: unknown;
+  tailscale?: unknown;
+  tailscaleResetOnExit?: boolean;
+  allowUnconfigured?: boolean;
+  force?: boolean;
+  verbose?: boolean;
+  wsLog?: unknown;
+  compact?: boolean;
+};
+
+type GatewayRunParams = {
+  legacyTokenEnv?: boolean;
+};
+
 const gatewayLog = createSubsystemLogger("gateway");
 
 type GatewayRunSignalAction = "stop" | "restart";
@@ -246,10 +265,259 @@ const callGatewayCli = async (
       }),
   );
 
-export function registerGatewayCli(program: Command) {
-  const gateway = program
-    .command("gateway")
-    .description("Run the WebSocket Gateway")
+async function runGatewayCommand(
+  opts: GatewayRunOpts,
+  params: GatewayRunParams = {},
+) {
+  if (params.legacyTokenEnv) {
+    const legacyToken = process.env.CLAWDIS_GATEWAY_TOKEN;
+    if (legacyToken && !process.env.CLAWDBOT_GATEWAY_TOKEN) {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = legacyToken;
+    }
+  }
+
+  setVerbose(Boolean(opts.verbose));
+  const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as
+    | string
+    | undefined;
+  const wsLogStyle: GatewayWsLogStyle =
+    wsLogRaw === "compact" ? "compact" : wsLogRaw === "full" ? "full" : "auto";
+  if (
+    wsLogRaw !== undefined &&
+    wsLogRaw !== "auto" &&
+    wsLogRaw !== "compact" &&
+    wsLogRaw !== "full"
+  ) {
+    defaultRuntime.error('Invalid --ws-log (use "auto", "full", "compact")');
+    defaultRuntime.exit(1);
+  }
+  setGatewayWsLogStyle(wsLogStyle);
+
+  const cfg = loadConfig();
+  const portOverride = parsePort(opts.port);
+  if (opts.port !== undefined && portOverride === null) {
+    defaultRuntime.error("Invalid port");
+    defaultRuntime.exit(1);
+  }
+  const port = portOverride ?? resolveGatewayPort(cfg);
+  if (!Number.isFinite(port) || port <= 0) {
+    defaultRuntime.error("Invalid port");
+    defaultRuntime.exit(1);
+  }
+  if (opts.force) {
+    try {
+      const { killed, waitedMs, escalatedToSigkill } =
+        await forceFreePortAndWait(port, {
+          timeoutMs: 2000,
+          intervalMs: 100,
+          sigtermTimeoutMs: 700,
+        });
+      if (killed.length === 0) {
+        gatewayLog.info(`force: no listeners on port ${port}`);
+      } else {
+        for (const proc of killed) {
+          gatewayLog.info(
+            `force: killed pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""} on port ${port}`,
+          );
+        }
+        if (escalatedToSigkill) {
+          gatewayLog.info(
+            `force: escalated to SIGKILL while freeing port ${port}`,
+          );
+        }
+        if (waitedMs > 0) {
+          gatewayLog.info(
+            `force: waited ${waitedMs}ms for port ${port} to free`,
+          );
+        }
+      }
+    } catch (err) {
+      defaultRuntime.error(`Force: ${String(err)}`);
+      defaultRuntime.exit(1);
+      return;
+    }
+  }
+  if (opts.token) {
+    process.env.CLAWDBOT_GATEWAY_TOKEN = String(opts.token);
+  }
+  const authModeRaw = opts.auth ? String(opts.auth) : undefined;
+  const authMode: GatewayAuthMode | null =
+    authModeRaw === "token" || authModeRaw === "password" ? authModeRaw : null;
+  if (authModeRaw && !authMode) {
+    defaultRuntime.error('Invalid --auth (use "token" or "password")');
+    defaultRuntime.exit(1);
+    return;
+  }
+  const tailscaleRaw = opts.tailscale ? String(opts.tailscale) : undefined;
+  const tailscaleMode =
+    tailscaleRaw === "off" ||
+    tailscaleRaw === "serve" ||
+    tailscaleRaw === "funnel"
+      ? tailscaleRaw
+      : null;
+  if (tailscaleRaw && !tailscaleMode) {
+    defaultRuntime.error(
+      'Invalid --tailscale (use "off", "serve", or "funnel")',
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
+  const mode = cfg.gateway?.mode;
+  if (!opts.allowUnconfigured && mode !== "local") {
+    if (!configExists) {
+      defaultRuntime.error(
+        "Missing config. Run `clawdbot setup` or set gateway.mode=local (or pass --allow-unconfigured).",
+      );
+    } else {
+      defaultRuntime.error(
+        `Gateway start blocked: set gateway.mode=local (current: ${mode ?? "unset"}) or pass --allow-unconfigured.`,
+      );
+    }
+    defaultRuntime.exit(1);
+    return;
+  }
+  const bindRaw = String(opts.bind ?? cfg.gateway?.bind ?? "loopback");
+  const bind =
+    bindRaw === "loopback" ||
+    bindRaw === "tailnet" ||
+    bindRaw === "lan" ||
+    bindRaw === "auto"
+      ? bindRaw
+      : null;
+  if (!bind) {
+    defaultRuntime.error(
+      'Invalid --bind (use "loopback", "tailnet", "lan", or "auto")',
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  const snapshot = await readConfigFileSnapshot().catch(() => null);
+  const miskeys = extractGatewayMiskeys(snapshot?.parsed);
+  const authConfig = {
+    ...cfg.gateway?.auth,
+    ...(authMode ? { mode: authMode } : {}),
+    ...(opts.password ? { password: String(opts.password) } : {}),
+    ...(opts.token ? { token: String(opts.token) } : {}),
+  };
+  const resolvedAuth = resolveGatewayAuth({
+    authConfig,
+    env: process.env,
+    tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
+  });
+  const resolvedAuthMode = resolvedAuth.mode;
+  const tokenValue = resolvedAuth.token;
+  const passwordValue = resolvedAuth.password;
+  const authHints: string[] = [];
+  if (miskeys.hasGatewayToken) {
+    authHints.push(
+      'Found "gateway.token" in config. Use "gateway.auth.token" instead.',
+    );
+  }
+  if (miskeys.hasRemoteToken) {
+    authHints.push(
+      '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
+    );
+  }
+  if (resolvedAuthMode === "token" && !tokenValue) {
+    defaultRuntime.error(
+      [
+        "Gateway auth is set to token, but no token is configured.",
+        "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN), or pass --token.",
+        ...authHints,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (resolvedAuthMode === "password" && !passwordValue) {
+    defaultRuntime.error(
+      [
+        "Gateway auth is set to password, but no password is configured.",
+        "Set gateway.auth.password (or CLAWDBOT_GATEWAY_PASSWORD), or pass --password.",
+        ...authHints,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+  if (bind !== "loopback" && resolvedAuthMode === "none") {
+    defaultRuntime.error(
+      [
+        `Refusing to bind gateway to ${bind} without auth.`,
+        "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) or pass --token.",
+        ...authHints,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  try {
+    await runGatewayLoop({
+      runtime: defaultRuntime,
+      start: async () =>
+        await startGatewayServer(port, {
+          bind,
+          auth:
+            authMode || opts.password || opts.token || authModeRaw
+              ? {
+                  mode: authMode ?? undefined,
+                  token: opts.token ? String(opts.token) : undefined,
+                  password: opts.password ? String(opts.password) : undefined,
+                }
+              : undefined,
+          tailscale:
+            tailscaleMode || opts.tailscaleResetOnExit
+              ? {
+                  mode: tailscaleMode ?? undefined,
+                  resetOnExit: Boolean(opts.tailscaleResetOnExit),
+                }
+              : undefined,
+        }),
+    });
+  } catch (err) {
+    if (
+      err instanceof GatewayLockError ||
+      (err &&
+        typeof err === "object" &&
+        (err as { name?: string }).name === "GatewayLockError")
+    ) {
+      const errMessage = describeUnknownError(err);
+      defaultRuntime.error(
+        `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot daemon stop`,
+      );
+      try {
+        const diagnostics = await inspectPortUsage(port);
+        if (diagnostics.status === "busy") {
+          for (const line of formatPortDiagnostics(diagnostics)) {
+            defaultRuntime.error(line);
+          }
+        }
+      } catch {
+        // ignore diagnostics failures
+      }
+      await maybeExplainGatewayServiceStop();
+      defaultRuntime.exit(1);
+      return;
+    }
+    defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
+    defaultRuntime.exit(1);
+  }
+}
+
+function addGatewayRunCommand(
+  cmd: Command,
+  params: GatewayRunParams = {},
+): Command {
+  return cmd
     .option("--port <port>", "Port for the gateway WebSocket")
     .option(
       "--bind <mode>",
@@ -288,252 +556,22 @@ export function registerGatewayCli(program: Command) {
     )
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as
-        | string
-        | undefined;
-      const wsLogStyle: GatewayWsLogStyle =
-        wsLogRaw === "compact"
-          ? "compact"
-          : wsLogRaw === "full"
-            ? "full"
-            : "auto";
-      if (
-        wsLogRaw !== undefined &&
-        wsLogRaw !== "auto" &&
-        wsLogRaw !== "compact" &&
-        wsLogRaw !== "full"
-      ) {
-        defaultRuntime.error(
-          'Invalid --ws-log (use "auto", "full", "compact")',
-        );
-        defaultRuntime.exit(1);
-      }
-      setGatewayWsLogStyle(wsLogStyle);
-
-      const cfg = loadConfig();
-      const portOverride = parsePort(opts.port);
-      if (opts.port !== undefined && portOverride === null) {
-        defaultRuntime.error("Invalid port");
-        defaultRuntime.exit(1);
-      }
-      const port = portOverride ?? resolveGatewayPort(cfg);
-      if (!Number.isFinite(port) || port <= 0) {
-        defaultRuntime.error("Invalid port");
-        defaultRuntime.exit(1);
-      }
-      if (opts.force) {
-        try {
-          const { killed, waitedMs, escalatedToSigkill } =
-            await forceFreePortAndWait(port, {
-              timeoutMs: 2000,
-              intervalMs: 100,
-              sigtermTimeoutMs: 700,
-            });
-          if (killed.length === 0) {
-            gatewayLog.info(`force: no listeners on port ${port}`);
-          } else {
-            for (const proc of killed) {
-              gatewayLog.info(
-                `force: killed pid ${proc.pid}${proc.command ? ` (${proc.command})` : ""} on port ${port}`,
-              );
-            }
-            if (escalatedToSigkill) {
-              gatewayLog.info(
-                `force: escalated to SIGKILL while freeing port ${port}`,
-              );
-            }
-            if (waitedMs > 0) {
-              gatewayLog.info(
-                `force: waited ${waitedMs}ms for port ${port} to free`,
-              );
-            }
-          }
-        } catch (err) {
-          defaultRuntime.error(`Force: ${String(err)}`);
-          defaultRuntime.exit(1);
-          return;
-        }
-      }
-      if (opts.token) {
-        process.env.CLAWDBOT_GATEWAY_TOKEN = String(opts.token);
-      }
-      const authModeRaw = opts.auth ? String(opts.auth) : undefined;
-      const authMode: GatewayAuthMode | null =
-        authModeRaw === "token" || authModeRaw === "password"
-          ? authModeRaw
-          : null;
-      if (authModeRaw && !authMode) {
-        defaultRuntime.error('Invalid --auth (use "token" or "password")');
-        defaultRuntime.exit(1);
-        return;
-      }
-      const tailscaleRaw = opts.tailscale ? String(opts.tailscale) : undefined;
-      const tailscaleMode =
-        tailscaleRaw === "off" ||
-        tailscaleRaw === "serve" ||
-        tailscaleRaw === "funnel"
-          ? tailscaleRaw
-          : null;
-      if (tailscaleRaw && !tailscaleMode) {
-        defaultRuntime.error(
-          'Invalid --tailscale (use "off", "serve", or "funnel")',
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
-      const mode = cfg.gateway?.mode;
-      if (!opts.allowUnconfigured && mode !== "local") {
-        if (!configExists) {
-          defaultRuntime.error(
-            "Missing config. Run `clawdbot setup` or set gateway.mode=local (or pass --allow-unconfigured).",
-          );
-        } else {
-          defaultRuntime.error(
-            `Gateway start blocked: set gateway.mode=local (current: ${mode ?? "unset"}) or pass --allow-unconfigured.`,
-          );
-        }
-        defaultRuntime.exit(1);
-        return;
-      }
-      const bindRaw = String(opts.bind ?? cfg.gateway?.bind ?? "loopback");
-      const bind =
-        bindRaw === "loopback" ||
-        bindRaw === "tailnet" ||
-        bindRaw === "lan" ||
-        bindRaw === "auto"
-          ? bindRaw
-          : null;
-      if (!bind) {
-        defaultRuntime.error(
-          'Invalid --bind (use "loopback", "tailnet", "lan", or "auto")',
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      const snapshot = await readConfigFileSnapshot().catch(() => null);
-      const miskeys = extractGatewayMiskeys(snapshot?.parsed);
-      const authConfig = {
-        ...cfg.gateway?.auth,
-        ...(authMode ? { mode: authMode } : {}),
-        ...(opts.password ? { password: String(opts.password) } : {}),
-        ...(opts.token ? { token: String(opts.token) } : {}),
-      };
-      const resolvedAuth = resolveGatewayAuth({
-        authConfig,
-        env: process.env,
-        tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
-      });
-      const resolvedAuthMode = resolvedAuth.mode;
-      const tokenValue = resolvedAuth.token;
-      const passwordValue = resolvedAuth.password;
-      const authHints: string[] = [];
-      if (miskeys.hasGatewayToken) {
-        authHints.push(
-          'Found "gateway.token" in config. Use "gateway.auth.token" instead.',
-        );
-      }
-      if (miskeys.hasRemoteToken) {
-        authHints.push(
-          '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
-        );
-      }
-      if (resolvedAuthMode === "token" && !tokenValue) {
-        defaultRuntime.error(
-          [
-            "Gateway auth is set to token, but no token is configured.",
-            "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN), or pass --token.",
-            ...authHints,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      if (resolvedAuthMode === "password" && !passwordValue) {
-        defaultRuntime.error(
-          [
-            "Gateway auth is set to password, but no password is configured.",
-            "Set gateway.auth.password (or CLAWDBOT_GATEWAY_PASSWORD), or pass --password.",
-            ...authHints,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-      if (bind !== "loopback" && resolvedAuthMode === "none") {
-        defaultRuntime.error(
-          [
-            `Refusing to bind gateway to ${bind} without auth.`,
-            "Set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) or pass --token.",
-            ...authHints,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-        );
-        defaultRuntime.exit(1);
-        return;
-      }
-
-      try {
-        await runGatewayLoop({
-          runtime: defaultRuntime,
-          start: async () =>
-            await startGatewayServer(port, {
-              bind,
-              auth:
-                authMode || opts.password || opts.token || authModeRaw
-                  ? {
-                      mode: authMode ?? undefined,
-                      token: opts.token ? String(opts.token) : undefined,
-                      password: opts.password
-                        ? String(opts.password)
-                        : undefined,
-                    }
-                  : undefined,
-              tailscale:
-                tailscaleMode || opts.tailscaleResetOnExit
-                  ? {
-                      mode: tailscaleMode ?? undefined,
-                      resetOnExit: Boolean(opts.tailscaleResetOnExit),
-                    }
-                  : undefined,
-            }),
-        });
-      } catch (err) {
-        if (
-          err instanceof GatewayLockError ||
-          (err &&
-            typeof err === "object" &&
-            (err as { name?: string }).name === "GatewayLockError")
-        ) {
-          const errMessage = describeUnknownError(err);
-          defaultRuntime.error(
-            `Gateway failed to start: ${errMessage}\nIf the gateway is supervised, stop it with: clawdbot daemon stop`,
-          );
-          try {
-            const diagnostics = await inspectPortUsage(port);
-            if (diagnostics.status === "busy") {
-              for (const line of formatPortDiagnostics(diagnostics)) {
-                defaultRuntime.error(line);
-              }
-            }
-          } catch {
-            // ignore diagnostics failures
-          }
-          await maybeExplainGatewayServiceStop();
-          defaultRuntime.exit(1);
-          return;
-        }
-        defaultRuntime.error(`Gateway failed to start: ${String(err)}`);
-        defaultRuntime.exit(1);
-      }
+      await runGatewayCommand(opts, params);
     });
+}
+
+export function registerGatewayCli(program: Command) {
+  const gateway = addGatewayRunCommand(
+    program.command("gateway").description("Run the WebSocket Gateway"),
+  );
+
+  // Back-compat: legacy launchd plists used gateway-daemon; keep hidden alias.
+  addGatewayRunCommand(
+    program
+      .command("gateway-daemon", { hidden: true })
+      .description("Run the WebSocket Gateway as a long-lived daemon"),
+    { legacyTokenEnv: true },
+  );
 
   gatewayCallOpts(
     gateway

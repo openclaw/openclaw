@@ -456,7 +456,7 @@ export async function handleCommands(params: {
         ...cfg.agent,
         model: {
           ...cfg.agent?.model,
-          primary: model,
+          primary: `${provider}/${model}`,
         },
         contextTokens,
         thinkingDefault: cfg.agent?.thinkingDefault,

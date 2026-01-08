@@ -41,10 +41,14 @@ export async function dispatchReplyFromConfig(params: {
    * Note: Only called when shouldRouteToOriginating is true, so
    * originatingChannel and originatingTo are guaranteed to be defined.
    */
-  const sendPayloadAsync = async (payload: ReplyPayload): Promise<void> => {
+  const sendPayloadAsync = async (
+    payload: ReplyPayload,
+    abortSignal?: AbortSignal,
+  ): Promise<void> => {
     // TypeScript doesn't narrow these from the shouldRouteToOriginating check,
     // but they're guaranteed non-null when this function is called.
     if (!originatingChannel || !originatingTo) return;
+    if (abortSignal?.aborted) return;
     const result = await routeReply({
       payload,
       channel: originatingChannel,
@@ -52,6 +56,7 @@ export async function dispatchReplyFromConfig(params: {
       accountId: ctx.AccountId,
       threadId: ctx.MessageThreadId,
       cfg,
+      abortSignal,
     });
     if (!result.ok) {
       logVerbose(
@@ -73,10 +78,10 @@ export async function dispatchReplyFromConfig(params: {
           dispatcher.sendToolResult(payload);
         }
       },
-      onBlockReply: (payload: ReplyPayload) => {
+      onBlockReply: (payload: ReplyPayload, context) => {
         if (shouldRouteToOriginating) {
-          // Fire-and-forget for streaming block replies when routing.
-          void sendPayloadAsync(payload);
+          // Await routed sends so upstream can enforce ordering/timeouts.
+          return sendPayloadAsync(payload, context?.abortSignal);
         } else {
           // Synchronous dispatch to preserve callback timing.
           dispatcher.sendBlockReply(payload);
