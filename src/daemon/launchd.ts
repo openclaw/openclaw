@@ -39,12 +39,31 @@ export function resolveGatewayLogPaths(
   stderrPath: string;
 } {
   const home = resolveHomeDir(env);
-  const logDir = path.join(home, ".clawdbot", "logs");
+  const stateOverride =
+    env.CLAWDBOT_STATE_DIR?.trim() || env.CLAWDIS_STATE_DIR?.trim();
+  const profile = env.CLAWDBOT_PROFILE?.trim();
+  const suffix =
+    profile && profile.toLowerCase() !== "default" ? `-${profile}` : "";
+  const defaultStateDir = path.join(home, `.clawdbot${suffix}`);
+  const stateDir = stateOverride
+    ? resolveUserPathWithHome(stateOverride, home)
+    : defaultStateDir;
+  const logDir = path.join(stateDir, "logs");
   return {
     logDir,
     stdoutPath: path.join(logDir, "gateway.log"),
     stderrPath: path.join(logDir, "gateway.err.log"),
   };
+}
+
+function resolveUserPathWithHome(input: string, home: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return trimmed;
+  if (trimmed.startsWith("~")) {
+    const expanded = trimmed.replace(/^~(?=$|[\\/])/, home);
+    return path.resolve(expanded);
+  }
+  return path.resolve(trimmed);
 }
 
 function plistEscape(value: string): string {
@@ -88,7 +107,12 @@ function renderEnvDict(
 
 export async function readLaunchAgentProgramArguments(
   env: Record<string, string | undefined>,
-): Promise<{ programArguments: string[]; workingDirectory?: string } | null> {
+): Promise<{
+  programArguments: string[];
+  workingDirectory?: string;
+  environment?: Record<string, string>;
+  sourcePath?: string;
+} | null> {
   const plistPath = resolveLaunchAgentPlistPath(env);
   try {
     const plist = await fs.readFile(plistPath, "utf8");
@@ -105,9 +129,25 @@ export async function readLaunchAgentProgramArguments(
     const workingDirectory = workingDirMatch
       ? plistUnescape(workingDirMatch[1] ?? "").trim()
       : "";
+    const envMatch = plist.match(
+      /<key>EnvironmentVariables<\/key>\s*<dict>([\s\S]*?)<\/dict>/i,
+    );
+    const environment: Record<string, string> = {};
+    if (envMatch) {
+      for (const pair of envMatch[1].matchAll(
+        /<key>([\s\S]*?)<\/key>\s*<string>([\s\S]*?)<\/string>/gi,
+      )) {
+        const key = plistUnescape(pair[1] ?? "").trim();
+        if (!key) continue;
+        const value = plistUnescape(pair[2] ?? "").trim();
+        environment[key] = value;
+      }
+    }
     return {
       programArguments: args.filter(Boolean),
       ...(workingDirectory ? { workingDirectory } : {}),
+      ...(Object.keys(environment).length > 0 ? { environment } : {}),
+      sourcePath: plistPath,
     };
   } catch {
     return null;

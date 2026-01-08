@@ -18,12 +18,12 @@ import {
   GATEWAY_SYSTEMD_SERVICE_NAME,
   GATEWAY_WINDOWS_TASK_NAME,
 } from "../daemon/constants.js";
+import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import {
   type FindExtraGatewayServicesOptions,
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
 } from "../daemon/inspect.js";
-import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
@@ -165,8 +165,11 @@ function parsePortFromArgs(
   return null;
 }
 
-function pickProbeHostForBind(bindMode: string, tailnetIPv4: string | null) {
-  if (bindMode === "tailnet") return tailnetIPv4;
+function pickProbeHostForBind(
+  bindMode: string,
+  tailnetIPv4: string | undefined,
+) {
+  if (bindMode === "tailnet") return tailnetIPv4 ?? "127.0.0.1";
   if (bindMode === "auto") return tailnetIPv4 ?? "127.0.0.1";
   return "127.0.0.1";
 }
@@ -330,7 +333,10 @@ async function gatherDaemonStatus(opts: {
     ...(serviceEnv ?? {}),
   } satisfies Record<string, string | undefined>;
 
-  const cliConfigPath = resolveConfigPath(process.env, resolveStateDir(process.env));
+  const cliConfigPath = resolveConfigPath(
+    process.env,
+    resolveStateDir(process.env),
+  );
   const daemonConfigPath = resolveConfigPath(
     mergedDaemonEnv as NodeJS.ProcessEnv,
     resolveStateDir(mergedDaemonEnv as NodeJS.ProcessEnv),
@@ -359,12 +365,15 @@ async function gatherDaemonStatus(opts: {
     path: daemonSnapshot?.path ?? daemonConfigPath,
     exists: daemonSnapshot?.exists ?? false,
     valid: daemonSnapshot?.valid ?? true,
-    ...(daemonSnapshot?.issues?.length ? { issues: daemonSnapshot.issues } : {}),
+    ...(daemonSnapshot?.issues?.length
+      ? { issues: daemonSnapshot.issues }
+      : {}),
   };
   const configMismatch = cliConfigSummary.path !== daemonConfigSummary.path;
 
   const portFromArgs = parsePortFromArgs(command?.programArguments);
-  const daemonPort = portFromArgs ?? resolveGatewayPort(daemonCfg, mergedDaemonEnv);
+  const daemonPort =
+    portFromArgs ?? resolveGatewayPort(daemonCfg, mergedDaemonEnv);
   const portSource: GatewayStatusSummary["portSource"] = portFromArgs
     ? "service args"
     : "env/config";
@@ -510,7 +519,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     defaultRuntime.log(`Config (cli): ${cliCfg}`);
     if (!status.config.cli.valid && status.config.cli.issues?.length) {
       for (const issue of status.config.cli.issues.slice(0, 5)) {
-        defaultRuntime.error(`Config issue: ${issue.path || "<root>"}: ${issue.message}`);
+        defaultRuntime.error(
+          `Config issue: ${issue.path || "<root>"}: ${issue.message}`,
+        );
       }
     }
     if (status.config.daemon) {
@@ -555,7 +566,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     } else {
       defaultRuntime.error("RPC probe: failed");
       if (rpc.url) defaultRuntime.error(`RPC target: ${rpc.url}`);
-      const lines = String(rpc.error ?? "unknown").split(/\r?\n/).filter(Boolean);
+      const lines = String(rpc.error ?? "unknown")
+        .split(/\r?\n/)
+        .filter(Boolean);
       for (const line of lines.slice(0, 12)) {
         defaultRuntime.error(`  ${line}`);
       }

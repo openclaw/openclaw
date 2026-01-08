@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const callGateway = vi.fn(async () => ({ ok: true }));
 const resolveGatewayProgramArguments = vi.fn(async () => ({
@@ -13,8 +13,8 @@ const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceReadCommand = vi.fn().mockResolvedValue(null);
 const serviceReadRuntime = vi.fn().mockResolvedValue({ status: "running" });
 const findExtraGatewayServices = vi.fn(async () => []);
-const inspectPortUsage = vi.fn(async () => ({
-  port: 18789,
+const inspectPortUsage = vi.fn(async (port: number) => ({
+  port,
   status: "free",
   listeners: [],
   hints: [],
@@ -77,6 +77,39 @@ vi.mock("./deps.js", () => ({
 }));
 
 describe("daemon-cli coverage", () => {
+  const originalEnv = {
+    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
+    CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
+    CLAWDBOT_GATEWAY_PORT: process.env.CLAWDBOT_GATEWAY_PORT,
+    CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
+  };
+
+  beforeEach(() => {
+    process.env.CLAWDBOT_STATE_DIR = "/tmp/clawdbot-cli-state";
+    process.env.CLAWDBOT_CONFIG_PATH = "/tmp/clawdbot-cli-state/clawdbot.json";
+    delete process.env.CLAWDBOT_GATEWAY_PORT;
+    delete process.env.CLAWDBOT_PROFILE;
+    serviceReadCommand.mockResolvedValue(null);
+  });
+
+  afterEach(() => {
+    if (originalEnv.CLAWDBOT_STATE_DIR !== undefined)
+      process.env.CLAWDBOT_STATE_DIR = originalEnv.CLAWDBOT_STATE_DIR;
+    else delete process.env.CLAWDBOT_STATE_DIR;
+
+    if (originalEnv.CLAWDBOT_CONFIG_PATH !== undefined)
+      process.env.CLAWDBOT_CONFIG_PATH = originalEnv.CLAWDBOT_CONFIG_PATH;
+    else delete process.env.CLAWDBOT_CONFIG_PATH;
+
+    if (originalEnv.CLAWDBOT_GATEWAY_PORT !== undefined)
+      process.env.CLAWDBOT_GATEWAY_PORT = originalEnv.CLAWDBOT_GATEWAY_PORT;
+    else delete process.env.CLAWDBOT_GATEWAY_PORT;
+
+    if (originalEnv.CLAWDBOT_PROFILE !== undefined)
+      process.env.CLAWDBOT_PROFILE = originalEnv.CLAWDBOT_PROFILE;
+    else delete process.env.CLAWDBOT_PROFILE;
+  });
+
   it("probes gateway status by default", async () => {
     runtimeLogs.length = 0;
     runtimeErrors.length = 0;
@@ -95,6 +128,51 @@ describe("daemon-cli coverage", () => {
     );
     expect(findExtraGatewayServices).toHaveBeenCalled();
     expect(inspectPortUsage).toHaveBeenCalled();
+  });
+
+  it("derives probe URL from service args + env (json)", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    callGateway.mockClear();
+    inspectPortUsage.mockClear();
+
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+      environment: {
+        CLAWDBOT_PROFILE: "dev",
+        CLAWDBOT_STATE_DIR: "/tmp/clawdbot-daemon-state",
+        CLAWDBOT_CONFIG_PATH: "/tmp/clawdbot-daemon-state/clawdbot.json",
+        CLAWDBOT_GATEWAY_PORT: "19001",
+      },
+      sourcePath: "/tmp/com.clawdbot.gateway.plist",
+    });
+
+    const { registerDaemonCli } = await import("./daemon-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(["daemon", "status", "--json"], { from: "user" });
+
+    expect(callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:19001",
+        method: "status",
+      }),
+    );
+    expect(inspectPortUsage).toHaveBeenCalledWith(19001);
+
+    const parsed = JSON.parse(runtimeLogs[0] ?? "{}") as {
+      gateway?: { port?: number; portSource?: string; probeUrl?: string };
+      config?: { mismatch?: boolean };
+      rpc?: { url?: string; ok?: boolean };
+    };
+    expect(parsed.gateway?.port).toBe(19001);
+    expect(parsed.gateway?.portSource).toBe("service args");
+    expect(parsed.gateway?.probeUrl).toBe("ws://127.0.0.1:19001");
+    expect(parsed.config?.mismatch).toBe(true);
+    expect(parsed.rpc?.url).toBe("ws://127.0.0.1:19001");
+    expect(parsed.rpc?.ok).toBe(true);
   });
 
   it("passes deep scan flag for daemon status", async () => {

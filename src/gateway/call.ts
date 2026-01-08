@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { ClawdbotConfig } from "../config/config.js";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
+import {
+  loadConfig,
+  resolveConfigPath,
+  resolveGatewayPort,
+  resolveStateDir,
+} from "../config/config.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { GatewayClient } from "./client.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
@@ -34,6 +39,10 @@ export function buildGatewayConnectionDetails(
   options: { config?: ClawdbotConfig; url?: string } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
+  const configPath = resolveConfigPath(
+    process.env,
+    resolveStateDir(process.env),
+  );
   const isRemoteMode = config.gateway?.mode === "remote";
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const localPort = resolveGatewayPort(config);
@@ -70,6 +79,7 @@ export function buildGatewayConnectionDetails(
   const message = [
     `Gateway target: ${url}`,
     `Source: ${urlSource}`,
+    `Config: ${configPath}`,
     bindDetail,
     remoteFallbackNote,
   ]
