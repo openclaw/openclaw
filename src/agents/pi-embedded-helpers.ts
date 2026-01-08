@@ -99,6 +99,28 @@ export async function sanitizeSessionMessagesImages(
       }
     }
 
+    if (role === "assistant") {
+      const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      const content = assistantMsg.content;
+      if (Array.isArray(content)) {
+        const filteredContent = content.filter((block) => {
+          if (!block || typeof block !== "object") return true;
+          const rec = block as { type?: unknown; text?: unknown };
+          if (rec.type !== "text" || typeof rec.text !== "string") return true;
+          return rec.text.trim().length > 0;
+        });
+        const sanitizedContent = (await sanitizeContentBlocksImages(
+          filteredContent as unknown as ContentBlock[],
+          label,
+        )) as unknown as typeof assistantMsg.content;
+        if (sanitizedContent.length === 0) {
+          continue;
+        }
+        out.push({ ...assistantMsg, content: sanitizedContent });
+        continue;
+      }
+    }
+
     out.push(msg);
   }
   return out;
