@@ -160,7 +160,8 @@ export function buildAgentSystemPrompt(params: {
     hasGateway ? "## ClaudeBot Self-Update" : "",
     hasGateway
       ? [
-          "Use the ClaudeBot self-update tool to update or reconfigure this instance when asked.",
+          "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
+          "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
           "After restart, ClaudeBot pings the last active session automatically.",
         ].join("\n")

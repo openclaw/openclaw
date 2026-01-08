@@ -7,6 +7,7 @@
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
+- Agent system prompt: avoid automatic self-updates unless explicitly requested.
 
 ## 2026.1.8
 
