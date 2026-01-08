@@ -1176,6 +1176,8 @@ per session key at a time). Default: 1.
 Optional **Docker sandboxing** for the embedded agent. Intended for non-main
 sessions so they cannot access your host system.
 
+Details: [Sandboxing](/gateway/sandboxing)
+
 Defaults (if enabled):
 - scope: `"agent"` (one container + workspace per agent)
 - Debian bookworm-slim based image

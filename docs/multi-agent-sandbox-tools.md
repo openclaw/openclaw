@@ -18,6 +18,8 @@ This allows you to run multiple agents with different security profiles:
 - Family/work agents with restricted tools
 - Public-facing agents in sandboxes
 
+For how sandboxing behaves at runtime, see [Sandboxing](/gateway/sandboxing).
+
 ---
 
 ## Configuration Examples
