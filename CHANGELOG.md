@@ -16,7 +16,7 @@
 - Commands: gate all slash commands to authorized senders; add `/compact` to manually compact session context.
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
 - Auto-reply: removed `autoReply` from Discord/Slack/Telegram channel configs; use `requireMention` instead (Telegram topics now support `requireMention` overrides).
-- CLI: remove `update`, `gateway-daemon`, `gateway {install|uninstall|start|stop|restart|daemon status|wake|send|agent}`, and `telegram` commands; use `daemon` for service control, `send`/`agent`/`wake` for RPC, and `nodes canvas` for canvas ops.
+- CLI: remove `update`, `gateway-daemon`, `gateway {install|uninstall|start|stop|restart|daemon status|wake|send|agent}`, and `telegram` commands; move `login/logout` to `providers login/logout` (top-level aliases hidden); use `daemon` for service control, `send`/`agent`/`wake` for RPC, and `nodes canvas` for canvas ops.
 
 ### Fixes
 - Auto-reply: keep typing indicators alive during tool execution without changing typing-mode semantics. Thanks @thesash for PR #452.

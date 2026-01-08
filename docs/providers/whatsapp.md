@@ -43,13 +43,13 @@ WhatsApp requires a real mobile number for verification. VoIP and virtual number
 - Result: unreliable delivery and frequent blocks, so support was removed.
 
 ## Login + credentials
-- Login command: `clawdbot login` (QR via Linked Devices).
-- Multi-account login: `clawdbot login --account <id>` (`<id>` = `accountId`).
+- Login command: `clawdbot providers login` (QR via Linked Devices).
+- Multi-account login: `clawdbot providers login --account <id>` (`<id>` = `accountId`).
 - Default account (when `--account` is omitted): `default` if present, otherwise the first configured account id (sorted).
 - Credentials stored in `~/.clawdbot/credentials/whatsapp/<accountId>/creds.json`.
 - Backup copy at `creds.json.bak` (restored on corruption).
 - Legacy compatibility: older installs stored Baileys files directly in `~/.clawdbot/credentials/`.
-- Logout: `clawdbot logout` (or `--account <id>`) deletes WhatsApp auth state (but keeps shared `oauth.json`).
+- Logout: `clawdbot providers logout` (or `--account <id>`) deletes WhatsApp auth state (but keeps shared `oauth.json`).
 - Logged-out socket => error instructs re-link.
 
 ## Inbound flow (DM + group)

@@ -23,11 +23,10 @@ import {
 } from "../config/config.js";
 import { danger, setVerbose } from "../globals.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
-import { loginWeb, logoutWeb } from "../provider-web.js";
+import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { defaultRuntime } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
-import { resolveWhatsAppAccount } from "../web/accounts.js";
 import { emitCliBanner, formatCliBannerLine } from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
@@ -138,7 +137,7 @@ export function buildProgram() {
   });
   const examples = [
     [
-      "clawdbot login --verbose",
+      "clawdbot providers login --verbose",
       "Link personal WhatsApp Web and show QR + connection logs.",
     ],
     [
@@ -342,23 +341,22 @@ export function buildProgram() {
       }
     });
 
+  // Deprecated hidden aliases: use `clawdbot providers login/logout`. Remove in a future major.
   program
-  program
-    .command("login")
+    .command("login", { hidden: true })
     .description("Link your personal WhatsApp via QR (web provider)")
     .option("--verbose", "Verbose connection logs", false)
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
     .option("--account <id>", "WhatsApp account id (accountId)")
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
       try {
-        const provider = opts.provider ?? "whatsapp";
-        await loginWeb(
-          Boolean(opts.verbose),
-          provider,
-          undefined,
+        await runProviderLogin(
+          {
+            provider: opts.provider as string | undefined,
+            account: opts.account as string | undefined,
+            verbose: Boolean(opts.verbose),
+          },
           defaultRuntime,
-          opts.account as string | undefined,
         );
       } catch (err) {
         defaultRuntime.error(danger(`Web login failed: ${String(err)}`));
@@ -367,23 +365,19 @@ export function buildProgram() {
     });
 
   program
-    .command("logout")
-    .description("Clear cached WhatsApp Web credentials")
+    .command("logout", { hidden: true })
+    .description("Log out of WhatsApp Web (keeps config)")
     .option("--provider <provider>", "Provider alias (default: whatsapp)")
     .option("--account <id>", "WhatsApp account id (accountId)")
     .action(async (opts) => {
       try {
-        void opts.provider; // placeholder for future multi-provider; currently web only.
-        const cfg = loadConfig();
-        const account = resolveWhatsAppAccount({
-          cfg,
-          accountId: opts.account as string | undefined,
-        });
-        await logoutWeb({
-          runtime: defaultRuntime,
-          authDir: account.authDir,
-          isLegacyAuthDir: account.isLegacyAuthDir,
-        });
+        await runProviderLogout(
+          {
+            provider: opts.provider as string | undefined,
+            account: opts.account as string | undefined,
+          },
+          defaultRuntime,
+        );
       } catch (err) {
         defaultRuntime.error(danger(`Logout failed: ${String(err)}`));
         defaultRuntime.exit(1);

@@ -99,7 +99,7 @@ https://github.com/oven-sh/bun/issues/5951
 ### WhatsApp (QR login)
 
 ```bash
-pnpm clawdbot login
+pnpm clawdbot providers login
 ```
 
 Scan via WhatsApp → Settings → Linked Devices.
