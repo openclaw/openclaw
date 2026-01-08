@@ -72,6 +72,9 @@ export function resolveTextChunkLimit(
         cfg?.imessage?.textChunkLimit
       );
     }
+    if (provider === "msteams") {
+      return cfg?.msteams?.textChunkLimit;
+    }
     return undefined;
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {
