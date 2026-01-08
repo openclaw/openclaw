@@ -4,6 +4,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const sendCommand = vi.fn();
 const statusCommand = vi.fn();
 const configureCommand = vi.fn();
+const setupCommand = vi.fn();
+const onboardCommand = vi.fn();
 const loginWeb = vi.fn();
 const callGateway = vi.fn();
 
@@ -18,6 +20,8 @@ const runtime = {
 vi.mock("../commands/send.js", () => ({ sendCommand }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
 vi.mock("../commands/configure.js", () => ({ configureCommand }));
+vi.mock("../commands/setup.js", () => ({ setupCommand }));
+vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
 vi.mock("../provider-web.js", () => ({
   loginWeb,
@@ -55,6 +59,22 @@ describe("cli program", () => {
     const program = buildProgram();
     await program.parseAsync(["config"], { from: "user" });
     expect(configureCommand).toHaveBeenCalled();
+  });
+
+  it("runs setup without wizard flags", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["setup"], { from: "user" });
+    expect(setupCommand).toHaveBeenCalled();
+    expect(onboardCommand).not.toHaveBeenCalled();
+  });
+
+  it("runs setup wizard when wizard flags are present", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["setup", "--remote-url", "ws://example"], {
+      from: "user",
+    });
+    expect(onboardCommand).toHaveBeenCalled();
+    expect(setupCommand).not.toHaveBeenCalled();
   });
 
   it("runs nodes list and calls node.pair.list", async () => {

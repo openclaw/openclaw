@@ -45,6 +45,7 @@ import { forceFreePort } from "./ports.js";
 import { registerProvidersCli } from "./providers-cli.js";
 import { registerTelegramCli } from "./telegram-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
+import { emitCliBanner, formatCliBannerLine } from "./banner.js";
 import { isRich, theme } from "../terminal/theme.js";
 
 export { forceFreePort };
@@ -52,8 +53,6 @@ export { forceFreePort };
 export function buildProgram() {
   const program = new Command();
   const PROGRAM_VERSION = VERSION;
-  const TAGLINE =
-    "Send, receive, and auto-reply on WhatsApp (web) and Telegram (bot).";
 
   program
     .name("clawdbot")
@@ -67,13 +66,6 @@ export function buildProgram() {
       "--profile <name>",
       "Use a named profile (isolates CLAWDBOT_STATE_DIR/CLAWDBOT_CONFIG_PATH under ~/.clawdbot-<name>)",
     );
-
-  const formatIntroLine = (version: string, rich = true) => {
-    const base = `🦞 ClawdBot ${version} — ${TAGLINE}`;
-    return rich
-      ? `${theme.heading("🦞 ClawdBot")} ${theme.info(version)} ${theme.muted("—")} ${theme.accentDim(TAGLINE)}`
-      : base;
-  };
 
   program.configureHelp({
     optionTerm: (option) => theme.option(option.flags),
@@ -101,12 +93,13 @@ export function buildProgram() {
     process.exit(0);
   }
 
-  program.addHelpText(
-    "beforeAll",
-    `\n${formatIntroLine(PROGRAM_VERSION, isRich())}\n`,
-  );
+  program.addHelpText("beforeAll", () => {
+    const line = formatCliBannerLine(PROGRAM_VERSION, { richTty: isRich() });
+    return `\n${line}\n`;
+  });
 
   program.hook("preAction", async (_thisCommand, actionCommand) => {
+    emitCliBanner(PROGRAM_VERSION);
     if (actionCommand.name() === "doctor") return;
     const snapshot = await readConfigFileSnapshot();
     if (snapshot.legacyIssues.length === 0) return;
@@ -195,9 +188,16 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option("--remote-url <url>", "Remote Gateway WebSocket URL")
     .option("--remote-token <token>", "Remote Gateway token (optional)")
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       try {
-        if (opts.wizard) {
+        const hasWizardFlags = hasExplicitOptions(command, [
+          "wizard",
+          "nonInteractive",
+          "mode",
+          "remoteUrl",
+          "remoteToken",
+        ]);
+        if (opts.wizard || hasWizardFlags) {
           await onboardCommand(
             {
               workspace: opts.workspace as string | undefined,

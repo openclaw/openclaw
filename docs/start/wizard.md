@@ -91,6 +91,7 @@ clawdbot agents add <name>
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
+   - Tip: `clawdbot status --deep` runs local provider probes without a gateway.
 
 8) **Skills (recommended)**
    - Reads the available skills and checks requirements.
