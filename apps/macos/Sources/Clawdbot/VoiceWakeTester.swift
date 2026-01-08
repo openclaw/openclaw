@@ -266,6 +266,8 @@ final class VoiceWakeTester {
         isFinal: Bool)
     {
         guard !transcript.isEmpty else { return }
+        let level = self.logger.logLevel
+        guard level == .debug || level == .trace else { return }
         if transcript == self.lastLoggedText, !isFinal {
             if let last = self.lastLoggedAt, Date().timeIntervalSince(last) < 0.25 {
                 return
@@ -333,7 +335,7 @@ final class VoiceWakeTester {
         for trigger in triggers {
             let tokens = trigger
                 .split(whereSeparator: { $0.isWhitespace })
-                .map { self.normalizeToken(String($0)) }
+                .map { VoiceWakeTextUtils.normalizeToken(String($0)) }
                 .filter { !$0.isEmpty }
             if tokens.isEmpty { continue }
             output.append(DebugTriggerTokens(tokens: tokens))
@@ -343,7 +345,7 @@ final class VoiceWakeTester {
 
     private static func normalizeSegments(_ segments: [WakeWordSegment]) -> [DebugToken] {
         segments.compactMap { segment in
-            let normalized = self.normalizeToken(segment.text)
+            let normalized = VoiceWakeTextUtils.normalizeToken(segment.text)
             guard !normalized.isEmpty else { return nil }
             return DebugToken(
                 normalized: normalized,
@@ -352,44 +354,18 @@ final class VoiceWakeTester {
         }
     }
 
-    private static func normalizeToken(_ token: String) -> String {
-        token
-            .trimmingCharacters(in: self.whitespaceAndPunctuation)
-            .lowercased()
-    }
-
-    private static let whitespaceAndPunctuation = CharacterSet.whitespacesAndNewlines
-        .union(.punctuationCharacters)
-
     private func textOnlyFallbackMatch(
         transcript: String,
         triggers: [String],
         config: WakeWordGateConfig) -> WakeWordGateMatch?
     {
-        guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
-        guard Self.startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
-        let trimmed = WakeWordGate.stripWake(text: transcript, triggers: triggers)
-        guard trimmed.count >= config.minCommandLength else { return nil }
-        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: trimmed)
-    }
-
-    private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
-        let tokens = transcript
-            .split(whereSeparator: { $0.isWhitespace })
-            .map { self.normalizeToken(String($0)) }
-            .filter { !$0.isEmpty }
-        guard !tokens.isEmpty else { return false }
-        for trigger in triggers {
-            let triggerTokens = trigger
-                .split(whereSeparator: { $0.isWhitespace })
-                .map { self.normalizeToken(String($0)) }
-                .filter { !$0.isEmpty }
-            guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
-            if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
-                return true
-            }
-        }
-        return false
+        guard let command = VoiceWakeTextUtils.textOnlyCommand(
+            transcript: transcript,
+            triggers: triggers,
+            minCommandLength: config.minCommandLength,
+            trimWake: { WakeWordGate.stripWake(text: $0, triggers: $1) })
+        else { return nil }
+        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
     }
 
     private func holdUntilSilence(onUpdate: @escaping @Sendable (VoiceWakeTestState) -> Void) {

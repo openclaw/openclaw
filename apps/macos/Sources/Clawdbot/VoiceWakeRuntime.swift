@@ -380,6 +380,8 @@ actor VoiceWakeRuntime {
         capturing: Bool)
     {
         guard !transcript.isEmpty else { return }
+        let level = self.logger.logLevel
+        guard level == .debug || level == .trace else { return }
         if transcript == self.lastLoggedText, !isFinal {
             if let last = self.lastLoggedAt, Date().timeIntervalSince(last) < 0.25 {
                 return
@@ -490,16 +492,18 @@ actor VoiceWakeRuntime {
         triggers: [String],
         config: WakeWordGateConfig) -> WakeWordGateMatch?
     {
-        guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return nil }
-        guard Self.startsWithTrigger(transcript: transcript, triggers: triggers) else { return nil }
-        let trimmed = Self.trimmedAfterTrigger(transcript, triggers: triggers)
-        guard trimmed.count >= config.minCommandLength else { return nil }
-        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: trimmed)
+        guard let command = VoiceWakeTextUtils.textOnlyCommand(
+            transcript: transcript,
+            triggers: triggers,
+            minCommandLength: config.minCommandLength,
+            trimWake: Self.trimmedAfterTrigger)
+        else { return nil }
+        return WakeWordGateMatch(triggerEndTime: 0, postGap: 0, command: command)
     }
 
     private func isTriggerOnly(transcript: String, triggers: [String]) -> Bool {
         guard WakeWordGate.matchesTextOnly(text: transcript, triggers: triggers) else { return false }
-        guard Self.startsWithTrigger(transcript: transcript, triggers: triggers) else { return false }
+        guard VoiceWakeTextUtils.startsWithTrigger(transcript: transcript, triggers: triggers) else { return false }
         return Self.trimmedAfterTrigger(transcript, triggers: triggers).isEmpty
     }
 
@@ -741,34 +745,6 @@ actor VoiceWakeRuntime {
         }
         return text
     }
-
-    private static func startsWithTrigger(transcript: String, triggers: [String]) -> Bool {
-        let tokens = transcript
-            .split(whereSeparator: { $0.isWhitespace })
-            .map { self.normalizeToken(String($0)) }
-            .filter { !$0.isEmpty }
-        guard !tokens.isEmpty else { return false }
-        for trigger in triggers {
-            let triggerTokens = trigger
-                .split(whereSeparator: { $0.isWhitespace })
-                .map { self.normalizeToken(String($0)) }
-                .filter { !$0.isEmpty }
-            guard !triggerTokens.isEmpty, tokens.count >= triggerTokens.count else { continue }
-            if zip(triggerTokens, tokens.prefix(triggerTokens.count)).allSatisfy({ $0 == $1 }) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private static func normalizeToken(_ token: String) -> String {
-        token
-            .trimmingCharacters(in: self.whitespaceAndPunctuation)
-            .lowercased()
-    }
-
-    private static let whitespaceAndPunctuation = CharacterSet.whitespacesAndNewlines
-        .union(.punctuationCharacters)
 
     private static func commandAfterTrigger(
         transcript: String,
