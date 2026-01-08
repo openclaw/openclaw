@@ -150,8 +150,11 @@ export async function probeDiscord(
     };
     if (includeApplication) {
       result.application =
-        (await fetchDiscordApplicationSummary(normalized, timeoutMs, fetcher)) ??
-        undefined;
+        (await fetchDiscordApplicationSummary(
+          normalized,
+          timeoutMs,
+          fetcher,
+        )) ?? undefined;
     }
     return { ...result, elapsedMs: Date.now() - started };
   } catch (err) {

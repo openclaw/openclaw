@@ -357,7 +357,9 @@ describe("providers command", () => {
 
   it("surfaces WhatsApp auth/runtime hints when unlinked or disconnected", () => {
     const unlinked = formatGatewayProvidersStatusLines({
-      whatsappAccounts: [{ accountId: "default", enabled: true, linked: false }],
+      whatsappAccounts: [
+        { accountId: "default", enabled: true, linked: false },
+      ],
     });
     expect(unlinked.join("\n")).toMatch(/WhatsApp/i);
     expect(unlinked.join("\n")).toMatch(/Not linked/i);

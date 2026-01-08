@@ -5,7 +5,10 @@ import {
   resolveDiscordAccount,
 } from "../discord/accounts.js";
 import { monitorDiscordProvider } from "../discord/index.js";
-import type { DiscordApplicationSummary, DiscordProbe } from "../discord/probe.js";
+import type {
+  DiscordApplicationSummary,
+  DiscordProbe,
+} from "../discord/probe.js";
 import { probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
 import {

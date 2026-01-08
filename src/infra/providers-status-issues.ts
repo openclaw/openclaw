@@ -58,7 +58,9 @@ function readDiscordAccountStatus(value: unknown): DiscordAccountStatus | null {
   };
 }
 
-function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummary {
+function readDiscordApplicationSummary(
+  value: unknown,
+): DiscordApplicationSummary {
   if (!isRecord(value)) return {};
   const intentsRaw = value.intents;
   if (!isRecord(intentsRaw)) return {};
@@ -74,7 +76,9 @@ function readDiscordApplicationSummary(value: unknown): DiscordApplicationSummar
   };
 }
 
-function readTelegramAccountStatus(value: unknown): TelegramAccountStatus | null {
+function readTelegramAccountStatus(
+  value: unknown,
+): TelegramAccountStatus | null {
   if (!isRecord(value)) return null;
   return {
     accountId: value.accountId,
@@ -84,7 +88,9 @@ function readTelegramAccountStatus(value: unknown): TelegramAccountStatus | null
   };
 }
 
-function readWhatsAppAccountStatus(value: unknown): WhatsAppAccountStatus | null {
+function readWhatsAppAccountStatus(
+  value: unknown,
+): WhatsAppAccountStatus | null {
   if (!isRecord(value)) return null;
   return {
     accountId: value.accountId,
@@ -159,7 +165,9 @@ export function collectProvidersStatusIssues(
       const running = account.running === true;
       const connected = account.connected === true;
       const reconnectAttempts =
-        typeof account.reconnectAttempts === "number" ? account.reconnectAttempts : null;
+        typeof account.reconnectAttempts === "number"
+          ? account.reconnectAttempts
+          : null;
       const lastError = asString(account.lastError);
 
       if (!linked) {

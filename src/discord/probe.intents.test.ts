@@ -39,4 +39,3 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
     });
   });
 });
-
