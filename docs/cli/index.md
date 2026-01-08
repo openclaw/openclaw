@@ -166,8 +166,9 @@ Options:
 - `--workspace <dir>`
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--auth-choice <oauth|claude-cli|openai-codex|codex-cli|antigravity|apiKey|minimax|skip>`
+- `--auth-choice <oauth|claude-cli|openai-codex|codex-cli|antigravity|apiKey|minimax-cloud|minimax|skip>`
 - `--anthropic-api-key <key>`
+- `--minimax-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto>`
 - `--gateway-auth <off|token|password>`

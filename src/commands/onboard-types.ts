@@ -9,6 +9,7 @@ export type AuthChoice =
   | "codex-cli"
   | "antigravity"
   | "apiKey"
+  | "minimax-cloud"
   | "minimax"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
@@ -24,6 +25,7 @@ export type OnboardOptions = {
   nonInteractive?: boolean;
   authChoice?: AuthChoice;
   anthropicApiKey?: string;
+  minimaxApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

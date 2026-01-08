@@ -3,6 +3,12 @@ import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
 
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
+export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
+const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
+const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
+export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
+
 export async function writeOAuthCredentials(
   provider: OAuthProvider,
   creds: OAuthCredentials,
@@ -27,6 +33,19 @@ export async function setAnthropicApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "anthropic",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
+export async function setMinimaxApiKey(key: string, agentDir?: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  upsertAuthProfile({
+    profileId: "minimax:default",
+    credential: {
+      type: "api_key",
+      provider: "minimax",
       key,
     },
     agentDir: agentDir ?? resolveDefaultAgentDir(),
@@ -119,6 +138,49 @@ export function applyMinimaxProviderConfig(
   };
 }
 
+export function applyMinimaxHostedProviderConfig(
+  cfg: ClawdbotConfig,
+  params?: { baseUrl?: string },
+): ClawdbotConfig {
+  const models = { ...cfg.agent?.models };
+  models[MINIMAX_HOSTED_MODEL_REF] = {
+    ...models[MINIMAX_HOSTED_MODEL_REF],
+    alias: models[MINIMAX_HOSTED_MODEL_REF]?.alias ?? "Minimax",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  if (!providers.minimax) {
+    providers.minimax = {
+      baseUrl: params?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
+      apiKey: "minimax",
+      api: "openai-completions",
+      models: [
+        {
+          id: MINIMAX_HOSTED_MODEL_ID,
+          name: "MiniMax M2.1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+          maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+        },
+      ],
+    };
+  }
+
+  return {
+    ...cfg,
+    agent: {
+      ...cfg.agent,
+      models,
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
 export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const next = applyMinimaxProviderConfig(cfg);
   return {
@@ -134,6 +196,29 @@ export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
             }
           : undefined),
         primary: "lmstudio/minimax-m2.1-gs32",
+      },
+    },
+  };
+}
+
+export function applyMinimaxHostedConfig(
+  cfg: ClawdbotConfig,
+  params?: { baseUrl?: string },
+): ClawdbotConfig {
+  const next = applyMinimaxHostedProviderConfig(cfg, params);
+  return {
+    ...next,
+    agent: {
+      ...next.agent,
+      model: {
+        ...(next.agent?.model &&
+        "fallbacks" in (next.agent.model as Record<string, unknown>)
+          ? {
+              fallbacks: (next.agent.model as { fallbacks?: string[] })
+                .fallbacks,
+            }
+          : undefined),
+        primary: MINIMAX_HOSTED_MODEL_REF,
       },
     },
   };

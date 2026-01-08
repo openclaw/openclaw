@@ -28,8 +28,12 @@ import {
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
+  applyMinimaxHostedConfig,
+  applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
+  MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
+  setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
@@ -397,6 +401,24 @@ export async function applyAuthChoice(params: {
       provider: "anthropic",
       mode: "api_key",
     });
+  } else if (params.authChoice === "minimax-cloud") {
+    const key = await params.prompter.text({
+      message: "Enter MiniMax API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setMinimaxApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyMinimaxHostedConfig(nextConfig);
+    } else {
+      nextConfig = applyMinimaxHostedProviderConfig(nextConfig);
+      agentModelOverride = MINIMAX_HOSTED_MODEL_REF;
+      await noteAgentModel(MINIMAX_HOSTED_MODEL_REF);
+    }
   } else if (params.authChoice === "minimax") {
     if (params.setDefaultModel) {
       nextConfig = applyMinimaxConfig(nextConfig);

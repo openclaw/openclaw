@@ -135,6 +135,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     cerebras: "CEREBRAS_API_KEY",
     xai: "XAI_API_KEY",
     openrouter: "OPENROUTER_API_KEY",
+    minimax: "MINIMAX_API_KEY",
     zai: "ZAI_API_KEY",
     mistral: "MISTRAL_API_KEY",
   };
