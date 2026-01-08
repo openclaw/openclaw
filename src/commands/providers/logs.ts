@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 
 import { getResolvedLoggerSettings } from "../../logging.js";
-import { theme } from "../../terminal/theme.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { theme } from "../../terminal/theme.js";
 
 export type ProvidersLogsOptions = {
   provider?: string;
@@ -128,7 +128,8 @@ export async function providersLogsCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const provider = parseProviderFilter(opts.provider);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
+  const limitRaw =
+    typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
   const limit =
     typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
       ? Math.floor(limitRaw)

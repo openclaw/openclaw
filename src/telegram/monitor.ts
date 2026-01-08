@@ -57,11 +57,7 @@ const isGetUpdatesConflict = (err: unknown) => {
   };
   const errorCode = typed.error_code ?? typed.errorCode;
   if (errorCode !== 409) return false;
-  const haystack = [
-    typed.method,
-    typed.description,
-    typed.message,
-  ]
+  const haystack = [typed.method, typed.description, typed.message]
     .filter((value): value is string => typeof value === "string")
     .join(" ")
     .toLowerCase();

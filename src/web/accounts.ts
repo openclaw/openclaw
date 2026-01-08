@@ -18,7 +18,6 @@ export type ResolvedWhatsAppAccount = {
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
-  dmPolicy?: WhatsAppAccountConfig["dmPolicy"];
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
@@ -118,7 +117,6 @@ export function resolveWhatsAppAccount(params: {
     groupAllowFrom:
       accountCfg?.groupAllowFrom ?? params.cfg.whatsapp?.groupAllowFrom,
     groupPolicy: accountCfg?.groupPolicy ?? params.cfg.whatsapp?.groupPolicy,
-    dmPolicy: accountCfg?.dmPolicy ?? params.cfg.whatsapp?.dmPolicy,
     textChunkLimit:
       accountCfg?.textChunkLimit ?? params.cfg.whatsapp?.textChunkLimit,
     groups: accountCfg?.groups ?? params.cfg.whatsapp?.groups,
