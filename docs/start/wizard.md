@@ -56,7 +56,9 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Full reset (also removes workspace)
 
 2) **Model/Auth**
+   - **Anthropic OAuth (Claude CLI)**: if `~/.claude/.credentials.json` exists, the wizard can reuse it.
    - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
+   - **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
    - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
      - Sets `agent.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
    - **API key**: stores the key for you.
@@ -64,6 +66,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **Skip**: no auth configured yet.
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
   - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
+   - More detail: [/concepts/oauth](/concepts/oauth)
 
 3) **Workspace**
    - Default `~/clawd` (configurable).

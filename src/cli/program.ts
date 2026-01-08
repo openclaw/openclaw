@@ -232,7 +232,7 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: oauth|openai-codex|antigravity|apiKey|minimax|skip",
+      "Auth: oauth|claude-cli|openai-codex|codex-cli|antigravity|apiKey|minimax|skip",
     )
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--gateway-port <port>", "Gateway port")
@@ -259,7 +259,9 @@ export function buildProgram() {
             mode: opts.mode as "local" | "remote" | undefined,
             authChoice: opts.authChoice as
               | "oauth"
+              | "claude-cli"
               | "openai-codex"
+              | "codex-cli"
               | "antigravity"
               | "apiKey"
               | "minimax"

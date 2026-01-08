@@ -339,6 +339,8 @@ Fix: either provide Google auth, or remove/avoid Google models in `agent.model.f
 
 ## Auth profiles: what they are and how to manage them
 
+Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-account patterns, CLI sync)
+
 ### What is an auth profile?
 
 An auth profile is a named credential record (OAuth or API key) tied to a provider. Profiles live in:

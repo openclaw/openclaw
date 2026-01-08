@@ -116,6 +116,8 @@ Env var equivalent:
 Clawdbot stores **per-agent** auth profiles (OAuth + API keys) in:
 - `<agentDir>/auth-profiles.json` (default: `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`)
 
+See also: [/concepts/oauth](/concepts/oauth)
+
 Legacy OAuth imports:
 - `~/.clawdbot/credentials/oauth.json` (or `$CLAWDBOT_STATE_DIR/credentials/oauth.json`)
 
@@ -130,6 +132,10 @@ Overrides:
 - Agent dir (default agent root override): `CLAWDBOT_AGENT_DIR` (preferred), `PI_CODING_AGENT_DIR` (legacy)
 
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
+
+Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
+- `~/.claude/.credentials.json` (Claude Code) → `anthropic:claude-cli`
+- `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
 
 ### `auth`
 
