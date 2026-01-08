@@ -61,6 +61,10 @@ import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
+import {
+  getDiscordGatewayEmitter,
+  waitForDiscordGatewayStop,
+} from "./monitor.gateway.js";
 import { fetchDiscordApplicationId } from "./probe.js";
 import { reactMessageDiscord, sendMessageDiscord } from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
@@ -402,18 +406,19 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   runtime.log?.(`logged in to discord${botUserId ? ` as ${botUserId}` : ""}`);
 
-  await new Promise<void>((resolve) => {
-    const onAbort = async () => {
-      try {
-        const gateway = client.getPlugin<GatewayPlugin>("gateway");
-        gateway?.disconnect();
-      } finally {
-        resolve();
-      }
-    };
-    opts.abortSignal?.addEventListener("abort", () => {
-      void onAbort();
-    });
+  const gateway = client.getPlugin<GatewayPlugin>("gateway");
+  const gatewayEmitter = getDiscordGatewayEmitter(gateway);
+  await waitForDiscordGatewayStop({
+    gateway: gateway
+      ? {
+          emitter: gatewayEmitter,
+          disconnect: () => gateway.disconnect(),
+        }
+      : undefined,
+    abortSignal: opts.abortSignal,
+    onGatewayError: (err) => {
+      runtime.error?.(danger(`discord gateway error: ${String(err)}`));
+    },
   });
 }
 
