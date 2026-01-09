@@ -49,6 +49,13 @@ import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { toLocationContext } from "../providers/location.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
+import {
+  buildAgentMainSessionKey,
+  buildAgentPeerSessionKey,
+  DEFAULT_MAIN_KEY,
+  normalizeAgentId,
+  normalizeId,
+} from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
@@ -1451,6 +1458,55 @@ export async function monitorWebProvider(
             );
             return;
           }
+        }
+
+        // Check for broadcast groups
+        const broadcastAgents = cfg.routing?.broadcast?.[peerId];
+        if (
+          broadcastAgents &&
+          Array.isArray(broadcastAgents) &&
+          broadcastAgents.length > 0
+        ) {
+          const strategy = cfg.routing?.broadcast?.strategy || "parallel";
+          whatsappInboundLog.info(
+            `Broadcasting message to ${broadcastAgents.length} agents (${strategy})`,
+          );
+
+          const processForAgent = (agentId: string) => {
+            const normalizedAgentId = normalizeAgentId(agentId);
+            const agentRoute = {
+              ...route,
+              agentId: normalizedAgentId,
+              sessionKey: buildAgentPeerSessionKey({
+                agentId: normalizedAgentId,
+                mainKey: DEFAULT_MAIN_KEY,
+                provider: "whatsapp",
+                peerKind: msg.chatType === "group" ? "group" : "dm",
+                peerId: normalizeId(peerId),
+              }),
+              mainSessionKey: buildAgentMainSessionKey({
+                agentId: normalizedAgentId,
+                mainKey: DEFAULT_MAIN_KEY,
+              }),
+            };
+
+            return processMessage(msg, agentRoute).catch((err) => {
+              whatsappInboundLog.error(
+                `Broadcast agent ${agentId} failed: ${formatError(err)}`,
+              );
+            });
+          };
+
+          if (strategy === "sequential") {
+            for (const agentId of broadcastAgents) {
+              await processForAgent(agentId);
+            }
+          } else {
+            // Parallel processing (default)
+            await Promise.allSettled(broadcastAgents.map(processForAgent));
+          }
+
+          return;
         }
 
         return processMessage(msg, route);
