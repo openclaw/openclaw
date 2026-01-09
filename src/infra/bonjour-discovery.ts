@@ -281,15 +281,7 @@ async function discoverWideAreaViaTailnetDns(
     const instanceName = ptrName.replace(/\.?_clawdbot-bridge\._tcp\..*$/, "");
 
     const srv = await run(
-      [
-        "dig",
-        "+short",
-        "+time=1",
-        "+tries=1",
-        nameserverArg,
-        ptrName,
-        "SRV",
-      ],
+      ["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "SRV"],
       { timeoutMs: Math.max(1, Math.min(350, budget)) },
     ).catch(() => null);
     const srvParsed = srv ? parseDigSrv(srv.stdout) : null;
@@ -308,15 +300,7 @@ async function discoverWideAreaViaTailnetDns(
     }
 
     const txt = await run(
-      [
-        "dig",
-        "+short",
-        "+time=1",
-        "+tries=1",
-        nameserverArg,
-        ptrName,
-        "TXT",
-      ],
+      ["dig", "+short", "+time=1", "+tries=1", nameserverArg, ptrName, "TXT"],
       { timeoutMs: Math.max(1, Math.min(350, txtBudget)) },
     ).catch(() => null);
     const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
