@@ -68,7 +68,7 @@ import { resolveWhatsAppAccount } from "./accounts.js";
 import { setActiveWebListener } from "./active-listener.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
-import { sendMessageWhatsApp } from "./outbound.js";
+import { sendMessageWhatsApp, sendReactionWhatsApp } from "./outbound.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -1385,6 +1385,45 @@ export async function monitorWebProvider(
 
       if (shouldClearGroupHistory && didSendReply) {
         groupHistories.set(groupHistoryKey, []);
+      }
+
+      // Send ack reaction after successful reply
+      const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
+      const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+      const shouldAckReaction = () => {
+        if (!ackReaction) return false;
+        if (!msg.id) return false;
+        if (!didSendReply) return false;
+        if (ackReactionScope === "all") return true;
+        if (ackReactionScope === "direct") return msg.chatType === "direct";
+        if (ackReactionScope === "group-all") return msg.chatType === "group";
+        if (ackReactionScope === "group-mentions") {
+          if (msg.chatType !== "group") return false;
+          const activation = resolveGroupActivationFor({
+            agentId: route.agentId,
+            sessionKey: route.sessionKey,
+            conversationId,
+          });
+          const requireMention = activation !== "always";
+          if (!requireMention) return false;
+          return msg.wasMentioned === true;
+        }
+        return false;
+      };
+
+      if (shouldAckReaction() && msg.id) {
+        sendReactionWhatsApp(msg.chatId, msg.id, ackReaction, {
+          verbose,
+          fromMe: false,
+        }).catch((err) => {
+          replyLogger.warn(
+            { error: formatError(err), chatId: msg.chatId, messageId: msg.id },
+            "failed to send ack reaction",
+          );
+          logVerbose(
+            `WhatsApp ack reaction failed for chat ${msg.chatId}: ${formatError(err)}`,
+          );
+        });
       }
 
       return didSendReply;
