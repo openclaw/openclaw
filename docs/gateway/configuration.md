@@ -1884,10 +1884,24 @@ Gmail helper config (used by `clawdbot hooks gmail setup` / `run`):
       renewEveryMinutes: 720,
       serve: { bind: "127.0.0.1", port: 8788, path: "/" },
       tailscale: { mode: "funnel", path: "/gmail-pubsub" },
+
+      // Optional: use a cheaper model for Gmail hook processing
+      // Falls back to agents.defaults.model.fallbacks, then primary, on auth/rate-limit/timeout
+      model: "openrouter/meta-llama/llama-3.3-70b-instruct:free",
+      // Optional: default thinking level for Gmail hooks
+      thinking: "off",
     }
   }
 }
 ```
+
+Model override for Gmail hooks:
+- `hooks.gmail.model` specifies a model to use for Gmail hook processing (defaults to session primary).
+- Accepts `provider/model` refs or aliases from `agents.defaults.models`.
+- Falls back to `agents.defaults.model.fallbacks`, then `agents.defaults.model.primary`, on auth/rate-limit/timeouts.
+- If `agents.defaults.models` is set, include the hooks model in the allowlist.
+- At startup, warns if the configured model is not in the model catalog or allowlist.
+- `hooks.gmail.thinking` sets the default thinking level for Gmail hooks and is overridden by per-hook `thinking`.
 
 Gateway auto-start:
 - If `hooks.enabled=true` and `hooks.gmail.account` is set, the Gateway starts

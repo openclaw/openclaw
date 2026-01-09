@@ -911,6 +911,16 @@ const HooksGmailSchema = z
         path: z.string().optional(),
       })
       .optional(),
+    model: z.string().optional(),
+    thinking: z
+      .union([
+        z.literal("off"),
+        z.literal("minimal"),
+        z.literal("low"),
+        z.literal("medium"),
+        z.literal("high"),
+      ])
+      .optional(),
   })
   .optional();
 

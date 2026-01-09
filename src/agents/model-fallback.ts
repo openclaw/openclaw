@@ -4,8 +4,13 @@ import {
   buildModelAliasIndex,
   modelKey,
   parseModelRef,
+  resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import {
+  isAuthErrorMessage,
+  isRateLimitErrorMessage,
+} from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -27,6 +32,59 @@ function isAbortError(err: unknown): boolean {
       ? err.message.toLowerCase()
       : "";
   return message.includes("aborted");
+}
+
+function getStatusCode(err: unknown): number | null {
+  if (!err || typeof err !== "object") return null;
+  const candidate =
+    (err as { status?: unknown; statusCode?: unknown }).status ??
+    (err as { statusCode?: unknown }).statusCode;
+  if (typeof candidate === "number") return candidate;
+  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
+    return Number(candidate);
+  }
+  return null;
+}
+
+function getErrorCode(err: unknown): string {
+  if (!err || typeof err !== "object") return "";
+  const candidate = (err as { code?: unknown }).code;
+  return typeof candidate === "string" ? candidate : "";
+}
+
+function getErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err ?? "");
+}
+
+function isTimeoutErrorMessage(raw: string): boolean {
+  const value = raw.toLowerCase();
+  return (
+    value.includes("timeout") ||
+    value.includes("timed out") ||
+    value.includes("deadline exceeded") ||
+    value.includes("context deadline exceeded")
+  );
+}
+
+function shouldFallbackForError(err: unknown): boolean {
+  const statusCode = getStatusCode(err);
+  if (statusCode && [401, 403, 429].includes(statusCode)) return true;
+  const code = getErrorCode(err).toUpperCase();
+  if (
+    ["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(
+      code,
+    )
+  ) {
+    return true;
+  }
+  const message = getErrorMessage(err);
+  if (!message) return false;
+  return (
+    isAuthErrorMessage(message) ||
+    isRateLimitErrorMessage(message) ||
+    isTimeoutErrorMessage(message)
+  );
 }
 
 function buildAllowedModelKeys(
@@ -119,6 +177,13 @@ function resolveFallbackCandidates(params: {
 }): ModelCandidate[] {
   const provider = params.provider.trim() || DEFAULT_PROVIDER;
   const model = params.model.trim() || DEFAULT_MODEL;
+  const primary = params.cfg
+    ? resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+        defaultModel: DEFAULT_MODEL,
+      })
+    : null;
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg ?? {},
     defaultProvider: DEFAULT_PROVIDER,
@@ -160,6 +225,10 @@ function resolveFallbackCandidates(params: {
     addCandidate(resolved.ref, true);
   }
 
+  if (primary?.provider && primary.model) {
+    addCandidate({ provider: primary.provider, model: primary.model }, false);
+  }
+
   return candidates;
 }
 
@@ -197,6 +266,8 @@ export async function runWithModelFallback<T>(params: {
       };
     } catch (err) {
       if (isAbortError(err)) throw err;
+      const shouldFallback = shouldFallbackForError(err);
+      if (!shouldFallback) throw err;
       lastError = err;
       attempts.push({
         provider: candidate.provider,
