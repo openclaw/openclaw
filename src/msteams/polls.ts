@@ -232,13 +232,23 @@ export function buildMSTeamsPollCard(params: {
   };
 }
 
-function resolveStorePath(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir?: () => string,
-): string {
-  const stateDir = homedir
-    ? resolveStateDir(env, homedir)
-    : resolveStateDir(env);
+export type MSTeamsPollStoreFsOptions = {
+  env?: NodeJS.ProcessEnv;
+  homedir?: () => string;
+  stateDir?: string;
+  storePath?: string;
+};
+
+function resolveStorePath(params?: MSTeamsPollStoreFsOptions): string {
+  if (params?.storePath) {
+    return params.storePath;
+  }
+  if (params?.stateDir) {
+    return path.join(params.stateDir, STORE_FILENAME);
+  }
+  const stateDir = params?.homedir
+    ? resolveStateDir(params.env ?? process.env, params.homedir)
+    : resolveStateDir(params?.env ?? process.env);
   return path.join(stateDir, STORE_FILENAME);
 }
 
@@ -336,7 +346,10 @@ function pruneToLimit(polls: Record<string, MSTeamsPoll>) {
   return Object.fromEntries(keep);
 }
 
-function normalizePollSelections(poll: MSTeamsPoll, selections: string[]) {
+export function normalizeMSTeamsPollSelections(
+  poll: MSTeamsPoll,
+  selections: string[],
+) {
   const maxSelections = Math.max(1, poll.maxSelections);
   const mapped = selections
     .map((entry) => Number.parseInt(entry, 10))
@@ -348,11 +361,10 @@ function normalizePollSelections(poll: MSTeamsPoll, selections: string[]) {
   return Array.from(new Set(limited));
 }
 
-export function createMSTeamsPollStoreFs(params?: {
-  env?: NodeJS.ProcessEnv;
-  homedir?: () => string;
-}): MSTeamsPollStore {
-  const filePath = resolveStorePath(params?.env, params?.homedir);
+export function createMSTeamsPollStoreFs(
+  params?: MSTeamsPollStoreFsOptions,
+): MSTeamsPollStore {
+  const filePath = resolveStorePath(params);
   const empty: PollStoreData = { version: 1, polls: {} };
 
   const readStore = async (): Promise<PollStoreData> => {
@@ -388,7 +400,10 @@ export function createMSTeamsPollStoreFs(params?: {
       const data = await readStore();
       const poll = data.polls[params.pollId];
       if (!poll) return null;
-      const normalized = normalizePollSelections(poll, params.selections);
+      const normalized = normalizeMSTeamsPollSelections(
+        poll,
+        params.selections,
+      );
       poll.votes[params.voterId] = normalized;
       poll.updatedAt = new Date().toISOString();
       data.polls[poll.id] = poll;

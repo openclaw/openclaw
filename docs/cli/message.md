@@ -155,6 +155,20 @@ clawdbot message poll --provider discord \
   --poll-multi --poll-duration-hours 48
 ```
 
+Send a Teams proactive message:
+```
+clawdbot message send --provider msteams \
+  --to conversation:19:abc@thread.tacv2 --message "hi"
+```
+
+Create a Teams poll:
+```
+clawdbot message poll --provider msteams \
+  --to conversation:19:abc@thread.tacv2 \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi
+```
+
 React in Slack:
 ```
 clawdbot message react --provider slack \
