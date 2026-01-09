@@ -47,11 +47,11 @@ export function resolveMessagePrefix(
 
 export function resolveResponsePrefix(
   cfg: ClawdbotConfig,
-  agentId: string,
+  _agentId: string,
 ): string | undefined {
   const configured = cfg.messages?.responsePrefix;
   if (configured !== undefined) return configured;
-  return resolveIdentityNamePrefix(cfg, agentId);
+  return undefined;
 }
 
 export function resolveEffectiveMessagesConfig(

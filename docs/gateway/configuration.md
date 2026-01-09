@@ -937,8 +937,7 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 `responsePrefix` is applied to **all outbound replies** (tool summaries, block
 streaming, final replies) across providers unless already present.
 
-If `messages.responsePrefix` is unset and the routed agent has `identity.name`
-set, Clawdbot defaults the prefix to `[{identity.name}]`.
+If `messages.responsePrefix` is unset, no prefix is applied by default.
 
 If `messages.messagePrefix` is unset, the default stays **unchanged**:
 `"[clawdbot]"` when `whatsapp.allowFrom` is empty, otherwise `""` (no prefix).

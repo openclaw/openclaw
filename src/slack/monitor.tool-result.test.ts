@@ -154,7 +154,7 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
   });
 
-  it("derives responsePrefix from routed agent identity when unset", async () => {
+  it("does not derive responsePrefix from routed agent identity when unset", async () => {
     config = {
       agents: {
         list: [
@@ -214,8 +214,8 @@ describe("monitorSlackProvider tool results", () => {
     await run;
 
     expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(sendMock.mock.calls[0][1]).toBe("[Richbot] tool update");
-    expect(sendMock.mock.calls[1][1]).toBe("[Richbot] final reply");
+    expect(sendMock.mock.calls[0][1]).toBe("tool update");
+    expect(sendMock.mock.calls[1][1]).toBe("final reply");
   });
 
   it("updates assistant thread status when replies start", async () => {

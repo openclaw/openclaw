@@ -99,7 +99,7 @@ describe("routeReply", () => {
     );
   });
 
-  it("derives responsePrefix from agent identity when routing", async () => {
+  it("does not derive responsePrefix from agent identity when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {
       agents: {
@@ -121,7 +121,7 @@ describe("routeReply", () => {
     });
     expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
       "channel:C123",
-      "[Richbot] hi",
+      "hi",
       expect.any(Object),
     );
   });

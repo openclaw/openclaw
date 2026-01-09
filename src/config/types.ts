@@ -932,7 +932,7 @@ export type AudioConfig = {
 
 export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[{agents.list[].identity.name}]" or "[clawdbot]" if no allowFrom, else "")
-  responsePrefix?: string; // Prefix auto-added to all outbound replies (default: "[{agents.list[].identity.name}]" when set, else none)
+  responsePrefix?: string; // Prefix auto-added to all outbound replies (default: none)
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */

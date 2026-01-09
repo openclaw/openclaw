@@ -2022,7 +2022,7 @@ describe("web auto-reply", () => {
     resetLoadConfigMock();
   });
 
-  it("uses identity.name for responsePrefix when set", async () => {
+  it("does not derive responsePrefix from identity.name when unset", async () => {
     setLoadConfigMock(() => ({
       agents: {
         list: [
@@ -2076,8 +2076,8 @@ describe("web auto-reply", () => {
       sendMedia: vi.fn(),
     });
 
-    // Reply should have identity-based responsePrefix prepended
-    expect(reply).toHaveBeenCalledWith("[Richbot] hello there");
+    // No implicit responsePrefix.
+    expect(reply).toHaveBeenCalledWith("hello there");
     resetLoadConfigMock();
   });
 });
