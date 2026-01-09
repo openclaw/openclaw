@@ -130,6 +130,7 @@
 - Dev templates: ship C-3PO dev workspace defaults as docs templates and use them for dev bootstrap. — thanks @steipete
 - Config: fix Minimax hosted onboarding to write `agents.defaults` and allow `msteams` as a heartbeat target. — thanks @steipete
 - Discord: add channel/category management actions (create/edit/move/delete + category removal). (#487) - thanks @NicholasSpisak
+- Discord: reject ambiguous bare numeric IDs in DM sends with clear guidance on `user:<id>` vs `channel:<id>` prefixes (fixes "Unknown Channel" error when DMing by user ID). (#596) — thanks @magimetal
 
 ## 2026.1.8
 
