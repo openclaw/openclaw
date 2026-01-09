@@ -216,8 +216,7 @@ export async function maybeRepairGatewayServiceConfig(
   ) {
     audit.issues.push({
       code: SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
-      message:
-        "Gateway service entrypoint does not match the current install.",
+      message: "Gateway service entrypoint does not match the current install.",
       detail: `${currentEntrypoint} -> ${expectedEntrypoint}`,
       level: "recommended",
     });
