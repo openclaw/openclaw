@@ -92,6 +92,31 @@ It also warns if your configured model is unknown or missing auth.
 
 Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
 
+### Can I switch between npm and git installs later?
+
+Yes. Install the other flavor, then run Doctor so the gateway service points at the new entrypoint.
+
+From npm → git:
+
+```bash
+git clone https://github.com/clawdbot/clawdbot.git
+cd clawdbot
+pnpm install
+pnpm build
+pnpm clawdbot doctor
+clawdbot daemon restart
+```
+
+From git → npm:
+
+```bash
+npm install -g clawdbot@latest
+clawdbot doctor
+clawdbot daemon restart
+```
+
+Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
+
 ### Is there a dedicated sandboxing doc?
 
 Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).

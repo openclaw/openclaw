@@ -112,6 +112,8 @@ clawdbot providers login
 clawdbot gateway --port 18789
 ```
 
+Switching between npm and git installs later is easy: install the other flavor and run `clawdbot doctor` to update the gateway service entrypoint.
+
 From source (development):
 
 ```bash
