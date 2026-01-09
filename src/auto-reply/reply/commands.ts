@@ -557,8 +557,6 @@ export async function handleCommands(params: {
       command,
       provider: command.provider,
       sessionEntry,
-    });
-      sessionEntry,
       sessionKey,
       sessionScope,
       provider,
