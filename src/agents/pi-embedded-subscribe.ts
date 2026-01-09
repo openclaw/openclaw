@@ -368,6 +368,7 @@ export function subscribeEmbeddedPiSession(params: {
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
   const toolSummaryById = new Set<string>();
+  const toolEventById = new Set<string>();
   const blockReplyBreak = params.blockReplyBreak ?? "text_end";
   const reasoningMode = params.reasoningMode ?? "off";
   const includeReasoning = reasoningMode === "on";
@@ -589,6 +590,7 @@ export function subscribeEmbeddedPiSession(params: {
     toolMetas.length = 0;
     toolMetaById.clear();
     toolSummaryById.clear();
+    toolEventById.clear();
     messagingToolSentTexts.length = 0;
     messagingToolSentTargets.length = 0;
     pendingMessagingTexts.clear();
@@ -639,16 +641,20 @@ export function subscribeEmbeddedPiSession(params: {
           `embedded run tool start: runId=${params.runId} tool=${toolName} toolCallId=${toolCallId}`,
         );
 
-        emitAgentEvent({
-          runId: params.runId,
-          stream: "tool",
-          data: {
-            phase: "start",
-            name: toolName,
-            toolCallId,
-            args: args as Record<string, unknown>,
-          },
-        });
+        const shouldEmitToolEvents = shouldEmitToolResult();
+        if (shouldEmitToolEvents) {
+          toolEventById.add(toolCallId);
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "start",
+              name: toolName,
+              toolCallId,
+              args: args as Record<string, unknown>,
+            },
+          });
+        }
         params.onAgentEvent?.({
           stream: "tool",
           data: { phase: "start", name: toolName, toolCallId },
@@ -656,7 +662,7 @@ export function subscribeEmbeddedPiSession(params: {
 
         if (
           params.onToolResult &&
-          shouldEmitToolResult() &&
+          shouldEmitToolEvents &&
           !toolSummaryById.has(toolCallId)
         ) {
           toolSummaryById.add(toolCallId);
@@ -704,16 +710,18 @@ export function subscribeEmbeddedPiSession(params: {
         const partial = (evt as AgentEvent & { partialResult?: unknown })
           .partialResult;
         const sanitized = sanitizeToolResult(partial);
-        emitAgentEvent({
-          runId: params.runId,
-          stream: "tool",
-          data: {
-            phase: "update",
-            name: toolName,
-            toolCallId,
-            partialResult: sanitized,
-          },
-        });
+        if (toolEventById.has(toolCallId)) {
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "update",
+              name: toolName,
+              toolCallId,
+              partialResult: sanitized,
+            },
+          });
+        }
         params.onAgentEvent?.({
           stream: "tool",
           data: {
@@ -760,18 +768,22 @@ export function subscribeEmbeddedPiSession(params: {
           }
         }
 
-        emitAgentEvent({
-          runId: params.runId,
-          stream: "tool",
-          data: {
-            phase: "result",
-            name: toolName,
-            toolCallId,
-            meta,
-            isError,
-            result: sanitizedResult,
-          },
-        });
+        const shouldEmitToolEvents = toolEventById.has(toolCallId);
+        if (shouldEmitToolEvents) {
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: toolName,
+              toolCallId,
+              meta,
+              isError,
+              result: sanitizedResult,
+            },
+          });
+        }
+        toolEventById.delete(toolCallId);
         params.onAgentEvent?.({
           stream: "tool",
           data: {

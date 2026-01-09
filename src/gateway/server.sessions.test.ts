@@ -143,7 +143,7 @@ describe("gateway server sessions", () => {
     const patched = await rpcReq<{ ok: true; key: string }>(
       ws,
       "sessions.patch",
-      { key: "agent:main:main", thinkingLevel: "medium", verboseLevel: null },
+      { key: "agent:main:main", thinkingLevel: "medium", verboseLevel: "off" },
     );
     expect(patched.ok).toBe(true);
     expect(patched.payload?.ok).toBe(true);
@@ -186,12 +186,31 @@ describe("gateway server sessions", () => {
       (s) => s.key === "agent:main:main",
     );
     expect(main2?.thinkingLevel).toBe("medium");
-    expect(main2?.verboseLevel).toBeUndefined();
+    expect(main2?.verboseLevel).toBe("off");
     expect(main2?.sendPolicy).toBe("deny");
     const subagent = list2.payload?.sessions.find(
       (s) => s.key === "agent:main:subagent:one",
     );
     expect(subagent?.label).toBe("Briefing");
+
+    const clearedVerbose = await rpcReq<{ ok: true; key: string }>(
+      ws,
+      "sessions.patch",
+      { key: "agent:main:main", verboseLevel: null },
+    );
+    expect(clearedVerbose.ok).toBe(true);
+
+    const list3 = await rpcReq<{
+      sessions: Array<{
+        key: string;
+        verboseLevel?: string;
+      }>;
+    }>(ws, "sessions.list", {});
+    expect(list3.ok).toBe(true);
+    const main3 = list3.payload?.sessions.find(
+      (s) => s.key === "agent:main:main",
+    );
+    expect(main3?.verboseLevel).toBeUndefined();
 
     const listByLabel = await rpcReq<{
       sessions: Array<{ key: string }>;
