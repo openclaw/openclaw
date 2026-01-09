@@ -411,7 +411,7 @@ Options:
 - `--tailscale-reset-on-exit`
 - `--allow-unconfigured`
 - `--dev`
-- `--reset`
+- `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
 - `--ws-log <auto|full|compact>`

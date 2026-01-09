@@ -5,7 +5,7 @@ import path from "node:path";
 import type { Command } from "commander";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { gatewayStatusCommand } from "../commands/gateway-status.js";
-import { moveToTrash } from "../commands/onboard-helpers.js";
+import { handleReset } from "../commands/onboard-helpers.js";
 import {
   CONFIG_PATH_CLAWDBOT,
   type GatewayAuthMode,
@@ -165,15 +165,14 @@ async function ensureDevWorkspace(dir: string) {
 }
 
 async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
-  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
-  if (opts.reset && configExists) {
-    await moveToTrash(CONFIG_PATH_CLAWDBOT, defaultRuntime);
+  const workspace = resolveDevWorkspaceDir();
+  if (opts.reset) {
+    await handleReset("full", workspace, defaultRuntime);
   }
 
-  const shouldWrite = opts.reset || !configExists;
-  if (!shouldWrite) return;
+  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
+  if (!opts.reset && configExists) return;
 
-  const workspace = resolveDevWorkspaceDir();
   await writeConfigFile({
     gateway: {
       mode: "local",
@@ -814,7 +813,11 @@ function addGatewayRunCommand(
       "Create a dev config + workspace if missing (no BOOTSTRAP.md)",
       false,
     )
-    .option("--reset", "Recreate dev config (requires --dev)", false)
+    .option(
+      "--reset",
+      "Reset dev config + credentials + sessions + workspace (requires --dev)",
+      false,
+    )
     .option(
       "--force",
       "Kill any existing listener on the target port before starting",
@@ -986,6 +989,7 @@ export function registerGatewayCli(program: Command) {
             label: "Scanning for gateways…",
             indeterminate: true,
             enabled: opts.json !== true,
+            delayMs: 0,
           },
           async () => await discoverGatewayBeacons({ timeoutMs }),
         );
