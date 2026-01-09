@@ -64,7 +64,8 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
         vi.mocked(abortEmbeddedPiRun).mockClear();
         return await fn(home);
       } finally {
-        if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
+        if (previousStateDir === undefined)
+          delete process.env.CLAWDBOT_STATE_DIR;
         else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
         if (previousClawdisStateDir === undefined)
           delete process.env.CLAWDIS_STATE_DIR;
