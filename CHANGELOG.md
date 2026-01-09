@@ -37,6 +37,7 @@
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
 - Status: compact /status with session token usage + estimated cost, add `/cost` per-response usage lines (tokens-only for OAuth).
 - Status: show active auth profile and key snippet in /status.
+- Status: show provider usage windows when auth uses token-based OAuth (e.g. Claude setup-token).
 - Agent: promote `<think>`/`<thinking>` tag reasoning into structured thinking blocks so `/reasoning` works consistently for OpenAI-compat providers.
 - macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj

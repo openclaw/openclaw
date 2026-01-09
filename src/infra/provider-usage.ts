@@ -106,6 +106,7 @@ type UsageSummaryOptions = {
   timeoutMs?: number;
   providers?: UsageProviderId[];
   auth?: ProviderAuth[];
+  agentDir?: string;
   fetch?: typeof fetch;
 };
 
@@ -670,9 +671,12 @@ function resolveZaiApiKey(): string | undefined {
 
 async function resolveOAuthToken(params: {
   provider: UsageProviderId;
+  agentDir?: string;
 }): Promise<ProviderAuth | null> {
   const cfg = loadConfig();
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
   const order = resolveAuthProfileOrder({
     cfg,
     store,
@@ -681,12 +685,15 @@ async function resolveOAuthToken(params: {
 
   for (const profileId of order) {
     const cred = store.profiles[profileId];
-    if (!cred || cred.type !== "oauth") continue;
+    if (!cred || (cred.type !== "oauth" && cred.type !== "token")) continue;
     try {
       const resolved = await resolveApiKeyForProfile({
-        cfg,
+        // Usage snapshots should work even if config profile metadata is stale.
+        // (e.g. config says api_key but the store has a token profile.)
+        cfg: undefined,
         store,
         profileId,
+        agentDir: params.agentDir,
       });
       if (!resolved?.apiKey) continue;
       let token = resolved.apiKey;
@@ -711,15 +718,20 @@ async function resolveOAuthToken(params: {
   return null;
 }
 
-function resolveOAuthProviders(): UsageProviderId[] {
-  const store = ensureAuthProfileStore();
+function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const cfg = loadConfig();
   const providers = usageProviders.filter((provider) => provider !== "zai");
+  const isOAuthLikeCredential = (id: string) => {
+    const cred = store.profiles[id];
+    return cred?.type === "oauth" || cred?.type === "token";
+  };
   return providers.filter((provider) => {
-    const profiles = listProfilesForProvider(store, provider).filter((id) => {
-      const cred = store.profiles[id];
-      return cred?.type === "oauth";
-    });
+    const profiles = listProfilesForProvider(store, provider).filter(
+      isOAuthLikeCredential,
+    );
     if (profiles.length > 0) return true;
     const normalized = normalizeProviderId(provider);
     const configuredProfiles = Object.entries(cfg.auth?.profiles ?? {})
@@ -727,7 +739,7 @@ function resolveOAuthProviders(): UsageProviderId[] {
         ([, profile]) => normalizeProviderId(profile.provider) === normalized,
       )
       .map(([id]) => id)
-      .filter((id) => store.profiles[id]?.type === "oauth");
+      .filter(isOAuthLikeCredential);
     return configuredProfiles.length > 0;
   });
 }
@@ -738,7 +750,7 @@ async function resolveProviderAuths(
   if (opts.auth) return opts.auth;
 
   const targetProviders = opts.providers ?? usageProviders;
-  const oauthProviders = resolveOAuthProviders();
+  const oauthProviders = resolveOAuthProviders(opts.agentDir);
   const auths: ProviderAuth[] = [];
 
   for (const provider of targetProviders) {
@@ -749,7 +761,7 @@ async function resolveProviderAuths(
     }
 
     if (!oauthProviders.includes(provider)) continue;
-    const auth = await resolveOAuthToken({ provider });
+    const auth = await resolveOAuthToken({ provider, agentDir: opts.agentDir });
     if (auth) auths.push(auth);
   }
 

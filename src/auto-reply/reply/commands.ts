@@ -1,4 +1,8 @@
 import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import {
   ensureAuthProfileStore,
   resolveAuthProfileDisplayLabel,
   resolveAuthProfileOrder,
@@ -16,6 +20,7 @@ import {
 } from "../../agents/pi-embedded.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
+  resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   type SessionEntry,
   type SessionScope,
@@ -134,6 +139,10 @@ export async function buildStatusReply(params: {
     );
     return undefined;
   }
+  const statusAgentId = sessionKey
+    ? resolveAgentIdFromSessionKey(sessionKey)
+    : resolveDefaultAgentId(cfg);
+  const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
   let usageLine: string | null = null;
   try {
     const usageProvider = resolveUsageProviderId(provider);
@@ -141,6 +150,7 @@ export async function buildStatusReply(params: {
       const usageSummary = await loadProviderUsageSummary({
         timeoutMs: 3500,
         providers: [usageProvider],
+        agentDir: statusAgentDir,
       });
       usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
     }
@@ -185,7 +195,12 @@ export async function buildStatusReply(params: {
     resolvedVerbose: resolvedVerboseLevel,
     resolvedReasoning: resolvedReasoningLevel,
     resolvedElevated: resolvedElevatedLevel,
-    modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry),
+    modelAuth: resolveModelAuthLabel(
+      provider,
+      cfg,
+      sessionEntry,
+      statusAgentDir,
+    ),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,
@@ -213,12 +228,15 @@ function resolveModelAuthLabel(
   provider?: string,
   cfg?: ClawdbotConfig,
   sessionEntry?: SessionEntry,
+  agentDir?: string,
 ): string | undefined {
   const resolved = provider?.trim();
   if (!resolved) return undefined;
 
   const providerKey = normalizeProviderId(resolved);
-  const store = ensureAuthProfileStore();
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const profileOverride = sessionEntry?.authProfileOverride?.trim();
   const order = resolveAuthProfileOrder({
     cfg,
