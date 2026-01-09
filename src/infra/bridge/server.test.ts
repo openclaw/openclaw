@@ -3,10 +3,10 @@ import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { approveNodePairing, listNodePairing } from "../node-pairing.js";
-import { startNodeBridgeServer } from "./server.js";
+import { configureNodeBridgeSocket, startNodeBridgeServer } from "./server.js";
 
 function createLineReader(socket: net.Socket) {
   let buffer = "";
@@ -68,6 +68,16 @@ describe("node bridge server", () => {
   afterAll(async () => {
     await fs.rm(baseDir, { recursive: true, force: true });
     delete process.env.CLAWDBOT_ENABLE_BRIDGE_IN_TESTS;
+  });
+
+  it("enables keepalive on sockets", () => {
+    const socket = {
+      setNoDelay: vi.fn(),
+      setKeepAlive: vi.fn(),
+    };
+    configureNodeBridgeSocket(socket);
+    expect(socket.setNoDelay).toHaveBeenCalledWith(true);
+    expect(socket.setKeepAlive).toHaveBeenCalledWith(true, 15_000);
   });
 
   it("rejects hello when not paired", async () => {
