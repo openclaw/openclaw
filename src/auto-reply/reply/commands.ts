@@ -1,6 +1,7 @@
 import {
   ensureAuthProfileStore,
-  listProfilesForProvider,
+  resolveAuthProfileDisplayLabel,
+  resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
 import {
   getCustomProviderApiKey,
@@ -92,32 +93,65 @@ export type CommandContext = {
   to?: string;
 };
 
+function formatApiKeySnippet(apiKey: string): string {
+  const compact = apiKey.replace(/\s+/g, "");
+  if (!compact) return "unknown";
+  const edge = compact.length >= 12 ? 6 : 4;
+  const head = compact.slice(0, edge);
+  const tail = compact.slice(-edge);
+  return `${head}…${tail}`;
+}
+
 function resolveModelAuthLabel(
   provider?: string,
   cfg?: ClawdbotConfig,
+  sessionEntry?: SessionEntry,
 ): string | undefined {
   const resolved = provider?.trim();
   if (!resolved) return undefined;
 
+  const providerKey = normalizeProviderId(resolved);
   const store = ensureAuthProfileStore();
-  const profiles = listProfilesForProvider(store, resolved);
-  if (profiles.length > 0) {
-    const modes = new Set(
-      profiles
-        .map((id) => store.profiles[id]?.type)
-        .filter((mode): mode is "api_key" | "oauth" => Boolean(mode)),
-    );
-    if (modes.has("oauth") && modes.has("api_key")) return "mixed";
-    if (modes.has("oauth")) return "oauth";
-    if (modes.has("api_key")) return "api-key";
+  const profileOverride = sessionEntry?.authProfileOverride?.trim();
+  const lastGood =
+    store.lastGood?.[providerKey] ?? store.lastGood?.[resolved];
+  const order = resolveAuthProfileOrder({
+    cfg,
+    store,
+    provider: providerKey,
+    preferredProfile: profileOverride,
+  });
+  const candidates = [
+    profileOverride,
+    lastGood,
+    ...order,
+  ].filter(Boolean) as string[];
+
+  for (const profileId of candidates) {
+    const profile = store.profiles[profileId];
+    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
+      continue;
+    }
+    const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
+    if (profile.type === "oauth") {
+      return `oauth${label ? ` (${label})` : ""}`;
+    }
+    const snippet = formatApiKeySnippet(profile.key);
+    return `api-key ${snippet}${label ? ` (${label})` : ""}`;
   }
 
-  const envKey = resolveEnvApiKey(resolved);
+  const envKey = resolveEnvApiKey(providerKey);
   if (envKey?.apiKey) {
-    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+    if (envKey.source.includes("OAUTH_TOKEN")) {
+      return `oauth (${envKey.source})`;
+    }
+    return `api-key ${formatApiKeySnippet(envKey.apiKey)} (${envKey.source})`;
   }
 
-  if (getCustomProviderApiKey(cfg, resolved)) return "api-key";
+  const customKey = getCustomProviderApiKey(cfg, providerKey);
+  if (customKey) {
+    return `api-key ${formatApiKeySnippet(customKey)} (models.json)`;
+  }
 
   return "unknown";
 }
@@ -469,7 +503,7 @@ export async function handleCommands(params: {
       resolvedVerbose: resolvedVerboseLevel,
       resolvedReasoning: resolvedReasoningLevel,
       resolvedElevated: resolvedElevatedLevel,
-      modelAuth: resolveModelAuthLabel(provider, cfg),
+      modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry),
       usageLine: usageLine ?? undefined,
       queue: {
         mode: queueSettings.mode,
