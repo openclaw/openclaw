@@ -976,6 +976,7 @@ export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
   effectiveModelDirective?: string;
   cfg: ClawdbotConfig;
+  agentDir?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -1009,6 +1010,7 @@ export async function persistInlineDirectives(params: {
     formatModelSwitchEvent,
     agentCfg,
   } = params;
+  const { agentDir } = params;
   let { provider, model } = params;
   const activeAgentId = sessionKey
     ? resolveAgentIdFromSessionKey(sessionKey)

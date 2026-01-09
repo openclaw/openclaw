@@ -45,6 +45,7 @@
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
+- Control UI: default to relative paths for control UI assets. (#569) — thanks @bjesuiter
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
 - Sessions: support session `label` in store/list/UI and allow `sessions_send` lookup by label. (#570) — thanks @azade-c
