@@ -331,12 +331,12 @@ describe("providers command", () => {
           accountId: "default",
           enabled: true,
           configured: true,
-          application: { intents: { messageContent: "limited" } },
+          application: { intents: { messageContent: "disabled" } },
         },
       ],
     });
     expect(lines.join("\n")).toMatch(/Warnings:/);
-    expect(lines.join("\n")).toMatch(/Message Content Intent is limited/i);
+    expect(lines.join("\n")).toMatch(/Message Content Intent is disabled/i);
     expect(lines.join("\n")).toMatch(/Run: clawdbot doctor/);
   });
 

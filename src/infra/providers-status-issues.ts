@@ -208,12 +208,13 @@ export function collectProvidersStatusIssues(
 
       const app = readDiscordApplicationSummary(account.application);
       const messageContent = app.intents?.messageContent;
-      if (messageContent && messageContent !== "enabled") {
+      if (messageContent === "disabled") {
         issues.push({
           provider: "discord",
           accountId,
           kind: "intent",
-          message: `Message Content Intent is ${messageContent}. Bot may not see normal channel messages.`,
+          message:
+            "Message Content Intent is disabled. Bot may not see normal channel messages.",
           fix: "Enable Message Content Intent in Discord Dev Portal → Bot → Privileged Gateway Intents, or require mention-only operation.",
         });
       }
