@@ -24,7 +24,7 @@ import {
 import { setVerbose } from "../globals.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
-import { createSubsystemLogger } from "../logging.js";
+import { createSubsystemLogger, setConsoleSubsystemFilter } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { forceFreePortAndWait } from "./ports.js";
 import { withProgress } from "./progress.js";
@@ -48,6 +48,7 @@ type GatewayRunOpts = {
   allowUnconfigured?: boolean;
   force?: boolean;
   verbose?: boolean;
+  claudeCliLogs?: boolean;
   wsLog?: unknown;
   compact?: boolean;
   rawStream?: boolean;
@@ -286,6 +287,10 @@ async function runGatewayCommand(
   }
 
   setVerbose(Boolean(opts.verbose));
+  if (opts.claudeCliLogs) {
+    setConsoleSubsystemFilter(["agent/claude-cli"]);
+    process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT = "1";
+  }
   const wsLogRaw = (opts.compact ? "compact" : opts.wsLog) as
     | string
     | undefined;
@@ -569,6 +574,11 @@ function addGatewayRunCommand(
       false,
     )
     .option("--verbose", "Verbose logging to stdout/stderr", false)
+    .option(
+      "--claude-cli-logs",
+      "Only show claude-cli logs in the console (includes stdout/stderr)",
+      false,
+    )
     .option(
       "--ws-log <style>",
       'WebSocket log style ("auto"|"full"|"compact")',

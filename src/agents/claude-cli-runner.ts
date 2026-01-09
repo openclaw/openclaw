@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import os from "node:os";
 
 import type { AgentTool } from "@mariozechner/pi-agent-core";
@@ -7,6 +8,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
+import { shouldLogVerbose } from "../globals.js";
 import {
   buildBootstrapContextFiles,
   type EmbeddedContextFile,
@@ -16,6 +18,20 @@ import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { loadWorkspaceBootstrapFiles } from "./workspace.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
+const CLAUDE_CLI_QUEUE_KEY = "global";
+const CLAUDE_CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
+
+function enqueueClaudeCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const prior = CLAUDE_CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
+  const chained = prior.catch(() => undefined).then(task);
+  const tracked = chained.finally(() => {
+    if (CLAUDE_CLI_RUN_QUEUE.get(key) === tracked) {
+      CLAUDE_CLI_RUN_QUEUE.delete(key);
+    }
+  });
+  CLAUDE_CLI_RUN_QUEUE.set(key, tracked);
+  return chained;
+}
 
 type ClaudeCliUsage = {
   input?: number;
@@ -30,6 +46,15 @@ type ClaudeCliOutput = {
   sessionId?: string;
   usage?: ClaudeCliUsage;
 };
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function normalizeClaudeSessionId(raw?: string): string {
+  const trimmed = raw?.trim();
+  if (trimmed && UUID_RE.test(trimmed)) return trimmed;
+  return crypto.randomUUID();
+}
 
 function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
@@ -207,7 +232,7 @@ async function runClaudeCliOnce(params: {
   modelId: string;
   systemPrompt: string;
   timeoutMs: number;
-  resumeSessionId?: string;
+  sessionId: string;
 }): Promise<ClaudeCliOutput> {
   const args = [
     "-p",
@@ -218,28 +243,74 @@ async function runClaudeCliOnce(params: {
     "--append-system-prompt",
     params.systemPrompt,
     "--dangerously-skip-permissions",
-    "--permission-mode",
-    "dontAsk",
-    "--tools",
-    "",
+    "--session-id",
+    params.sessionId,
   ];
-  if (params.resumeSessionId) {
-    args.push("--resume", params.resumeSessionId);
-  }
   args.push(params.prompt);
+
+  log.info(
+    `claude-cli exec: model=${normalizeClaudeCliModel(params.modelId)} promptChars=${params.prompt.length} systemPromptChars=${params.systemPrompt.length}`,
+  );
+  if (process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT === "1") {
+    const logArgs: string[] = [];
+    for (let i = 0; i < args.length; i += 1) {
+      const arg = args[i];
+      if (arg === "--append-system-prompt") {
+        logArgs.push(arg, `<systemPrompt:${params.systemPrompt.length} chars>`);
+        i += 1;
+        continue;
+      }
+      if (arg === "--session-id") {
+        logArgs.push(arg, args[i + 1] ?? "");
+        i += 1;
+        continue;
+      }
+      logArgs.push(arg);
+    }
+    const promptIndex = logArgs.indexOf(params.prompt);
+    if (promptIndex >= 0) {
+      logArgs[promptIndex] = `<prompt:${params.prompt.length} chars>`;
+    }
+    log.info(`claude-cli argv: claude ${logArgs.join(" ")}`);
+  }
 
   const result = await runCommandWithTimeout(["claude", ...args], {
     timeoutMs: params.timeoutMs,
     cwd: params.workspaceDir,
   });
+  if (process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT === "1") {
+    const stdoutDump = result.stdout.trim();
+    const stderrDump = result.stderr.trim();
+    if (stdoutDump) {
+      log.info(`claude-cli stdout:\n${stdoutDump}`);
+    }
+    if (stderrDump) {
+      log.info(`claude-cli stderr:\n${stderrDump}`);
+    }
+  }
   const stdout = result.stdout.trim();
+  const logOutputText = process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT === "1";
+  if (shouldLogVerbose()) {
+    if (stdout) {
+      log.debug(`claude-cli stdout:\n${stdout}`);
+    }
+    if (result.stderr.trim()) {
+      log.debug(`claude-cli stderr:\n${result.stderr.trim()}`);
+    }
+  }
   if (result.code !== 0) {
     const err = result.stderr.trim() || stdout || "Claude CLI failed.";
     throw new Error(err);
   }
   const parsed = parseClaudeCliJson(stdout);
-  if (parsed) return parsed;
-  return { text: stdout };
+  const output = parsed ?? { text: stdout };
+  if (logOutputText) {
+    const text = output.text?.trim();
+    if (text) {
+      log.info(`claude-cli output:\n${text}`);
+    }
+  }
+  return output;
 }
 
 export async function runClaudeCliAgent(params: {
@@ -256,7 +327,7 @@ export async function runClaudeCliAgent(params: {
   runId: string;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
-  resumeSessionId?: string;
+  claudeSessionId?: string;
 }): Promise<EmbeddedPiRunResult> {
   const started = Date.now();
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
@@ -285,29 +356,17 @@ export async function runClaudeCliAgent(params: {
     modelDisplay,
   });
 
-  let output: ClaudeCliOutput;
-  try {
-    output = await runClaudeCliOnce({
+  const claudeSessionId = normalizeClaudeSessionId(params.claudeSessionId);
+  const output = await enqueueClaudeCliRun(CLAUDE_CLI_QUEUE_KEY, () =>
+    runClaudeCliOnce({
       prompt: params.prompt,
       workspaceDir,
       modelId,
       systemPrompt,
       timeoutMs: params.timeoutMs,
-      resumeSessionId: params.resumeSessionId,
-    });
-  } catch (err) {
-    if (!params.resumeSessionId) throw err;
-    log.warn(
-      `claude-cli resume failed for ${params.resumeSessionId}; retrying without resume`,
-    );
-    output = await runClaudeCliOnce({
-      prompt: params.prompt,
-      workspaceDir,
-      modelId,
-      systemPrompt,
-      timeoutMs: params.timeoutMs,
-    });
-  }
+      sessionId: claudeSessionId,
+    }),
+  );
 
   const text = output.text?.trim();
   const payloads = text ? [{ text }] : undefined;
@@ -317,7 +376,7 @@ export async function runClaudeCliAgent(params: {
     meta: {
       durationMs: Date.now() - started,
       agentMeta: {
-        sessionId: output.sessionId ?? params.sessionId,
+        sessionId: output.sessionId ?? claudeSessionId,
         provider: params.provider ?? "claude-cli",
         model: modelId,
         usage: output.usage,

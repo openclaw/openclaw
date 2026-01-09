@@ -352,9 +352,9 @@ export async function runReplyAgent(params: {
               runId,
               extraSystemPrompt: followupRun.run.extraSystemPrompt,
               ownerNumbers: followupRun.run.ownerNumbers,
-              resumeSessionId:
-                sessionEntry?.claudeCliSessionId?.trim() || undefined,
-            })
+                claudeSessionId:
+                  sessionEntry?.claudeCliSessionId?.trim() || undefined,
+              })
               .then((result) => {
                 emitAgentEvent({
                   runId,
