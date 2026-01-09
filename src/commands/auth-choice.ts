@@ -36,6 +36,8 @@ import {
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
+  applyMinimaxApiConfig,
+  applyMinimaxApiProviderConfig,
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   applyMinimaxHostedProviderConfig,
@@ -628,6 +630,24 @@ export async function applyAuthChoice(params: {
       nextConfig = applyMinimaxProviderConfig(nextConfig);
       agentModelOverride = "lmstudio/minimax-m2.1-gs32";
       await noteAgentModel("lmstudio/minimax-m2.1-gs32");
+    }
+  } else if (params.authChoice === "minimax-api") {
+    const key = await params.prompter.text({
+      message: "Enter MiniMax API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setMinimaxApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyMinimaxApiConfig(nextConfig);
+    } else {
+      nextConfig = applyMinimaxApiProviderConfig(nextConfig);
+      agentModelOverride = "minimax/MiniMax-M2.1";
+      await noteAgentModel("minimax/MiniMax-M2.1");
     }
   }
 

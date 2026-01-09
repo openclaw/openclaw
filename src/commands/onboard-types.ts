@@ -16,6 +16,7 @@ export type AuthChoice =
   | "gemini-api-key"
   | "minimax-cloud"
   | "minimax"
+  | "minimax-api"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";

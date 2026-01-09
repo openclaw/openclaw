@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 
 const MINIMAX_KEY = process.env.MINIMAX_API_KEY ?? "";
 const MINIMAX_BASE_URL =
-  process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
+  process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/anthropic";
 const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
 const LIVE = process.env.MINIMAX_LIVE_TEST === "1" || process.env.LIVE === "1";
 
@@ -11,15 +11,16 @@ const describeLive = LIVE && MINIMAX_KEY ? describe : describe.skip;
 
 describeLive("minimax live", () => {
   it("returns assistant text", async () => {
-    const model: Model<"openai-completions"> = {
+    const model: Model<"anthropic-messages"> = {
       id: MINIMAX_MODEL,
       name: `MiniMax ${MINIMAX_MODEL}`,
-      api: "openai-completions",
+      api: "anthropic-messages",
       provider: "minimax",
       baseUrl: MINIMAX_BASE_URL,
-      reasoning: false,
+      reasoning: MINIMAX_MODEL === "MiniMax-M2",
       input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      // Pricing: placeholder values (per 1M tokens, multiplied by 1000 for display)
+      cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
       contextWindow: 200000,
       maxTokens: 8192,
     };
