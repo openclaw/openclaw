@@ -718,9 +718,7 @@ export async function setAuthProfileOrder(params: {
   const providerKey = normalizeProviderId(params.provider);
   const sanitized =
     params.order && Array.isArray(params.order)
-      ? params.order
-          .map((entry) => String(entry).trim())
-          .filter(Boolean)
+      ? params.order.map((entry) => String(entry).trim()).filter(Boolean)
       : [];
 
   const deduped: string[] = [];
