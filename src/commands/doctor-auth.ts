@@ -1,4 +1,4 @@
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import {
   buildAuthHealthSummary,
@@ -13,7 +13,11 @@ import {
   resolveApiKeyForProfile,
 } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 export async function maybeRepairAnthropicOAuthProfileId(
   cfg: ClawdbotConfig,
@@ -86,7 +90,7 @@ export async function noteAuthProfileHealth(params: {
   const findIssues = () =>
     summary.profiles.filter(
       (profile) =>
-        profile.type === "oauth" &&
+        (profile.type === "oauth" || profile.type === "token") &&
         (profile.status === "expired" ||
           profile.status === "expiring" ||
           profile.status === "missing"),
@@ -96,13 +100,15 @@ export async function noteAuthProfileHealth(params: {
   if (issues.length === 0) return;
 
   const shouldRefresh = await params.prompter.confirmRepair({
-    message: "Refresh expiring OAuth tokens now?",
+    message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
     initialValue: true,
   });
 
   if (shouldRefresh) {
-    const refreshTargets = issues.filter((issue) =>
-      ["expired", "expiring", "missing"].includes(issue.status),
+    const refreshTargets = issues.filter(
+      (issue) =>
+        issue.type === "oauth" &&
+        ["expired", "expiring", "missing"].includes(issue.status),
     );
     const errors: string[] = [];
     for (const profile of refreshTargets) {

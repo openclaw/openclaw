@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import { isVerbose } from "../globals.js";
+import { shouldLogSubsystemToConsole } from "../logging.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
 
 const LOG_VALUE_LIMIT = 240;
@@ -140,6 +141,7 @@ export function logWs(
   kind: string,
   meta?: Record<string, unknown>,
 ) {
+  if (!shouldLogSubsystemToConsole("gateway/ws")) return;
   const style = getGatewayWsLogStyle();
   if (!isVerbose()) {
     logWsOptimized(direction, kind, meta);

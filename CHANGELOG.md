@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+- Commands: accept /models as an alias for /model.
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Agent: add claude-cli/opus-4.5 runner via Claude CLI with resume support (tools disabled).
+- CLI: move `clawdbot message` to subcommands (`message send|poll|…`), fold Discord/Slack/Telegram/WhatsApp tools into `message`, and require `--provider` unless only one provider is configured.
 - CLI: improve `logs` output (pretty/plain/JSONL), add gateway unreachable hint, and document logging.
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
 - Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223
@@ -37,6 +39,7 @@
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
+- Control UI: drop explicit `ui:install` step; `ui:build` now auto-installs UI deps (docs + update flow).
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
@@ -72,6 +75,10 @@
 - Commands: return /status in directive-only multi-line messages.
 - Models: fall back to configured models when the provider catalog is unavailable.
 - Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
+- Agent: bypass Anthropic OAuth tool-name blocks by capitalizing built-ins and keeping pruning tool matching case-insensitive. (#553) — thanks @andrewting19
+- Commands/Tools: disable /restart and gateway restart tool by default (enable with commands.restart=true).
+- Gateway/CLI: add `clawdbot gateway discover` (Bonjour scan on `local.` + `clawdbot.internal.`) with `--timeout` and `--json`. — thanks @steipete
+- CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
 
 ## 2026.1.8
 

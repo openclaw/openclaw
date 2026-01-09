@@ -145,13 +145,14 @@ export async function listSlackReactions(
 export async function sendSlackMessage(
   to: string,
   content: string,
-  opts: SlackActionClientOpts & { mediaUrl?: string } = {},
+  opts: SlackActionClientOpts & { mediaUrl?: string; threadTs?: string } = {},
 ) {
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
     client: opts.client,
+    threadTs: opts.threadTs,
   });
 }
 

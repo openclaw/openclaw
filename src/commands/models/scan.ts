@@ -1,4 +1,8 @@
-import { cancel, isCancel, multiselect } from "@clack/prompts";
+import {
+  cancel,
+  isCancel,
+  multiselect as clackMultiselect,
+} from "@clack/prompts";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import {
   type ModelScanResult,
@@ -7,10 +11,26 @@ import {
 import { withProgressTotals } from "../../cli/progress.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../terminal/prompt-style.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
+
+const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
+  clackMultiselect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 const pad = (value: string, size: number) => value.padEnd(size);
 
@@ -268,7 +288,7 @@ export async function modelsScanCommand(
     });
 
     if (isCancel(selection)) {
-      cancel("Model scan cancelled.");
+      cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
       runtime.exit(0);
     }
 
@@ -285,7 +305,9 @@ export async function modelsScanCommand(
       });
 
       if (isCancel(imageSelection)) {
-        cancel("Model scan cancelled.");
+        cancel(
+          stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.",
+        );
         runtime.exit(0);
       }
 

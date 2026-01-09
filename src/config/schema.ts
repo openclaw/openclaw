@@ -98,6 +98,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agent.imageModel.fallbacks": "Image Model Fallbacks",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
+  "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
@@ -159,6 +160,8 @@ const FIELD_HELP: Record<string, string> = {
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
+  "commands.restart":
+    "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups":
     "Enforce access-group allowlists/policies for commands.",
   "session.agentToAgent.maxPingPongTurns":

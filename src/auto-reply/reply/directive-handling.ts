@@ -88,12 +88,17 @@ const resolveAuthLabel = async (
         !profile ||
         (configProfile?.provider &&
           configProfile.provider !== profile.provider) ||
-        (configProfile?.mode && configProfile.mode !== profile.type)
+        (configProfile?.mode &&
+          configProfile.mode !== profile.type &&
+          !(configProfile.mode === "oauth" && profile.type === "token"))
       ) {
         return `${profileId}=missing`;
       }
       if (profile.type === "api_key") {
         return `${profileId}=${maskApiKey(profile.key)}`;
+      }
+      if (profile.type === "token") {
+        return `${profileId}=token:${maskApiKey(profile.token)}`;
       }
       const display = resolveAuthProfileDisplayLabel({
         cfg,

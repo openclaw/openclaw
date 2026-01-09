@@ -5,6 +5,7 @@ export type OnboardMode = "local" | "remote";
 export type AuthChoice =
   | "oauth"
   | "claude-cli"
+  | "token"
   | "openai-codex"
   | "codex-cli"
   | "antigravity"

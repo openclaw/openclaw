@@ -95,8 +95,7 @@ Follow the Linux Getting Started flow inside WSL:
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 pnpm build
 pnpm clawdbot onboard
 ```

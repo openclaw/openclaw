@@ -64,8 +64,7 @@ pnpm install
 pnpm build
 
 # If the Control UI assets are missing or you want the dashboard:
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 
 pnpm clawdbot onboard
 ```
@@ -561,7 +560,7 @@ Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (o
 CLI sending:
 
 ```bash
-clawdbot send --to +15555550123 --message "Here you go" --media /path/to/file.png
+clawdbot message send --to +15555550123 --message "Here you go" --media /path/to/file.png
 ```
 
 Note: images are resized/recompressed (max side 2048px) to hit size limits. See [Images](/nodes/images).

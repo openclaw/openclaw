@@ -1,17 +1,16 @@
 import path from "node:path";
 
 import {
-  confirm,
-  intro,
-  multiselect,
-  note,
-  outro,
-  select,
+  confirm as clackConfirm,
+  intro as clackIntro,
+  multiselect as clackMultiselect,
+  note as clackNote,
+  outro as clackOutro,
+  select as clackSelect,
   spinner,
-  text,
+  text as clackText,
 } from "@clack/prompts";
 import {
-  loginAnthropic,
   loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
@@ -20,7 +19,9 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -38,6 +39,11 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { theme } from "../terminal/theme.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import {
@@ -45,6 +51,10 @@ import {
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -98,6 +108,43 @@ type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
 };
+
+const intro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+const outro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
+const text = (params: Parameters<typeof clackText>[0]) =>
+  clackText({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
+  clackConfirm({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  clackSelect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
+const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
+  clackMultiselect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 const startOscSpinner = (label: string) => {
   const spin = spinner();
@@ -302,6 +349,7 @@ async function promptAuthConfig(
   ) as
     | "oauth"
     | "claude-cli"
+    | "token"
     | "openai-codex"
     | "codex-cli"
     | "antigravity"
@@ -312,52 +360,148 @@ async function promptAuthConfig(
 
   let next = cfg;
 
-  if (authChoice === "oauth") {
-    note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
-    );
-    const spin = startOscSpinner("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = guardCancel(
-            await text({
-              message: "Paste authorization code (code#state)",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
-            runtime,
-          );
-          return String(code);
-        },
+  if (authChoice === "claude-cli") {
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID] && process.stdin.isTTY) {
+      note(
+        [
+          "No Claude CLI credentials found yet.",
+          "If you have a Claude Pro/Max subscription, run `claude setup-token`.",
+        ].join("\n"),
+        "Claude CLI",
       );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        next = applyAuthProfileConfig(next, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
+      const runNow = guardCancel(
+        await confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (runNow) {
+        const res = await (async () => {
+          const { spawnSync } = await import("node:child_process");
+          return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+        })();
+        if (res.error) {
+          note(
+            `Failed to run claude: ${String(res.error)}`,
+            "Claude setup-token",
+          );
+        }
       }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      runtime.error(String(err));
-      note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
     }
-  } else if (authChoice === "claude-cli") {
     next = applyAuthProfileConfig(next, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
     });
+  } else if (authChoice === "token" || authChoice === "oauth") {
+    const profileNameRaw = guardCancel(
+      await text({
+        message: "Token name (blank = default)",
+        placeholder: "default",
+      }),
+      runtime,
+    );
+
+    const provider = guardCancel(
+      await select({
+        message: "Token provider",
+        options: [
+          {
+            value: "anthropic",
+            label: "Anthropic (only supported)",
+          },
+        ],
+      }),
+      runtime,
+    ) as "anthropic";
+
+    const profileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
+    const existing = store.profiles[profileId];
+    if (existing?.type === "token") {
+      const useExisting = guardCancel(
+        await confirm({
+          message: `Use existing token "${profileId}"?`,
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (useExisting) {
+        next = applyAuthProfileConfig(next, {
+          profileId,
+          provider,
+          mode: "token",
+        });
+        return next;
+      }
+    }
+
+    note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
+    );
+
+    const tokenRaw = guardCancel(
+      await text({
+        message: "Paste Anthropic setup-token",
+        validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+      }),
+      runtime,
+    );
+    const token = String(tokenRaw).trim();
+
+    const wantsExpiry = guardCancel(
+      await confirm({
+        message: "Does this token expire?",
+        initialValue: false,
+      }),
+      runtime,
+    );
+    const expiresInRaw = wantsExpiry
+      ? guardCancel(
+          await text({
+            message: "Expires in (duration)",
+            initialValue: "365d",
+            validate: (value) => {
+              try {
+                parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
+                return undefined;
+              } catch {
+                return "Invalid duration (e.g. 365d, 12h, 30m)";
+              }
+            },
+          }),
+          runtime,
+        )
+      : "";
+    const expiresIn = String(expiresInRaw).trim();
+    const expires = expiresIn
+      ? Date.now() + parseDurationMs(expiresIn, { defaultUnit: "d" })
+      : undefined;
+
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "token",
+        provider,
+        token,
+        ...(expires ? { expires } : {}),
+      },
+    });
+
+    next = applyAuthProfileConfig(next, { profileId, provider, mode: "token" });
   } else if (authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     note(
@@ -787,13 +931,41 @@ export async function runConfigureWizard(
         await multiselect({
           message: "Select sections to configure",
           options: [
-            { value: "workspace", label: "Workspace" },
-            { value: "model", label: "Model/auth" },
-            { value: "gateway", label: "Gateway config" },
-            { value: "daemon", label: "Gateway daemon" },
-            { value: "providers", label: "Providers" },
-            { value: "skills", label: "Skills" },
-            { value: "health", label: "Health check" },
+            {
+              value: "workspace",
+              label: "Workspace",
+              hint: "Set agent workspace + ensure sessions",
+            },
+            {
+              value: "model",
+              label: "Model/auth",
+              hint: "Pick model + auth profile sources",
+            },
+            {
+              value: "gateway",
+              label: "Gateway config",
+              hint: "Port/bind/auth/control UI settings",
+            },
+            {
+              value: "daemon",
+              label: "Gateway daemon",
+              hint: "Install/manage the background service",
+            },
+            {
+              value: "providers",
+              label: "Providers",
+              hint: "Link WhatsApp/Telegram/etc and defaults",
+            },
+            {
+              value: "skills",
+              label: "Skills",
+              hint: "Install/enable workspace skills",
+            },
+            {
+              value: "health",
+              label: "Health check",
+              hint: "Run gateway + provider checks",
+            },
           ],
         }),
         runtime,
