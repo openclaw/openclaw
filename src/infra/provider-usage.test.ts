@@ -264,4 +264,68 @@ describe("provider usage loading", () => {
       else process.env.CLAWDBOT_STATE_DIR = stateSnapshot;
     }
   });
+
+  it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
+    const cookieSnapshot = process.env.CLAUDE_AI_SESSION_KEY;
+    process.env.CLAUDE_AI_SESSION_KEY = "sk-ant-web-1";
+    try {
+      const makeResponse = (status: number, body: unknown): Response => {
+        const payload = typeof body === "string" ? body : JSON.stringify(body);
+        const headers =
+          typeof body === "string"
+            ? undefined
+            : { "Content-Type": "application/json" };
+        return new Response(payload, { status, headers });
+      };
+
+      const mockFetch = vi.fn<
+        Parameters<typeof fetch>,
+        ReturnType<typeof fetch>
+      >(async (input) => {
+        const url =
+          typeof input === "string"
+            ? input
+            : input instanceof URL
+              ? input.toString()
+              : input.url;
+        if (url.includes("api.anthropic.com/api/oauth/usage")) {
+          return makeResponse(403, {
+            type: "error",
+            error: {
+              type: "permission_error",
+              message:
+                "OAuth token does not meet scope requirement user:profile",
+            },
+          });
+        }
+        if (url.includes("claude.ai/api/organizations/org-1/usage")) {
+          return makeResponse(200, {
+            five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
+            seven_day: { utilization: 40, resets_at: "2026-01-08T01:00:00Z" },
+            seven_day_opus: { utilization: 5 },
+          });
+        }
+        if (url.includes("claude.ai/api/organizations")) {
+          return makeResponse(200, [{ uuid: "org-1", name: "Test" }]);
+        }
+        return makeResponse(404, "not found");
+      });
+
+      const summary = await loadProviderUsageSummary({
+        now: Date.UTC(2026, 0, 7, 0, 0, 0),
+        auth: [{ provider: "anthropic", token: "sk-ant-oauth-1" }],
+        fetch: mockFetch,
+      });
+
+      expect(summary.providers).toHaveLength(1);
+      const claude = summary.providers[0];
+      expect(claude?.provider).toBe("anthropic");
+      expect(claude?.windows.some((w) => w.label === "5h")).toBe(true);
+      expect(claude?.windows.some((w) => w.label === "Week")).toBe(true);
+    } finally {
+      if (cookieSnapshot === undefined)
+        delete process.env.CLAUDE_AI_SESSION_KEY;
+      else process.env.CLAUDE_AI_SESSION_KEY = cookieSnapshot;
+    }
+  });
 });
