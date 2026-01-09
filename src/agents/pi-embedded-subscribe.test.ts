@@ -167,6 +167,117 @@ describe("subscribeEmbeddedPiSession", () => {
     );
   });
 
+  it("promotes <think> tags to thinking blocks at write-time", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      reasoningMode: "on",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<think>\nBecause it helps\n</think>\n\nFinal answer",
+        },
+      ],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0][0].text).toBe(
+      "_Reasoning:_\n_Because it helps_\n\nFinal answer",
+    );
+
+    expect(assistantMessage.content).toEqual([
+      { type: "thinking", thinking: "Because it helps" },
+      { type: "text", text: "Final answer" },
+    ]);
+  });
+
+  it("streams <think> reasoning via onReasoningStream without leaking into final text", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onReasoningStream = vi.fn();
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onReasoningStream,
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      reasoningMode: "stream",
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "<think>\nBecause",
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: " it helps\n</think>\n\nFinal answer",
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "<think>\nBecause it helps\n</think>\n\nFinal answer",
+        },
+      ],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0][0].text).toBe("Final answer");
+
+    const streamTexts = onReasoningStream.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(streamTexts.at(-1)).toBe("Reasoning:\nBecause it helps");
+
+    expect(assistantMessage.content).toEqual([
+      { type: "thinking", thinking: "Because it helps" },
+      { type: "text", text: "Final answer" },
+    ]);
+  });
+
   it("emits block replies on text_end and does not duplicate on message_end", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
