@@ -210,7 +210,7 @@ export function normalizeAgentPayload(
   if (modelRaw !== undefined && !model) {
     return { ok: false, error: "model required" };
   }
-  const deliver = payload.deliver === true;
+  const deliver = payload.deliver !== false;
   const thinkingRaw = payload.thinking;
   const thinking =
     typeof thinkingRaw === "string" && thinkingRaw.trim()
