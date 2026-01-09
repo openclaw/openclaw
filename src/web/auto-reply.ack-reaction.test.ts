@@ -1,303 +1,260 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ClawdbotConfig } from "../config/types.js";
 
-describe("WhatsApp ack reaction", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+describe("WhatsApp ack reaction logic", () => {
+  // Helper to simulate the logic from auto-reply.ts
+  function shouldSendReaction(
+    cfg: ClawdbotConfig,
+    msg: {
+      id?: string;
+      chatType: "direct" | "group";
+      wasMentioned?: boolean;
+    },
+    groupActivation?: "always" | "mention",
+  ): boolean {
+    const ackConfig = cfg.whatsapp?.ackReaction;
+    const emoji = (ackConfig?.emoji ?? "").trim();
+    const directEnabled = ackConfig?.direct ?? true;
+    const groupMode = ackConfig?.group ?? "mentions";
 
-  it("should send ack reaction in direct chat when scope is 'all'", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "all",
-      },
-    };
+    if (!emoji) return false;
+    if (!msg.id) return false;
 
-    // Simulate the logic from auto-reply.ts
-    const msg = {
-      id: "msg123",
-      chatId: "123456789@s.whatsapp.net",
-      chatType: "direct" as const,
-      from: "+1234567890",
-      to: "+9876543210",
-      body: "hello",
-    };
+    // Direct chat logic
+    if (msg.chatType === "direct") {
+      return directEnabled;
+    }
 
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-    const didSendReply = true;
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      if (ackReactionScope === "all") return true;
-      if (ackReactionScope === "direct") return msg.chatType === "direct";
-      if (ackReactionScope === "group-all") return msg.chatType === "group";
-      if (ackReactionScope === "group-mentions") {
-        if (msg.chatType !== "group") return false;
-        return false; // Would check wasMentioned
-      }
-      return false;
-    };
-
-    expect(shouldAckReaction()).toBe(true);
-  });
-
-  it("should send ack reaction in direct chat when scope is 'direct'", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "direct",
-      },
-    };
-
-    const msg = {
-      id: "msg123",
-      chatId: "123456789@s.whatsapp.net",
-      chatType: "direct" as const,
-      from: "+1234567890",
-      to: "+9876543210",
-      body: "hello",
-    };
-
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-    const didSendReply = true;
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      if (ackReactionScope === "all") return true;
-      if (ackReactionScope === "direct") return msg.chatType === "direct";
-      if (ackReactionScope === "group-all") return msg.chatType === "group";
-      return false;
-    };
-
-    expect(shouldAckReaction()).toBe(true);
-  });
-
-  it("should NOT send ack reaction in group when scope is 'direct'", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "direct",
-      },
-    };
-
-    const msg = {
-      id: "msg123",
-      chatId: "123456789-group@g.us",
-      chatType: "group" as const,
-      from: "123456789-group@g.us",
-      to: "+9876543210",
-      body: "hello",
-      wasMentioned: true,
-    };
-
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-    const didSendReply = true;
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      if (ackReactionScope === "all") return true;
-      if (ackReactionScope === "direct") return msg.chatType === "direct";
-      if (ackReactionScope === "group-all") return msg.chatType === "group";
-      return false;
-    };
-
-    expect(shouldAckReaction()).toBe(false);
-  });
-
-  it("should send ack reaction in group when mentioned and scope is 'group-mentions' (requireMention=true)", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "group-mentions",
-      },
-    };
-
-    const msg = {
-      id: "msg123",
-      chatId: "123456789-group@g.us",
-      chatType: "group" as const,
-      from: "123456789-group@g.us",
-      to: "+9876543210",
-      body: "hello @bot",
-      wasMentioned: true,
-    };
-
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-    const didSendReply = true;
-    const requireMention = true; // Simulated from activation check
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      if (ackReactionScope === "all") return true;
-      if (ackReactionScope === "direct") return msg.chatType === "direct";
-      if (ackReactionScope === "group-all") return msg.chatType === "group";
-      if (ackReactionScope === "group-mentions") {
-        if (msg.chatType !== "group") return false;
-        // If mention is not required (activation === "always"), always react
-        if (!requireMention) return true;
+    // Group chat logic
+    if (msg.chatType === "group") {
+      if (groupMode === "never") return false;
+      if (groupMode === "always") return true;
+      if (groupMode === "mentions") {
+        // If group activation is "always", always react
+        if (groupActivation === "always") return true;
         // Otherwise, only react if bot was mentioned
         return msg.wasMentioned === true;
       }
-      return false;
-    };
+    }
 
-    expect(shouldAckReaction()).toBe(true);
+    return false;
+  }
+
+  describe("direct chat", () => {
+    it("should react when direct=true", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", direct: true } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "direct",
+        }),
+      ).toBe(true);
+    });
+
+    it("should not react when direct=false", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", direct: false } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "direct",
+        }),
+      ).toBe(false);
+    });
+
+    it("should not react when emoji is empty", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "", direct: true } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "direct",
+        }),
+      ).toBe(false);
+    });
   });
 
-  it("should send ack reaction in group when requireMention=false and scope is 'group-mentions' (activation: always)", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "group-mentions",
-      },
-    };
+  describe("group chat - always mode", () => {
+    it("should react to all messages when group=always", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "always" } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "group",
+          wasMentioned: false,
+        }),
+      ).toBe(true);
+    });
 
-    const msg = {
-      id: "msg123",
-      chatId: "123456789-group@g.us",
-      chatType: "group" as const,
-      from: "123456789-group@g.us",
-      to: "+9876543210",
-      body: "hello",
-      wasMentioned: false, // No mention, but activation is "always"
-    };
-
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-    const didSendReply = true;
-    const requireMention = false; // activation === "always"
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      if (ackReactionScope === "all") return true;
-      if (ackReactionScope === "direct") return msg.chatType === "direct";
-      if (ackReactionScope === "group-all") return msg.chatType === "group";
-      if (ackReactionScope === "group-mentions") {
-        if (msg.chatType !== "group") return false;
-        // If mention is not required (activation === "always"), always react
-        if (!requireMention) return true;
-        return msg.wasMentioned === true;
-      }
-      return false;
-    };
-
-    expect(shouldAckReaction()).toBe(true);
+    it("should react even with mention when group=always", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "always" } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "group",
+          wasMentioned: true,
+        }),
+      ).toBe(true);
+    });
   });
 
-  it("should NOT send ack reaction in group when NOT mentioned and scope is 'group-mentions' (requireMention=true)", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "group-mentions",
-      },
-    };
+  describe("group chat - mentions mode", () => {
+    it("should react when mentioned", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "group",
+          wasMentioned: true,
+        }),
+      ).toBe(true);
+    });
 
-    const msg = {
-      id: "msg123",
-      chatId: "123456789-group@g.us",
-      chatType: "group" as const,
-      from: "123456789-group@g.us",
-      to: "+9876543210",
-      body: "hello",
-      wasMentioned: false,
-    };
+    it("should not react when not mentioned", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+      };
+      expect(
+        shouldSendReaction(
+          cfg,
+          {
+            id: "msg1",
+            chatType: "group",
+            wasMentioned: false,
+          },
+          "mention", // group activation
+        ),
+      ).toBe(false);
+    });
 
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-    const didSendReply = true;
-    const requireMention = true;
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      if (ackReactionScope === "all") return true;
-      if (ackReactionScope === "direct") return msg.chatType === "direct";
-      if (ackReactionScope === "group-all") return msg.chatType === "group";
-      if (ackReactionScope === "group-mentions") {
-        if (msg.chatType !== "group") return false;
-        // If mention is not required (activation === "always"), always react
-        if (!requireMention) return true;
-        return msg.wasMentioned === true;
-      }
-      return false;
-    };
-
-    expect(shouldAckReaction()).toBe(false);
+    it("should react to all messages when group activation is always", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "mentions" } },
+      };
+      expect(
+        shouldSendReaction(
+          cfg,
+          {
+            id: "msg1",
+            chatType: "group",
+            wasMentioned: false,
+          },
+          "always", // group has requireMention=false
+        ),
+      ).toBe(true);
+    });
   });
 
-  it("should NOT send ack reaction when no reply was sent", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "👀",
-        ackReactionScope: "all",
-      },
-    };
+  describe("group chat - never mode", () => {
+    it("should not react even with mention", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "never" } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "group",
+          wasMentioned: true,
+        }),
+      ).toBe(false);
+    });
 
-    const msg = {
-      id: "msg123",
-      chatId: "123456789@s.whatsapp.net",
-      chatType: "direct" as const,
-      from: "+1234567890",
-      to: "+9876543210",
-      body: "hello",
-    };
-
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const didSendReply = false; // No reply sent
-
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      return true;
-    };
-
-    expect(shouldAckReaction()).toBe(false);
+    it("should not react without mention", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", group: "never" } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "msg1",
+          chatType: "group",
+          wasMentioned: false,
+        }),
+      ).toBe(false);
+    });
   });
 
-  it("should NOT send ack reaction when ackReaction is empty", async () => {
-    const cfg: ClawdbotConfig = {
-      messages: {
-        ackReaction: "",
-        ackReactionScope: "all",
-      },
-    };
+  describe("combinations", () => {
+    it("direct=false, group=always: only groups", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: {
+          ackReaction: { emoji: "✅", direct: false, group: "always" },
+        },
+      };
 
-    const msg = {
-      id: "msg123",
-      chatId: "123456789@s.whatsapp.net",
-      chatType: "direct" as const,
-      from: "+1234567890",
-      to: "+9876543210",
-      body: "hello",
-    };
+      expect(
+        shouldSendReaction(cfg, { id: "m1", chatType: "direct" }),
+      ).toBe(false);
 
-    const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const didSendReply = true;
+      expect(
+        shouldSendReaction(cfg, {
+          id: "m2",
+          chatType: "group",
+          wasMentioned: false,
+        }),
+      ).toBe(true);
+    });
 
-    const shouldAckReaction = () => {
-      if (!ackReaction) return false;
-      if (!msg.id) return false;
-      if (!didSendReply) return false;
-      return true;
-    };
+    it("direct=true, group=never: only direct", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: {
+          ackReaction: { emoji: "🤖", direct: true, group: "never" },
+        },
+      };
 
-    expect(shouldAckReaction()).toBe(false);
+      expect(
+        shouldSendReaction(cfg, { id: "m1", chatType: "direct" }),
+      ).toBe(true);
+
+      expect(
+        shouldSendReaction(cfg, {
+          id: "m2",
+          chatType: "group",
+          wasMentioned: true,
+        }),
+      ).toBe(false);
+    });
+  });
+
+  describe("defaults", () => {
+    it("should default direct=true", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀" } },
+      };
+      expect(
+        shouldSendReaction(cfg, { id: "m1", chatType: "direct" }),
+      ).toBe(true);
+    });
+
+    it("should default group=mentions", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀" } },
+      };
+
+      expect(
+        shouldSendReaction(cfg, {
+          id: "m1",
+          chatType: "group",
+          wasMentioned: false,
+        }),
+      ).toBe(false);
+
+      expect(
+        shouldSendReaction(cfg, {
+          id: "m2",
+          chatType: "group",
+          wasMentioned: true,
+        }),
+      ).toBe(true);
+    });
   });
 });
