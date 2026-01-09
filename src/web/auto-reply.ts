@@ -1405,7 +1405,9 @@ export async function monitorWebProvider(
             conversationId,
           });
           const requireMention = activation !== "always";
-          if (!requireMention) return false;
+          // If mention is not required (activation === "always"), always react
+          if (!requireMention) return true;
+          // Otherwise, only react if bot was mentioned
           return msg.wasMentioned === true;
         }
         return false;
