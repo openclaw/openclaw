@@ -9,6 +9,7 @@ import {
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
 import {
+  type OutboundDeliveryResult,
   type MessagePollResult,
   type MessageSendResult,
   sendMessage,
@@ -75,9 +76,10 @@ function logSendResult(
   runtime: RuntimeEnv,
 ) {
   if (result.via === "direct") {
+    const directResult = result.result as OutboundDeliveryResult | undefined;
     const summary = formatOutboundDeliverySummary(
       result.provider,
-      result.result,
+      directResult,
     );
     runtime.log(success(summary));
     if (opts.json) {
@@ -87,7 +89,7 @@ function logSendResult(
             provider: result.provider,
             via: "direct",
             to: opts.to,
-            result: result.result,
+            result: directResult,
             mediaUrl: opts.media ?? null,
           }),
           null,
@@ -153,7 +155,16 @@ export async function messageSendCommand(
         gifPlayback: opts.gifPlayback,
         accountId: opts.account,
         dryRun: opts.dryRun,
-        deps,
+        deps: deps
+          ? {
+              sendWhatsApp: deps.sendMessageWhatsApp,
+              sendTelegram: deps.sendMessageTelegram,
+              sendDiscord: deps.sendMessageDiscord,
+              sendSlack: deps.sendMessageSlack,
+              sendSignal: deps.sendMessageSignal,
+              sendIMessage: deps.sendMessageIMessage,
+            }
+          : undefined,
         gateway: { clientName: "cli", mode: "cli" },
       }),
   );
