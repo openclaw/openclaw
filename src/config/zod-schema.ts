@@ -1333,6 +1333,8 @@ export const ClawdbotSchema = z.object({
           url: z.string().optional(),
           token: z.string().optional(),
           password: z.string().optional(),
+          sshTarget: z.string().optional(),
+          sshIdentity: z.string().optional(),
         })
         .optional(),
       reload: z

@@ -940,6 +940,10 @@ export type GatewayRemoteConfig = {
   token?: string;
   /** Password for remote auth (when the gateway requires password auth). */
   password?: string;
+  /** SSH target for tunneling remote Gateway (user@host). */
+  sshTarget?: string;
+  /** SSH identity file path for tunneling remote Gateway. */
+  sshIdentity?: string;
 };
 
 export type GatewayReloadMode = "off" | "restart" | "hot" | "hybrid";
