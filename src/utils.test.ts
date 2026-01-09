@@ -86,7 +86,11 @@ describe("normalizeE164 & toWhatsappJid", () => {
 
 describe("jidToE164", () => {
   it("maps @lid using reverse mapping file", () => {
-    const mappingPath = `${CONFIG_DIR}/credentials/lid-mapping-123_reverse.json`;
+    const mappingPath = path.join(
+      CONFIG_DIR,
+      "credentials",
+      "lid-mapping-123_reverse.json",
+    );
     const original = fs.readFileSync;
     const spy = vi
       .spyOn(fs, "readFileSync")
