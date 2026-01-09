@@ -150,6 +150,14 @@
         "restart": { "label": "restart", "detailKeys": ["reason", "delayMs"] }
       }
     },
+    "message": {
+      "emoji": "✉️",
+      "title": "Message",
+      "actions": {
+        "send": { "label": "send", "detailKeys": ["to", "provider", "mediaUrl"] },
+        "poll": { "label": "poll", "detailKeys": ["to", "provider", "question"] }
+      }
+    },
     "agents_list": {
       "emoji": "🧭",
       "title": "Agents",

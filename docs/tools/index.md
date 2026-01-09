@@ -1,5 +1,5 @@
 ---
-summary: "Agent tool surface for Clawdbot (browser, canvas, nodes, cron) replacing legacy `clawdbot-*` skills"
+summary: "Agent tool surface for Clawdbot (browser, canvas, nodes, message, cron) replacing legacy `clawdbot-*` skills"
 read_when:
   - Adding or modifying agent tools
   - Retiring or changing `clawdbot-*` skills
@@ -147,6 +147,17 @@ Core parameters:
 Notes:
 - Only available when `agent.imageModel` is configured (primary or fallbacks).
 - Uses the image model directly (independent of the main chat model).
+
+### `message`
+Send messages and polls across providers.
+
+Core actions:
+- `send` (text + optional media)
+- `poll` (WhatsApp/Discord polls)
+
+Notes:
+- `send` routes WhatsApp via the Gateway and other providers directly.
+- `poll` always routes via the Gateway.
 
 ### `cron`
 Manage Gateway cron jobs and wakeups.

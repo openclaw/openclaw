@@ -15,12 +15,12 @@ read_when:
 
 ```bash
 # WhatsApp
-clawdbot poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
-clawdbot poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
+clawdbot message poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
+clawdbot message poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
 
 # Discord
-clawdbot poll --to channel:123456789 -q "Snack?" -o "Pizza" -o "Sushi" --provider discord
-clawdbot poll --to channel:123456789 -q "Plan?" -o "A" -o "B" --provider discord --duration-hours 48
+clawdbot message poll --to channel:123456789 -q "Snack?" -o "Pizza" -o "Sushi" --provider discord
+clawdbot message poll --to channel:123456789 -q "Plan?" -o "A" -o "B" --provider discord --duration-hours 48
 ```
 
 Options:
@@ -49,3 +49,6 @@ Params:
 The Discord tool action `poll` still uses `question`, `answers`, optional `allowMultiselect`, `durationHours`, and `content`. The gateway/CLI poll model maps `allowMultiselect` to `maxSelections > 1`.
 
 Note: Discord has no “pick exactly N” mode; `maxSelections` is treated as a boolean (`> 1` = multiselect).
+
+## Agent tool (Message)
+Use the `message` tool with `poll` action (`to`, `question`, `options`, optional `maxSelections`, `durationHours`, `provider`).

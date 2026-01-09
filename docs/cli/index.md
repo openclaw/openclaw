@@ -55,8 +55,9 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     info
     check
-  send
-  poll
+  message
+    send
+    poll
   agent
   agents
     list
@@ -283,7 +284,7 @@ Options:
 
 ## Messaging + agent
 
-### `send`
+### `message send`
 Send a message through a provider.
 
 Required:
@@ -299,7 +300,7 @@ Options:
 - `--json`
 - `--verbose`
 
-### `poll`
+### `message poll`
 Create a poll (WhatsApp or Discord).
 
 Required:

@@ -92,17 +92,17 @@
 - Voice wake forwarding tips:
   - Command template should stay `clawdbot-mac agent --message "${text}" --thinking low`; `VoiceWakeForwarder` already shell-escapes `${text}`. Don’t add extra quotes.
   - launchd PATH is minimal; ensure the app’s launch agent PATH includes standard system paths plus your pnpm bin (typically `$HOME/Library/pnpm`) so `pnpm`/`clawdbot` binaries resolve when invoked via `clawdbot-mac`.
-  - For manual `clawdbot send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
+- For manual `clawdbot message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 
 ## Exclamation Mark Escaping Workaround
-The Claude Code Bash tool escapes `!` to `\\!` in command arguments. When using `clawdbot send` with messages containing exclamation marks, use heredoc syntax:
+The Claude Code Bash tool escapes `!` to `\\!` in command arguments. When using `clawdbot message send` with messages containing exclamation marks, use heredoc syntax:
 
 ```bash
 # WRONG - will send "Hello\\!" with backslash
-clawdbot send --to "+1234" --message 'Hello!'
+clawdbot message send --to "+1234" --message 'Hello!'
 
 # CORRECT - use heredoc to avoid escaping
-clawdbot send --to "+1234" --message "$(cat <<'EOF'
+clawdbot message send --to "+1234" --message "$(cat <<'EOF'
 Hello!
 EOF
 )"
