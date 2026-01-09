@@ -34,9 +34,13 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 5) **Tail the latest log**
    ```bash
+   clawdbot logs --follow
+   ```
+   If RPC is down, fall back to:
+   ```bash
    tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)"
    ```
-   File logs are separate from service logs; see [Logging](/gateway/logging) and [Troubleshooting](/gateway/troubleshooting).
+   File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
 
 ## What is Clawdbot?
 
@@ -113,6 +117,26 @@ Everything lives under `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`):
 Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`).
 
 Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agent.workspace` (default: `~/clawd`).
+
+### Can agents work outside the workspace?
+
+Yes. The workspace is the **default cwd** and memory anchor, not a hard sandbox.
+Relative paths resolve inside the workspace, but absolute paths can access other
+host locations unless sandboxing is enabled. If you need isolation, use
+[`agent.sandbox`](/gateway/sandboxing) or per‑agent sandbox settings. If you
+want a repo to be the default working directory, point that agent’s
+`workspace` to the repo root. The Clawdbot repo is just source code; keep the
+workspace separate unless you intentionally want the agent to work inside it.
+
+Example (repo as default cwd):
+
+```json5
+{
+  agent: {
+    workspace: "~/Projects/my-repo"
+  }
+}
+```
 
 ### I’m in remote mode — where is the session store?
 
@@ -257,6 +281,18 @@ Use the `/model` command as a standalone message:
 
 You can list available models with `/model`, `/model list`, or `/model status`.
 
+### Why do I see “Model … is not allowed” and then no reply?
+
+If `agent.models` is set, it becomes the **allowlist** for `/model` and any
+session overrides. Choosing a model that isn’t in that list returns:
+
+```
+Model "provider/model" is not allowed. Use /model to list available models.
+```
+
+That error is returned **instead of** a normal reply. Fix: add the model to
+`agent.models`, remove the allowlist, or pick a model from `/model list`.
+
 ### Are opus / sonnet / gpt built‑in shortcuts?
 
 Yes. Clawdbot ships a few default shorthands (only applied when the model exists in `agent.models`):
@@ -346,7 +382,7 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 - **Make sure you’re editing the correct agent**
   - Multi‑agent setups mean there can be multiple `auth-profiles.json` files.
 - **Sanity‑check model/auth status**
-  - Use `/model status` to see configured models and whether providers are authenticated.
+  - Use `clawdbot models status` to see configured models and whether providers are authenticated.
 
 ### Why did it also try Google Gemini and fail?
 

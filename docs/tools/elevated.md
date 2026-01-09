@@ -15,7 +15,7 @@ read_when:
 - **Global availability gate**: `agent.elevated` is global (not per-agent). If disabled or sender not allowlisted, elevated is unavailable everywhere.
 - **Per-session state**: `/elevated on|off` sets the elevated level for the current session key.
 - **Inline directive**: `/elevated on` inside a message applies to that message only.
-- **Groups**: In group chats, elevated directives are only honored when the agent is mentioned.
+- **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
 - **Host execution**: elevated runs `bash` on the host (bypasses sandbox).
 - **Unsandboxed agents**: when there is no sandbox to bypass, elevated does not change where `bash` runs.
 - **Tool policy still applies**: if `bash` is denied by tool policy, elevated cannot be used.

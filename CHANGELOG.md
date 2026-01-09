@@ -2,12 +2,17 @@
 
 ## Unreleased
 
+- CLI: improve `logs` output (pretty/plain/JSONL), add gateway unreachable hint, and document logging.
+- WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
+- Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223
+- Deps: bump Pi to 0.40.0 and drop pi-ai patch (upstream 429 fix). (#543) — thanks @mcinteerj
 - Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
+- Daemon: add KillMode=process to systemd units to avoid podman restart hangs. (#541) — thanks @ogulcancelik
 - Doctor: run legacy state migrations in non-interactive mode without prompts.
 - Cron: parse Telegram topic targets for isolated delivery. (#478) — thanks @nachoiacovino
 - Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos
@@ -33,6 +38,7 @@
 - Signal: accept UUID-only senders for pairing/allowlists/routing when sourceNumber is missing. (#523) — thanks @neist
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
+- Onboarding: set Gemini 3 Pro as the default model for Gemini API key auth. (#489) — thanks @jonasjancarik
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
@@ -43,11 +49,14 @@
 - Providers/Doctor: warn when Telegram config expects unmentioned group messages but Bot API privacy mode is likely enabled; surface WhatsApp login/disconnect hints.
 - Providers/Doctor: add last inbound/outbound activity timestamps in `providers status` and extend `--probe` with Discord channel permission + Telegram group membership audits.
 - Docs: add provider troubleshooting index (`/providers/troubleshooting`) and link it from the main troubleshooting guide.
+- Docs: clarify model allowlist errors and add safety notes for verbose/reasoning in groups.
+- Docs: add Ansible installation guide. (#545) — thanks @pasogott
 - Telegram: include the user id in DM pairing messages and label it clearly in `clawdbot pairing list --provider telegram`.
 - Apps: refresh iOS/Android/macOS app icons for Clawdbot branding. (#521) — thanks @fishfisher
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
 - TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
+- Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
 
 ## 2026.1.8
 

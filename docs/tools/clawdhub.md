@@ -50,7 +50,8 @@ bun add -g clawdhub
 
 By default, the CLI installs skills into `./skills` under your current working directory. Clawdbot loads workspace skills from `<workspace>/skills` and will pick them up in the **next** session. If you already use `~/.clawdbot/skills` or bundled skills, workspace skills take precedence.
 
-For more detail on how skills are loaded and gated, see `docs/skills.md`.
+For more detail on how skills are loaded, shared, and gated, see
+[Skills](/tools/skills).
 
 ## What the service provides (features)
 

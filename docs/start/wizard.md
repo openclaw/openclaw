@@ -170,6 +170,17 @@ clawdbot onboard --non-interactive \
 
 Add `--json` for a machine‑readable summary.
 
+Gemini example:
+
+```bash
+clawdbot onboard --non-interactive \
+  --mode local \
+  --auth-choice gemini-api-key \
+  --gemini-api-key "$GEMINI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
 Add agent (non‑interactive) example:
 
 ```bash

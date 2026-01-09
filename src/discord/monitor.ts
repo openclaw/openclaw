@@ -785,6 +785,7 @@ export function createDiscordMessageHandler(params: {
         !hasAnyMention &&
         commandAuthorized &&
         hasControlCommand(baseText);
+      const effectiveWasMentioned = wasMentioned || shouldBypassMention;
       const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
       if (isGuildMessage && shouldRequireMention) {
         if (botId && !wasMentioned && !shouldBypassMention) {
@@ -981,7 +982,7 @@ export function createDiscordMessageHandler(params: {
           : undefined,
         Provider: "discord" as const,
         Surface: "discord" as const,
-        WasMentioned: wasMentioned,
+        WasMentioned: effectiveWasMentioned,
         MessageSid: message.id,
         ParentSessionKey: threadKeys.parentSessionKey,
         ThreadStarterBody: threadStarterBody,

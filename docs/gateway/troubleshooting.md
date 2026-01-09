@@ -33,6 +33,19 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 - Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
 
+**Enable more logging:**
+- Bump file log detail (persisted JSONL):
+  ```json
+  { "logging": { "level": "debug" } }
+  ```
+- Bump console verbosity (TTY output only):
+  ```json
+  { "logging": { "consoleLevel": "debug", "consoleStyle": "pretty" } }
+  ```
+- Quick tip: `--verbose` affects **console** output only. File logs remain controlled by `logging.level`.
+
+See [/logging](/logging) for a full overview of formats, config, and access.
+
 ### Service Environment (PATH + runtime)
 
 The gateway daemon runs with a **minimal PATH** to avoid shell/manager cruft:
