@@ -1,8 +1,10 @@
 import type { ClawdbotConfig } from "../../config/config.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { resolveTextChunkLimit, type TextChunkProvider } from "../chunk.js";
 
 const DEFAULT_BLOCK_STREAM_MIN = 800;
 const DEFAULT_BLOCK_STREAM_MAX = 1200;
+const DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS = 400;
 
 const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
   "whatsapp",
@@ -12,6 +14,7 @@ const BLOCK_CHUNK_PROVIDERS = new Set<TextChunkProvider>([
   "signal",
   "imessage",
   "webchat",
+  "msteams",
 ]);
 
 function normalizeChunkProvider(
@@ -24,16 +27,24 @@ function normalizeChunkProvider(
     : undefined;
 }
 
+export type BlockStreamingCoalescing = {
+  minChars: number;
+  maxChars: number;
+  idleMs: number;
+  joiner: string;
+};
+
 export function resolveBlockStreamingChunking(
   cfg: ClawdbotConfig | undefined,
   provider?: string,
+  accountId?: string | null,
 ): {
   minChars: number;
   maxChars: number;
   breakPreference: "paragraph" | "newline" | "sentence";
 } {
   const providerKey = normalizeChunkProvider(provider);
-  const textLimit = resolveTextChunkLimit(cfg, providerKey);
+  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
   const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
   const maxRequested = Math.max(
     1,
@@ -51,4 +62,89 @@ export function resolveBlockStreamingChunking(
       ? chunkCfg.breakPreference
       : "paragraph";
   return { minChars, maxChars, breakPreference };
+}
+
+export function resolveBlockStreamingCoalescing(
+  cfg: ClawdbotConfig | undefined,
+  provider?: string,
+  accountId?: string | null,
+  chunking?: {
+    minChars: number;
+    maxChars: number;
+    breakPreference: "paragraph" | "newline" | "sentence";
+  },
+): BlockStreamingCoalescing {
+  const providerKey = normalizeChunkProvider(provider);
+  const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
+  const normalizedAccountId = normalizeAccountId(accountId);
+  const providerCfg = (() => {
+    if (!cfg || !providerKey) return undefined;
+    if (providerKey === "whatsapp") {
+      return (
+        cfg.whatsapp?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
+        cfg.whatsapp?.blockStreamingCoalesce
+      );
+    }
+    if (providerKey === "telegram") {
+      return (
+        cfg.telegram?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
+        cfg.telegram?.blockStreamingCoalesce
+      );
+    }
+    if (providerKey === "discord") {
+      return (
+        cfg.discord?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
+        cfg.discord?.blockStreamingCoalesce
+      );
+    }
+    if (providerKey === "slack") {
+      return (
+        cfg.slack?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
+        cfg.slack?.blockStreamingCoalesce
+      );
+    }
+    if (providerKey === "signal") {
+      return (
+        cfg.signal?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
+        cfg.signal?.blockStreamingCoalesce
+      );
+    }
+    if (providerKey === "imessage") {
+      return (
+        cfg.imessage?.accounts?.[normalizedAccountId]?.blockStreamingCoalesce ??
+        cfg.imessage?.blockStreamingCoalesce
+      );
+    }
+    if (providerKey === "msteams") {
+      return cfg.msteams?.blockStreamingCoalesce;
+    }
+    return undefined;
+  })();
+  const coalesceCfg =
+    providerCfg ?? cfg?.agents?.defaults?.blockStreamingCoalesce;
+  const minRequested = Math.max(
+    1,
+    Math.floor(
+      coalesceCfg?.minChars ?? chunking?.minChars ?? DEFAULT_BLOCK_STREAM_MIN,
+    ),
+  );
+  const maxRequested = Math.max(
+    1,
+    Math.floor(coalesceCfg?.maxChars ?? textLimit),
+  );
+  const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
+  const minChars = Math.min(minRequested, maxChars);
+  const idleMs = Math.max(
+    0,
+    Math.floor(coalesceCfg?.idleMs ?? DEFAULT_BLOCK_STREAM_COALESCE_IDLE_MS),
+  );
+  const preference = chunking?.breakPreference ?? "paragraph";
+  const joiner =
+    preference === "sentence" ? " " : preference === "newline" ? "\n" : "\n\n";
+  return {
+    minChars,
+    maxChars,
+    idleMs,
+    joiner,
+  };
 }

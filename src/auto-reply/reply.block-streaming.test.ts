@@ -149,7 +149,7 @@ describe("block streaming", () => {
 
       const res = await replyPromise;
       expect(res).toBeUndefined();
-      expect(seen).toEqual(["first", "second"]);
+      expect(seen).toEqual(["first\n\nsecond"]);
     });
   });
 

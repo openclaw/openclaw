@@ -51,6 +51,7 @@
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
 - Auto-reply: preserve spacing when stripping inline directives. (#539) — thanks @joshp123
 - Auto-reply: relax reply tag parsing to allow whitespace. (#560) — thanks @mcinteerj
+- Auto-reply: add per-provider block streaming toggles and coalesce streamed blocks to reduce line spam. (#536) — thanks @mcinteerj
 - Auto-reply: fix /status usage summary filtering for the active provider.
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
 - Status: compact /status with session token usage + estimated cost, add `/cost` per-response usage lines (tokens-only for OAuth).

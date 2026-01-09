@@ -88,6 +88,8 @@ via `agents.defaults.blockStreamingDefault: "off"` if you only want the final re
 Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
 Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults to
 800–1200 chars; prefers paragraph breaks, then newlines; sentences last).
+Coalesce streamed chunks with `agents.defaults.blockStreamingCoalesce` to reduce
+single-line spam (idle-based merging before send).
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
 More details: [Streaming + chunking](/concepts/streaming).

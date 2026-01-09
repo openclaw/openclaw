@@ -673,7 +673,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
     const draftChunking =
       draftStream && streamMode === "block"
-        ? resolveBlockStreamingChunking(cfg, "telegram")
+        ? resolveBlockStreamingChunking(cfg, "telegram", route.accountId)
         : undefined;
     const draftChunker = draftChunking
       ? new EmbeddedBlockChunker(draftChunking)

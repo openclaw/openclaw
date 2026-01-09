@@ -454,7 +454,11 @@ export async function getReplyFromConfig(
   const blockStreamingEnabled =
     resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
   const blockReplyChunking = blockStreamingEnabled
-    ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider)
+    ? resolveBlockStreamingChunking(
+        cfg,
+        sessionCtx.Provider,
+        sessionCtx.AccountId,
+      )
     : undefined;
 
   const modelState = await createModelSelectionState({
