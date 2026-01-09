@@ -40,6 +40,7 @@ import {
   getStatusCode,
   waitForWaConnection,
 } from "./session.js";
+import { parseVcard } from "./vcard.js";
 
 export type WebListenerCloseReason = {
   status?: number;
@@ -789,49 +790,6 @@ function describeContact(input: {
   return { name, phone };
 }
 
-function parseVcard(vcard?: string): { name?: string; phones: string[] } {
-  if (!vcard) return { phones: [] };
-  const lines = vcard.split(/\r?\n/);
-  let nameFromN: string | undefined;
-  let nameFromFn: string | undefined;
-  const phones: string[] = [];
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const colonIndex = line.indexOf(":");
-    if (colonIndex === -1) continue;
-    const key = line.slice(0, colonIndex).toUpperCase();
-    const rawValue = line.slice(colonIndex + 1).trim();
-    if (!rawValue) continue;
-    const value = cleanVcardValue(rawValue);
-    if (!value) continue;
-    if (key === "FN" && !nameFromFn) {
-      nameFromFn = normalizeVcardName(value);
-      continue;
-    }
-    if (key === "N" && !nameFromN) {
-      nameFromN = normalizeVcardName(value);
-      continue;
-    }
-    if (key.startsWith("TEL") || key.includes(".TEL")) {
-      phones.push(value);
-    }
-  }
-  return { name: nameFromFn ?? nameFromN, phones };
-}
-
-function cleanVcardValue(value: string): string {
-  return value
-    .replace(/\\n/gi, " ")
-    .replace(/\\,/g, ",")
-    .replace(/\\;/g, ";")
-    .trim();
-}
-
-function normalizeVcardName(value: string): string {
-  return value.replace(/;/g, " ").replace(/\s+/g, " ").trim();
-}
-
 function formatContactPlaceholder(name?: string, phone?: string): string {
   const parts = [name, phone].filter((value): value is string =>
     Boolean(value),
@@ -842,7 +800,10 @@ function formatContactPlaceholder(name?: string, phone?: string): string {
 
 function formatContactsPlaceholder(labels: string[], total: number): string {
   const cleaned = labels.map((label) => label.trim()).filter(Boolean);
-  if (cleaned.length === 0) return "<contacts>";
+  if (cleaned.length === 0) {
+    const suffix = total === 1 ? "contact" : "contacts";
+    return `<contacts: ${total} ${suffix}>`;
+  }
   const shown = cleaned.slice(0, 3);
   const remaining = Math.max(total - shown.length, 0);
   const suffix = remaining > 0 ? ` +${remaining} more` : "";

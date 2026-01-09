@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- WhatsApp: refactor vCard parsing helper and improve empty contact card summaries. (#624) — thanks @steipete
 - Pairing: cap pending DM pairing requests at 3 per provider and avoid pairing replies for outbound DMs. — thanks @steipete
 - macOS: replace relay smoke test with version check in packaging script. (#615) — thanks @YuriNachos
 - macOS: avoid clearing Launch at Login during app initialization. (#607) — thanks @wes-davis
