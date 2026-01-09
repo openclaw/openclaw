@@ -14,114 +14,156 @@ export type NativeCommandSpec = {
   acceptsArgs: boolean;
 };
 
-const CHAT_COMMANDS: ChatCommandDefinition[] = [
-  {
-    key: "help",
-    nativeName: "help",
-    description: "Show available commands.",
-    textAliases: ["/help"],
-  },
-  {
-    key: "status",
-    nativeName: "status",
-    description: "Show current status.",
-    textAliases: ["/status", "/usage"],
-  },
-  {
-    key: "debug",
-    nativeName: "debug",
-    description: "Set runtime debug overrides.",
-    textAliases: ["/debug"],
-    acceptsArgs: true,
-  },
-  {
-    key: "cost",
-    nativeName: "cost",
-    description: "Toggle per-response usage line.",
-    textAliases: ["/cost"],
-    acceptsArgs: true,
-  },
-  {
-    key: "stop",
-    nativeName: "stop",
-    description: "Stop the current run.",
-    textAliases: ["/stop"],
-  },
-  {
-    key: "restart",
-    nativeName: "restart",
-    description: "Restart Clawdbot.",
-    textAliases: ["/restart"],
-  },
-  {
-    key: "activation",
-    nativeName: "activation",
-    description: "Set group activation mode.",
-    textAliases: ["/activation"],
-    acceptsArgs: true,
-  },
-  {
-    key: "send",
-    nativeName: "send",
-    description: "Set send policy.",
-    textAliases: ["/send"],
-    acceptsArgs: true,
-  },
-  {
-    key: "reset",
-    nativeName: "reset",
-    description: "Reset the current session.",
-    textAliases: ["/reset"],
-  },
-  {
-    key: "new",
-    nativeName: "new",
-    description: "Start a new session.",
-    textAliases: ["/new"],
-  },
-  {
-    key: "think",
-    nativeName: "think",
-    description: "Set thinking level.",
-    textAliases: ["/thinking", "/think", "/t"],
-    acceptsArgs: true,
-  },
-  {
-    key: "verbose",
-    nativeName: "verbose",
-    description: "Toggle verbose mode.",
-    textAliases: ["/verbose", "/v"],
-    acceptsArgs: true,
-  },
-  {
-    key: "reasoning",
-    nativeName: "reasoning",
-    description: "Toggle reasoning visibility.",
-    textAliases: ["/reasoning", "/reason"],
-    acceptsArgs: true,
-  },
-  {
-    key: "elevated",
-    nativeName: "elevated",
-    description: "Toggle elevated mode.",
-    textAliases: ["/elevated", "/elev"],
-    acceptsArgs: true,
-  },
-  {
-    key: "model",
-    nativeName: "model",
-    description: "Show or set the model.",
-    textAliases: ["/model", "/models"],
-    acceptsArgs: true,
-  },
-  {
-    key: "queue",
-    nativeName: "queue",
-    description: "Adjust queue settings.",
-    textAliases: ["/queue"],
-    acceptsArgs: true,
-  },
-];
+function defineChatCommand(
+  command: Omit<ChatCommandDefinition, "textAliases"> & { textAlias: string },
+): ChatCommandDefinition {
+  return {
+    key: command.key,
+    nativeName: command.nativeName,
+    description: command.description,
+    acceptsArgs: command.acceptsArgs,
+    textAliases: [command.textAlias],
+  };
+}
+
+function registerAlias(
+  commands: ChatCommandDefinition[],
+  key: string,
+  ...aliases: string[]
+): void {
+  const command = commands.find((entry) => entry.key === key);
+  if (!command) {
+    throw new Error(`registerAlias: unknown command key: ${key}`);
+  }
+  const existing = new Set(command.textAliases.map((alias) => alias.trim()));
+  for (const alias of aliases) {
+    const trimmed = alias.trim();
+    if (!trimmed) continue;
+    if (existing.has(trimmed)) continue;
+    existing.add(trimmed);
+    command.textAliases.push(trimmed);
+  }
+}
+
+export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
+  const commands: ChatCommandDefinition[] = [
+    defineChatCommand({
+      key: "help",
+      nativeName: "help",
+      description: "Show available commands.",
+      textAlias: "/help",
+    }),
+    defineChatCommand({
+      key: "status",
+      nativeName: "status",
+      description: "Show current status.",
+      textAlias: "/status",
+    }),
+    defineChatCommand({
+      key: "debug",
+      nativeName: "debug",
+      description: "Set runtime debug overrides.",
+      textAlias: "/debug",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "cost",
+      nativeName: "cost",
+      description: "Toggle per-response usage line.",
+      textAlias: "/cost",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "stop",
+      nativeName: "stop",
+      description: "Stop the current run.",
+      textAlias: "/stop",
+    }),
+    defineChatCommand({
+      key: "restart",
+      nativeName: "restart",
+      description: "Restart Clawdbot.",
+      textAlias: "/restart",
+    }),
+    defineChatCommand({
+      key: "activation",
+      nativeName: "activation",
+      description: "Set group activation mode.",
+      textAlias: "/activation",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "send",
+      nativeName: "send",
+      description: "Set send policy.",
+      textAlias: "/send",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "reset",
+      nativeName: "reset",
+      description: "Reset the current session.",
+      textAlias: "/reset",
+    }),
+    defineChatCommand({
+      key: "new",
+      nativeName: "new",
+      description: "Start a new session.",
+      textAlias: "/new",
+    }),
+    defineChatCommand({
+      key: "think",
+      nativeName: "think",
+      description: "Set thinking level.",
+      textAlias: "/think",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "verbose",
+      nativeName: "verbose",
+      description: "Toggle verbose mode.",
+      textAlias: "/verbose",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "reasoning",
+      nativeName: "reasoning",
+      description: "Toggle reasoning visibility.",
+      textAlias: "/reasoning",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "elevated",
+      nativeName: "elevated",
+      description: "Toggle elevated mode.",
+      textAlias: "/elevated",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "model",
+      nativeName: "model",
+      description: "Show or set the model.",
+      textAlias: "/model",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "queue",
+      nativeName: "queue",
+      description: "Adjust queue settings.",
+      textAlias: "/queue",
+      acceptsArgs: true,
+    }),
+  ];
+
+  registerAlias(commands, "status", "/usage");
+  registerAlias(commands, "think", "/thinking", "/t");
+  registerAlias(commands, "verbose", "/v");
+  registerAlias(commands, "reasoning", "/reason");
+  registerAlias(commands, "elevated", "/elev");
+  registerAlias(commands, "model", "/models");
+
+  return commands;
+})();
 
 const NATIVE_COMMAND_SURFACES = new Set(["discord", "slack", "telegram"]);
 

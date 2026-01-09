@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCommandText,
   getCommandDetection,
+  listChatCommands,
   listNativeCommandSpecs,
   shouldHandleTextCommands,
 } from "./commands-registry.js";
@@ -21,16 +22,21 @@ describe("commands registry", () => {
 
   it("detects known text commands", () => {
     const detection = getCommandDetection();
-    expect(detection.exact.has("/help")).toBe(true);
-    expect(detection.regex.test("/status")).toBe(true);
-    expect(detection.regex.test("/status:")).toBe(true);
-    expect(detection.regex.test("/usage")).toBe(true);
-    expect(detection.regex.test("/usage:")).toBe(true);
-    expect(detection.regex.test("/stop")).toBe(true);
-    expect(detection.regex.test("/send:")).toBe(true);
-    expect(detection.regex.test("/debug set foo=bar")).toBe(true);
-    expect(detection.regex.test("/models")).toBe(true);
-    expect(detection.regex.test("/models list")).toBe(true);
+    for (const command of listChatCommands()) {
+      for (const alias of command.textAliases) {
+        expect(detection.exact.has(alias.toLowerCase())).toBe(true);
+        expect(detection.regex.test(alias)).toBe(true);
+        expect(detection.regex.test(`${alias}:`)).toBe(true);
+
+        if (command.acceptsArgs) {
+          expect(detection.regex.test(`${alias} list`)).toBe(true);
+          expect(detection.regex.test(`${alias}: list`)).toBe(true);
+        } else {
+          expect(detection.regex.test(`${alias} list`)).toBe(false);
+          expect(detection.regex.test(`${alias}: list`)).toBe(false);
+        }
+      }
+    }
     expect(detection.regex.test("try /status")).toBe(false);
   });
 
