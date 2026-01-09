@@ -221,6 +221,8 @@ describe("sandboxRecreateCommand", () => {
         "Please specify --all, --session <key>, or --agent <id>",
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
+      expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
     });
 
     it("should error if multiple filters specified", async () => {
@@ -234,6 +236,8 @@ describe("sandboxRecreateCommand", () => {
         "Please specify only one of: --all, --session, --agent",
       );
       expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(mocks.listSandboxContainers).not.toHaveBeenCalled();
+      expect(mocks.listSandboxBrowsers).not.toHaveBeenCalled();
     });
   });
 

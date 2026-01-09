@@ -14,8 +14,12 @@ import {
   resolveProfile,
 } from "../browser/config.js";
 import { DEFAULT_CLAWD_BROWSER_COLOR } from "../browser/constants.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { STATE_DIR_CLAWDBOT } from "../config/config.js";
+import {
+  type ClawdbotConfig,
+  loadConfig,
+  STATE_DIR_CLAWDBOT,
+} from "../config/config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentIdFromSessionKey } from "./agent-scope.js";
@@ -327,6 +331,14 @@ function resolveSandboxScopeKey(scope: SandboxScope, sessionKey: string) {
   if (scope === "session") return trimmed;
   const agentId = resolveAgentIdFromSessionKey(trimmed);
   return `agent:${agentId}`;
+}
+
+function resolveSandboxAgentId(scopeKey: string): string | undefined {
+  const trimmed = scopeKey.trim();
+  if (!trimmed || trimmed === "shared") return undefined;
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts[0] === "agent" && parts[1]) return normalizeAgentId(parts[1]);
+  return resolveAgentIdFromSessionKey(trimmed);
 }
 
 export function resolveSandboxConfigForAgent(
@@ -1159,6 +1171,7 @@ export type SandboxBrowserInfo = SandboxBrowserRegistryEntry & {
 };
 
 export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
+  const config = loadConfig();
   const registry = await readRegistry();
   const results: SandboxContainerInfo[] = [];
 
@@ -1179,10 +1192,14 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
         // ignore
       }
     }
+    const agentId = resolveSandboxAgentId(entry.sessionKey);
+    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker
+      .image;
     results.push({
       ...entry,
+      image: actualImage,
       running: state.running,
-      imageMatch: actualImage === entry.image,
+      imageMatch: actualImage === configuredImage,
     });
   }
 
@@ -1190,6 +1207,7 @@ export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
 }
 
 export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
+  const config = loadConfig();
   const registry = await readBrowserRegistry();
   const results: SandboxBrowserInfo[] = [];
 
@@ -1209,10 +1227,14 @@ export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
         // ignore
       }
     }
+    const agentId = resolveSandboxAgentId(entry.sessionKey);
+    const configuredImage = resolveSandboxConfigForAgent(config, agentId)
+      .browser.image;
     results.push({
       ...entry,
+      image: actualImage,
       running: state.running,
-      imageMatch: actualImage === entry.image,
+      imageMatch: actualImage === configuredImage,
     });
   }
 

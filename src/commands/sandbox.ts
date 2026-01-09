@@ -72,7 +72,9 @@ export async function sandboxRecreateCommand(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,
 ): Promise<void> {
-  validateRecreateOptions(opts, runtime);
+  if (!validateRecreateOptions(opts, runtime)) {
+    return;
+  }
 
   const filtered = await fetchAndFilterContainers(opts);
 
@@ -101,10 +103,11 @@ export async function sandboxRecreateCommand(
 function validateRecreateOptions(
   opts: SandboxRecreateOptions,
   runtime: RuntimeEnv,
-): void {
+): boolean {
   if (!opts.all && !opts.session && !opts.agent) {
     runtime.error("Please specify --all, --session <key>, or --agent <id>");
     runtime.exit(1);
+    return false;
   }
 
   const exclusiveCount = [opts.all, opts.session, opts.agent].filter(
@@ -113,7 +116,10 @@ function validateRecreateOptions(
   if (exclusiveCount > 1) {
     runtime.error("Please specify only one of: --all, --session, --agent");
     runtime.exit(1);
+    return false;
   }
+
+  return true;
 }
 
 // --- Filtering ---
