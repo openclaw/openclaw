@@ -32,12 +32,14 @@
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
 - Status: compact /status with session token usage + estimated cost, add `/cost` per-response usage lines (tokens-only for OAuth).
 - Status: show active auth profile and key snippet in /status.
+- Agent: promote `<think>`/`<thinking>` tag reasoning into structured thinking blocks so `/reasoning` works consistently for OpenAI-compat providers.
 - macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
+- Control UI: show/patch per-session reasoning level and render extracted reasoning in chat.
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Control UI: drop explicit `ui:install` step; `ui:build` now auto-installs UI deps (docs + update flow).
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
