@@ -22,6 +22,11 @@ available from `~/.clawdbot/skills`. See [Skills: per-agent vs shared](/tools/sk
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
+**Workspace note:** each agent’s workspace is the **default cwd**, not a hard
+sandbox. Relative paths resolve inside the workspace, but absolute paths can
+reach other host locations unless sandboxing is enabled. See
+[Sandboxing](/gateway/sandboxing).
+
 ## Paths (quick map)
 
 - Config: `~/.clawdbot/clawdbot.json` (or `CLAWDBOT_CONFIG_PATH`)

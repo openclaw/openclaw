@@ -114,6 +114,26 @@ Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`
 
 Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agent.workspace` (default: `~/clawd`).
 
+### Can agents work outside the workspace?
+
+Yes. The workspace is the **default cwd** and memory anchor, not a hard sandbox.
+Relative paths resolve inside the workspace, but absolute paths can access other
+host locations unless sandboxing is enabled. If you need isolation, use
+[`agent.sandbox`](/gateway/sandboxing) or per‑agent sandbox settings. If you
+want a repo to be the default working directory, point that agent’s
+`workspace` to the repo root. The Clawdbot repo is just source code; keep the
+workspace separate unless you intentionally want the agent to work inside it.
+
+Example (repo as default cwd):
+
+```json5
+{
+  agent: {
+    workspace: "~/Projects/my-repo"
+  }
+}
+```
+
 ### I’m in remote mode — where is the session store?
 
 Session state is owned by the **gateway host**. If you’re in remote mode, the session store you care about is on the remote machine, not your local laptop. See [Session management](/concepts/session).
