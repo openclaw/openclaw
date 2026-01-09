@@ -16,12 +16,24 @@ if (process.platform === "win32" && process.env.GITHUB_ACTIONS === "true") {
     if (typeof chunk === "string") {
       return originalStdoutWrite(sanitizeWindowsCIOutput(chunk), ...args);
     }
+    if (Buffer.isBuffer(chunk)) {
+      return originalStdoutWrite(
+        sanitizeWindowsCIOutput(chunk.toString("utf-8")),
+        ...args,
+      );
+    }
     return originalStdoutWrite(chunk as never, ...args);
   }) as typeof process.stdout.write;
 
   process.stderr.write = ((chunk: unknown, ...args: unknown[]) => {
     if (typeof chunk === "string") {
       return originalStderrWrite(sanitizeWindowsCIOutput(chunk), ...args);
+    }
+    if (Buffer.isBuffer(chunk)) {
+      return originalStderrWrite(
+        sanitizeWindowsCIOutput(chunk.toString("utf-8")),
+        ...args,
+      );
     }
     return originalStderrWrite(chunk as never, ...args);
   }) as typeof process.stderr.write;
