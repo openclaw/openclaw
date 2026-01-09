@@ -1,16 +1,22 @@
-import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
+  resolveAgentDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import {
+  type AuthProfileStore,
   ensureAuthProfileStore,
   setAuthProfileOrder,
-  type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 
-function resolveTargetAgent(cfg: ReturnType<typeof loadConfig>, raw?: string): {
+function resolveTargetAgent(
+  cfg: ReturnType<typeof loadConfig>,
+  raw?: string,
+): {
   agentId: string;
   agentDir: string;
 } {
@@ -37,7 +43,9 @@ export async function modelsAuthOrderGetCommand(
 
   const cfg = loadConfig();
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const order = describeOrder(store, provider);
 
   if (opts.json) {
@@ -59,9 +67,13 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`);
   runtime.log(
-    order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)",
+    `Auth file: ${shortenHomePath(`${agentDir}/auth-profiles.json`)}`,
+  );
+  runtime.log(
+    order.length > 0
+      ? `Order override: ${order.join(", ")}`
+      : "Order override: (none)",
   );
 }
 
@@ -75,8 +87,13 @@ export async function modelsAuthOrderClearCommand(
 
   const cfg = loadConfig();
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
-  const updated = await setAuthProfileOrder({ agentDir, provider, order: null });
-  if (!updated) throw new Error("Failed to update auth-profiles.json (lock busy?).");
+  const updated = await setAuthProfileOrder({
+    agentDir,
+    provider,
+    order: null,
+  });
+  if (!updated)
+    throw new Error("Failed to update auth-profiles.json (lock busy?).");
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
@@ -94,7 +111,9 @@ export async function modelsAuthOrderSetCommand(
   const cfg = loadConfig();
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
 
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+  });
   const providerKey = normalizeProviderId(provider);
   const requested = (opts.order ?? [])
     .map((entry) => String(entry).trim())
@@ -120,10 +139,10 @@ export async function modelsAuthOrderSetCommand(
     provider,
     order: requested,
   });
-  if (!updated) throw new Error("Failed to update auth-profiles.json (lock busy?).");
+  if (!updated)
+    throw new Error("Failed to update auth-profiles.json (lock busy?).");
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Order override: ${describeOrder(updated, provider).join(", ")}`);
 }
-
