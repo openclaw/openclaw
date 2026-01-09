@@ -100,7 +100,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Models](https://docs.clawd.bot/concepts/models)
 - [Sub-agents](https://docs.clawd.bot/tools/subagents)
 - [Agent send CLI](https://docs.clawd.bot/tools/agent-send)
-- [Terminal UI](https://docs.clawd.bot/web/tui)
+- [Terminal UI](https://docs.clawd.bot/tui)
 - [Browser control](https://docs.clawd.bot/tools/browser)
 - [Browser (Linux troubleshooting)](https://docs.clawd.bot/tools/browser-linux-troubleshooting)
 - [Polls](https://docs.clawd.bot/automation/poll)
