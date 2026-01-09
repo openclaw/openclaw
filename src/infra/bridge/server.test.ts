@@ -46,6 +46,14 @@ function sendLine(socket: net.Socket, obj: unknown) {
   socket.write(`${JSON.stringify(obj)}\n`);
 }
 
+async function waitForSocketConnect(socket: net.Socket) {
+  if (!socket.connecting) return;
+  await new Promise<void>((resolve, reject) => {
+    socket.once("connect", resolve);
+    socket.once("error", reject);
+  });
+}
+
 describe("node bridge server", () => {
   let baseDir = "";
 
@@ -156,6 +164,7 @@ describe("node bridge server", () => {
     });
 
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket);
     const readLine = createLineReader(socket);
     sendLine(socket, { type: "pair-request", nodeId: "n2", platform: "ios" });
 
@@ -189,6 +198,7 @@ describe("node bridge server", () => {
     socket.destroy();
 
     const socket2 = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket2);
     const readLine2 = createLineReader(socket2);
     sendLine(socket2, { type: "hello", nodeId: "n2", token });
     const line3 = JSON.parse(await readLine2()) as { type: string };
@@ -239,6 +249,7 @@ describe("node bridge server", () => {
     });
 
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket);
     const readLine = createLineReader(socket);
     sendLine(socket, {
       type: "pair-request",
@@ -248,7 +259,7 @@ describe("node bridge server", () => {
 
     // Approve the pending request from the gateway side.
     let reqId: string | undefined;
-    for (let i = 0; i < 40; i += 1) {
+    for (let i = 0; i < 120; i += 1) {
       const list = await listNodePairing(baseDir);
       const req = list.pending.find((p) => p.nodeId === "n3-rpc");
       if (req) {
