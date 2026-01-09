@@ -175,7 +175,8 @@ export async function runNonInteractiveOnboarding(
     });
     nextConfig = applyMinimaxHostedConfig(nextConfig);
   } else if (authChoice === "minimax-api") {
-    const key = opts.minimaxApiKey?.trim() || resolveEnvApiKey("minimax")?.apiKey;
+    const key =
+      opts.minimaxApiKey?.trim() || resolveEnvApiKey("minimax")?.apiKey;
     if (!key) {
       runtime.error("Missing --minimax-api-key (or MINIMAX_API_KEY in env).");
       runtime.exit(1);
@@ -221,8 +222,6 @@ export async function runNonInteractiveOnboarding(
     nextConfig = applyOpenAICodexModelDefault(nextConfig).next;
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
-  } else if (authChoice === "minimax-api") {
-    nextConfig = applyMinimaxApiConfig(nextConfig);
   } else if (
     authChoice === "token" ||
     authChoice === "oauth" ||
