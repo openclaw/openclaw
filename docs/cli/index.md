@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for clawdbot commands, subcommands, and options"
+summary: "Clawdbot CLI reference for `clawdbot` commands, subcommands, and options"
 read_when:
   - Adding or modifying CLI commands or options
   - Documenting new command surfaces
@@ -7,13 +7,13 @@ read_when:
 
 # CLI reference
 
-This page mirrors `src/cli/*` and is the source of truth for CLI behavior.
-If you change the CLI code, update this doc.
+This page describes the current CLI behavior. If commands change, update this doc.
 
 ## Global flags
 
 - `--dev`: isolate state under `~/.clawdbot-dev` and shift default ports.
 - `--profile <name>`: isolate state under `~/.clawdbot-<name>`.
+- `--no-color`: disable ANSI colors.
 - `-V`, `--version`, `-v`: print version and exit.
 
 ## Output styling
@@ -21,11 +21,12 @@ If you change the CLI code, update this doc.
 - ANSI colors and progress indicators only render in TTY sessions.
 - OSC-8 hyperlinks render as clickable links in supported terminals; otherwise we fall back to plain URLs.
 - `--json` (and `--plain` where supported) disables styling for clean output.
+- `--no-color` disables ANSI styling; `NO_COLOR=1` is also respected.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
 ## Color palette
 
-Clawdbot uses a lobster palette for CLI output. Source of truth: `src/terminal/theme.ts`.
+Clawdbot uses a lobster palette for CLI output.
 
 - `accent` (#FF5A2D): headings, provider labels, primary highlights.
 - `accentBright` (#FF7A3D): command names, emphasis.
@@ -35,6 +36,8 @@ Clawdbot uses a lobster palette for CLI output. Source of truth: `src/terminal/t
 - `warn` (#FFB020): warnings, fallbacks, attention.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
+
+Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
 
 ## Command tree
 
@@ -55,8 +58,7 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     info
     check
-  send
-  poll
+  message
   agent
   agents
     list
@@ -69,6 +71,7 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
+    discover
   models
     list
     status
@@ -206,7 +209,8 @@ Manage chat provider accounts (WhatsApp/Telegram/Discord/Slack/Signal/iMessage).
 
 Subcommands:
 - `providers list`: show configured chat providers and auth profiles (Claude Code + Codex CLI OAuth sync included).
-- `providers status`: check gateway reachability and provider health (`--probe` to verify credentials; use `status --deep` for local-only probes).
+- `providers status`: check gateway reachability and provider health (`--probe` to verify credentials and run small provider audits; use `status --deep` for local-only probes).
+- Tip: `providers status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `clawdbot doctor`).
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `providers login`: interactive provider login (WhatsApp Web only).
@@ -231,7 +235,9 @@ Common options:
 - `--json`: output JSON (includes usage unless `--no-usage` is set).
 
 OAuth sync sources:
-- `~/.claude/.credentials.json` → `anthropic:claude-cli`
+- Claude Code → `anthropic:claude-cli`
+  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
+  - Linux/Windows: `~/.claude/.credentials.json`
 - `~/.codex/auth.json` → `openai-codex:codex-cli`
 
 More detail: [/concepts/oauth](/concepts/oauth)
@@ -282,37 +288,25 @@ Options:
 
 ## Messaging + agent
 
-### `send`
-Send a message through a provider.
+### `message`
+Unified outbound messaging + provider actions.
 
-Required:
-- `--to <dest>`
-- `--message <text>`
+See: [/cli/message](/cli/message)
 
-Options:
-- `--media <path-or-url>`
-- `--gif-playback`
-- `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
-- `--account <id>` (WhatsApp)
-- `--dry-run`
-- `--json`
-- `--verbose`
+Subcommands:
+- `message send|poll|react|reactions|read|edit|delete|pin|unpin|pins|permissions|search|timeout|kick|ban`
+- `message thread <create|list|reply>`
+- `message emoji <list|upload>`
+- `message sticker <send|upload>`
+- `message role <info|add|remove>`
+- `message channel <info|list>`
+- `message member info`
+- `message voice status`
+- `message event <list|create>`
 
-### `poll`
-Create a poll (WhatsApp or Discord).
-
-Required:
-- `--to <id>`
-- `--question <text>`
-- `--option <choice>` (repeat 2-12 times)
-
-Options:
-- `--max-selections <n>`
-- `--duration-hours <n>` (Discord)
-- `--provider <whatsapp|discord>`
-- `--dry-run`
-- `--json`
-- `--verbose`
+Examples:
+- `clawdbot message send --to +15555550123 --message "Hi"`
+- `clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).
@@ -416,6 +410,8 @@ Options:
 - `--tailscale <off|serve|funnel>`
 - `--tailscale-reset-on-exit`
 - `--allow-unconfigured`
+- `--dev`
+- `--reset`
 - `--force` (kill existing listener on port)
 - `--verbose`
 - `--ws-log <auto|full|compact>`
@@ -443,10 +439,17 @@ Notes:
 ### `logs`
 Tail Gateway file logs via RPC.
 
+Notes:
+- TTY sessions render a colorized, structured view; non-TTY falls back to plain text.
+- `--json` emits line-delimited JSON (one log event per line).
+
 Examples:
 ```bash
 clawdbot logs --follow
 clawdbot logs --limit 200
+clawdbot logs --plain
+clawdbot logs --json
+clawdbot logs --no-color
 ```
 
 ### `gateway <subcommand>`
@@ -480,6 +483,9 @@ Options:
 Options:
 - `--json`
 - `--plain`
+- `--check` (exit 1=expired/missing, 2=expiring)
+
+Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 
 ### `models set <model>`
 Set `agent.model.primary`.

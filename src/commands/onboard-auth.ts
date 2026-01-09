@@ -2,6 +2,7 @@ import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.js";
 
 const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
 export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
@@ -173,7 +174,7 @@ export function applyMinimaxHostedProviderConfig(
   };
 
   const providers = { ...cfg.models?.providers };
-  const hostedModel = {
+  const hostedModel: ModelDefinitionConfig = {
     id: MINIMAX_HOSTED_MODEL_ID,
     name: "MiniMax M2.1",
     reasoning: false,
