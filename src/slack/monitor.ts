@@ -1110,7 +1110,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             accountId: account.accountId,
             runtime,
             textLimit,
-            threadTs: effectiveThreadTs,
+            replyThreadTs: effectiveThreadTs,
           });
           hasRepliedRef.value = true;
         },
