@@ -317,6 +317,28 @@ export class CronService {
         raw.description = desc;
         mutated = true;
       }
+
+      const payload = raw.payload;
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        const legacyChannel =
+          typeof (payload as Record<string, unknown>).channel === "string"
+            ? String((payload as Record<string, unknown>).channel).trim()
+            : "";
+        const provider =
+          typeof (payload as Record<string, unknown>).provider === "string"
+            ? String((payload as Record<string, unknown>).provider).trim()
+            : "";
+        // Back-compat: older cron payloads used `channel` for delivery provider.
+        if (!provider && legacyChannel) {
+          (payload as Record<string, unknown>).provider =
+            legacyChannel.toLowerCase();
+          mutated = true;
+        }
+        if ("channel" in (payload as Record<string, unknown>)) {
+          delete (payload as Record<string, unknown>).channel;
+          mutated = true;
+        }
+      }
     }
     this.store = { version: 1, jobs: jobs as unknown as CronJob[] };
     if (mutated) await this.persist();
