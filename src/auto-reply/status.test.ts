@@ -65,7 +65,6 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      },
       } as ClawdbotConfig,
       agent: {
         model: "anthropic/pi:opus",
@@ -249,7 +248,6 @@ describe("buildStatusMessage", () => {
             },
           },
         },
-      },
       } as ClawdbotConfig,
       agent: { model: "anthropic/claude-opus-4-5" },
       sessionEntry: { sessionId: "c1", updatedAt: 0, inputTokens: 10 },
