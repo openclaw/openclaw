@@ -393,6 +393,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               threadTs: threadId ?? replyTo ?? undefined,
             },
             cfg,
+            {
+              currentChannelId: options?.currentChannelId,
+              currentThreadTs: options?.currentThreadTs,
+              replyToMode: options?.replyToMode,
+              hasRepliedRef: options?.hasRepliedRef,
+            },
           );
         }
         if (provider === "telegram") {
