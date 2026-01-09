@@ -67,6 +67,7 @@
 - Commands: warn when /elevated runs in direct (unsandboxed) runtime.
 - Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
 - Commands: return /status in directive-only multi-line messages.
+- Models: fall back to configured models when the provider catalog is unavailable.
 - Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
 
 ## 2026.1.8
