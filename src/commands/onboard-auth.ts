@@ -170,7 +170,7 @@ export function applyMinimaxHostedProviderConfig(
   cfg: ClawdbotConfig,
   params?: { baseUrl?: string },
 ): ClawdbotConfig {
-  const models = { ...cfg.agent?.models };
+  const models = { ...cfg.agents?.defaults?.models };
   models[MINIMAX_HOSTED_MODEL_REF] = {
     ...models[MINIMAX_HOSTED_MODEL_REF],
     alias: models[MINIMAX_HOSTED_MODEL_REF]?.alias ?? "Minimax",
@@ -206,9 +206,12 @@ export function applyMinimaxHostedProviderConfig(
 
   return {
     ...cfg,
-    agent: {
-      ...cfg.agent,
-      models,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
     },
     models: {
       mode: cfg.models?.mode ?? "merge",
@@ -248,17 +251,14 @@ export function applyMinimaxHostedConfig(
   const next = applyMinimaxHostedProviderConfig(cfg, params);
   return {
     ...next,
-    agent: {
-      ...next.agent,
-      model: {
-        ...(next.agent?.model &&
-        "fallbacks" in (next.agent.model as Record<string, unknown>)
-          ? {
-              fallbacks: (next.agent.model as { fallbacks?: string[] })
-                .fallbacks,
-            }
-          : undefined),
-        primary: MINIMAX_HOSTED_MODEL_REF,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(next.agents?.defaults?.model ?? {}),
+          primary: MINIMAX_HOSTED_MODEL_REF,
+        },
       },
     },
   };

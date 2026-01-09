@@ -23,6 +23,9 @@ actor MacNodeBridgeSession {
     private var buffer = Data()
     private var pendingRPC: [String: CheckedContinuation<BridgeRPCResponse, Error>] = [:]
     private var serverEventSubscribers: [UUID: AsyncStream<BridgeEventFrame>.Continuation] = [:]
+    private var pingTask: Task<Void, Never>?
+    private var lastPongAt: Date?
+    private var lastPingId: String?
 
     private(set) var state: State = .idle
 
@@ -77,6 +80,7 @@ actor MacNodeBridgeSession {
         if base.type == "hello-ok" {
             let ok = try self.decoder.decode(BridgeHelloOk.self, from: data)
             self.state = .connected(serverName: ok.serverName)
+            self.startPingLoop()
             await onConnected?(ok.serverName)
         } else if base.type == "error" {
             let err = try self.decoder.decode(BridgeErrorFrame.self, from: data)
@@ -112,6 +116,10 @@ actor MacNodeBridgeSession {
             case "ping":
                 let ping = try self.decoder.decode(BridgePing.self, from: nextData)
                 try await self.send(BridgePong(type: "pong", id: ping.id))
+
+            case "pong":
+                let pong = try self.decoder.decode(BridgePong.self, from: nextData)
+                self.notePong(pong)
 
             case "invoke":
                 let req = try self.decoder.decode(BridgeInvokeRequest.self, from: nextData)
@@ -182,6 +190,11 @@ actor MacNodeBridgeSession {
     }
 
     func disconnect() async {
+        self.pingTask?.cancel()
+        self.pingTask = nil
+        self.lastPongAt = nil
+        self.lastPingId = nil
+
         self.connection?.cancel()
         self.connection = nil
         self.queue = nil
@@ -239,12 +252,17 @@ actor MacNodeBridgeSession {
     }
 
     private func send(_ obj: some Encodable) async throws {
+        guard let connection = self.connection else {
+            throw NSError(domain: "Bridge", code: 15, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
         let data = try self.encoder.encode(obj)
         var line = Data()
         line.append(data)
         line.append(0x0A)
         try await withCheckedThrowingContinuation(isolation: self) { (cont: CheckedContinuation<Void, Error>) in
-            self.connection?.send(content: line, completion: .contentProcessed { err in
+            connection.send(content: line, completion: .contentProcessed { err in
                 if let err { cont.resume(throwing: err) } else { cont.resume(returning: ()) }
             })
         }
@@ -278,6 +296,51 @@ actor MacNodeBridgeSession {
                 cont.resume(returning: data ?? Data())
             }
         }
+    }
+
+    private func startPingLoop() {
+        self.pingTask?.cancel()
+        self.lastPongAt = Date()
+        self.pingTask = Task { [weak self] in
+            guard let self else { return }
+            await self.runPingLoop()
+        }
+    }
+
+    private func runPingLoop() async {
+        let intervalSeconds = 15.0
+        let timeoutSeconds = 45.0
+
+        while !Task.isCancelled {
+            do {
+                try await Task.sleep(nanoseconds: UInt64(intervalSeconds * 1_000_000_000))
+            } catch {
+                return
+            }
+
+            guard self.connection != nil else { return }
+
+            if let last = self.lastPongAt,
+               Date().timeIntervalSince(last) > timeoutSeconds
+            {
+                await self.disconnect()
+                return
+            }
+
+            let id = UUID().uuidString
+            self.lastPingId = id
+            do {
+                try await self.send(BridgePing(type: "ping", id: id))
+            } catch {
+                await self.disconnect()
+                return
+            }
+        }
+    }
+
+    private func notePong(_ pong: BridgePong) {
+        _ = pong
+        self.lastPongAt = Date()
     }
 
     private static func makeStateStream(

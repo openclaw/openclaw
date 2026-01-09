@@ -56,8 +56,9 @@ export async function monitorMSTeamsProvider(
   const textLimit = resolveTextChunkLimit(cfg, "msteams");
   const MB = 1024 * 1024;
   const mediaMaxBytes =
-    typeof cfg.agent?.mediaMaxMb === "number" && cfg.agent.mediaMaxMb > 0
-      ? Math.floor(cfg.agent.mediaMaxMb * MB)
+    typeof cfg.agents?.defaults?.mediaMaxMb === "number" &&
+    cfg.agents.defaults.mediaMaxMb > 0
+      ? Math.floor(cfg.agents.defaults.mediaMaxMb * MB)
       : 8 * MB;
   const conversationStore =
     opts.conversationStore ?? createMSTeamsConversationStoreFs();
