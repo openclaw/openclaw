@@ -288,12 +288,14 @@ export function buildStatusMessage(args: StatusArgs): string {
 
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
+  const verboseLabel = verboseLevel === "on" ? "verbose" : null;
+  const elevatedLabel = elevatedLevel === "on" ? "elevated" : null;
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
-    `Verbose: ${verboseLevel}`,
+    verboseLabel,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
-    `Elevated: ${elevatedLevel}`,
+    elevatedLabel,
   ];
   const optionsLine = optionParts.filter(Boolean).join(" · ");
   const activationParts = [
