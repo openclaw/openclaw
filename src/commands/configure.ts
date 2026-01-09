@@ -21,6 +21,7 @@ import {
   ensureAuthProfileStore,
   upsertAuthProfile,
 } from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -35,6 +36,7 @@ import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -64,8 +66,6 @@ import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
-import { resolveEnvApiKey } from "../agents/model-auth.js";
-import { upsertSharedEnvVar } from "../infra/env-file.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
