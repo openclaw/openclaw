@@ -7,6 +7,7 @@ import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -93,6 +94,110 @@ export type CommandContext = {
   to?: string;
 };
 
+export async function buildStatusReply(params: {
+  cfg: ClawdbotConfig;
+  command: CommandContext;
+  sessionEntry?: SessionEntry;
+  sessionKey?: string;
+  sessionScope?: SessionScope;
+  provider: string;
+  model: string;
+  contextTokens: number;
+  resolvedThinkLevel?: ThinkLevel;
+  resolvedVerboseLevel: VerboseLevel;
+  resolvedReasoningLevel: ReasoningLevel;
+  resolvedElevatedLevel?: ElevatedLevel;
+  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  isGroup: boolean;
+  defaultGroupActivation: () => "always" | "mention";
+}): Promise<ReplyPayload | undefined> {
+  const {
+    cfg,
+    command,
+    sessionEntry,
+    sessionKey,
+    sessionScope,
+    provider,
+    model,
+    contextTokens,
+    resolvedThinkLevel,
+    resolvedVerboseLevel,
+    resolvedReasoningLevel,
+    resolvedElevatedLevel,
+    resolveDefaultThinkingLevel,
+    isGroup,
+    defaultGroupActivation,
+  } = params;
+  if (!command.isAuthorizedSender) {
+    logVerbose(
+      `Ignoring /status from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+    );
+    return undefined;
+  }
+  let usageLine: string | null = null;
+  try {
+    const usageProvider = resolveUsageProviderId(provider);
+    if (usageProvider) {
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: 3500,
+        providers: [usageProvider],
+      });
+      usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
+    }
+  } catch {
+    usageLine = null;
+  }
+  const queueSettings = resolveQueueSettings({
+    cfg,
+    provider: command.provider,
+    sessionEntry,
+  });
+  const queueKey = sessionKey ?? sessionEntry?.sessionId;
+  const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
+  const queueOverrides = Boolean(
+    sessionEntry?.queueDebounceMs ??
+      sessionEntry?.queueCap ??
+      sessionEntry?.queueDrop,
+  );
+  const groupActivation = isGroup
+    ? (normalizeGroupActivation(sessionEntry?.groupActivation) ??
+      defaultGroupActivation())
+    : undefined;
+  const statusText = buildStatusMessage({
+    agent: {
+      ...cfg.agent,
+      model: {
+        ...cfg.agent?.model,
+        primary: `${provider}/${model}`,
+      },
+      contextTokens,
+      thinkingDefault: cfg.agent?.thinkingDefault,
+      verboseDefault: cfg.agent?.verboseDefault,
+      elevatedDefault: cfg.agent?.elevatedDefault,
+    },
+    sessionEntry,
+    sessionKey,
+    sessionScope,
+    groupActivation,
+    resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
+    resolvedVerbose: resolvedVerboseLevel,
+    resolvedReasoning: resolvedReasoningLevel,
+    resolvedElevated: resolvedElevatedLevel,
+    modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry),
+    usageLine: usageLine ?? undefined,
+    queue: {
+      mode: queueSettings.mode,
+      depth: queueDepth,
+      debounceMs: queueSettings.debounceMs,
+      cap: queueSettings.cap,
+      dropPolicy: queueSettings.dropPolicy,
+      showDetails: queueOverrides,
+    },
+    includeTranscriptUsage: false,
+  });
+  return { text: statusText };
+}
+
 function formatApiKeySnippet(apiKey: string): string {
   const compact = apiKey.replace(/\s+/g, "");
   if (!compact) return "unknown";
@@ -113,19 +218,16 @@ function resolveModelAuthLabel(
   const providerKey = normalizeProviderId(resolved);
   const store = ensureAuthProfileStore();
   const profileOverride = sessionEntry?.authProfileOverride?.trim();
-  const lastGood =
-    store.lastGood?.[providerKey] ?? store.lastGood?.[resolved];
+  const lastGood = store.lastGood?.[providerKey] ?? store.lastGood?.[resolved];
   const order = resolveAuthProfileOrder({
     cfg,
     store,
     provider: providerKey,
     preferredProfile: profileOverride,
   });
-  const candidates = [
-    profileOverride,
-    lastGood,
-    ...order,
-  ].filter(Boolean) as string[];
+  const candidates = [profileOverride, lastGood, ...order].filter(
+    Boolean,
+  ) as string[];
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
@@ -449,73 +551,24 @@ export async function handleCommands(params: {
     directives.hasStatusDirective ||
     command.commandBodyNormalized === "/status";
   if (allowTextCommands && statusRequested) {
-    if (!command.isAuthorizedSender) {
-      logVerbose(
-        `Ignoring /status from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
-      );
-      return { shouldContinue: false };
-    }
-    let usageLine: string | null = null;
-    try {
-      const usageProvider = resolveUsageProviderId(provider);
-      const usageSummary = await loadProviderUsageSummary({
-        timeoutMs: 3500,
-        providers: usageProvider ? [usageProvider] : [],
-      });
-      usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
-    } catch {
-      usageLine = null;
-    }
-    const queueSettings = resolveQueueSettings({
+    const reply = await buildStatusReply({
       cfg,
-      provider: command.provider,
-      sessionEntry,
-    });
-    const queueKey = sessionKey ?? sessionEntry?.sessionId;
-    const queueDepth = queueKey ? getFollowupQueueDepth(queueKey) : 0;
-    const queueOverrides = Boolean(
-      sessionEntry?.queueDebounceMs ??
-        sessionEntry?.queueCap ??
-        sessionEntry?.queueDrop,
-    );
-    const groupActivation = isGroup
-      ? (normalizeGroupActivation(sessionEntry?.groupActivation) ??
-        defaultGroupActivation())
-      : undefined;
-    const statusText = buildStatusMessage({
-      agent: {
-        ...cfg.agent,
-        model: {
-          ...cfg.agent?.model,
-          primary: `${provider}/${model}`,
-        },
-        contextTokens,
-        thinkingDefault: cfg.agent?.thinkingDefault,
-        verboseDefault: cfg.agent?.verboseDefault,
-        elevatedDefault: cfg.agent?.elevatedDefault,
-      },
+      command,
       sessionEntry,
       sessionKey,
       sessionScope,
-      groupActivation,
-      resolvedThink:
-        resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
-      resolvedVerbose: resolvedVerboseLevel,
-      resolvedReasoning: resolvedReasoningLevel,
-      resolvedElevated: resolvedElevatedLevel,
-      modelAuth: resolveModelAuthLabel(provider, cfg, sessionEntry),
-      usageLine: usageLine ?? undefined,
-      queue: {
-        mode: queueSettings.mode,
-        depth: queueDepth,
-        debounceMs: queueSettings.debounceMs,
-        cap: queueSettings.cap,
-        dropPolicy: queueSettings.dropPolicy,
-        showDetails: queueOverrides,
-      },
-      includeTranscriptUsage: false,
+      provider,
+      model,
+      contextTokens,
+      resolvedThinkLevel,
+      resolvedVerboseLevel,
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel,
+      isGroup,
+      defaultGroupActivation,
     });
-    return { shouldContinue: false, reply: { text: statusText } };
+    return { shouldContinue: false, reply };
   }
 
   const stopRequested = command.commandBodyNormalized === "/stop";

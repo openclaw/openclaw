@@ -744,6 +744,7 @@ export async function handleDirectiveOnly(params: {
     parts.push(`${SYSTEM_MARK} Queue drop set to ${directives.dropPolicy}.`);
   }
   const ack = parts.join(" ").trim();
+  if (!ack && directives.hasStatusDirective) return undefined;
   return { text: ack || "OK." };
 }
 
