@@ -233,6 +233,9 @@ importers:
       marked:
         specifier: ^17.0.1
         version: 17.0.1
+      vite:
+        specifier: 7.3.1
+        version: 7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
     devDependencies:
       '@vitest/browser-playwright':
         specifier: 4.0.16
@@ -243,9 +246,6 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
-      vite:
-        specifier: 7.3.1
-        version: 7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
       vitest:
         specifier: 4.0.16
         version: 4.0.16(@types/node@25.0.3)(@vitest/browser-playwright@4.0.16)(@vitest/browser-preview@4.0.16)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
