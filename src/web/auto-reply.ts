@@ -1,4 +1,8 @@
 import {
+  resolveIdentityNamePrefix,
+  resolveResponsePrefix,
+} from "../agents/identity.js";
+import {
   chunkMarkdownText,
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
@@ -1032,12 +1036,14 @@ export async function monitorWebProvider(
       return `[Replying to ${sender}${idPart}]\n${msg.replyToBody}\n[/Replying]`;
     };
 
-    const buildLine = (msg: WebInboundMsg) => {
-      // Build message prefix: explicit config > default based on allowFrom
+    const buildLine = (msg: WebInboundMsg, agentId: string) => {
+      // Build message prefix: explicit config > identity name > default based on allowFrom
       let messagePrefix = cfg.messages?.messagePrefix;
       if (messagePrefix === undefined) {
         const hasAllowFrom = (cfg.whatsapp?.allowFrom?.length ?? 0) > 0;
-        messagePrefix = hasAllowFrom ? "" : "[clawdbot]";
+        messagePrefix = hasAllowFrom
+          ? ""
+          : (resolveIdentityNamePrefix(cfg, agentId) ?? "[clawdbot]");
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
       const senderLabel =
@@ -1069,7 +1075,7 @@ export async function monitorWebProvider(
       status.lastEventAt = status.lastMessageAt;
       emitStatus();
       const conversationId = msg.conversationId ?? msg.from;
-      let combinedBody = buildLine(msg);
+      let combinedBody = buildLine(msg, route.agentId);
       let shouldClearGroupHistory = false;
 
       if (msg.chatType === "group") {
@@ -1087,7 +1093,10 @@ export async function monitorWebProvider(
               }),
             )
             .join("\\n");
-          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(msg)}`;
+          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(
+            msg,
+            route.agentId,
+          )}`;
         }
         // Always surface who sent the triggering message so the agent can address them.
         const senderLabel =
@@ -1169,9 +1178,10 @@ export async function monitorWebProvider(
       const textLimit = resolveTextChunkLimit(cfg, "whatsapp");
       let didLogHeartbeatStrip = false;
       let didSendReply = false;
+      const responsePrefix = resolveResponsePrefix(cfg, route.agentId);
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
-          responsePrefix: cfg.messages?.responsePrefix,
+          responsePrefix,
           onHeartbeatStrip: () => {
             if (!didLogHeartbeatStrip) {
               didLogHeartbeatStrip = true;

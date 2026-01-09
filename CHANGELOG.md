@@ -58,6 +58,7 @@
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
 - Pairing: replies now include sender ids for Discord/Slack/Signal/iMessage/WhatsApp; pairing list labels them explicitly.
+- Messages: default inbound/outbound prefixes from the routed agent’s `identity.name` when set. (#578) — thanks @p6l-richard
 - Signal: accept UUID-only senders for pairing/allowlists/routing when sourceNumber is missing. (#523) — thanks @neist
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
