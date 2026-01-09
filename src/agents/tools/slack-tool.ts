@@ -9,6 +9,14 @@ import { SlackToolSchema } from "./slack-schema.js";
 type SlackToolOptions = {
   agentAccountId?: string;
   config?: ClawdbotConfig;
+  /** Current channel ID for auto-threading. */
+  currentChannelId?: string;
+  /** Current thread timestamp for auto-threading. */
+  currentThreadTs?: string;
+  /** Reply-to mode for auto-threading. */
+  replyToMode?: "off" | "first" | "all";
+  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  hasRepliedRef?: { value: boolean };
 };
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -63,7 +71,12 @@ export function createSlackTool(options?: SlackToolOptions): AnyAgentTool {
           ).trim()}`,
         );
       }
-      return await handleSlackAction(resolvedParams, cfg);
+      return await handleSlackAction(resolvedParams, cfg, {
+        currentChannelId: options?.currentChannelId,
+        currentThreadTs: options?.currentThreadTs,
+        replyToMode: options?.replyToMode,
+        hasRepliedRef: options?.hasRepliedRef,
+      });
     },
   };
 }

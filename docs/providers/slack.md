@@ -199,12 +199,20 @@ Ack reactions are controlled globally via `messages.ackReaction` +
 - Media uploads are capped by `slack.mediaMaxMb` (default 20).
 
 ## Reply threading
-Slack supports optional threaded replies via tags:
-- `[[reply_to_current]]` — reply to the triggering message.
-- `[[reply_to:<id>]]` — reply to a specific message id.
+By default, Clawdbot replies in the main channel. Use `slack.replyToMode` to control automatic threading:
 
-Controlled by `slack.replyToMode`:
-- `off` (default), `first`, `all`.
+| Mode | Behavior |
+| --- | --- |
+| `off` | **Default.** Reply in main channel. Only thread if the triggering message was already in a thread. |
+| `first` | First reply goes to thread (under the triggering message), subsequent replies go to main channel. Useful for keeping context visible while avoiding thread clutter. |
+| `all` | All replies go to thread. Keeps conversations contained but may reduce visibility. |
+
+The mode applies to both auto-replies and agent tool calls (`slack sendMessage`).
+
+### Manual threading tags
+For fine-grained control, use these tags in agent responses:
+- `[[reply_to_current]]` — reply to the triggering message (start/continue thread).
+- `[[reply_to:<id>]]` — reply to a specific message id.
 
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).

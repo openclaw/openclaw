@@ -21,6 +21,8 @@ export type GetReplyOptions = {
   blockReplyTimeoutMs?: number;
   /** If provided, only load these skills for this session (empty = no skills). */
   skillFilter?: string[];
+  /** Mutable ref to track if a reply was sent (for Slack "first" threading mode). */
+  hasRepliedRef?: { value: boolean };
 };
 
 export type ReplyPayload = {

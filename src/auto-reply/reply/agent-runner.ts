@@ -62,6 +62,50 @@ import { createTypingSignaler } from "./typing-mode.js";
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
 const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
+/**
+ * Build Slack-specific threading context for tool auto-injection.
+ * Returns undefined values for non-Slack providers.
+ */
+function buildSlackThreadingContext(params: {
+  sessionCtx: TemplateContext;
+  config: { slack?: { replyToMode?: "off" | "first" | "all" } } | undefined;
+  hasRepliedRef: { value: boolean } | undefined;
+}): {
+  currentChannelId: string | undefined;
+  currentThreadTs: string | undefined;
+  replyToMode: "off" | "first" | "all" | undefined;
+  hasRepliedRef: { value: boolean } | undefined;
+} {
+  const { sessionCtx, config, hasRepliedRef } = params;
+  const isSlack = sessionCtx.Provider?.toLowerCase() === "slack";
+  if (!isSlack) {
+    return {
+      currentChannelId: undefined,
+      currentThreadTs: undefined,
+      replyToMode: undefined,
+      hasRepliedRef: undefined,
+    };
+  }
+
+  // If we're already inside a thread, never jump replies out of it (even in
+  // replyToMode="off"/"first"). This keeps tool calls consistent with the
+  // auto-reply path.
+  const configuredReplyToMode = config?.slack?.replyToMode ?? "off";
+  const effectiveReplyToMode = sessionCtx.ThreadLabel
+    ? ("all" as const)
+    : configuredReplyToMode;
+
+  return {
+    // Extract channel from "channel:C123" format
+    currentChannelId: sessionCtx.To?.startsWith("channel:")
+      ? sessionCtx.To.slice("channel:".length)
+      : undefined,
+    currentThreadTs: sessionCtx.ReplyToId,
+    replyToMode: effectiveReplyToMode,
+    hasRepliedRef,
+  };
+}
+
 const isBunFetchSocketError = (message?: string) =>
   Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
 
@@ -375,6 +419,12 @@ export async function runReplyAgent(params: {
             messageProvider:
               sessionCtx.Provider?.trim().toLowerCase() || undefined,
             agentAccountId: sessionCtx.AccountId,
+            // Slack threading context for tool auto-injection
+            ...buildSlackThreadingContext({
+              sessionCtx,
+              config: followupRun.run.config,
+              hasRepliedRef: opts?.hasRepliedRef,
+            }),
             sessionFile: followupRun.run.sessionFile,
             workspaceDir: followupRun.run.workspaceDir,
             agentDir: followupRun.run.agentDir,

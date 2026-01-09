@@ -9,6 +9,7 @@ import { logVerbose } from "../globals.js";
 import { loadWebMedia } from "../web/media.js";
 import type { SlackTokenSource } from "./accounts.js";
 import { resolveSlackAccount } from "./accounts.js";
+import { markdownToSlackMrkdwn } from "./format.js";
 import { resolveSlackBotToken } from "./token.js";
 
 const SLACK_TEXT_LIMIT = 4000;
@@ -169,7 +170,8 @@ export async function sendMessageSlack(
   const { channelId } = await resolveChannelId(client, recipient);
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
   const chunkLimit = Math.min(textLimit, SLACK_TEXT_LIMIT);
-  const chunks = chunkMarkdownText(trimmedMessage, chunkLimit);
+  const slackFormatted = markdownToSlackMrkdwn(trimmedMessage);
+  const chunks = chunkMarkdownText(slackFormatted, chunkLimit);
   const mediaMaxBytes =
     typeof account.config.mediaMaxMb === "number"
       ? account.config.mediaMaxMb * 1024 * 1024

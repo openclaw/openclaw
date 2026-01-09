@@ -1069,11 +1069,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
-    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+    // Use helper for status thread; compute baseThreadTs for "first" mode support
+    const { statusThreadTs } = resolveSlackThreadTargets({
       message,
       replyToMode,
     });
+    const messageTs = message.ts ?? message.event_ts;
+    const incomingThreadTs = message.thread_ts;
     let didSetStatus = false;
+    // Shared mutable ref for tracking if a reply was sent (used by both
+    // auto-reply path and tool path for "first" threading mode).
+    const hasRepliedRef = { value: false };
     const onReplyStart = async () => {
       didSetStatus = true;
       await setSlackThreadStatus({
@@ -1087,6 +1093,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
           .responsePrefix,
         deliver: async (payload) => {
+          const effectiveThreadTs = resolveSlackThreadTs({
+            replyToMode,
+            incomingThreadTs,
+            messageTs,
+            hasReplied: hasRepliedRef.value,
+          });
           await deliverReplies({
             replies: [payload],
             target: replyTarget,
@@ -1094,8 +1106,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             accountId: account.accountId,
             runtime,
             textLimit,
-            replyThreadTs,
+            replyThreadTs: effectiveThreadTs,
           });
+          hasRepliedRef.value = true;
         },
         onError: (err, info) => {
           runtime.error?.(
@@ -1119,6 +1132,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       replyOptions: {
         ...replyOptions,
         skillFilter: channelConfig?.skills,
+        hasRepliedRef,
         disableBlockStreaming:
           typeof account.config.blockStreaming === "boolean"
             ? !account.config.blockStreaming
@@ -1956,6 +1970,33 @@ export function isSlackRoomAllowedByPolicy(params: {
   if (groupPolicy === "open") return true;
   if (!channelAllowlistConfigured) return false;
   return channelAllowed;
+}
+
+/**
+ * Compute effective threadTs for a Slack reply based on replyToMode.
+ * - "off": stay in thread if already in one, otherwise main channel
+ * - "first": first reply goes to thread, subsequent replies to main channel
+ * - "all": all replies go to thread
+ */
+export function resolveSlackThreadTs(params: {
+  replyToMode: "off" | "first" | "all";
+  incomingThreadTs: string | undefined;
+  messageTs: string | undefined;
+  hasReplied: boolean;
+}): string | undefined {
+  const { replyToMode, incomingThreadTs, messageTs, hasReplied } = params;
+  if (incomingThreadTs) return incomingThreadTs;
+  if (!messageTs) return undefined;
+  if (replyToMode === "all") {
+    // All replies go to thread
+    return messageTs;
+  }
+  if (replyToMode === "first") {
+    // "first": only first reply goes to thread
+    return hasReplied ? undefined : messageTs;
+  }
+  // "off": never start a thread
+  return undefined;
 }
 
 async function deliverSlackSlashReplies(params: {

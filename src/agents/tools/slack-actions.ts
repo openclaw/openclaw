@@ -34,9 +34,60 @@ const messagingActions = new Set([
 const reactionsActions = new Set(["react", "reactions"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 
+export type SlackActionContext = {
+  /** Current channel ID for auto-threading. */
+  currentChannelId?: string;
+  /** Current thread timestamp for auto-threading. */
+  currentThreadTs?: string;
+  /** Reply-to mode for auto-threading. */
+  replyToMode?: "off" | "first" | "all";
+  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  hasRepliedRef?: { value: boolean };
+};
+
+/**
+ * Resolve threadTs for a Slack message based on context and replyToMode.
+ * - "all": always inject threadTs
+ * - "first": inject only for first message (updates hasRepliedRef)
+ * - "off": never auto-inject
+ */
+function resolveThreadTsFromContext(
+  explicitThreadTs: string | undefined,
+  targetChannel: string,
+  context: SlackActionContext | undefined,
+): string | undefined {
+  // Agent explicitly provided threadTs - use it
+  if (explicitThreadTs) return explicitThreadTs;
+  // No context or missing required fields
+  if (!context?.currentThreadTs || !context?.currentChannelId) return undefined;
+
+  // Normalize target (strip "channel:" prefix if present)
+  const normalizedTarget = targetChannel.startsWith("channel:")
+    ? targetChannel.slice("channel:".length)
+    : targetChannel;
+
+  // Different channel - don't inject
+  if (normalizedTarget !== context.currentChannelId) return undefined;
+
+  // Check replyToMode
+  if (context.replyToMode === "all") {
+    return context.currentThreadTs;
+  }
+  if (
+    context.replyToMode === "first" &&
+    context.hasRepliedRef &&
+    !context.hasRepliedRef.value
+  ) {
+    context.hasRepliedRef.value = true;
+    return context.currentThreadTs;
+  }
+  return undefined;
+}
+
 export async function handleSlackAction(
   params: Record<string, unknown>,
   cfg: ClawdbotConfig,
+  context?: SlackActionContext,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");
@@ -91,12 +142,29 @@ export async function handleSlackAction(
         const to = readStringParam(params, "to", { required: true });
         const content = readStringParam(params, "content", { required: true });
         const mediaUrl = readStringParam(params, "mediaUrl");
-        const threadTs = readStringParam(params, "threadTs");
+        const threadTs = resolveThreadTsFromContext(
+          readStringParam(params, "threadTs"),
+          to,
+          context,
+        );
         const result = await sendSlackMessage(to, content, {
           accountId: accountId ?? undefined,
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
         });
+
+        // Keep "first" mode consistent even when the agent explicitly provided
+        // threadTs: once we send a message to the current channel, consider the
+        // first reply "used" so later tool calls don't auto-thread again.
+        if (context?.hasRepliedRef && context.currentChannelId) {
+          const normalizedTarget = to.startsWith("channel:")
+            ? to.slice("channel:".length)
+            : to;
+          if (normalizedTarget === context.currentChannelId) {
+            context.hasRepliedRef.value = true;
+          }
+        }
+
         return jsonResult({ ok: true, result });
       }
       case "editMessage": {

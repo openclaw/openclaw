@@ -869,6 +869,7 @@ export async function compactEmbeddedPiSession(params: {
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           config: params.config,
+          // No currentChannelId/currentThreadTs for compaction - not in message context
         });
         const machineName = await getMachineDisplayName();
         const runtimeProvider = normalizeMessageProvider(
@@ -1000,6 +1001,14 @@ export async function runEmbeddedPiAgent(params: {
   sessionKey?: string;
   messageProvider?: string;
   agentAccountId?: string;
+  /** Current channel ID for auto-threading (Slack). */
+  currentChannelId?: string;
+  /** Current thread timestamp for auto-threading (Slack). */
+  currentThreadTs?: string;
+  /** Reply-to mode for Slack auto-threading. */
+  replyToMode?: "off" | "first" | "all";
+  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  hasRepliedRef?: { value: boolean };
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
@@ -1201,6 +1210,10 @@ export async function runEmbeddedPiAgent(params: {
             sessionKey: params.sessionKey ?? params.sessionId,
             agentDir,
             config: params.config,
+            currentChannelId: params.currentChannelId,
+            currentThreadTs: params.currentThreadTs,
+            replyToMode: params.replyToMode,
+            hasRepliedRef: params.hasRepliedRef,
           });
           const machineName = await getMachineDisplayName();
           const runtimeInfo = {
