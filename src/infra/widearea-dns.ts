@@ -70,12 +70,15 @@ function computeContentHash(body: string): string {
 
 export type WideAreaBridgeZoneOpts = {
   bridgePort: number;
+  gatewayPort?: number;
   displayName: string;
   tailnetIPv4: string;
   tailnetIPv6?: string;
   instanceLabel?: string;
   hostLabel?: string;
   tailnetDns?: string;
+  sshPort?: number;
+  cliPath?: string;
 };
 
 function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
@@ -91,8 +94,17 @@ function renderZone(opts: WideAreaBridgeZoneOpts & { serial: number }): string {
     `transport=bridge`,
     `bridgePort=${opts.bridgePort}`,
   ];
+  if (typeof opts.gatewayPort === "number" && opts.gatewayPort > 0) {
+    txt.push(`gatewayPort=${opts.gatewayPort}`);
+  }
   if (opts.tailnetDns?.trim()) {
     txt.push(`tailnetDns=${opts.tailnetDns.trim()}`);
+  }
+  if (typeof opts.sshPort === "number" && opts.sshPort > 0) {
+    txt.push(`sshPort=${opts.sshPort}`);
+  }
+  if (opts.cliPath?.trim()) {
+    txt.push(`cliPath=${opts.cliPath.trim()}`);
   }
 
   const records: string[] = [];

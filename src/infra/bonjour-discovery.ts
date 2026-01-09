@@ -27,6 +27,86 @@ const DEFAULT_TIMEOUT_MS = 2000;
 
 const DEFAULT_DOMAINS = ["local.", WIDE_AREA_DISCOVERY_DOMAIN] as const;
 
+function isTailnetIPv4(address: string): boolean {
+  const parts = address.split(".");
+  if (parts.length !== 4) return false;
+  const octets = parts.map((p) => Number.parseInt(p, 10));
+  if (octets.some((n) => !Number.isFinite(n) || n < 0 || n > 255)) return false;
+  // Tailscale IPv4 range: 100.64.0.0/10
+  const [a, b] = octets;
+  return a === 100 && b >= 64 && b <= 127;
+}
+
+function parseDigShortLines(stdout: string): string[] {
+  return stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+}
+
+function parseDigTxt(stdout: string): string[] {
+  // dig +short TXT prints one or more lines of quoted strings:
+  // "k=v" "k2=v2"
+  const tokens: string[] = [];
+  for (const raw of stdout.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const matches = Array.from(line.matchAll(/"([^"]*)"/g), (m) => m[1] ?? "");
+    for (const m of matches) {
+      const unescaped = m
+        .replaceAll("\\\\", "\\")
+        .replaceAll('\\"', '"')
+        .replaceAll("\\n", "\n");
+      tokens.push(unescaped);
+    }
+  }
+  return tokens;
+}
+
+function parseDigSrv(stdout: string): { host: string; port: number } | null {
+  // dig +short SRV: "0 0 18790 host.domain."
+  const line = stdout
+    .split("\n")
+    .map((l) => l.trim())
+    .find(Boolean);
+  if (!line) return null;
+  const parts = line.split(/\s+/).filter(Boolean);
+  if (parts.length < 4) return null;
+  const port = Number.parseInt(parts[2] ?? "", 10);
+  const hostRaw = parts[3] ?? "";
+  if (!Number.isFinite(port) || port <= 0) return null;
+  const host = hostRaw.replace(/\.$/, "");
+  if (!host) return null;
+  return { host, port };
+}
+
+function parseTailscaleStatusIPv4s(stdout: string): string[] {
+  const parsed = stdout ? (JSON.parse(stdout) as Record<string, unknown>) : {};
+  const out: string[] = [];
+
+  const addIps = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const ips = (value as { TailscaleIPs?: unknown }).TailscaleIPs;
+    if (!Array.isArray(ips)) return;
+    for (const ip of ips) {
+      if (typeof ip !== "string") continue;
+      const trimmed = ip.trim();
+      if (trimmed && isTailnetIPv4(trimmed)) out.push(trimmed);
+    }
+  };
+
+  addIps((parsed as { Self?: unknown }).Self);
+
+  const peerObj = (parsed as { Peer?: unknown }).Peer;
+  if (peerObj && typeof peerObj === "object") {
+    for (const peer of Object.values(peerObj as Record<string, unknown>)) {
+      addIps(peer);
+    }
+  }
+
+  return [...new Set(out)];
+}
+
 function parseIntOrNull(value: string | undefined): number | undefined {
   if (!value) return undefined;
   const parsed = Number.parseInt(value, 10);
@@ -121,6 +201,146 @@ async function discoverViaDnsSd(
   return results;
 }
 
+async function discoverWideAreaViaTailnetDns(
+  domain: string,
+  timeoutMs: number,
+  run: typeof runCommandWithTimeout,
+): Promise<GatewayBonjourBeacon[]> {
+  if (domain !== WIDE_AREA_DISCOVERY_DOMAIN) return [];
+  const startedAt = Date.now();
+  const remainingMs = () => timeoutMs - (Date.now() - startedAt);
+
+  const tailscaleCandidates = [
+    "tailscale",
+    "/Applications/Tailscale.app/Contents/MacOS/Tailscale",
+  ];
+  let ips: string[] = [];
+  for (const candidate of tailscaleCandidates) {
+    try {
+      const res = await run([candidate, "status", "--json"], {
+        timeoutMs: Math.max(1, Math.min(700, remainingMs())),
+      });
+      ips = parseTailscaleStatusIPv4s(res.stdout);
+      if (ips.length > 0) break;
+    } catch {
+      // ignore
+    }
+  }
+  if (ips.length === 0) return [];
+  if (remainingMs() <= 0) return [];
+
+  // Keep scans bounded: this is a fallback and should not block long.
+  ips = ips.slice(0, 40);
+
+  const probeName = `_clawdbot-bridge._tcp.${domain.replace(/\.$/, "")}`;
+
+  const concurrency = 6;
+  let nextIndex = 0;
+  let nameserver: string | null = null;
+  let ptrs: string[] = [];
+
+  const worker = async () => {
+    while (nameserver === null) {
+      const budget = remainingMs();
+      if (budget <= 0) return;
+      const i = nextIndex;
+      nextIndex += 1;
+      if (i >= ips.length) return;
+      const ip = ips[i] ?? "";
+      if (!ip) continue;
+      try {
+        const probe = await run(
+          ["dig", "+short", "+time=1", "+tries=1", `@${ip}`, probeName, "PTR"],
+          { timeoutMs: Math.max(1, Math.min(250, budget)) },
+        );
+        const lines = parseDigShortLines(probe.stdout);
+        if (lines.length === 0) continue;
+        nameserver = ip;
+        ptrs = lines;
+        return;
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, ips.length) }, () => worker()),
+  );
+
+  if (!nameserver || ptrs.length === 0) return [];
+  if (remainingMs() <= 0) return [];
+
+  const results: GatewayBonjourBeacon[] = [];
+  for (const ptr of ptrs) {
+    const budget = remainingMs();
+    if (budget <= 0) break;
+    const ptrName = ptr.trim().replace(/\.$/, "");
+    if (!ptrName) continue;
+    const instanceName = ptrName.replace(/\.?_clawdbot-bridge\._tcp\..*$/, "");
+
+    const srv = await run(
+      [
+        "dig",
+        "+short",
+        "+time=1",
+        "+tries=1",
+        `@${nameserver}`,
+        ptrName,
+        "SRV",
+      ],
+      { timeoutMs: Math.max(1, Math.min(350, budget)) },
+    ).catch(() => null);
+    const srvParsed = srv ? parseDigSrv(srv.stdout) : null;
+    if (!srvParsed) continue;
+
+    const txtBudget = remainingMs();
+    if (txtBudget <= 0) {
+      results.push({
+        instanceName: instanceName || ptrName,
+        displayName: instanceName || ptrName,
+        domain,
+        host: srvParsed.host,
+        port: srvParsed.port,
+      });
+      continue;
+    }
+
+    const txt = await run(
+      [
+        "dig",
+        "+short",
+        "+time=1",
+        "+tries=1",
+        `@${nameserver}`,
+        ptrName,
+        "TXT",
+      ],
+      { timeoutMs: Math.max(1, Math.min(350, txtBudget)) },
+    ).catch(() => null);
+    const txtTokens = txt ? parseDigTxt(txt.stdout) : [];
+    const txtMap = txtTokens.length > 0 ? parseTxtTokens(txtTokens) : {};
+
+    const beacon: GatewayBonjourBeacon = {
+      instanceName: instanceName || ptrName,
+      displayName: txtMap.displayName || instanceName || ptrName,
+      domain,
+      host: srvParsed.host,
+      port: srvParsed.port,
+      txt: Object.keys(txtMap).length ? txtMap : undefined,
+      bridgePort: parseIntOrNull(txtMap.bridgePort),
+      gatewayPort: parseIntOrNull(txtMap.gatewayPort),
+      sshPort: parseIntOrNull(txtMap.sshPort),
+      tailnetDns: txtMap.tailnetDns || undefined,
+      cliPath: txtMap.cliPath || undefined,
+    };
+
+    results.push(beacon);
+  }
+
+  return results;
+}
+
 function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
   const results: GatewayBonjourBeacon[] = [];
   let current: GatewayBonjourBeacon | null = null;
@@ -211,9 +431,25 @@ export async function discoverGatewayBeacons(
           async (domain) => await discoverViaDnsSd(domain, timeoutMs, run),
         ),
       );
-      return perDomain.flatMap((r) =>
+      const discovered = perDomain.flatMap((r) =>
         r.status === "fulfilled" ? r.value : [],
       );
+
+      const wantsWideArea = domains.includes(WIDE_AREA_DISCOVERY_DOMAIN);
+      const hasWideArea = discovered.some(
+        (b) => b.domain === WIDE_AREA_DISCOVERY_DOMAIN,
+      );
+
+      if (wantsWideArea && !hasWideArea) {
+        const fallback = await discoverWideAreaViaTailnetDns(
+          WIDE_AREA_DISCOVERY_DOMAIN,
+          timeoutMs,
+          run,
+        ).catch(() => []);
+        return [...discovered, ...fallback];
+      }
+
+      return discovered;
     }
     if (platform === "linux") {
       const perDomain = await Promise.allSettled(

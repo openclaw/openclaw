@@ -98,6 +98,132 @@ describe("bonjour-discovery", () => {
     expect(browseCalls.every((c) => c.timeoutMs === 1234)).toBe(true);
   });
 
+  it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
+    const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
+
+    const run = vi.fn(
+      async (argv: string[], options: { timeoutMs: number }) => {
+        calls.push({ argv, timeoutMs: options.timeoutMs });
+        const cmd = argv[0];
+
+        if (cmd === "dns-sd" && argv[1] === "-B") {
+          return {
+            stdout: "",
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
+
+        if (
+          cmd === "tailscale" &&
+          argv[1] === "status" &&
+          argv[2] === "--json"
+        ) {
+          return {
+            stdout: JSON.stringify({
+              Self: { TailscaleIPs: ["100.69.232.64"] },
+              Peer: {
+                "peer-1": { TailscaleIPs: ["100.123.224.76"] },
+              },
+            }),
+            stderr: "",
+            code: 0,
+            signal: null,
+            killed: false,
+          };
+        }
+
+        if (cmd === "dig") {
+          const at = argv.find((a) => a.startsWith("@")) ?? "";
+          const server = at.replace(/^@/, "");
+          const qname = argv[argv.length - 2] ?? "";
+          const qtype = argv[argv.length - 1] ?? "";
+
+          if (
+            server === "100.123.224.76" &&
+            qtype === "PTR" &&
+            qname === "_clawdbot-bridge._tcp.clawdbot.internal"
+          ) {
+            return {
+              stdout: `studio-bridge._clawdbot-bridge._tcp.clawdbot.internal.\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            };
+          }
+
+          if (
+            server === "100.123.224.76" &&
+            qtype === "SRV" &&
+            qname === "studio-bridge._clawdbot-bridge._tcp.clawdbot.internal"
+          ) {
+            return {
+              stdout: `0 0 18790 studio.clawdbot.internal.\n`,
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            };
+          }
+
+          if (
+            server === "100.123.224.76" &&
+            qtype === "TXT" &&
+            qname === "studio-bridge._clawdbot-bridge._tcp.clawdbot.internal"
+          ) {
+            return {
+              stdout: [
+                `"displayName=Studio"`,
+                `"transport=bridge"`,
+                `"bridgePort=18790"`,
+                `"gatewayPort=18789"`,
+                `"sshPort=22"`,
+                `"tailnetDns=peters-mac-studio-1.sheep-coho.ts.net"`,
+                `"cliPath=/opt/homebrew/bin/clawdbot"`,
+                "",
+              ].join(" "),
+              stderr: "",
+              code: 0,
+              signal: null,
+              killed: false,
+            };
+          }
+        }
+
+        throw new Error(`unexpected argv: ${argv.join(" ")}`);
+      },
+    );
+
+    const beacons = await discoverGatewayBeacons({
+      platform: "darwin",
+      timeoutMs: 1200,
+      domains: [WIDE_AREA_DISCOVERY_DOMAIN],
+      run: run as unknown as typeof runCommandWithTimeout,
+    });
+
+    expect(beacons).toEqual([
+      expect.objectContaining({
+        domain: WIDE_AREA_DISCOVERY_DOMAIN,
+        instanceName: "studio-bridge",
+        displayName: "Studio",
+        host: "studio.clawdbot.internal",
+        port: 18790,
+        tailnetDns: "peters-mac-studio-1.sheep-coho.ts.net",
+        gatewayPort: 18789,
+        sshPort: 22,
+        cliPath: "/opt/homebrew/bin/clawdbot",
+      }),
+    ]);
+
+    expect(
+      calls.some((c) => c.argv[0] === "tailscale" && c.argv[1] === "status"),
+    ).toBe(true);
+    expect(calls.some((c) => c.argv[0] === "dig")).toBe(true);
+  });
+
   it("normalizes domains and respects domains override", async () => {
     const calls: string[][] = [];
     const run = vi.fn(async (argv: string[]) => {
