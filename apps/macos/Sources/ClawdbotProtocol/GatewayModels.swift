@@ -421,7 +421,7 @@ public struct AgentParams: Codable, Sendable {
     public let sessionkey: String?
     public let thinking: String?
     public let deliver: Bool?
-    public let provider: AnyCodable?
+    public let provider: String?
     public let timeout: Int?
     public let lane: String?
     public let extrasystemprompt: String?
@@ -436,7 +436,7 @@ public struct AgentParams: Codable, Sendable {
         sessionkey: String?,
         thinking: String?,
         deliver: Bool?,
-        provider: AnyCodable?,
+        provider: String?,
         timeout: Int?,
         lane: String?,
         extrasystemprompt: String?,
