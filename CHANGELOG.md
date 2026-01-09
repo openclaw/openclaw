@@ -45,6 +45,7 @@
 - Providers/Doctor: warn when Telegram config expects unmentioned group messages but Bot API privacy mode is likely enabled; surface WhatsApp login/disconnect hints.
 - Providers/Doctor: add last inbound/outbound activity timestamps in `providers status` and extend `--probe` with Discord channel permission + Telegram group membership audits.
 - Docs: add provider troubleshooting index (`/providers/troubleshooting`) and link it from the main troubleshooting guide.
+- Docs: clarify model allowlist errors and add safety notes for verbose/reasoning in groups.
 - Telegram: include the user id in DM pairing messages and label it clearly in `clawdbot pairing list --provider telegram`.
 - Apps: refresh iOS/Android/macOS app icons for Clawdbot branding. (#521) — thanks @fishfisher
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj

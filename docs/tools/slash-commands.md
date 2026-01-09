@@ -52,6 +52,8 @@ Text-only:
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
+- `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
+- `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 
 ## Surface notes
 

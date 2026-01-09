@@ -277,6 +277,18 @@ Use the `/model` command as a standalone message:
 
 You can list available models with `/model`, `/model list`, or `/model status`.
 
+### Why do I see “Model … is not allowed” and then no reply?
+
+If `agent.models` is set, it becomes the **allowlist** for `/model` and any
+session overrides. Choosing a model that isn’t in that list returns:
+
+```
+Model "provider/model" is not allowed. Use /model to list available models.
+```
+
+That error is returned **instead of** a normal reply. Fix: add the model to
+`agent.models`, remove the allowlist, or pick a model from `/model list`.
+
 ### Are opus / sonnet / gpt built‑in shortcuts?
 
 Yes. Clawdbot ships a few default shorthands (only applied when the model exists in `agent.models`):
