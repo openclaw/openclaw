@@ -700,8 +700,8 @@ class NodeRuntime(context: Context) {
       val ui = config?.get("ui").asObjectOrNull()
       val raw = ui?.get("seamColor").asStringOrNull()?.trim()
       val sessionCfg = config?.get("session").asObjectOrNull()
-      val rawMainKey = sessionCfg?.get("mainKey").asStringOrNull()?.trim()
-      _mainSessionKey.value = rawMainKey?.takeIf { it.isNotEmpty() } ?: "main"
+      val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
+      _mainSessionKey.value = mainKey
 
       val parsed = parseHexColorArgb(raw)
       _seamColorArgb.value = parsed ?: DEFAULT_SEAM_COLOR_ARGB

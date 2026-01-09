@@ -651,8 +651,7 @@ final class TalkModeManager: NSObject {
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]
             let session = config["session"] as? [String: Any]
-            let rawMainKey = (session?["mainKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            self.mainSessionKey = rawMainKey.isEmpty ? "main" : rawMainKey
+            self.mainSessionKey = SessionKey.normalizeMainKey(session?["mainKey"] as? String)
             self.defaultVoiceId = (talk?["voiceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let aliases = talk?["voiceAliases"] as? [String: Any] {
                 var resolved: [String: String] = [:]
