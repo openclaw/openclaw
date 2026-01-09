@@ -7,6 +7,7 @@ export type AuthChoice =
   | "claude-cli"
   | "token"
   | "openai-codex"
+  | "openai-api-key"
   | "codex-cli"
   | "antigravity"
   | "apiKey"
@@ -26,6 +27,7 @@ export type OnboardOptions = {
   nonInteractive?: boolean;
   authChoice?: AuthChoice;
   anthropicApiKey?: string;
+  openaiApiKey?: string;
   geminiApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;

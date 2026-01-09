@@ -85,6 +85,7 @@ export function buildAuthChoiceOptions(params: {
     value: "openai-codex",
     label: "OpenAI Codex (ChatGPT OAuth)",
   });
+  options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({
     value: "antigravity",
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",

@@ -18,8 +18,8 @@ import {
 } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
@@ -210,38 +210,10 @@ export async function applyAuthChoice(params: {
       mode: "token",
     });
   } else if (params.authChoice === "token" || params.authChoice === "oauth") {
-    const profileNameRaw = await params.prompter.text({
-      message: "Token name (blank = default)",
-      placeholder: "default",
-    });
     const provider = (await params.prompter.select({
       message: "Token provider",
       options: [{ value: "anthropic", label: "Anthropic (only supported)" }],
     })) as "anthropic";
-    const profileId = buildTokenProfileId({
-      provider,
-      name: String(profileNameRaw ?? ""),
-    });
-
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-    });
-    const existing = store.profiles[profileId];
-    if (existing?.type === "token") {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing token "${profileId}"?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId,
-          provider,
-          mode: "token",
-        });
-        return { config: nextConfig, agentModelOverride };
-      }
-    }
-
     await params.prompter.note(
       [
         "Run `claude setup-token` in your terminal.",
@@ -256,46 +228,67 @@ export async function applyAuthChoice(params: {
     });
     const token = String(tokenRaw).trim();
 
-    const wantsExpiry = await params.prompter.confirm({
-      message: "Does this token expire?",
-      initialValue: false,
+    const profileNameRaw = await params.prompter.text({
+      message: "Token name (blank = default)",
+      placeholder: "default",
     });
-    const expiresInRaw = wantsExpiry
-      ? await params.prompter.text({
-          message: "Expires in (duration)",
-          initialValue: "365d",
-          validate: (value) => {
-            try {
-              parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
-              return undefined;
-            } catch {
-              return "Invalid duration (e.g. 365d, 12h, 30m)";
-            }
-          },
-        })
-      : "";
-
-    const expiresIn = String(expiresInRaw).trim();
-    const expires = expiresIn
-      ? Date.now() + parseDurationMs(expiresIn, { defaultUnit: "d" })
-      : undefined;
+    const namedProfileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
 
     upsertAuthProfile({
-      profileId,
+      profileId: namedProfileId,
       agentDir: params.agentDir,
       credential: {
         type: "token",
         provider,
         token,
-        ...(expires ? { expires } : {}),
       },
     });
 
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId,
+      profileId: namedProfileId,
       provider,
       mode: "token",
     });
+  } else if (params.authChoice === "openai-api-key") {
+    const envKey = resolveEnvApiKey("openai");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        const result = upsertSharedEnvVar({
+          key: "OPENAI_API_KEY",
+          value: envKey.apiKey,
+        });
+        if (!process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = envKey.apiKey;
+        }
+        await params.prompter.note(
+          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+          "OpenAI API key",
+        );
+        return { config: nextConfig, agentModelOverride };
+      }
+    }
+
+    const key = await params.prompter.text({
+      message: "Enter OpenAI API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    const trimmed = String(key).trim();
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: trimmed,
+    });
+    process.env.OPENAI_API_KEY = trimmed;
+    await params.prompter.note(
+      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+      "OpenAI API key",
+    );
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(

@@ -32,12 +32,14 @@
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
 - Status: compact /status with session token usage + estimated cost, add `/cost` per-response usage lines (tokens-only for OAuth).
 - Status: show active auth profile and key snippet in /status.
+- Agent: promote `<think>`/`<thinking>` tag reasoning into structured thinking blocks so `/reasoning` works consistently for OpenAI-compat providers.
 - macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
+- Control UI: show/patch per-session reasoning level and render extracted reasoning in chat.
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Control UI: drop explicit `ui:install` step; `ui:build` now auto-installs UI deps (docs + update flow).
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
@@ -53,6 +55,8 @@
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
+- Onboarding/Configure: add OpenAI API key flow that stores in shared `~/.clawdbot/.env` for launchd; simplify Anthropic token prompt order.
+- Configure/Onboarding: show Control UI docs with gateway reachability status and only offer to open when a gateway is detected; default model prompt now prefers Opus 4.5 for Anthropic auth.
 - Control UI: show skill install progress + per-skill results, hide install once binaries present. (#445) — thanks @pkrmf
 - Providers/Doctor: surface Discord privileged intent (Message Content) misconfiguration with actionable warnings.
 - Providers/Doctor: warn when Telegram config expects unmentioned group messages but Bot API privacy mode is likely enabled; surface WhatsApp login/disconnect hints.
@@ -78,6 +82,8 @@
 - Agent: bypass Anthropic OAuth tool-name blocks by capitalizing built-ins and keeping pruning tool matching case-insensitive. (#553) — thanks @andrewting19
 - Commands/Tools: disable /restart and gateway restart tool by default (enable with commands.restart=true).
 - Gateway/CLI: add `clawdbot gateway discover` (Bonjour scan on `local.` + `clawdbot.internal.`) with `--timeout` and `--json`. — thanks @steipete
+- Gateway/CLI: make `clawdbot gateway status` human-readable by default, add `--json`, and probe localhost + configured remote (warn on multiple gateways). — thanks @steipete
+- CLI: add global `--no-color` (and respect `NO_COLOR=1`) to disable ANSI output. — thanks @steipete
 - CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
 
 ## 2026.1.8

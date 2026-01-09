@@ -23,12 +23,17 @@ export type SessionsProps = {
   onRefresh: () => void;
   onPatch: (
     key: string,
-    patch: { thinkingLevel?: string | null; verboseLevel?: string | null },
+    patch: {
+      thinkingLevel?: string | null;
+      verboseLevel?: string | null;
+      reasoningLevel?: string | null;
+    },
   ) => void;
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVELS = ["", "off", "on"] as const;
+const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 
 export function renderSessions(props: SessionsProps) {
   const rows = props.result?.sessions ?? [];
@@ -117,6 +122,7 @@ export function renderSessions(props: SessionsProps) {
           <div>Tokens</div>
           <div>Thinking</div>
           <div>Verbose</div>
+          <div>Reasoning</div>
         </div>
         ${rows.length === 0
           ? html`<div class="muted">No sessions found.</div>`
@@ -130,6 +136,7 @@ function renderRow(row: GatewaySessionRow, basePath: string, onPatch: SessionsPr
   const updated = row.updatedAt ? formatAgo(row.updatedAt) : "n/a";
   const thinking = row.thinkingLevel ?? "";
   const verbose = row.verboseLevel ?? "";
+  const reasoning = row.reasoningLevel ?? "";
   const displayName = row.displayName ?? row.key;
   const canLink = row.kind !== "global";
   const chatUrl = canLink
@@ -166,6 +173,19 @@ function renderRow(row: GatewaySessionRow, basePath: string, onPatch: SessionsPr
           }}
         >
           ${VERBOSE_LEVELS.map((level) =>
+            html`<option value=${level}>${level || "inherit"}</option>`,
+          )}
+        </select>
+      </div>
+      <div>
+        <select
+          .value=${reasoning}
+          @change=${(e: Event) => {
+            const value = (e.target as HTMLSelectElement).value;
+            onPatch(row.key, { reasoningLevel: value || null });
+          }}
+        >
+          ${REASONING_LEVELS.map((level) =>
             html`<option value=${level}>${level || "inherit"}</option>`,
           )}
         </select>

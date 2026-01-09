@@ -1,7 +1,7 @@
 import {
   cancel,
-  isCancel,
   multiselect as clackMultiselect,
+  isCancel,
 } from "@clack/prompts";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import {
@@ -288,7 +288,9 @@ export async function modelsScanCommand(
     });
 
     if (isCancel(selection)) {
-      cancel(stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.");
+      cancel(
+        stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.",
+      );
       runtime.exit(0);
     }
 

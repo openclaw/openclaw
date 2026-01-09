@@ -1,5 +1,9 @@
 import path from "node:path";
-import { intro as clackIntro, note as clackNote, outro as clackOutro } from "@clack/prompts";
+import {
+  intro as clackIntro,
+  note as clackNote,
+  outro as clackOutro,
+} from "@clack/prompts";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {

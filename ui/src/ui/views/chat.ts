@@ -38,6 +38,11 @@ export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || Boolean(props.stream);
   const sessionOptions = resolveSessionOptions(props.sessionKey, props.sessions);
+  const activeSession = props.sessions?.sessions?.find(
+    (row) => row.key === props.sessionKey,
+  );
+  const reasoningLevel = activeSession?.reasoningLevel ?? "off";
+  const showReasoning = reasoningLevel !== "off";
   const composePlaceholder = props.connected
     ? "Message (↩ to send, Shift+↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
@@ -72,6 +77,7 @@ export function renderChat(props: ChatProps) {
         </div>
         <div class="chat-header__right">
           <div class="muted">Thinking: ${props.thinkingLevel ?? "inherit"}</div>
+          <div class="muted">Reasoning: ${reasoningLevel}</div>
         </div>
       </div>
 
@@ -107,7 +113,7 @@ export function renderChat(props: ChatProps) {
                 { streaming: true }
               );
             }
-            return renderMessage(item.message, props);
+            return renderMessage(item.message, props, { showReasoning });
           }
         )}
       </div>
@@ -326,7 +332,7 @@ function renderReadingIndicator() {
 function renderMessage(
   message: unknown,
   props?: Pick<ChatProps, "isToolOutputExpanded" | "onToolOutputToggle">,
-  opts?: { streaming?: boolean }
+  opts?: { streaming?: boolean; showReasoning?: boolean }
 ) {
   const m = message as Record<string, unknown>;
   const role = typeof m.role === "string" ? m.role : "unknown";
@@ -334,6 +340,10 @@ function renderMessage(
   const hasToolCards = toolCards.length > 0;
   const isToolResult = isToolResultMessage(message);
   const extractedText = extractText(message);
+  const extractedThinking =
+    opts?.showReasoning && role === "assistant"
+      ? extractThinking(message)
+      : null;
   const contentText = typeof m.content === "string" ? m.content : null;
   const fallback = hasToolCards ? null : JSON.stringify(message, null, 2);
 
@@ -345,10 +355,15 @@ function renderMessage(
         : !isToolResult && fallback
           ? { kind: "json" as const, value: fallback }
           : null;
-  const markdown =
+  const markdownBase =
     display?.kind === "json"
       ? ["```json", display.value, "```"].join("\n")
       : (display?.value ?? null);
+  const markdown = extractedThinking
+    ? [formatReasoningMarkdown(extractedThinking), markdownBase]
+        .filter(Boolean)
+        .join("\n\n")
+    : markdownBase;
 
   const timestamp =
     typeof m.timestamp === "number" ? new Date(m.timestamp).toLocaleTimeString() : "";
@@ -411,6 +426,60 @@ function extractText(message: unknown): string | null {
     return role === "assistant" ? stripThinkingTags(m.text) : m.text;
   }
   return null;
+}
+
+function extractThinking(message: unknown): string | null {
+  const m = message as Record<string, unknown>;
+  const content = m.content;
+  const parts: string[] = [];
+  if (Array.isArray(content)) {
+    for (const p of content) {
+      const item = p as Record<string, unknown>;
+      if (item.type === "thinking" && typeof item.thinking === "string") {
+        const cleaned = item.thinking.trim();
+        if (cleaned) parts.push(cleaned);
+      }
+    }
+  }
+  if (parts.length > 0) return parts.join("\n");
+
+  // Back-compat: older logs may still have <think> tags inside text blocks.
+  const rawText = extractRawText(message);
+  if (!rawText) return null;
+  const matches = [...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi)];
+  const extracted = matches
+    .map((m) => (m[1] ?? "").trim())
+    .filter(Boolean);
+  return extracted.length > 0 ? extracted.join("\n") : null;
+}
+
+function extractRawText(message: unknown): string | null {
+  const m = message as Record<string, unknown>;
+  const content = m.content;
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    const parts = content
+      .map((p) => {
+        const item = p as Record<string, unknown>;
+        if (item.type === "text" && typeof item.text === "string") return item.text;
+        return null;
+      })
+      .filter((v): v is string => typeof v === "string");
+    if (parts.length > 0) return parts.join("\n");
+  }
+  if (typeof m.text === "string") return m.text;
+  return null;
+}
+
+function formatReasoningMarkdown(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return "";
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => `_${line}_`);
+  return lines.length ? ["_Reasoning:_", ...lines].join("\n") : "";
 }
 
 type ToolCard = {

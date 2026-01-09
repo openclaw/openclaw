@@ -51,11 +51,16 @@ Notes:
 
 All query commands use WebSocket RPC.
 
-Shared options:
-- `--url <url>`: Gateway WebSocket URL (defaults to `gateway.remote.url` when configured).
-- `--token <token>`: Gateway token (if required).
-- `--password <password>`: Gateway password (password auth).
-- `--timeout <ms>`: timeout (default `10000`).
+Output modes:
+- Default: human-readable (colored in TTY).
+- `--json`: machine-readable JSON (no styling/spinner).
+- `--no-color` (or `NO_COLOR=1`): disable ANSI while keeping human layout.
+
+Shared options (where supported):
+- `--url <url>`: Gateway WebSocket URL.
+- `--token <token>`: Gateway token.
+- `--password <password>`: Gateway password.
+- `--timeout <ms>`: timeout/budget (varies per command).
 - `--expect-final`: wait for a “final” response (agent calls).
 
 ### `gateway health`
@@ -66,8 +71,15 @@ clawdbot gateway health --url ws://127.0.0.1:18789
 
 ### `gateway status`
 
+`gateway status` is the “debug everything” command. It always probes:
+- your configured remote gateway (if set), and
+- localhost (loopback) **even if remote is configured**.
+
+If multiple gateways are reachable, it prints all of them and warns this is an unconventional setup (usually you want only one gateway).
+
 ```bash
-clawdbot gateway status --url ws://127.0.0.1:18789
+clawdbot gateway status
+clawdbot gateway status --json
 ```
 
 ### `gateway call <method>`
@@ -104,4 +116,3 @@ Examples:
 clawdbot gateway discover --timeout 4000
 clawdbot gateway discover --json | jq '.beacons[].wsUrl'
 ```
-

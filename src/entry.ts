@@ -3,6 +3,11 @@ import process from "node:process";
 
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 
+if (process.argv.includes("--no-color")) {
+  process.env.NO_COLOR = "1";
+  process.env.FORCE_COLOR = "0";
+}
+
 const parsed = parseCliProfileArgs(process.argv);
 if (!parsed.ok) {
   // Keep it simple; Commander will handle rich help/errors after we strip flags.
