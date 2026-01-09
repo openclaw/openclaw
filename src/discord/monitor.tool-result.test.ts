@@ -1,7 +1,7 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Routes } from "discord-api-types/v10";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMock = vi.fn();
 const reactMock = vi.fn();
@@ -119,6 +119,79 @@ describe("discord tool result dispatch", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[1]).toMatch(/^PFX /);
   }, 10000);
+
+  it("caches channel info lookups between messages", async () => {
+    const { createDiscordMessageHandler } = await import("./monitor.js");
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: "/tmp/clawd",
+        },
+      },
+      session: { store: "/tmp/clawdbot-sessions.json" },
+      discord: { dm: { enabled: true, policy: "open" } },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const handler = createDiscordMessageHandler({
+      cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
+      token: "token",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code: number): never => {
+          throw new Error(`exit ${code}`);
+        },
+      },
+      botUserId: "bot-id",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 10_000,
+      textLimit: 2000,
+      replyToMode: "off",
+      dmEnabled: true,
+      groupDmEnabled: false,
+    });
+
+    const fetchChannel = vi.fn().mockResolvedValue({
+      type: ChannelType.DM,
+      name: "dm",
+    });
+    const client = { fetchChannel } as unknown as Client;
+    const baseMessage = {
+      content: "hello",
+      channelId: "cache-channel-1",
+      timestamp: new Date().toISOString(),
+      type: MessageType.Default,
+      attachments: [],
+      embeds: [],
+      mentionedEveryone: false,
+      mentionedUsers: [],
+      mentionedRoles: [],
+      author: { id: "u-cache", bot: false, username: "Ada" },
+    };
+
+    await handler(
+      {
+        message: { ...baseMessage, id: "m-cache-1" },
+        author: baseMessage.author,
+        guild_id: null,
+      },
+      client,
+    );
+    await handler(
+      {
+        message: { ...baseMessage, id: "m-cache-2" },
+        author: baseMessage.author,
+        guild_id: null,
+      },
+      client,
+    );
+
+    expect(fetchChannel).toHaveBeenCalledTimes(1);
+  });
 
   it("replies with pairing code and sender id when dmPolicy is pairing", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");
@@ -483,9 +556,7 @@ describe("discord tool result dispatch", () => {
     );
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #support");
-    expect(restGet).toHaveBeenCalledWith(
-      Routes.channelMessage("t1", "t1"),
-    );
+    expect(restGet).toHaveBeenCalledWith(Routes.channelMessage("t1", "t1"));
   });
 
   it("scopes thread sessions to the routed agent", async () => {
