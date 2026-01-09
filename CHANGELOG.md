@@ -90,7 +90,7 @@
 - Status: show Verbose/Elevated only when enabled.
 - Status: filter usage summary to the active model provider.
 - Status: map model providers to usage sources so unrelated usage doesn’t appear.
-- Status: allow Claude usage snapshot fallback via claude.ai session cookie (`CLAUDE_AI_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) when OAuth token lacks `user:profile`.
+- Status: fix Claude usage snapshots when `anthropic:default` is a setup-token lacking `user:profile` by preferring `anthropic:claude-cli`; optional claude.ai fallback via `CLAUDE_AI_SESSION_KEY` / `CLAUDE_WEB_COOKIE`.
 - Commands: allow /elevated off in groups without a mention; keep /elevated on mention-gated.
 - Commands: keep multi-directive messages from clearing directive handling.
 - Commands: warn when /elevated runs in direct (unsandboxed) runtime.
