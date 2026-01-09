@@ -6,6 +6,7 @@ import {
   getCustomProviderApiKey,
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -23,6 +24,7 @@ import { logVerbose } from "../../globals.js";
 import {
   formatUsageSummaryLine,
   loadProviderUsageSummary,
+  type UsageProviderId,
 } from "../../infra/provider-usage.js";
 import {
   scheduleGatewaySigusr1Restart,
@@ -37,7 +39,6 @@ import {
   normalizeCommandBody,
   shouldHandleTextCommands,
 } from "../commands-registry.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -62,6 +63,22 @@ import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
+
+const usageProviderMap: Record<string, UsageProviderId> = {
+  anthropic: "anthropic",
+  "github-copilot": "github-copilot",
+  "google-antigravity": "google-antigravity",
+  "google-gemini-cli": "google-gemini-cli",
+  google: "google-gemini-cli",
+  openai: "openai-codex",
+  "openai-codex": "openai-codex",
+  zai: "zai",
+};
+
+function resolveUsageProviderId(provider: string): UsageProviderId | undefined {
+  const normalized = normalizeProviderId(provider);
+  return usageProviderMap[normalized];
+}
 
 function resolveSessionEntryForKey(
   store: Record<string, SessionEntry> | undefined,
@@ -423,11 +440,14 @@ export async function handleCommands(params: {
     }
     let usageLine: string | null = null;
     try {
-      const usageSummary = await loadProviderUsageSummary({
-        timeoutMs: 3500,
-        providers: [normalizeProviderId(provider)],
-      });
-      usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
+      const usageProvider = resolveUsageProviderId(provider);
+      if (usageProvider) {
+        const usageSummary = await loadProviderUsageSummary({
+          timeoutMs: 3500,
+          providers: [usageProvider],
+        });
+        usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
+      }
     } catch {
       usageLine = null;
     }

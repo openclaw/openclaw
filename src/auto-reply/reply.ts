@@ -332,7 +332,11 @@ export async function getReplyFromConfig(
   let parsedDirectives = parseInlineDirectives(rawBody, {
     modelAliases: configuredAliases,
   });
-  if (isGroup && ctx.WasMentioned !== true && parsedDirectives.hasElevatedDirective) {
+  if (
+    isGroup &&
+    ctx.WasMentioned !== true &&
+    parsedDirectives.hasElevatedDirective
+  ) {
     if (parsedDirectives.elevatedLevel !== "off") {
       parsedDirectives = {
         ...parsedDirectives,
@@ -358,7 +362,6 @@ export async function getReplyFromConfig(
     if (noMentions.trim().length > 0) {
       const directiveOnlyCheck = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
-        disableElevated: disableElevatedInGroup,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
         parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);

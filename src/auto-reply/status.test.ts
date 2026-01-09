@@ -79,6 +79,24 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Queue: collect");
   });
 
+  it("shows verbose/elevated labels only when enabled", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: { sessionId: "v1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      resolvedThink: "low",
+      resolvedVerbose: "on",
+      resolvedElevated: "on",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(text).toContain("Verbose");
+    expect(text).toContain("Elevated");
+    expect(text).not.toContain("Verbose:");
+    expect(text).not.toContain("Elevated:");
+  });
+
   it("prefers model overrides over last-run model", () => {
     const text = buildStatusMessage({
       agent: {
