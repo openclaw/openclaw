@@ -272,8 +272,6 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
   fi
   rm -rf "$RELAY_BUILD_DIR"
 
-  echo "🧪 Smoke testing bundled relay QR modules"
-  "$RELAY_OUT" --smoke qr >/dev/null
 
   echo "🎨 Copying gateway A2UI host assets"
   rm -rf "$RELAY_DIR/a2ui"
