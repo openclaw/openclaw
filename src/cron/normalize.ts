@@ -1,3 +1,4 @@
+import { migrateLegacyCronPayload } from "./payload-migration.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
@@ -34,15 +35,7 @@ function coercePayload(payload: UnknownRecord) {
   }
 
   // Back-compat: older configs used `channel` for delivery provider.
-  const providerRaw =
-    typeof payload.provider === "string" ? payload.provider.trim() : "";
-  const channelRaw =
-    typeof payload.channel === "string" ? payload.channel.trim() : "";
-  const provider =
-    (providerRaw || channelRaw).trim().toLowerCase() ||
-    (providerRaw || channelRaw).trim();
-  if (!providerRaw && provider) next.provider = provider;
-  if ("channel" in next) delete next.channel;
+  migrateLegacyCronPayload(next);
   return next;
 }
 
