@@ -376,6 +376,8 @@ export function subscribeEmbeddedPiSession(params: {
     typeof params.onReasoningStream === "function";
   let deltaBuffer = "";
   let blockBuffer = "";
+  // Track if a streamed chunk opened a <think> block (stateful across chunks).
+  let blockThinkingActive = false;
   let lastStreamedAssistant: string | undefined;
   let lastStreamedReasoning: string | undefined;
   let lastBlockReplyText: string | undefined;
@@ -481,9 +483,32 @@ export function subscribeEmbeddedPiSession(params: {
     }
   };
 
+  const stripBlockThinkingSegments = (text: string): string => {
+    if (!text) return text;
+    if (!blockThinkingActive && !THINKING_TAG_SCAN_RE.test(text)) return text;
+    THINKING_TAG_SCAN_RE.lastIndex = 0;
+    let result = "";
+    let lastIndex = 0;
+    let inThinking = blockThinkingActive;
+    for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
+      const idx = match.index ?? 0;
+      if (!inThinking) {
+        result += text.slice(lastIndex, idx);
+      }
+      const isClose = match[1] === "/";
+      inThinking = !isClose;
+      lastIndex = idx + match[0].length;
+    }
+    if (!inThinking) {
+      result += text.slice(lastIndex);
+    }
+    blockThinkingActive = inThinking;
+    return result;
+  };
+
   const emitBlockChunk = (text: string) => {
-    // Strip any <thinking> tags that may have leaked into the output (e.g., from Gemini mimicking history)
-    const strippedText = stripThinkingSegments(stripUnpairedThinkingTags(text));
+    // Strip <think> blocks across chunk boundaries to avoid leaking reasoning.
+    const strippedText = stripBlockThinkingSegments(text);
     const chunk = strippedText.trimEnd();
     if (!chunk) return;
     if (chunk === lastBlockReplyText) return;
@@ -571,6 +596,7 @@ export function subscribeEmbeddedPiSession(params: {
     deltaBuffer = "";
     blockBuffer = "";
     blockChunker?.reset();
+    blockThinkingActive = false;
     lastStreamedAssistant = undefined;
     lastStreamedReasoning = undefined;
     lastBlockReplyText = undefined;
@@ -590,6 +616,7 @@ export function subscribeEmbeddedPiSession(params: {
           deltaBuffer = "";
           blockBuffer = "";
           blockChunker?.reset();
+          blockThinkingActive = false;
           lastStreamedAssistant = undefined;
           lastBlockReplyText = undefined;
           lastStreamedReasoning = undefined;
@@ -973,6 +1000,7 @@ export function subscribeEmbeddedPiSession(params: {
           deltaBuffer = "";
           blockBuffer = "";
           blockChunker?.reset();
+          blockThinkingActive = false;
           lastStreamedAssistant = undefined;
         }
       }
@@ -1054,6 +1082,7 @@ export function subscribeEmbeddedPiSession(params: {
             blockBuffer = "";
           }
         }
+        blockThinkingActive = false;
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {
