@@ -330,7 +330,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
   const usageCostLine =
-    usagePair && costLine ? `${usagePair} · ${costLine}` : usagePair ?? costLine;
+    usagePair && costLine
+      ? `${usagePair} · ${costLine}`
+      : (usagePair ?? costLine);
 
   return [
     versionLine,
