@@ -6,6 +6,7 @@
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Commands: accept /models as an alias for /model.
+- Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Agent: add claude-cli/opus-4.5 runner via Claude CLI with resume support (tools disabled).
 - CLI: move `clawdbot message` to subcommands (`message send|poll|…`), fold Discord/Slack/Telegram/WhatsApp tools into `message`, and require `--provider` unless only one provider is configured.

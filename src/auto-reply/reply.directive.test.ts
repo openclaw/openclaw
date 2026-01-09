@@ -1131,7 +1131,7 @@ describe("directive behavior", () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
-      const authDir = path.join(home, ".clawdbot", "agent");
+      const authDir = path.join(home, ".clawdbot", "agents", "main", "agent");
       await fs.mkdir(authDir, { recursive: true, mode: 0o700 });
       await fs.writeFile(
         path.join(authDir, "auth-profiles.json"),

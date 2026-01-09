@@ -130,6 +130,39 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
 
+  it("prefers store order over config order", () => {
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:default", "anthropic:work"] },
+          profiles: cfg.auth.profiles,
+        },
+      },
+      store: {
+        ...store,
+        order: { anthropic: ["anthropic:work", "anthropic:default"] },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+
+  it("pushes cooldown profiles to the end even with store order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      store: {
+        ...store,
+        order: { anthropic: ["anthropic:default", "anthropic:work"] },
+        usageStats: {
+          "anthropic:default": { cooldownUntil: now + 60_000 },
+          "anthropic:work": { lastUsed: 1 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+
   it("pushes cooldown profiles to the end even with configured order", () => {
     const now = Date.now();
     const order = resolveAuthProfileOrder({
