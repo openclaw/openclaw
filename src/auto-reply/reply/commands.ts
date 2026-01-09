@@ -236,6 +236,10 @@ function resolveModelAuthLabel(
     if (profile.type === "oauth") {
       return `oauth${label ? ` (${label})` : ""}`;
     }
+    if (profile.type === "token") {
+      const snippet = formatApiKeySnippet(profile.token);
+      return `token ${snippet}${label ? ` (${label})` : ""}`;
+    }
     const snippet = formatApiKeySnippet(profile.key);
     return `api-key ${snippet}${label ? ` (${label})` : ""}`;
   }
