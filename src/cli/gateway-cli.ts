@@ -77,8 +77,8 @@ type GatewayRunParams = {
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
-const DEV_IDENTITY_NAME = "Clawdbot Dev";
-const DEV_IDENTITY_THEME = "helpful debug droid";
+const DEV_IDENTITY_NAME = "C3-PO";
+const DEV_IDENTITY_THEME = "protocol droid";
 const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
 const DEV_AGENTS_TEMPLATE = `# AGENTS.md - Clawdbot Dev Workspace
@@ -91,7 +91,7 @@ Default dev workspace for clawdbot gateway --dev.
 `;
 const DEV_SOUL_TEMPLATE = `# SOUL.md - Dev Persona
 
-Helpful robotic debugging assistant.
+Protocol droid for debugging and operations.
 
 - Concise, structured answers.
 - Ask for missing context before guessing.
@@ -100,7 +100,7 @@ Helpful robotic debugging assistant.
 const DEV_IDENTITY_TEMPLATE = `# IDENTITY.md - Agent Identity
 
 - Name: ${DEV_IDENTITY_NAME}
-- Creature: debug droid
+- Creature: protocol droid
 - Vibe: ${DEV_IDENTITY_THEME}
 - Emoji: ${DEV_IDENTITY_EMOJI}
 `;
