@@ -12,6 +12,7 @@ export function buildAgentSystemPrompt(params: {
   userTimezone?: string;
   userTime?: string;
   contextFiles?: EmbeddedContextFile[];
+  skillsPrompt?: string;
   heartbeatPrompt?: string;
   runtimeInfo?: {
     host?: string;
@@ -121,6 +122,7 @@ export function buildAgentSystemPrompt(params: {
     : undefined;
   const userTimezone = params.userTimezone?.trim();
   const userTime = params.userTime?.trim();
+  const skillsPrompt = params.skillsPrompt?.trim();
   const heartbeatPrompt = params.heartbeatPrompt?.trim();
   const heartbeatPromptLine = heartbeatPrompt
     ? `Heartbeat prompt: ${heartbeatPrompt}`
@@ -136,6 +138,7 @@ export function buildAgentSystemPrompt(params: {
   const telegramInlineButtonsEnabled =
     runtimeProvider === "telegram" &&
     runtimeCapabilitiesLower.has("inlinebuttons");
+  const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
 
   const lines = [
     "You are a personal assistant running inside Clawdbot.",
@@ -164,7 +167,8 @@ export function buildAgentSystemPrompt(params: {
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
     "",
     "## Skills",
-    `Skills provide task-specific instructions. Use \`read\` to load from ${params.workspaceDir}/skills/<name>/SKILL.md when needed.`,
+    "Skills provide task-specific instructions. Use `read` to load the SKILL.md at the location listed for that skill.",
+    ...skillsLines,
     "",
     hasGateway ? "## Clawdbot Self-Update" : "",
     hasGateway

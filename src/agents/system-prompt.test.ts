@@ -90,8 +90,19 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "Use `read` to load from /tmp/clawd/skills/<name>/SKILL.md",
+      "Use `read` to load the SKILL.md at the location listed for that skill.",
     );
+  });
+
+  it("appends available skills when provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain("<available_skills>");
+    expect(prompt).toContain("<name>demo</name>");
   });
 
   it("renders project context files when provided", () => {

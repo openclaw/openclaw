@@ -89,7 +89,9 @@ import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
+  buildWorkspaceSkillsPrompt,
   loadWorkspaceSkillEntries,
+  type SkillEntry,
   type SkillSnapshot,
 } from "./skills.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -578,6 +580,7 @@ function buildEmbeddedSystemPrompt(params: {
   ownerNumbers?: string[];
   reasoningTagHint: boolean;
   heartbeatPrompt?: string;
+  skillsPrompt?: string;
   runtimeInfo: {
     host: string;
     os: string;
@@ -601,6 +604,7 @@ function buildEmbeddedSystemPrompt(params: {
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: params.reasoningTagHint,
     heartbeatPrompt: params.heartbeatPrompt,
+    skillsPrompt: params.skillsPrompt,
     runtimeInfo: params.runtimeInfo,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
@@ -616,6 +620,24 @@ export function createSystemPromptOverride(
 ): (defaultPrompt: string) => string {
   const trimmed = systemPrompt.trim();
   return () => trimmed;
+}
+
+export function resolveSkillsPrompt(params: {
+  skillsSnapshot?: SkillSnapshot;
+  skillEntries?: SkillEntry[];
+  config?: ClawdbotConfig;
+  workspaceDir: string;
+}): string {
+  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
+  if (snapshotPrompt) return snapshotPrompt;
+  if (params.skillEntries && params.skillEntries.length > 0) {
+    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
+      entries: params.skillEntries,
+      config: params.config,
+    });
+    return prompt.trim() ? prompt : "";
+  }
+  return "";
 }
 
 // Tool names are now capitalized (Bash, Read, Write, Edit) to bypass Anthropic's
@@ -844,6 +866,12 @@ export async function compactEmbeddedPiSession(params: {
               skills: skillEntries ?? [],
               config: params.config,
             });
+        const skillsPrompt = resolveSkillsPrompt({
+          skillsSnapshot: params.skillsSnapshot,
+          skillEntries: shouldLoadSkillEntries ? skillEntries : undefined,
+          config: params.config,
+          workspaceDir: effectiveWorkspace,
+        });
 
         const bootstrapFiles =
           await loadWorkspaceBootstrapFiles(effectiveWorkspace);
@@ -895,6 +923,7 @@ export async function compactEmbeddedPiSession(params: {
           heartbeatPrompt: resolveHeartbeatPrompt(
             params.config?.agents?.defaults?.heartbeat?.prompt,
           ),
+          skillsPrompt,
           runtimeInfo,
           sandboxInfo,
           tools,
@@ -1167,6 +1196,12 @@ export async function runEmbeddedPiAgent(params: {
                 skills: skillEntries ?? [],
                 config: params.config,
               });
+          const skillsPrompt = resolveSkillsPrompt({
+            skillsSnapshot: params.skillsSnapshot,
+            skillEntries: shouldLoadSkillEntries ? skillEntries : undefined,
+            config: params.config,
+            workspaceDir: effectiveWorkspace,
+          });
 
           const bootstrapFiles =
             await loadWorkspaceBootstrapFiles(effectiveWorkspace);
@@ -1208,6 +1243,7 @@ export async function runEmbeddedPiAgent(params: {
             heartbeatPrompt: resolveHeartbeatPrompt(
               params.config?.agents?.defaults?.heartbeat?.prompt,
             ),
+            skillsPrompt,
             runtimeInfo,
             sandboxInfo,
             tools,

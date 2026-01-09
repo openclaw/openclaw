@@ -49,10 +49,19 @@ Use `agents.defaults.userTimezone` in `~/.clawdbot/clawdbot.json` to change the 
 
 ## Skills
 
-Skills are **not** auto-injected. Instead, the prompt instructs the model to use `read` to load skill instructions on demand:
+When eligible skills exist, Clawdbot injects a compact **available skills list**
+(`formatSkillsForPrompt`) that includes the **file path** for each skill. The
+prompt instructs the model to use `read` to load the SKILL.md at the listed
+location (workspace, managed, or bundled).
 
 ```
-<workspace>/skills/<name>/SKILL.md
+<available_skills>
+  <skill>
+    <name>...</name>
+    <description>...</description>
+    <location>...</location>
+  </skill>
+</available_skills>
 ```
 
 This keeps the base prompt small while still enabling targeted skill usage.
