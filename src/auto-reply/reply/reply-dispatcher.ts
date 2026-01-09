@@ -1,5 +1,5 @@
-import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
