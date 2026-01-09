@@ -33,6 +33,19 @@ export async function setAnthropicApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setGeminiApiKey(key: string, agentDir?: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  upsertAuthProfile({
+    profileId: "google:default",
+    credential: {
+      type: "api_key",
+      provider: "google",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
 export function applyAuthProfileConfig(
   cfg: ClawdbotConfig,
   params: {

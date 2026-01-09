@@ -326,6 +326,7 @@ export async function monitorIMessageProvider(
       !mentioned &&
       commandAuthorized &&
       hasControlCommand(messageText);
+    const effectiveWasMentioned = mentioned || shouldBypassMention;
     if (
       isGroup &&
       requireMention &&
@@ -387,7 +388,7 @@ export async function monitorIMessageProvider(
       MediaPath: mediaPath,
       MediaType: mediaType,
       MediaUrl: mediaPath,
-      WasMentioned: mentioned,
+      WasMentioned: effectiveWasMentioned,
       CommandAuthorized: commandAuthorized,
       // Originating channel for reply routing.
       OriginatingChannel: "imessage" as const,

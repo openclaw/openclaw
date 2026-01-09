@@ -57,6 +57,11 @@ export function registerModelsCli(program: Command) {
     .description("Show configured model state")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
+    .option(
+      "--check",
+      "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
+      false,
+    )
     .action(async (opts) => {
       try {
         await modelsStatusCommand(opts, defaultRuntime);

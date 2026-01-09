@@ -23,11 +23,13 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import { applyGoogleGeminiModelDefault } from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
   setAnthropicApiKey,
+  setGeminiApiKey,
 } from "./onboard-auth.js";
 import {
   applyWizardMetadata,
@@ -119,6 +121,20 @@ export async function runNonInteractiveOnboarding(
       provider: "anthropic",
       mode: "api_key",
     });
+  } else if (authChoice === "gemini-api-key") {
+    const key = opts.geminiApiKey?.trim();
+    if (!key) {
+      runtime.error("Missing --gemini-api-key");
+      runtime.exit(1);
+      return;
+    }
+    await setGeminiApiKey(key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "google:default",
+      provider: "google",
+      mode: "api_key",
+    });
+    nextConfig = applyGoogleGeminiModelDefault(nextConfig).next;
   } else if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,

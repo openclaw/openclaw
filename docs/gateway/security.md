@@ -77,6 +77,13 @@ Even with strong system prompts, **prompt injection is not solved**. What helps 
 - Run sensitive tool execution in a sandbox; keep secrets out of the agent’s reachable filesystem.
 - **Model choice matters:** we recommend Anthropic Opus 4.5 because it’s quite good at recognizing prompt injections (see [“A step forward on safety”](https://www.anthropic.com/news/claude-opus-4-5)). Using weaker models increases risk.
 
+## Reasoning & verbose output in groups
+
+`/reasoning` and `/verbose` can expose internal reasoning or tool output that
+was not meant for a public channel. In group settings, treat them as **debug
+only** and keep them off unless you explicitly need them. If you enable them,
+do so only in trusted DMs or tightly controlled rooms.
+
 ## Lessons Learned (The Hard Way)
 
 ### The `find ~` Incident 🦞

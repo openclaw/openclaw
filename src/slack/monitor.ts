@@ -913,6 +913,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(message.text ?? "");
+    const effectiveWasMentioned = wasMentioned || shouldBypassMention;
     const canDetectMention = Boolean(botUserId) || mentionRegexes.length > 0;
     if (
       isRoom &&
@@ -1058,7 +1059,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ThreadStarterBody: threadStarterBody,
       ThreadLabel: threadLabel,
       Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-      WasMentioned: isRoomish ? wasMentioned : undefined,
+      WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
       MediaPath: media?.path,
       MediaType: media?.contentType,
       MediaUrl: media?.path,

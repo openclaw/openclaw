@@ -486,6 +486,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(msg.text ?? msg.caption ?? "");
+    const effectiveWasMentioned = wasMentioned || shouldBypassMention;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
     if (isGroup && requireMention && canDetectMention) {
       if (!wasMentioned && !shouldBypassMention) {
@@ -592,7 +593,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ReplyToBody: replyTarget?.body,
       ReplyToSender: replyTarget?.sender,
       Timestamp: msg.date ? msg.date * 1000 : undefined,
-      WasMentioned: isGroup ? wasMentioned : undefined,
+      WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       MediaPath: allMedia[0]?.path,
       MediaType: allMedia[0]?.contentType,
       MediaUrl: allMedia[0]?.path,

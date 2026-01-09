@@ -49,10 +49,13 @@ If you already signed in with the external CLIs *on the gateway host*, Clawdbot 
 - Codex CLI: reads `~/.codex/auth.json` → profile `openai-codex:codex-cli`
 
 Sync happens when Clawdbot loads the auth store (so it stays up-to-date when the CLIs refresh tokens).
+On macOS, the first read may trigger a Keychain prompt; run `clawdbot models status`
+in a terminal once if the Gateway runs headless and can’t access the entry.
 
 How to verify:
 
 ```bash
+clawdbot models status
 clawdbot providers list
 ```
 

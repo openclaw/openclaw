@@ -26,7 +26,10 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
-import { maybeRepairAnthropicOAuthProfileId } from "./doctor-auth.js";
+import {
+  maybeRepairAnthropicOAuthProfileId,
+  noteAuthProfileHealth,
+} from "./doctor-auth.js";
 import {
   buildGatewayRuntimeHints,
   formatGatewayRuntimeSummary,
@@ -124,6 +127,12 @@ export async function doctorCommand(
   }
 
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
+  await noteAuthProfileHealth({
+    cfg,
+    prompter,
+    allowKeychainPrompt:
+      options.nonInteractive !== true && Boolean(process.stdin.isTTY),
+  });
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
   if (gatewayDetails.remoteFallbackNote) {
     note(gatewayDetails.remoteFallbackNote, "Gateway");

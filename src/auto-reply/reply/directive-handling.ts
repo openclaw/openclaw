@@ -54,6 +54,9 @@ import {
 } from "./queue.js";
 
 const SYSTEM_MARK = "⚙️";
+const formatOptionsLine = (options: string) => `Options: ${options}.`;
+const withOptions = (line: string, options: string) =>
+  `${line}\n${formatOptionsLine(options)}`;
 
 const maskApiKey = (value: string): string => {
   const trimmed = value.trim();
@@ -417,7 +420,12 @@ export async function handleDirectiveOnly(params: {
     // If no argument was provided, show the current level
     if (!directives.rawThinkLevel) {
       const level = currentThinkLevel ?? "off";
-      return { text: `Current thinking level: ${level}.` };
+      return {
+        text: withOptions(
+          `Current thinking level: ${level}.`,
+          "off, minimal, low, medium, high",
+        ),
+      };
     }
     return {
       text: `Unrecognized thinking level "${directives.rawThinkLevel}". Valid levels: off, minimal, low, medium, high.`,
@@ -426,7 +434,9 @@ export async function handleDirectiveOnly(params: {
   if (directives.hasVerboseDirective && !directives.verboseLevel) {
     if (!directives.rawVerboseLevel) {
       const level = currentVerboseLevel ?? "off";
-      return { text: `Current verbose level: ${level}.` };
+      return {
+        text: withOptions(`Current verbose level: ${level}.`, "on, off"),
+      };
     }
     return {
       text: `Unrecognized verbose level "${directives.rawVerboseLevel}". Valid levels: off, on.`,
@@ -435,7 +445,12 @@ export async function handleDirectiveOnly(params: {
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
     if (!directives.rawReasoningLevel) {
       const level = currentReasoningLevel ?? "off";
-      return { text: `Current reasoning level: ${level}.` };
+      return {
+        text: withOptions(
+          `Current reasoning level: ${level}.`,
+          "on, off, stream",
+        ),
+      };
     }
     return {
       text: `Unrecognized reasoning level "${directives.rawReasoningLevel}". Valid levels: on, off, stream.`,
@@ -447,7 +462,9 @@ export async function handleDirectiveOnly(params: {
         return { text: "elevated is not available right now." };
       }
       const level = currentElevatedLevel ?? "off";
-      return { text: `Current elevated level: ${level}.` };
+      return {
+        text: withOptions(`Current elevated level: ${level}.`, "on, off"),
+      };
     }
     return {
       text: `Unrecognized elevated level "${directives.rawElevatedLevel}". Valid levels: off, on.`,
@@ -483,7 +500,10 @@ export async function handleDirectiveOnly(params: {
       typeof settings.cap === "number" ? String(settings.cap) : "default";
     const dropLabel = settings.dropPolicy ?? "default";
     return {
-      text: `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
+      text: withOptions(
+        `Current queue settings: mode=${settings.mode}, debounce=${debounceLabel}, cap=${capLabel}, drop=${dropLabel}.`,
+        "modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize",
+      ),
     };
   }
 

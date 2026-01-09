@@ -1261,7 +1261,7 @@ export async function monitorWebProvider(
           Provider: "whatsapp",
           Surface: "whatsapp",
           OriginatingChannel: "whatsapp",
-          OriginatingTo: msg.to,
+          OriginatingTo: msg.from,
         },
         cfg,
         dispatcher,

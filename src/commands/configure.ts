@@ -50,11 +50,16 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
   setAnthropicApiKey,
+  setGeminiApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import {
@@ -300,6 +305,7 @@ async function promptAuthConfig(
     | "openai-codex"
     | "codex-cli"
     | "antigravity"
+    | "gemini-api-key"
     | "apiKey"
     | "minimax"
     | "skip";
@@ -512,6 +518,28 @@ async function promptAuthConfig(
       spin.stop("Antigravity OAuth failed");
       runtime.error(String(err));
       note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
+    }
+  } else if (authChoice === "gemini-api-key") {
+    const key = guardCancel(
+      await text({
+        message: "Enter Gemini API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    await setGeminiApiKey(String(key).trim());
+    next = applyAuthProfileConfig(next, {
+      profileId: "google:default",
+      provider: "google",
+      mode: "api_key",
+    });
+    const applied = applyGoogleGeminiModelDefault(next);
+    next = applied.next;
+    if (applied.changed) {
+      note(
+        `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+        "Model configured",
+      );
     }
   } else if (authChoice === "apiKey") {
     const key = guardCancel(

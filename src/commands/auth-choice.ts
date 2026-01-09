@@ -26,10 +26,15 @@ import {
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
 import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
+import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
   applyMinimaxProviderConfig,
   setAnthropicApiKey,
+  setGeminiApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
@@ -414,6 +419,30 @@ export async function applyAuthChoice(params: {
         "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
         "OAuth help",
       );
+    }
+  } else if (params.authChoice === "gemini-api-key") {
+    const key = await params.prompter.text({
+      message: "Enter Gemini API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setGeminiApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "google:default",
+      provider: "google",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      const applied = applyGoogleGeminiModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+          "Model configured",
+        );
+      }
+    } else {
+      agentModelOverride = GOOGLE_GEMINI_DEFAULT_MODEL;
+      await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
     }
   } else if (params.authChoice === "apiKey") {
     const key = await params.prompter.text({
