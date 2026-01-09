@@ -36,6 +36,23 @@ In **multi-agent** setups, each agent has its own workspace. That means:
 If the same skill name exists in more than one place, the usual precedence
 applies: workspace wins, then managed/local, then bundled.
 
+## ClawdHub (install + sync)
+
+ClawdHub is the public skills registry for Clawdbot. Use it to discover,
+install, update, and back up skills. Full guide: [ClawdHub](/tools/clawdhub).
+
+Common flows:
+
+- Install a skill into your workspace:
+  - `clawdhub install <skill-slug>`
+- Update all installed skills:
+  - `clawdhub update --all`
+- Sync (scan + publish updates):
+  - `clawdhub sync --all`
+
+By default, `clawdhub` installs into `./skills` under your current working
+directory; Clawdbot picks that up as `<workspace>/skills` on the next session.
+
 ## Format (AgentSkills + Pi-compatible)
 
 `SKILL.md` must include at least:
