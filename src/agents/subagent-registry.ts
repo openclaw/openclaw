@@ -84,7 +84,7 @@ function ensureListener() {
         ? (evt.data.endedAt as number)
         : Date.now();
     entry.endedAt = endedAt;
-    
+
     if (!beginSubagentAnnounce(evt.runId)) {
       if (entry.cleanup === "delete") {
         subagentRuns.delete(evt.runId);

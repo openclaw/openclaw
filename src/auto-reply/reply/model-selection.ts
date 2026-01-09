@@ -95,7 +95,7 @@ export async function createModelSelectionState(params: {
         delete sessionEntry.providerOverride;
         delete sessionEntry.modelOverride;
         sessionEntry.updatedAt = Date.now();
-        sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+        sessionStore[sessionKey] = sessionEntry;
         if (storePath) {
           await saveSessionStore(storePath, sessionStore);
         }
@@ -129,7 +129,7 @@ export async function createModelSelectionState(params: {
     if (!profile || profile.provider !== provider) {
       delete sessionEntry.authProfileOverride;
       sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+      sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await saveSessionStore(storePath, sessionStore);
       }

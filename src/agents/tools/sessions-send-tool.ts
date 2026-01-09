@@ -29,12 +29,24 @@ import {
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
 
-const SessionsSendToolSchema = Type.Object({
-  sessionKey: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String()),
-  message: Type.String(),
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-});
+const SessionsSendToolSchema = Type.Union([
+  Type.Object(
+    {
+      sessionKey: Type.String(),
+      message: Type.String(),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      label: Type.String(),
+      message: Type.String(),
+      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+    },
+    { additionalProperties: false },
+  ),
+]);
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;
@@ -49,36 +61,8 @@ export function createSessionsSendTool(opts?: {
     parameters: SessionsSendToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      let sessionKey = readStringParam(params, "sessionKey");
-      const labelParam = readStringParam(params, "label");
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
-
-      // Lookup by label if sessionKey not provided
-      if (!sessionKey && labelParam) {
-        const listResult = (await callGateway({
-          method: "sessions.list",
-          params: { activeMinutes: 1440 }, // Last 24h
-          timeoutMs: 10_000,
-        })) as { sessions?: Array<{ key: string; label?: string }> };
-        const match = listResult.sessions?.find(
-          (s) => s.label === labelParam,
-        );
-        if (!match) {
-          return jsonResult({
-            status: "error",
-            error: `No session found with label: ${labelParam}`,
-          });
-        }
-        sessionKey = match.key;
-      }
-
-      if (!sessionKey) {
-        return jsonResult({
-          status: "error",
-          error: "Either sessionKey or label is required",
-        });
-      }
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const visibility =
         cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
@@ -90,42 +74,111 @@ export function createSessionsSendTool(opts?: {
               mainKey,
             })
           : undefined;
-      const resolvedKey = resolveInternalSessionKey({
-        key: sessionKey,
-        alias,
-        mainKey,
-      });
       const restrictToSpawned =
         opts?.sandboxed === true &&
         visibility === "spawned" &&
         requesterInternalKey &&
         !isSubagentSessionKey(requesterInternalKey);
-      if (restrictToSpawned) {
-        try {
-          const list = (await callGateway({
-            method: "sessions.list",
-            params: {
-              includeGlobal: false,
-              includeUnknown: false,
-              limit: 500,
-              spawnedBy: requesterInternalKey,
-            },
-          })) as { sessions?: Array<Record<string, unknown>> };
-          const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
-          const ok = sessions.some((entry) => entry?.key === resolvedKey);
-          if (!ok) {
+
+      const sessionKeyParam = readStringParam(params, "sessionKey");
+      const labelParam = readStringParam(params, "label");
+      if (sessionKeyParam && labelParam) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Provide either sessionKey or label (not both).",
+        });
+      }
+
+      const listSessions = async (listParams: Record<string, unknown>) => {
+        const result = (await callGateway({
+          method: "sessions.list",
+          params: listParams,
+          timeoutMs: 10_000,
+        })) as { sessions?: Array<Record<string, unknown>> };
+        return Array.isArray(result?.sessions) ? result.sessions : [];
+      };
+
+      const activeMinutes = 24 * 60;
+      const visibleSessions = restrictToSpawned
+        ? await listSessions({
+            activeMinutes,
+            includeGlobal: false,
+            includeUnknown: false,
+            limit: 500,
+            spawnedBy: requesterInternalKey,
+          })
+        : undefined;
+
+      let sessionKey = sessionKeyParam;
+      if (!sessionKey && labelParam) {
+        const sessions =
+          visibleSessions ??
+          (await listSessions({
+            activeMinutes,
+            includeGlobal: false,
+            includeUnknown: false,
+            limit: 500,
+          }));
+        const matches = sessions.filter((entry) => {
+          const label =
+            typeof entry?.label === "string" ? entry.label : undefined;
+          return label === labelParam;
+        });
+        if (matches.length === 0) {
+          if (restrictToSpawned) {
             return jsonResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
-              error: `Session not visible from this sandboxed agent session: ${sessionKey}`,
-              sessionKey: resolveDisplaySessionKey({
-                key: sessionKey,
-                alias,
-                mainKey,
-              }),
+              error: `Session not visible from this sandboxed agent session: label=${labelParam}`,
             });
           }
-        } catch {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `No session found with label: ${labelParam}`,
+          });
+        }
+        if (matches.length > 1) {
+          const keys = matches
+            .map((entry) => (typeof entry?.key === "string" ? entry.key : ""))
+            .filter(Boolean)
+            .join(", ");
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `Multiple sessions found with label: ${labelParam}${keys ? ` (${keys})` : ""}`,
+          });
+        }
+        const key = matches[0]?.key;
+        if (typeof key !== "string" || !key.trim()) {
+          return jsonResult({
+            runId: crypto.randomUUID(),
+            status: "error",
+            error: `Invalid session entry for label: ${labelParam}`,
+          });
+        }
+        sessionKey = key;
+      }
+
+      if (!sessionKey) {
+        return jsonResult({
+          runId: crypto.randomUUID(),
+          status: "error",
+          error: "Either sessionKey or label is required",
+        });
+      }
+
+      const resolvedKey = resolveInternalSessionKey({
+        key: sessionKey,
+        alias,
+        mainKey,
+      });
+
+      if (restrictToSpawned) {
+        const sessions = visibleSessions ?? [];
+        const ok = sessions.some((entry) => entry?.key === resolvedKey);
+        if (!ok) {
           return jsonResult({
             runId: crypto.randomUUID(),
             status: "forbidden",

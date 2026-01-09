@@ -880,7 +880,7 @@ export async function handleDirectiveOnly(params: {
       }
     }
     sessionEntry.updatedAt = Date.now();
-    sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+    sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       await saveSessionStore(storePath, sessionStore);
     }
@@ -1099,7 +1099,7 @@ export async function persistInlineDirectives(params: {
     }
     if (updated) {
       sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+      sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await saveSessionStore(storePath, sessionStore);
       }

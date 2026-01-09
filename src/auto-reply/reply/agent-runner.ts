@@ -271,7 +271,7 @@ export async function runReplyAgent(params: {
     if (steered && !shouldFollowup) {
       if (sessionEntry && sessionStore && sessionKey) {
         sessionEntry.updatedAt = Date.now();
-        sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+        sessionStore[sessionKey] = sessionEntry;
         if (storePath) {
           await saveSessionStore(storePath, sessionStore);
         }
@@ -285,7 +285,7 @@ export async function runReplyAgent(params: {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     if (sessionEntry && sessionStore && sessionKey) {
       sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+      sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await saveSessionStore(storePath, sessionStore);
       }
@@ -674,7 +674,7 @@ export async function runReplyAgent(params: {
     ) {
       sessionEntry.groupActivationNeedsSystemIntro = false;
       sessionEntry.updatedAt = Date.now();
-      sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+      sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await saveSessionStore(storePath, sessionStore);
       }

@@ -173,7 +173,7 @@ describe("sessions_send label lookup", () => {
       };
       expect(details.status).toBe("ok");
       expect(details.reply).toBe("labeled response");
-      expect(details.sessionKey).toBe("test-labeled-session");
+      expect(details.sessionKey).toBe("agent:main:test-labeled-session");
     } finally {
       if (prevPort === undefined) {
         delete process.env.CLAWDBOT_GATEWAY_PORT;
