@@ -19,6 +19,7 @@ import {
   isCacheEnabled,
   resolveCacheTtlMs,
 } from "./cache-utils.js";
+import { loadConfig } from "./config.js";
 import { resolveStateDir } from "./paths.js";
 
 // ============================================================================
@@ -230,6 +231,10 @@ export function resolveMainSessionKey(cfg?: {
   const mainKey =
     (cfg?.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
   return buildAgentMainSessionKey({ agentId, mainKey });
+}
+
+export function resolveMainSessionKeyFromConfig(): string {
+  return resolveMainSessionKey(loadConfig());
 }
 
 export { resolveAgentIdFromSessionKey };

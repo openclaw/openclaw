@@ -1,5 +1,4 @@
-import { loadConfig } from "../../config/config.js";
-import { resolveMainSessionKey } from "../../config/sessions.js";
+import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import {
@@ -47,7 +46,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const sessionKey = resolveMainSessionKey(loadConfig());
+    const sessionKey = resolveMainSessionKeyFromConfig();
     const instanceId =
       typeof params.instanceId === "string" ? params.instanceId : undefined;
     const host = typeof params.host === "string" ? params.host : undefined;

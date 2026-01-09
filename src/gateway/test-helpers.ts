@@ -4,8 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import { loadConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
@@ -375,7 +374,7 @@ export function installGatewayTestHooks() {
     embeddedRunMock.abortCalls = [];
     embeddedRunMock.waitCalls = [];
     embeddedRunMock.waitResults.clear();
-    drainSystemEvents(resolveMainSessionKey(loadConfig()));
+    drainSystemEvents(resolveMainSessionKeyFromConfig());
     resetAgentRunContextForTest();
     const mod = await import("./server.js");
     mod.__resetModelCatalogCacheForTest();
@@ -555,7 +554,7 @@ export async function rpcReq<T = unknown>(
 }
 
 export async function waitForSystemEvent(timeoutMs = 2000) {
-  const sessionKey = resolveMainSessionKey(loadConfig());
+  const sessionKey = resolveMainSessionKeyFromConfig();
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const events = peekSystemEvents(sessionKey);

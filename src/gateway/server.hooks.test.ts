@@ -1,6 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { loadConfig } from "../config/config.js";
-import { resolveMainSessionKey } from "../config/sessions.js";
+import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import {
   cronIsolatedRun,
@@ -13,7 +12,7 @@ import {
 
 installGatewayTestHooks();
 
-const resolveMainKey = () => resolveMainSessionKey(loadConfig());
+const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 
 describe("gateway server hooks", () => {
   test("hooks wake requires auth", async () => {

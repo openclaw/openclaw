@@ -41,6 +41,7 @@ import {
 import {
   loadSessionStore,
   resolveMainSessionKey,
+  resolveMainSessionKeyFromConfig,
   resolveStorePath,
 } from "../config/sessions.js";
 import { runCronIsolatedAgentTurn } from "../cron/isolated-agent.js";
@@ -488,7 +489,7 @@ export async function startGatewayServer(
     text: string;
     mode: "now" | "next-heartbeat";
   }) => {
-    const sessionKey = resolveMainSessionKey(loadConfig());
+    const sessionKey = resolveMainSessionKeyFromConfig();
     enqueueSystemEvent(value.text, { sessionKey });
     if (value.mode === "now") {
       requestHeartbeatNow({ reason: "hook:wake" });
@@ -510,7 +511,7 @@ export async function startGatewayServer(
     const sessionKey = value.sessionKey.trim()
       ? value.sessionKey.trim()
       : `hook:${randomUUID()}`;
-    const mainSessionKey = resolveMainSessionKey(loadConfig());
+    const mainSessionKey = resolveMainSessionKeyFromConfig();
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -1828,7 +1829,7 @@ export async function startGatewayServer(
     const summary = summarizeRestartSentinel(payload);
 
     if (!sessionKey) {
-      const mainSessionKey = resolveMainSessionKey(loadConfig());
+      const mainSessionKey = resolveMainSessionKeyFromConfig();
       enqueueSystemEvent(message, { sessionKey: mainSessionKey });
       return;
     }

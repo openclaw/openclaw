@@ -23,7 +23,7 @@ import {
 import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
-  resolveMainSessionKey,
+  resolveMainSessionKeyFromConfig,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
@@ -472,7 +472,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             };
           }
 
-          const mainKey = resolveMainSessionKey(loadConfig());
+          const mainKey = resolveMainSessionKeyFromConfig();
           if (key === mainKey) {
             return {
               ok: false,
