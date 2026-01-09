@@ -34,7 +34,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Gateway port **18789**
 - Gateway auth **Off** (loopback only)
 - Tailscale exposure **Off**
-- Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for a number)
+- Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for your phone number)
 
 **Advanced** exposes every step (mode, workspace, gateway, providers, daemon, skills).
 
