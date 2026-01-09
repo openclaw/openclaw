@@ -170,7 +170,8 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch"
+      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
+      "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch"
     }
   },
   "vitest": {
