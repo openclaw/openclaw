@@ -252,12 +252,17 @@ actor MacNodeBridgeSession {
     }
 
     private func send(_ obj: some Encodable) async throws {
+        guard let connection = self.connection else {
+            throw NSError(domain: "Bridge", code: 15, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
         let data = try self.encoder.encode(obj)
         var line = Data()
         line.append(data)
         line.append(0x0A)
         try await withCheckedThrowingContinuation(isolation: self) { (cont: CheckedContinuation<Void, Error>) in
-            self.connection?.send(content: line, completion: .contentProcessed { err in
+            connection.send(content: line, completion: .contentProcessed { err in
                 if let err { cont.resume(throwing: err) } else { cont.resume(returning: ()) }
             })
         }
@@ -334,9 +339,8 @@ actor MacNodeBridgeSession {
     }
 
     private func notePong(_ pong: BridgePong) {
-        if pong.id == self.lastPingId || self.lastPingId == nil {
-            self.lastPongAt = Date()
-        }
+        _ = pong
+        self.lastPongAt = Date()
     }
 
     private static func makeStateStream(

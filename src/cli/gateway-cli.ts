@@ -179,14 +179,23 @@ async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
       mode: "local",
       bind: "loopback",
     },
-    agent: {
-      workspace,
-      skipBootstrap: true,
-    },
-    identity: {
-      name: DEV_IDENTITY_NAME,
-      theme: DEV_IDENTITY_THEME,
-      emoji: DEV_IDENTITY_EMOJI,
+    agents: {
+      defaults: {
+        workspace,
+        skipBootstrap: true,
+      },
+      list: [
+        {
+          id: "dev",
+          default: true,
+          workspace,
+          identity: {
+            name: DEV_IDENTITY_NAME,
+            theme: DEV_IDENTITY_THEME,
+            emoji: DEV_IDENTITY_EMOJI,
+          },
+        },
+      ],
     },
   });
   await ensureDevWorkspace(workspace);
