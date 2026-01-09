@@ -43,6 +43,12 @@ import {
 } from "./auth-profiles.js";
 import type { BashElevatedDefaults } from "./bash-tools.js";
 import {
+  CONTEXT_WINDOW_HARD_MIN_TOKENS,
+  CONTEXT_WINDOW_WARN_BELOW_TOKENS,
+  evaluateContextWindowGuard,
+  resolveContextWindowInfo,
+} from "./context-window-guard.js";
+import {
   DEFAULT_CONTEXT_TOKENS,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
@@ -183,41 +189,13 @@ function resolveContextWindowTokens(params: {
   modelId: string;
   model: Model<Api> | undefined;
 }): number {
-  const fromModel =
-    typeof params.model?.contextWindow === "number" &&
-    Number.isFinite(params.model.contextWindow) &&
-    params.model.contextWindow > 0
-      ? params.model.contextWindow
-      : undefined;
-  if (fromModel) return fromModel;
-
-  const fromModelsConfig = (() => {
-    const providers = params.cfg?.models?.providers as
-      | Record<
-          string,
-          { models?: Array<{ id?: string; contextWindow?: number }> }
-        >
-      | undefined;
-    const providerEntry = providers?.[params.provider];
-    const models = Array.isArray(providerEntry?.models)
-      ? providerEntry.models
-      : [];
-    const match = models.find((m) => m?.id === params.modelId);
-    return typeof match?.contextWindow === "number" && match.contextWindow > 0
-      ? match.contextWindow
-      : undefined;
-  })();
-  if (fromModelsConfig) return fromModelsConfig;
-
-  const fromAgentConfig =
-    typeof params.cfg?.agents?.defaults?.contextTokens === "number" &&
-    Number.isFinite(params.cfg.agents.defaults.contextTokens) &&
-    params.cfg.agents.defaults.contextTokens > 0
-      ? Math.floor(params.cfg.agents.defaults.contextTokens)
-      : undefined;
-  if (fromAgentConfig) return fromAgentConfig;
-
-  return DEFAULT_CONTEXT_TOKENS;
+  return resolveContextWindowInfo({
+    cfg: params.cfg,
+    provider: params.provider,
+    modelId: params.modelId,
+    modelContextWindow: params.model?.contextWindow,
+    defaultTokens: DEFAULT_CONTEXT_TOKENS,
+  }).tokens;
 }
 
 function buildContextPruningExtension(params: {
@@ -1085,6 +1063,33 @@ export async function runEmbeddedPiAgent(params: {
       );
       if (!model) {
         throw new Error(error ?? `Unknown model: ${provider}/${modelId}`);
+      }
+
+      const ctxInfo = resolveContextWindowInfo({
+        cfg: params.config,
+        provider,
+        modelId,
+        modelContextWindow: model.contextWindow,
+        defaultTokens: DEFAULT_CONTEXT_TOKENS,
+      });
+      const ctxGuard = evaluateContextWindowGuard({
+        info: ctxInfo,
+        warnBelowTokens: CONTEXT_WINDOW_WARN_BELOW_TOKENS,
+        hardMinTokens: CONTEXT_WINDOW_HARD_MIN_TOKENS,
+      });
+      if (ctxGuard.shouldWarn) {
+        log.warn(
+          `low context window: ${provider}/${modelId} ctx=${ctxGuard.tokens} (warn<${CONTEXT_WINDOW_WARN_BELOW_TOKENS}) source=${ctxGuard.source}`,
+        );
+      }
+      if (ctxGuard.shouldBlock) {
+        log.error(
+          `blocked model (context window too small): ${provider}/${modelId} ctx=${ctxGuard.tokens} (min=${CONTEXT_WINDOW_HARD_MIN_TOKENS}) source=${ctxGuard.source}`,
+        );
+        throw new FailoverError(
+          `Model context window too small (${ctxGuard.tokens} tokens). Minimum is ${CONTEXT_WINDOW_HARD_MIN_TOKENS}.`,
+          { reason: "unknown", provider, model: modelId },
+        );
       }
       const authStore = ensureAuthProfileStore(agentDir);
       const explicitProfileId = params.authProfileId?.trim();
