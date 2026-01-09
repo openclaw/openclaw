@@ -38,10 +38,9 @@ describe("buildAuthChoiceOptions", () => {
       version: 1,
       profiles: {
         [CLAUDE_CLI_PROFILE_ID]: {
-          type: "oauth",
+          type: "token",
           provider: "anthropic",
-          access: "token",
-          refresh: "refresh",
+          token: "token",
           expires: Date.now() + 60 * 60 * 1000,
         },
       },

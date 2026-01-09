@@ -36,6 +36,8 @@ Clawdbot uses a lobster palette for CLI output.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
 
+Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
+
 ## Command tree
 
 ```
@@ -55,8 +57,7 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     info
     check
-  send
-  poll
+  message
   agent
   agents
     list
@@ -69,6 +70,7 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
+    discover
   models
     list
     status
@@ -283,37 +285,21 @@ Options:
 
 ## Messaging + agent
 
-### `send`
-Send a message through a provider.
+### `message`
+Unified outbound messaging + provider actions.
 
-Required:
-- `--to <dest>`
-- `--message <text>`
+See: [/cli/message](/cli/message)
 
-Options:
-- `--media <path-or-url>`
-- `--gif-playback`
-- `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
-- `--account <id>` (WhatsApp)
-- `--dry-run`
-- `--json`
-- `--verbose`
-
-### `poll`
-Create a poll (WhatsApp or Discord).
-
-Required:
-- `--to <id>`
-- `--question <text>`
-- `--option <choice>` (repeat 2-12 times)
-
-Options:
-- `--max-selections <n>`
-- `--duration-hours <n>` (Discord)
-- `--provider <whatsapp|discord>`
-- `--dry-run`
-- `--json`
-- `--verbose`
+Subcommands:
+- `message send|poll|react|reactions|read|edit|delete|pin|unpin|pins|permissions|search|timeout|kick|ban`
+- `message thread <create|list|reply>`
+- `message emoji <list|upload>`
+- `message sticker <send|upload>`
+- `message role <info|add|remove>`
+- `message channel <info|list>`
+- `message member info`
+- `message voice status`
+- `message event <list|create>`
 
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).

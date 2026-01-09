@@ -520,6 +520,7 @@ const CommandsSchema = z
   .object({
     native: z.boolean().optional(),
     text: z.boolean().optional(),
+    restart: z.boolean().optional(),
     useAccessGroups: z.boolean().optional(),
   })
   .optional();
@@ -894,7 +895,11 @@ export const ClawdbotSchema = z.object({
           z.string(),
           z.object({
             provider: z.string(),
-            mode: z.union([z.literal("api_key"), z.literal("oauth")]),
+            mode: z.union([
+              z.literal("api_key"),
+              z.literal("oauth"),
+              z.literal("token"),
+            ]),
             email: z.string().optional(),
           }),
         )

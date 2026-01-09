@@ -411,7 +411,7 @@ export async function agentCommand(
   let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
-  const claudeResumeId = sessionEntry?.claudeCliSessionId?.trim();
+  const claudeSessionId = sessionEntry?.claudeCliSessionId?.trim();
   try {
     const messageProvider = resolveMessageProvider(
       opts.messageProvider,
@@ -436,7 +436,7 @@ export async function agentCommand(
             timeoutMs,
             runId,
             extraSystemPrompt: opts.extraSystemPrompt,
-            resumeSessionId: claudeResumeId,
+            claudeSessionId,
           });
         }
         return runEmbeddedPiAgent({

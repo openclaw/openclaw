@@ -135,8 +135,7 @@ If you’re hacking on Clawdbot itself, run from source:
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 pnpm build
 pnpm clawdbot onboard --install-daemon
 ```
@@ -153,7 +152,7 @@ In a new terminal:
 
 ```bash
 clawdbot health
-clawdbot send --to +15555550123 --message "Hello from Clawdbot"
+clawdbot message send --to +15555550123 --message "Hello from Clawdbot"
 ```
 
 If `health` shows “no auth configured”, go back to the wizard and set OAuth/key auth — the agent won’t be able to respond without it.

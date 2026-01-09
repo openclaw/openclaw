@@ -44,6 +44,7 @@ Pruning uses an estimated context window (chars ≈ tokens × 4). The window siz
 ## Tool selection
 - `tools.allow` / `tools.deny` support `*` wildcards.
 - Deny wins.
+- Matching is case-insensitive.
 - Empty allow list => all tools allowed.
 
 ## Interaction with other limits

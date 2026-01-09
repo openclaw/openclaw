@@ -789,6 +789,8 @@ export type CommandsConfig = {
   native?: boolean;
   /** Enable text command parsing (default: true). */
   text?: boolean;
+  /** Allow restart commands/tools (default: false). */
+  restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
 };
@@ -983,7 +985,13 @@ export type ModelsConfig = {
 
 export type AuthProfileConfig = {
   provider: string;
-  mode: "api_key" | "oauth";
+  /**
+   * Credential type expected in auth-profiles.json for this profile id.
+   * - api_key: static provider API key
+   * - oauth: refreshable OAuth credentials (access+refresh+expires)
+   * - token: static bearer-style token (optionally expiring; no refresh)
+   */
+  mode: "api_key" | "oauth" | "token";
   email?: string;
 };
 

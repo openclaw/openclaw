@@ -118,8 +118,7 @@ From source (development):
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 pnpm build
 pnpm clawdbot onboard --install-daemon
 ```
@@ -135,7 +134,7 @@ clawdbot gateway --port 19001
 Send a test message (requires a running Gateway):
 
 ```bash
-clawdbot send --to +15555550123 --message "Hello from CLAWDBOT"
+clawdbot message send --to +15555550123 --message "Hello from CLAWDBOT"
 ```
 
 ## Configuration (optional)

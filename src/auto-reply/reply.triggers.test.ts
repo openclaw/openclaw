@@ -181,7 +181,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("restarts even with prefix/whitespace", async () => {
+  it("rejects /restart by default", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
         {
@@ -191,6 +191,24 @@ describe("trigger handling", () => {
         },
         {},
         makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("/restart is disabled");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("restarts when enabled", async () => {
+    await withTempHome(async (home) => {
+      const cfg = { ...makeCfg(home), commands: { restart: true } };
+      const res = await getReplyFromConfig(
+        {
+          Body: "/restart",
+          From: "+1001",
+          To: "+2000",
+        },
+        {},
+        cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(

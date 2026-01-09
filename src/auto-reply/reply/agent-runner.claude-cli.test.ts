@@ -1,8 +1,7 @@
 import crypto from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-
-import type { TemplateContext } from "../templating.js";
 import { onAgentEvent } from "../../infra/agent-events.js";
+import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -105,9 +104,7 @@ function createRun() {
 
 describe("runReplyAgent claude-cli routing", () => {
   it("uses claude-cli runner for claude-cli provider", async () => {
-    const randomSpy = vi
-      .spyOn(crypto, "randomUUID")
-      .mockReturnValue("run-1");
+    const randomSpy = vi.spyOn(crypto, "randomUUID").mockReturnValue("run-1");
     const lifecyclePhases: string[] = [];
     const unsubscribe = onAgentEvent((evt) => {
       if (evt.runId !== "run-1") return;

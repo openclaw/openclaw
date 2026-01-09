@@ -5,7 +5,10 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { writeOAuthCredentials } from "./onboard-auth.js";
+import {
+  applyAuthProfileConfig,
+  writeOAuthCredentials,
+} from "./onboard-auth.js";
 
 describe("writeOAuthCredentials", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
@@ -49,7 +52,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("anthropic", creds);
+    await writeOAuthCredentials("openai-codex", creds);
 
     // Now writes to the multi-agent path: agents/main/agent
     const authProfilePath = path.join(
@@ -63,7 +66,7 @@ describe("writeOAuthCredentials", () => {
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
-    expect(parsed.profiles?.["anthropic:default"]).toMatchObject({
+    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
       type: "oauth",
@@ -75,5 +78,30 @@ describe("writeOAuthCredentials", () => {
         "utf8",
       ),
     ).rejects.toThrow();
+  });
+});
+
+describe("applyAuthProfileConfig", () => {
+  it("promotes the newly selected profile to the front of auth.order", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "anthropic:default": { provider: "anthropic", mode: "api_key" },
+          },
+          order: { anthropic: ["anthropic:default"] },
+        },
+      },
+      {
+        profileId: "anthropic:claude-cli",
+        provider: "anthropic",
+        mode: "oauth",
+      },
+    );
+
+    expect(next.auth?.order?.anthropic).toEqual([
+      "anthropic:claude-cli",
+      "anthropic:default",
+    ]);
   });
 });

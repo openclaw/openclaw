@@ -19,7 +19,7 @@ export type AuthProfileHealthStatus =
 export type AuthProfileHealth = {
   profileId: string;
   provider: string;
-  type: "oauth" | "api_key";
+  type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
   expiresAt?: number;
   remainingMs?: number;
@@ -109,6 +109,39 @@ function buildProfileHealth(params: {
     };
   }
 
+  if (credential.type === "token") {
+    const expiresAt =
+      typeof credential.expires === "number" &&
+      Number.isFinite(credential.expires)
+        ? credential.expires
+        : undefined;
+    if (!expiresAt || expiresAt <= 0) {
+      return {
+        profileId,
+        provider: credential.provider,
+        type: "token",
+        status: "static",
+        source,
+        label,
+      };
+    }
+    const { status, remainingMs } = resolveOAuthStatus(
+      expiresAt,
+      now,
+      warnAfterMs,
+    );
+    return {
+      profileId,
+      provider: credential.provider,
+      type: "token",
+      status,
+      expiresAt,
+      remainingMs,
+      source,
+      label,
+    };
+  }
+
   const { status, remainingMs } = resolveOAuthStatus(
     credential.expires,
     now,
@@ -192,16 +225,18 @@ export function buildAuthHealthSummary(params: {
     }
 
     const oauthProfiles = provider.profiles.filter((p) => p.type === "oauth");
+    const tokenProfiles = provider.profiles.filter((p) => p.type === "token");
     const apiKeyProfiles = provider.profiles.filter(
       (p) => p.type === "api_key",
     );
 
-    if (oauthProfiles.length === 0) {
+    const expirable = [...oauthProfiles, ...tokenProfiles];
+    if (expirable.length === 0) {
       provider.status = apiKeyProfiles.length > 0 ? "static" : "missing";
       continue;
     }
 
-    const expiryCandidates = oauthProfiles
+    const expiryCandidates = expirable
       .map((p) => p.expiresAt)
       .filter((v): v is number => typeof v === "number" && Number.isFinite(v));
     if (expiryCandidates.length > 0) {
@@ -209,7 +244,7 @@ export function buildAuthHealthSummary(params: {
       provider.remainingMs = provider.expiresAt - now;
     }
 
-    const statuses = oauthProfiles.map((p) => p.status);
+    const statuses = expirable.map((p) => p.status);
     if (statuses.includes("expired") || statuses.includes("missing")) {
       provider.status = "expired";
     } else if (statuses.includes("expiring")) {

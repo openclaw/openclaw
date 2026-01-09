@@ -18,7 +18,10 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   estimateUsageCost,
@@ -352,7 +355,7 @@ export async function runReplyAgent(params: {
               runId,
               extraSystemPrompt: followupRun.run.extraSystemPrompt,
               ownerNumbers: followupRun.run.ownerNumbers,
-              resumeSessionId:
+              claudeSessionId:
                 sessionEntry?.claudeCliSessionId?.trim() || undefined,
             })
               .then((result) => {

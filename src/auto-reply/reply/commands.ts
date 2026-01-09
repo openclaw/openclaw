@@ -220,16 +220,13 @@ function resolveModelAuthLabel(
   const providerKey = normalizeProviderId(resolved);
   const store = ensureAuthProfileStore();
   const profileOverride = sessionEntry?.authProfileOverride?.trim();
-  const lastGood = store.lastGood?.[providerKey] ?? store.lastGood?.[resolved];
   const order = resolveAuthProfileOrder({
     cfg,
     store,
     provider: providerKey,
     preferredProfile: profileOverride,
   });
-  const candidates = [profileOverride, lastGood, ...order].filter(
-    Boolean,
-  ) as string[];
+  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
@@ -239,6 +236,10 @@ function resolveModelAuthLabel(
     const label = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
     if (profile.type === "oauth") {
       return `oauth${label ? ` (${label})` : ""}`;
+    }
+    if (profile.type === "token") {
+      const snippet = formatApiKeySnippet(profile.token);
+      return `token ${snippet}${label ? ` (${label})` : ""}`;
     }
     const snippet = formatApiKeySnippet(profile.key);
     return `api-key ${snippet}${label ? ` (${label})` : ""}`;
@@ -507,6 +508,14 @@ export async function handleCommands(params: {
         `Ignoring /restart from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
+    }
+    if (cfg.commands?.restart !== true) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /restart is disabled. Set commands.restart=true to enable.",
+        },
+      };
     }
     const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
     if (hasSigusr1Listener) {

@@ -24,6 +24,7 @@ export const SlackToolSchema = Type.Union([
     to: Type.String(),
     content: Type.String(),
     mediaUrl: Type.Optional(Type.String()),
+    threadTs: Type.Optional(Type.String()),
     accountId: Type.Optional(Type.String()),
   }),
   Type.Object({

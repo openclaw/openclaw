@@ -424,7 +424,7 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: params.sessionKey,
     });
     const messageProvider = resolvedDelivery.provider;
-    const claudeResumeId = cronSession.sessionEntry.claudeCliSessionId?.trim();
+    const claudeSessionId = cronSession.sessionEntry.claudeCliSessionId?.trim();
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfg,
       provider,
@@ -443,7 +443,7 @@ export async function runCronIsolatedAgentTurn(params: {
             thinkLevel,
             timeoutMs,
             runId: cronSession.sessionEntry.sessionId,
-            resumeSessionId: claudeResumeId,
+            claudeSessionId,
           });
         }
         return runEmbeddedPiAgent({

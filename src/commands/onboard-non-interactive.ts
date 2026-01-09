@@ -151,7 +151,7 @@ export async function runNonInteractiveOnboarding(
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
     });
   } else if (authChoice === "codex-cli") {
     const store = ensureAuthProfileStore();
@@ -169,17 +169,18 @@ export async function runNonInteractiveOnboarding(
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
   } else if (
+    authChoice === "token" ||
     authChoice === "oauth" ||
     authChoice === "openai-codex" ||
     authChoice === "antigravity"
   ) {
-    runtime.error(
-      `${
-        authChoice === "oauth" || authChoice === "openai-codex"
-          ? "OAuth"
-          : "Antigravity"
-      } requires interactive mode.`,
-    );
+    const label =
+      authChoice === "antigravity"
+        ? "Antigravity"
+        : authChoice === "token"
+          ? "Token"
+          : "OAuth";
+    runtime.error(`${label} requires interactive mode.`);
     runtime.exit(1);
     return;
   }
