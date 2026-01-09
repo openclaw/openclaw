@@ -41,6 +41,15 @@ type SignalEnvelope = {
   dataMessage?: SignalDataMessage | null;
   editMessage?: { dataMessage?: SignalDataMessage | null } | null;
   syncMessage?: unknown;
+  reactionMessage?: SignalReactionMessage | null;
+};
+
+type SignalReactionMessage = {
+  emoji?: string | null;
+  targetAuthor?: string | null;
+  targetAuthorUuid?: string | null;
+  targetSentTimestamp?: number | null;
+  isRemove?: boolean | null;
 };
 
 type SignalDataMessage = {
@@ -305,6 +314,22 @@ export async function monitorSignalProvider(
       const envelope = payload?.envelope;
       if (!envelope) return;
       if (envelope.syncMessage) return;
+
+      // Handle reaction messages
+      if (envelope.reactionMessage) {
+        const reaction = envelope.reactionMessage;
+        if (reaction.isRemove) return; // Ignore reaction removals
+        const emoji = reaction.emoji ?? "👍";
+        const sender = resolveSignalSender(envelope);
+        if (!sender) return;
+        const senderDisplay = formatSignalSenderDisplay(sender);
+        const senderName = envelope.sourceName ?? senderDisplay;
+        logVerbose(`signal reaction: ${emoji} from ${senderName}`);
+        // Skip processing reactions as messages for now - just log them
+        // Future: could dispatch as a notification or store for context
+        return;
+      }
+
       const dataMessage =
         envelope.dataMessage ?? envelope.editMessage?.dataMessage;
       if (!dataMessage) return;
