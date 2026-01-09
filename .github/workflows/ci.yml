@@ -102,12 +102,12 @@ jobs:
           - runtime: node
             task: lint
             command: pnpm lint
-          - runtime: node
-            task: test
-            command: pnpm test
-          - runtime: node
-            task: build
-            command: pnpm build
+	          - runtime: node
+	            task: test
+	            command: node scripts/ci-sanitize-output.mjs pnpm test
+	          - runtime: node
+	            task: build
+	            command: pnpm build
           - runtime: node
             task: protocol
             command: pnpm protocol:check
