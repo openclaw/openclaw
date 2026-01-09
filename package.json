@@ -183,6 +183,7 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
+      "@buape/carbon": "patches/@buape__carbon.patch",
       "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
       "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
       "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch"
@@ -221,6 +222,7 @@
     ]
   },
   "patchedDependencies": {
+    "@buape/carbon": "patches/@buape__carbon.patch",
     "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
     "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
     "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",

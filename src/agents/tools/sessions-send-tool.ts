@@ -4,6 +4,8 @@ import { Type } from "@sinclair/typebox";
 
 import { loadConfig } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -34,6 +36,8 @@ import {
   isReplySkip,
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
+
+const log = createSubsystemLogger("agents/sessions-send");
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
@@ -308,11 +312,13 @@ export function createSessionsSendTool(opts?: {
       const requesterSessionKey = opts?.agentSessionKey;
       const requesterProvider = opts?.agentProvider;
       const maxPingPongTurns = resolvePingPongTurns(cfg);
+      const delivery = { status: "pending", mode: "announce" as const };
 
       const runAgentToAgentFlow = async (
         roundOneReply?: string,
         runInfo?: { runId: string },
       ) => {
+        const runContextId = runInfo?.runId ?? runId;
         try {
           let primaryReply = roundOneReply;
           let latestReply = roundOneReply;
@@ -400,20 +406,32 @@ export function createSessionsSendTool(opts?: {
             announceReply.trim() &&
             !isAnnounceSkip(announceReply)
           ) {
-            await callGateway({
-              method: "send",
-              params: {
-                to: announceTarget.to,
-                message: announceReply.trim(),
+            try {
+              await callGateway({
+                method: "send",
+                params: {
+                  to: announceTarget.to,
+                  message: announceReply.trim(),
+                  provider: announceTarget.provider,
+                  accountId: announceTarget.accountId,
+                  idempotencyKey: crypto.randomUUID(),
+                },
+                timeoutMs: 10_000,
+              });
+            } catch (err) {
+              log.warn("sessions_send announce delivery failed", {
+                runId: runContextId,
                 provider: announceTarget.provider,
-                accountId: announceTarget.accountId,
-                idempotencyKey: crypto.randomUUID(),
-              },
-              timeoutMs: 10_000,
-            });
+                to: announceTarget.to,
+                error: formatErrorMessage(err),
+              });
+            }
           }
-        } catch {
-          // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
+        } catch (err) {
+          log.warn("sessions_send announce flow failed", {
+            runId: runContextId,
+            error: formatErrorMessage(err),
+          });
         }
       };
 
@@ -432,6 +450,7 @@ export function createSessionsSendTool(opts?: {
             runId,
             status: "accepted",
             sessionKey: displayKey,
+            delivery,
           });
         } catch (err) {
           const messageText =
@@ -535,6 +554,7 @@ export function createSessionsSendTool(opts?: {
         status: "ok",
         reply,
         sessionKey: displayKey,
+        delivery,
       });
     },
   };

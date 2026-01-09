@@ -243,7 +243,11 @@ describe("sessions tools", () => {
       message: "ping",
       timeoutSeconds: 0,
     });
-    expect(fire.details).toMatchObject({ status: "accepted", runId: "run-1" });
+    expect(fire.details).toMatchObject({
+      status: "accepted",
+      runId: "run-1",
+      delivery: { status: "pending", mode: "announce" },
+    });
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -256,6 +260,7 @@ describe("sessions tools", () => {
     expect(waited.details).toMatchObject({
       status: "ok",
       reply: "done",
+      delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
     await new Promise((resolve) => setTimeout(resolve, 0));
