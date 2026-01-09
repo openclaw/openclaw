@@ -197,6 +197,76 @@ export function buildAllowedModelSet(params: {
   return { allowAny: false, allowedCatalog, allowedKeys };
 }
 
+export type ModelRefStatus = {
+  key: string;
+  inCatalog: boolean;
+  allowAny: boolean;
+  allowed: boolean;
+};
+
+export function getModelRefStatus(params: {
+  cfg: ClawdbotConfig;
+  catalog: ModelCatalogEntry[];
+  ref: ModelRef;
+  defaultProvider: string;
+  defaultModel?: string;
+}): ModelRefStatus {
+  const allowed = buildAllowedModelSet({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+  });
+  const key = modelKey(params.ref.provider, params.ref.model);
+  return {
+    key,
+    inCatalog: params.catalog.some(
+      (entry) => modelKey(entry.provider, entry.id) === key,
+    ),
+    allowAny: allowed.allowAny,
+    allowed: allowed.allowAny || allowed.allowedKeys.has(key),
+  };
+}
+
+export function resolveAllowedModelRef(params: {
+  cfg: ClawdbotConfig;
+  catalog: ModelCatalogEntry[];
+  raw: string;
+  defaultProvider: string;
+  defaultModel?: string;
+}):
+  | { ref: ModelRef; key: string }
+  | {
+      error: string;
+    } {
+  const trimmed = params.raw.trim();
+  if (!trimmed) return { error: "invalid model: empty" };
+
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+  const resolved = resolveModelRefFromString({
+    raw: trimmed,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+  if (!resolved) return { error: `invalid model: ${trimmed}` };
+
+  const status = getModelRefStatus({
+    cfg: params.cfg,
+    catalog: params.catalog,
+    ref: resolved.ref,
+    defaultProvider: params.defaultProvider,
+    defaultModel: params.defaultModel,
+  });
+  if (!status.allowed) {
+    return { error: `model not allowed: ${status.key}` };
+  }
+
+  return { ref: resolved.ref, key: status.key };
+}
+
 export function resolveThinkingDefault(params: {
   cfg: ClawdbotConfig;
   provider: string;

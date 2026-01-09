@@ -6,6 +6,7 @@ import {
   buildAllowedModelSet,
   modelKey,
   parseModelRef,
+  resolveAllowedModelRef,
   resolveHooksGmailModel,
 } from "./model-selection.js";
 
@@ -140,6 +141,65 @@ describe("resolveHooksGmailModel", () => {
     expect(result).toEqual({
       provider: "anthropic",
       model: "claude-haiku-3-5",
+    });
+  });
+});
+
+describe("resolveAllowedModelRef", () => {
+  it("resolves aliases when allowed", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
+          },
+        },
+      },
+    } satisfies ClawdbotConfig;
+    const resolved = resolveAllowedModelRef({
+      cfg,
+      catalog: [
+        {
+          provider: "anthropic",
+          id: "claude-sonnet-4-1",
+          name: "Sonnet",
+        },
+      ],
+      raw: "Sonnet",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+    });
+    expect("error" in resolved).toBe(false);
+    if ("ref" in resolved) {
+      expect(resolved.ref).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-1",
+      });
+    }
+  });
+
+  it("rejects disallowed models", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4": { alias: "GPT4" },
+          },
+        },
+      },
+    } satisfies ClawdbotConfig;
+    const resolved = resolveAllowedModelRef({
+      cfg,
+      catalog: [
+        { provider: "openai", id: "gpt-4", name: "GPT-4" },
+        { provider: "anthropic", id: "claude-sonnet-4-1", name: "Sonnet" },
+      ],
+      raw: "anthropic/claude-sonnet-4-1",
+      defaultProvider: "openai",
+      defaultModel: "gpt-4",
+    });
+    expect(resolved).toEqual({
+      error: "model not allowed: anthropic/claude-sonnet-4-1",
     });
   });
 });
