@@ -25,7 +25,11 @@ import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { defaultRuntime } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
-import { emitCliBanner, formatCliBannerLine } from "./banner.js";
+import {
+  emitCliBanner,
+  formatCliBannerArt,
+  formatCliBannerLine,
+} from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -95,8 +99,10 @@ export function buildProgram() {
   }
 
   program.addHelpText("beforeAll", () => {
-    const line = formatCliBannerLine(PROGRAM_VERSION, { richTty: isRich() });
-    return `\n${line}\n`;
+    const rich = isRich();
+    const art = formatCliBannerArt({ richTty: rich });
+    const line = formatCliBannerLine(PROGRAM_VERSION, { richTty: rich });
+    return `\n${art}\n${line}\n`;
   });
 
   program.hook("preAction", async (_thisCommand, actionCommand) => {
@@ -231,7 +237,7 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: oauth|claude-cli|openai-codex|codex-cli|antigravity|gemini-api-key|apiKey|minimax|skip",
+      "Auth: oauth|claude-cli|token|openai-codex|codex-cli|antigravity|gemini-api-key|apiKey|minimax|skip",
     )
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--gemini-api-key <key>", "Gemini API key")
@@ -260,6 +266,7 @@ export function buildProgram() {
             authChoice: opts.authChoice as
               | "oauth"
               | "claude-cli"
+              | "token"
               | "openai-codex"
               | "codex-cli"
               | "antigravity"
