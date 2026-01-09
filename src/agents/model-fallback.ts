@@ -1,6 +1,10 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { type FailoverError, isFailoverError } from "./failover-error.js";
+import {
+  coerceToFailoverError,
+  describeFailoverError,
+  isFailoverError,
+} from "./failover-error.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -9,7 +13,6 @@ import {
   resolveModelRefFromString,
 } from "./model-selection.js";
 import type { FailoverReason } from "./pi-embedded-helpers.js";
-import { isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -34,81 +37,6 @@ function isAbortError(err: unknown): boolean {
       ? err.message.toLowerCase()
       : "";
   return message.includes("aborted");
-}
-
-function getStatusCode(err: unknown): number | null {
-  if (!err || typeof err !== "object") return null;
-  const candidate =
-    (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode;
-  if (typeof candidate === "number") return candidate;
-  if (typeof candidate === "string" && /^\d+$/.test(candidate)) {
-    return Number(candidate);
-  }
-  return null;
-}
-
-function getErrorCode(err: unknown): string {
-  if (!err || typeof err !== "object") return "";
-  const candidate = (err as { code?: unknown }).code;
-  return typeof candidate === "string" ? candidate : "";
-}
-
-function getErrorMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  if (typeof err === "string") return err;
-  if (
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint"
-  ) {
-    return String(err);
-  }
-  if (typeof err === "symbol") return err.description ?? "";
-  if (err && typeof err === "object") {
-    const message = (err as { message?: unknown }).message;
-    if (typeof message === "string") return message;
-  }
-  return "";
-}
-
-function describeFallbackError(err: unknown): {
-  message: string;
-  reason?: FailoverReason;
-  status?: number;
-  code?: string;
-} {
-  if (isFailoverError(err)) {
-    const fe = err as FailoverError;
-    return {
-      message: fe.message,
-      reason: fe.reason,
-      status: fe.status,
-      code: fe.code,
-    };
-  }
-  return {
-    message: getErrorMessage(err) || String(err),
-    status: getStatusCode(err) ?? undefined,
-    code: getErrorCode(err) || undefined,
-  };
-}
-
-function shouldFallbackForError(err: unknown): boolean {
-  if (isFailoverError(err)) return true;
-  const statusCode = getStatusCode(err);
-  if (statusCode && [401, 402, 403, 408, 429].includes(statusCode)) return true;
-  const code = getErrorCode(err).toUpperCase();
-  if (
-    ["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(
-      code,
-    )
-  ) {
-    return true;
-  }
-  const message = getErrorMessage(err);
-  if (!message) return false;
-  return isFailoverErrorMessage(message);
 }
 
 function buildAllowedModelKeys(
@@ -290,10 +218,15 @@ export async function runWithModelFallback<T>(params: {
       };
     } catch (err) {
       if (isAbortError(err)) throw err;
-      const shouldFallback = shouldFallbackForError(err);
-      if (!shouldFallback) throw err;
-      lastError = err;
-      const described = describeFallbackError(err);
+      const normalized =
+        coerceToFailoverError(err, {
+          provider: candidate.provider,
+          model: candidate.model,
+        }) ?? err;
+      if (!isFailoverError(normalized)) throw err;
+
+      lastError = normalized;
+      const described = describeFailoverError(normalized);
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
@@ -305,7 +238,7 @@ export async function runWithModelFallback<T>(params: {
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
-        error: err,
+        error: normalized,
         attempt: i + 1,
         total: candidates.length,
       });
