@@ -61,6 +61,7 @@ import {
 } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
@@ -1017,7 +1018,10 @@ export function createDiscordMessageHandler(params: {
       }
 
       if (shouldLogVerbose()) {
-        const preview = combinedBody.slice(0, 200).replace(/\n/g, "\\n");
+        const preview = truncateUtf16Safe(combinedBody, 200).replace(
+          /\n/g,
+          "\\n",
+        );
         logVerbose(
           `discord inbound: channel=${message.channelId} from=${ctxPayload.From} preview="${preview}"`,
         );

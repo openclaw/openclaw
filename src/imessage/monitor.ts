@@ -24,6 +24,7 @@ import {
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { resolveIMessageAccount } from "./accounts.js";
 import { createIMessageRpcClient } from "./client.js";
 import { sendMessageIMessage } from "./send.js";
@@ -413,7 +414,7 @@ export async function monitorIMessageProvider(
     }
 
     if (shouldLogVerbose()) {
-      const preview = body.slice(0, 200).replace(/\n/g, "\\n");
+      const preview = truncateUtf16Safe(body, 200).replace(/\n/g, "\\n");
       logVerbose(
         `imessage inbound: chatId=${chatId ?? "unknown"} from=${ctxPayload.From} len=${body.length} preview="${preview}"`,
       );

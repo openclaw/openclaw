@@ -55,10 +55,11 @@ export async function monitorMSTeamsProvider(
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = resolveTextChunkLimit(cfg, "msteams");
   const MB = 1024 * 1024;
+  const agentDefaults = cfg.agents?.defaults;
   const mediaMaxBytes =
-    typeof cfg.agents?.defaults?.mediaMaxMb === "number" &&
-    cfg.agents.defaults.mediaMaxMb > 0
-      ? Math.floor(cfg.agents.defaults.mediaMaxMb * MB)
+    typeof agentDefaults?.mediaMaxMb === "number" &&
+    agentDefaults.mediaMaxMb > 0
+      ? Math.floor(agentDefaults.mediaMaxMb * MB)
       : 8 * MB;
   const conversationStore =
     opts.conversationStore ?? createMSTeamsConversationStoreFs();
