@@ -20,6 +20,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - ANSI colors and progress indicators only render in TTY sessions.
 - OSC-8 hyperlinks render as clickable links in supported terminals; otherwise we fall back to plain URLs.
 - `--json` (and `--plain` where supported) disables styling for clean output.
+- `--no-color` disables ANSI styling where supported; `NO_COLOR=1` is also respected.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
 ## Color palette
@@ -443,10 +444,17 @@ Notes:
 ### `logs`
 Tail Gateway file logs via RPC.
 
+Notes:
+- TTY sessions render a colorized, structured view; non-TTY falls back to plain text.
+- `--json` emits line-delimited JSON (one log event per line).
+
 Examples:
 ```bash
 clawdbot logs --follow
 clawdbot logs --limit 200
+clawdbot logs --plain
+clawdbot logs --json
+clawdbot logs --no-color
 ```
 
 ### `gateway <subcommand>`

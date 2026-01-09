@@ -7,6 +7,8 @@ read_when:
 
 # Logging
 
+For a user-facing overview (CLI + Control UI + config), see [/logging](/logging).
+
 Clawdbot has two log “surfaces”:
 
 - **Console output** (what you see in the terminal / Debug UI).
