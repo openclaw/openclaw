@@ -260,7 +260,9 @@ export async function runReplyAgent(params: {
     followupRun.run.config,
     replyToChannel,
   );
-  const applyReplyToMode = createReplyToModeFilter(replyToMode);
+  const applyReplyToMode = createReplyToModeFilter(replyToMode, {
+    allowTagsWhenOff: replyToChannel === "slack",
+  });
   const cfg = followupRun.run.config;
 
   if (shouldSteer && isStreaming) {

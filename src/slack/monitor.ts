@@ -86,6 +86,7 @@ type SlackMessageEvent = {
   text?: string;
   ts?: string;
   thread_ts?: string;
+  event_ts?: string;
   parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
@@ -100,6 +101,7 @@ type SlackAppMentionEvent = {
   text?: string;
   ts?: string;
   thread_ts?: string;
+  event_ts?: string;
   parent_user_id?: string;
   channel: string;
   channel_type?: "im" | "mpim" | "channel" | "group";
@@ -506,6 +508,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
+  const replyToMode = slackCfg.replyToMode ?? "off";
   const slashCommand = resolveSlackSlashCommandConfig(
     opts.slashCommand ?? slackCfg.slashCommand,
   );
@@ -1096,9 +1099,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
-    // Only thread replies if the incoming message was in a thread.
     const incomingThreadTs = message.thread_ts;
-    const statusThreadTs = message.thread_ts ?? message.ts;
+    const eventTs = message.event_ts;
+    const replyThreadTs =
+      replyToMode === "all"
+        ? (incomingThreadTs ?? message.ts ?? eventTs)
+        : replyToMode === "first"
+          ? incomingThreadTs
+          : undefined;
+    const statusThreadTs =
+      replyThreadTs ?? incomingThreadTs ?? message.ts ?? eventTs;
     let didSetStatus = false;
     const onReplyStart = async () => {
       didSetStatus = true;
@@ -1119,7 +1129,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             accountId: account.accountId,
             runtime,
             textLimit,
-            threadTs: incomingThreadTs,
+            replyThreadTs,
           });
         },
         onError: (err, info) => {
@@ -1922,10 +1932,11 @@ async function deliverReplies(params: {
   accountId?: string;
   runtime: RuntimeEnv;
   textLimit: number;
-  threadTs?: string;
+  replyThreadTs?: string;
 }) {
   const chunkLimit = Math.min(params.textLimit, 4000);
   for (const payload of params.replies) {
+    const threadTs = payload.replyToId ?? params.replyThreadTs;
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
@@ -1937,7 +1948,7 @@ async function deliverReplies(params: {
         if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
-          threadTs: params.threadTs,
+          threadTs,
           accountId: params.accountId,
         });
       }
@@ -1949,7 +1960,7 @@ async function deliverReplies(params: {
         await sendMessageSlack(params.target, caption, {
           token: params.token,
           mediaUrl,
-          threadTs: params.threadTs,
+          threadTs,
           accountId: params.accountId,
         });
       }

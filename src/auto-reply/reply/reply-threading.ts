@@ -19,11 +19,15 @@ export function resolveReplyToMode(
   }
 }
 
-export function createReplyToModeFilter(mode: ReplyToMode) {
+export function createReplyToModeFilter(
+  mode: ReplyToMode,
+  opts: { allowTagsWhenOff?: boolean } = {},
+) {
   let hasThreaded = false;
   return (payload: ReplyPayload): ReplyPayload => {
     if (!payload.replyToId) return payload;
     if (mode === "off") {
+      if (opts.allowTagsWhenOff && payload.replyToTag) return payload;
       return { ...payload, replyToId: undefined };
     }
     if (mode === "all") return payload;

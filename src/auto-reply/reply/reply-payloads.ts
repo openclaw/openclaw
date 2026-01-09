@@ -10,7 +10,7 @@ export function applyReplyTagsToPayload(
   currentMessageId?: string,
 ): ReplyPayload {
   if (typeof payload.text !== "string") return payload;
-  const { cleaned, replyToId } = extractReplyToTag(
+  const { cleaned, replyToId, hasTag } = extractReplyToTag(
     payload.text,
     currentMessageId,
   );
@@ -18,6 +18,7 @@ export function applyReplyTagsToPayload(
     ...payload,
     text: cleaned ? cleaned : undefined,
     replyToId: replyToId ?? payload.replyToId,
+    replyToTag: hasTag || payload.replyToTag,
   };
 }
 
