@@ -1,9 +1,11 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+
 import { toSanitizedMarkdownHtml } from "../markdown";
 import { formatToolDetail, resolveToolDisplay } from "../tool-display";
 import type { SessionsListResult } from "../types";
+import type { ChatQueueItem } from "../ui-types";
 
 export type ChatProps = {
   sessionKey: string;
@@ -16,6 +18,7 @@ export type ChatProps = {
   stream: string | null;
   streamStartedAt: number | null;
   draft: string;
+  queue: ChatQueueItem[];
   connected: boolean;
   canSend: boolean;
   disabledReason: string | null;
@@ -26,14 +29,16 @@ export type ChatProps = {
   onRefresh: () => void;
   onDraftChange: (next: string) => void;
   onSend: () => void;
+  onQueueRemove: (id: string) => void;
   onNewSession: () => void;
 };
 
 export function renderChat(props: ChatProps) {
-  const canCompose = props.connected && !props.sending;
+  const canCompose = props.connected;
+  const isBusy = props.sending || Boolean(props.stream);
   const sessionOptions = resolveSessionOptions(props.sessionKey, props.sessions);
   const composePlaceholder = props.connected
-    ? "Message (Shift+↩ for line breaks)"
+    ? "Message (↩ to send, Shift+↩ for line breaks)"
     : "Connect to the gateway to start chatting…";
 
   return html`
@@ -106,6 +111,31 @@ export function renderChat(props: ChatProps) {
         )}
       </div>
 
+      ${props.queue.length
+        ? html`
+            <div class="chat-queue" role="status" aria-live="polite">
+              <div class="chat-queue__title">Queued (${props.queue.length})</div>
+              <div class="chat-queue__list">
+                ${props.queue.map(
+                  (item) => html`
+                    <div class="chat-queue__item">
+                      <div class="chat-queue__text">${item.text}</div>
+                      <button
+                        class="btn chat-queue__remove"
+                        type="button"
+                        aria-label="Remove queued message"
+                        @click=${() => props.onQueueRemove(item.id)}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  `,
+                )}
+              </div>
+            </div>
+          `
+        : nothing}
+
       <div class="chat-compose">
         <label class="field chat-compose__field">
           <span>Message</span>
@@ -114,7 +144,9 @@ export function renderChat(props: ChatProps) {
             ?disabled=${!props.connected}
             @keydown=${(e: KeyboardEvent) => {
               if (e.key !== "Enter") return;
+              if (e.isComposing || e.keyCode === 229) return;
               if (e.shiftKey) return; // Allow Shift+Enter for line breaks
+              if (!props.connected) return;
               e.preventDefault();
               if (canCompose) props.onSend();
             }}
@@ -132,10 +164,10 @@ export function renderChat(props: ChatProps) {
           </button>
           <button
             class="btn primary"
-            ?disabled=${!props.connected || props.sending}
+            ?disabled=${!props.connected}
             @click=${props.onSend}
           >
-            ${props.sending ? "Sending…" : "Send"}
+            ${isBusy ? "Queue" : "Send"}
           </button>
         </div>
       </div>
