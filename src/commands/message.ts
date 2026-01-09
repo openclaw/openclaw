@@ -283,6 +283,8 @@ export async function messageCommand(
     sendSlack: deps.sendMessageSlack,
     sendSignal: deps.sendMessageSignal,
     sendIMessage: deps.sendMessageIMessage,
+    sendMSTeams: (to, text, opts) =>
+      deps.sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }),
   };
 
   if (opts.dryRun && action !== "send" && action !== "poll") {

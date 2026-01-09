@@ -33,7 +33,7 @@ clawdbot message poll --provider msteams --to conversation:19:abc@thread.tacv2 \
 ```
 
 Options:
-- `--provider`: `whatsapp` (default) or `discord`
+- `--provider`: `whatsapp` (default), `discord`, or `msteams`
 - `--poll-multi`: allow selecting multiple options
 - `--poll-duration-hours`: Discord-only (defaults to 24 when omitted)
 

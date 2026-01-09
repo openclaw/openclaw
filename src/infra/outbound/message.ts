@@ -169,7 +169,7 @@ export async function sendMessage(
 export async function sendPoll(
   params: MessagePollParams,
 ): Promise<MessagePollResult> {
-  const provider = (params.provider ?? "whatsapp").toLowerCase();
+  const provider = normalizeMessageProvider(params.provider) ?? "whatsapp";
   if (
     provider !== "whatsapp" &&
     provider !== "discord" &&
@@ -205,6 +205,8 @@ export async function sendPoll(
     messageId: string;
     toJid?: string;
     channelId?: string;
+    conversationId?: string;
+    pollId?: string;
   }>({
     url: gateway.url,
     token: gateway.token,
