@@ -885,7 +885,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Elevated: off");
+      expect(text).not.toContain("elevated");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

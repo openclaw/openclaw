@@ -82,9 +82,9 @@ describe("buildStatusMessage", () => {
       sessionScope: "per-sender",
       resolvedThink: "low",
       resolvedVerbose: "on",
-    resolvedElevated: "on",
-    queue: { mode: "collect", depth: 0 },
-  });
+      resolvedElevated: "on",
+      queue: { mode: "collect", depth: 0 },
+    });
 
     expect(text).toContain("verbose");
     expect(text).toContain("elevated");
