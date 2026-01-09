@@ -56,8 +56,6 @@ clawdbot [--dev] [--profile <name>] <command>
     info
     check
   message
-    send
-    poll
   agent
   agents
     list
@@ -285,37 +283,10 @@ Options:
 
 ## Messaging + agent
 
-### `message send`
-Send a message through a provider.
+### `message`
+Unified outbound messaging + provider actions.
 
-Required:
-- `--to <dest>`
-- `--message <text>`
-
-Options:
-- `--media <path-or-url>`
-- `--gif-playback`
-- `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
-- `--account <id>` (WhatsApp)
-- `--dry-run`
-- `--json`
-- `--verbose`
-
-### `message poll`
-Create a poll (WhatsApp or Discord).
-
-Required:
-- `--to <id>`
-- `--question <text>`
-- `--option <choice>` (repeat 2-12 times)
-
-Options:
-- `--max-selections <n>`
-- `--duration-hours <n>` (Discord)
-- `--provider <whatsapp|discord>`
-- `--dry-run`
-- `--json`
-- `--verbose`
+See: [/cli/message](/cli/message)
 
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).

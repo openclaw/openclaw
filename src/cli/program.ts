@@ -8,7 +8,7 @@ import {
 import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
-import { messagePollCommand, messageSendCommand } from "../commands/message.js";
+import { messageCommand } from "../commands/message.js";
 import { onboardCommand } from "../commands/onboard.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
@@ -408,41 +408,100 @@ export function buildProgram() {
       }
     });
 
-  const message = program
+  program
     .command("message")
-    .description("Send messages and polls across providers")
-    .action(() => {
-      message.outputHelp();
-      defaultRuntime.error(
-        danger('Missing subcommand. Try: "clawdbot message send"'),
-      );
-      defaultRuntime.exit(1);
-    });
-
-  message
-    .command("send")
-    .description(
-      "Send a message (WhatsApp Web, Telegram bot, Discord, Slack, Signal, iMessage)",
+    .description("Send messages and provider actions")
+    .option(
+      "-a, --action <action>",
+      "Action: send|poll|react|reactions|read|edit|delete|pin|unpin|list-pins|permissions|thread-create|thread-list|thread-reply|search|sticker|member-info|role-info|emoji-list|emoji-upload|sticker-upload|role-add|role-remove|channel-info|channel-list|voice-status|event-list|event-create|timeout|kick|ban",
+      "send",
     )
-    .requiredOption(
-      "-t, --to <number>",
-      "Recipient: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord channel/user, or iMessage handle/chat_id",
+    .option(
+      "-t, --to <dest>",
+      "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
     )
-    .requiredOption("-m, --message <text>", "Message body")
+    .option("-m, --message <text>", "Message body")
     .option(
       "--media <path-or-url>",
       "Attach media (image/audio/video/document). Accepts local paths or URLs.",
     )
+    .option("--message-id <id>", "Message id (edit/delete/react/pin)")
+    .option("--reply-to <id>", "Reply-to message id")
+    .option("--thread-id <id>", "Thread id (Telegram forum thread)")
+    .option("--account <id>", "Provider account id")
+    .option(
+      "--provider <provider>",
+      "Provider: whatsapp|telegram|discord|slack|signal|imessage",
+    )
+    .option("--emoji <emoji>", "Emoji for reactions")
+    .option("--remove", "Remove reaction", false)
+    .option("--limit <n>", "Result limit for read/reactions/search")
+    .option("--before <id>", "Read/search before id")
+    .option("--after <id>", "Read/search after id")
+    .option("--around <id>", "Read around id (Discord)")
+    .option("--poll-question <text>", "Poll question")
+    .option(
+      "--poll-option <choice>",
+      "Poll option (repeat 2-12 times)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option("--poll-multi", "Allow multiple selections", false)
+    .option("--poll-duration-hours <n>", "Poll duration (Discord)")
+    .option("--channel-id <id>", "Channel id")
+    .option(
+      "--channel-ids <id>",
+      "Channel id (repeat)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option("--guild-id <id>", "Guild id")
+    .option("--user-id <id>", "User id")
+    .option("--author-id <id>", "Author id")
+    .option(
+      "--author-ids <id>",
+      "Author id (repeat)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option("--role-id <id>", "Role id")
+    .option(
+      "--role-ids <id>",
+      "Role id (repeat)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option("--emoji-name <name>", "Emoji name")
+    .option(
+      "--sticker-id <id>",
+      "Sticker id (repeat)",
+      (value: string, previous: string[]) => previous.concat([value]),
+      [] as string[],
+    )
+    .option("--sticker-name <name>", "Sticker name")
+    .option("--sticker-desc <text>", "Sticker description")
+    .option("--sticker-tags <tags>", "Sticker tags")
+    .option("--thread-name <name>", "Thread name")
+    .option("--auto-archive-min <n>", "Thread auto-archive minutes")
+    .option("--query <text>", "Search query")
+    .option("--event-name <name>", "Event name")
+    .option("--event-type <stage|external|voice>", "Event type")
+    .option("--start-time <iso>", "Event start time")
+    .option("--end-time <iso>", "Event end time")
+    .option("--desc <text>", "Event description")
+    .option("--location <text>", "Event location")
+    .option("--duration-min <n>", "Timeout duration minutes")
+    .option("--until <iso>", "Timeout until")
+    .option("--reason <text>", "Moderation reason")
+    .option("--delete-days <n>", "Ban delete message days")
+    .option("--include-archived", "Include archived threads", false)
+    .option("--participant <id>", "WhatsApp reaction participant")
+    .option("--from-me", "WhatsApp reaction fromMe", false)
     .option(
       "--gif-playback",
       "Treat video media as GIF playback (WhatsApp only).",
       false,
     )
-    .option(
-      "--provider <provider>",
-      "Delivery provider: whatsapp|telegram|discord|slack|signal|imessage (default: whatsapp)",
-    )
-    .option("--account <id>", "WhatsApp account id (accountId)")
     .option("--dry-run", "Print payload and skip sending", false)
     .option("--json", "Output result as JSON", false)
     .option("--verbose", "Verbose logging", false)
@@ -450,16 +509,16 @@ export function buildProgram() {
       "after",
       `
 Examples:
-  clawdbot message send --to +15555550123 --message "Hi"
-  clawdbot message send --to +15555550123 --message "Hi" --media photo.jpg
-  clawdbot message send --to +15555550123 --message "Hi" --dry-run      # print payload only
-  clawdbot message send --to +15555550123 --message "Hi" --json         # machine-readable result`,
+  clawdbot message --to +15555550123 --message "Hi"
+  clawdbot message --action send --to +15555550123 --message "Hi" --media photo.jpg
+  clawdbot message --action poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
+  clawdbot message --action react --provider discord --to 123 --message-id 456 --emoji "✅"`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));
       const deps = createDefaultDeps();
       try {
-        await messageSendCommand(
+        await messageCommand(
           {
             ...opts,
             account: opts.account as string | undefined,
@@ -467,55 +526,6 @@ Examples:
           deps,
           defaultRuntime,
         );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
-    });
-
-  message
-    .command("poll")
-    .description("Create a poll via WhatsApp or Discord")
-    .requiredOption(
-      "-t, --to <id>",
-      "Recipient: WhatsApp JID/number or Discord channel/user",
-    )
-    .requiredOption("-q, --question <text>", "Poll question")
-    .requiredOption(
-      "-o, --option <choice>",
-      "Poll option (use multiple times, 2-12 required)",
-      (value: string, previous: string[]) => previous.concat([value]),
-      [] as string[],
-    )
-    .option(
-      "-s, --max-selections <n>",
-      "How many options can be selected (default: 1)",
-    )
-    .option(
-      "--duration-hours <n>",
-      "Poll duration in hours (Discord only, default: 24)",
-    )
-    .option(
-      "--provider <provider>",
-      "Delivery provider: whatsapp|discord (default: whatsapp)",
-    )
-    .option("--dry-run", "Print payload and skip sending", false)
-    .option("--json", "Output result as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .addHelpText(
-      "after",
-      `
-Examples:
-  clawdbot message poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
-  clawdbot message poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
-  clawdbot message poll --to channel:123456789 -q "Snack?" -o "Pizza" -o "Sushi" --provider discord
-  clawdbot message poll --to channel:123456789 -q "Plan?" -o "A" -o "B" --provider discord --duration-hours 48`,
-    )
-    .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      const deps = createDefaultDeps();
-      try {
-        await messagePollCommand(opts, deps, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
