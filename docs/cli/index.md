@@ -660,5 +660,6 @@ Options:
 - `--session <key>`
 - `--deliver`
 - `--thinking <level>`
+- `--message <text>`
 - `--timeout-ms <ms>`
 - `--history-limit <n>`
