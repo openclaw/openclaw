@@ -9,8 +9,8 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  normalizeMainKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import { normalizeE164 } from "../utils.js";
@@ -228,8 +228,7 @@ export function resolveMainSessionKey(cfg?: {
     agents[0]?.id ??
     DEFAULT_AGENT_ID;
   const agentId = normalizeAgentId(defaultAgentId);
-  const mainKey =
-    (cfg?.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  const mainKey = normalizeMainKey(cfg?.session?.mainKey);
   return buildAgentMainSessionKey({ agentId, mainKey });
 }
 
@@ -243,9 +242,7 @@ export function resolveAgentMainSessionKey(params: {
   cfg?: { session?: { mainKey?: string } };
   agentId: string;
 }): string {
-  const mainKey =
-    (params.cfg?.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() ||
-    DEFAULT_MAIN_KEY;
+  const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
@@ -548,8 +545,7 @@ export function resolveSessionKey(
   if (explicit) return explicit;
   const raw = deriveSessionKey(scope, ctx);
   if (scope === "global") return raw;
-  const canonicalMainKey =
-    (mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  const canonicalMainKey = normalizeMainKey(mainKey);
   const canonical = buildAgentMainSessionKey({
     agentId: DEFAULT_AGENT_ID,
     mainKey: canonicalMainKey,

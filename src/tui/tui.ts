@@ -12,6 +12,7 @@ import { loadConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
+  normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { formatTokenCount } from "../utils/usage-format.js";
@@ -132,7 +133,7 @@ export async function runTui(opts: TuiOptions) {
   const initialSessionInput = (opts.session ?? "").trim();
   let sessionScope: SessionScope = (config.session?.scope ??
     "per-sender") as SessionScope;
-  let sessionMainKey = (config.session?.mainKey ?? "main").trim() || "main";
+  let sessionMainKey = normalizeMainKey(config.session?.mainKey);
   let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
   let agents: AgentSummary[] = [];
@@ -263,7 +264,7 @@ export async function runTui(opts: TuiOptions) {
 
   const applyAgentsResult = (result: GatewayAgentsList) => {
     agentDefaultId = normalizeAgentId(result.defaultId);
-    sessionMainKey = result.mainKey.trim() || sessionMainKey;
+    sessionMainKey = normalizeMainKey(result.mainKey);
     sessionScope = result.scope ?? sessionScope;
     agents = result.agents.map((agent) => ({
       id: normalizeAgentId(agent.id),

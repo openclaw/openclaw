@@ -9,6 +9,7 @@ import {
   saveSessionStore,
 } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeMessageProvider } from "../../utils/message-provider.js";
@@ -129,7 +130,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         cfg,
         agentId,
       });
-      const rawMainKey = (cfg.session?.mainKey ?? "main").trim() || "main";
+      const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       if (
         requestedSessionKey === mainSessionKey ||
         requestedSessionKey === rawMainKey

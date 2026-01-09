@@ -21,8 +21,8 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import {
-  DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  normalizeMainKey,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 
@@ -255,8 +255,7 @@ export function listAgentsForGateway(cfg: ClawdbotConfig): {
   agents: GatewayAgentRow[];
 } {
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
-  const mainKey =
-    (cfg.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  const mainKey = normalizeMainKey(cfg.session?.mainKey);
   const scope = cfg.session?.scope ?? "per-sender";
   const configuredById = new Map<string, { name?: string }>();
   for (const entry of cfg.agents?.list ?? []) {

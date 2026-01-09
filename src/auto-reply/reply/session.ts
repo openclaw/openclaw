@@ -23,6 +23,7 @@ import {
   type SessionScope,
   saveSessionStore,
 } from "../../config/sessions.js";
+import { normalizeMainKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
@@ -90,7 +91,7 @@ export async function initSessionState(params: {
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
   const sessionCfg = cfg.session;
-  const mainKey = sessionCfg?.mainKey ?? "main";
+  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers

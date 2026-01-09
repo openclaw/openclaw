@@ -33,6 +33,7 @@ import {
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
 import { clearCommandLane } from "../process/command-queue.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { buildMessageWithAttachments } from "./chat-attachments.js";
 import {
@@ -944,8 +945,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
         if (text.length > 20_000) return;
         const sessionKeyRaw =
           typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
-        const mainKey =
-          (loadConfig().session?.mainKey ?? "main").trim() || "main";
+        const mainKey = normalizeMainKey(loadConfig().session?.mainKey);
         const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : mainKey;
         const { storePath, store, entry } = loadSessionEntry(sessionKey);
         const now = Date.now();
