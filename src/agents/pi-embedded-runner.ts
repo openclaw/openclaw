@@ -60,6 +60,8 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isAuthErrorMessage,
+  isBillingAssistantError,
+  isBillingErrorMessage,
   isContextOverflowError,
   isGoogleModelApi,
   isRateLimitAssistantError,
@@ -1421,7 +1423,8 @@ export async function runEmbeddedPiAgent(params: {
             }
             if (
               (isAuthErrorMessage(errorText) ||
-                isRateLimitErrorMessage(errorText)) &&
+                isRateLimitErrorMessage(errorText) ||
+                isBillingErrorMessage(errorText)) &&
               (await advanceAuthProfile())
             ) {
               continue;
@@ -1464,10 +1467,12 @@ export async function runEmbeddedPiAgent(params: {
             0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
+          const billingFailure = isBillingAssistantError(lastAssistant);
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
           const shouldRotate =
-            (!aborted && (authFailure || rateLimitFailure)) || timedOut;
+            (!aborted && (authFailure || rateLimitFailure || billingFailure)) ||
+            timedOut;
 
           if (shouldRotate) {
             // Mark current profile for cooldown before rotating
@@ -1496,7 +1501,9 @@ export async function runEmbeddedPiAgent(params: {
                   ? "LLM request timed out."
                   : rateLimitFailure
                     ? "LLM request rate limited."
-                    : "LLM request unauthorized.");
+                    : billingFailure
+                      ? "LLM request payment required."
+                      : "LLM request unauthorized.");
               throw new Error(message);
             }
           }
