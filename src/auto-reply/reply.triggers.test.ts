@@ -56,7 +56,11 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const previousUserProfile = process.env.USERPROFILE;
   const previousHomeDrive = process.env.HOMEDRIVE;
   const previousHomePath = process.env.HOMEPATH;
+  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+  const previousClawdisStateDir = process.env.CLAWDIS_STATE_DIR;
   process.env.HOME = base;
+  process.env.CLAWDBOT_STATE_DIR = join(base, ".clawdbot");
+  process.env.CLAWDIS_STATE_DIR = join(base, ".clawdbot");
   if (process.platform === "win32") {
     process.env.USERPROFILE = base;
     const driveMatch = base.match(/^([A-Za-z]:)(.*)$/);
@@ -74,6 +78,8 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
     process.env.USERPROFILE = previousUserProfile;
     process.env.HOMEDRIVE = previousHomeDrive;
     process.env.HOMEPATH = previousHomePath;
+    process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+    process.env.CLAWDIS_STATE_DIR = previousClawdisStateDir;
     await fs.rm(base, { recursive: true, force: true });
   }
 }
