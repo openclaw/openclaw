@@ -352,6 +352,7 @@ async function promptAuthConfig(
     runtime,
   ) as
     | "oauth"
+    | "setup-token"
     | "claude-cli"
     | "token"
     | "openai-codex"
@@ -403,7 +404,68 @@ async function promptAuthConfig(
       provider: "anthropic",
       mode: "token",
     });
-  } else if (authChoice === "token" || authChoice === "oauth") {
+  } else if (authChoice === "setup-token" || authChoice === "oauth") {
+    note(
+      [
+        "This will run `claude setup-token` to create a long-lived Anthropic token.",
+        "Requires an interactive TTY and a Claude Pro/Max subscription.",
+      ].join("\n"),
+      "Anthropic setup-token",
+    );
+
+    if (!process.stdin.isTTY) {
+      note(
+        "`claude setup-token` requires an interactive TTY.",
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    const runNow = guardCancel(
+      await confirm({
+        message: "Run `claude setup-token` now?",
+        initialValue: true,
+      }),
+      runtime,
+    );
+    if (!runNow) return next;
+
+    const res = await (async () => {
+      const { spawnSync } = await import("node:child_process");
+      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+    })();
+    if (res.error) {
+      note(
+        `Failed to run claude: ${String(res.error)}`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+    if (typeof res.status === "number" && res.status !== 0) {
+      note(
+        `claude setup-token failed (exit ${res.status})`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: true,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      note(
+        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    next = applyAuthProfileConfig(next, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "token",
+    });
+  } else if (authChoice === "token") {
     const provider = guardCancel(
       await select({
         message: "Token provider",
@@ -726,6 +788,7 @@ async function promptAuthConfig(
       : (next.agents?.defaults?.model?.primary ?? "");
   const preferAnthropic =
     authChoice === "claude-cli" ||
+    authChoice === "setup-token" ||
     authChoice === "token" ||
     authChoice === "oauth" ||
     authChoice === "apiKey";

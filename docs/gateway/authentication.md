@@ -29,6 +29,19 @@ clawdbot models status
 clawdbot doctor
 ```
 
+Alternative: run the wrapper (also updates Clawdbot config):
+
+```bash
+clawdbot models auth setup-token --provider anthropic
+```
+
+Manual token entry (any provider; writes `auth-profiles.json` + updates config):
+
+```bash
+clawdbot models auth paste-token --provider anthropic
+clawdbot models auth paste-token --provider openrouter
+```
+
 ## Recommended: long‑lived Claude Code token
 
 Run this on the **gateway host** (the machine running the Gateway):
@@ -92,13 +105,15 @@ Use `--agent <id>` to target a specific agent; omit it to use the configured def
 2. **Clawdbot** syncs those into
    `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` when the auth store is
    loaded.
-3. OAuth refresh happens automatically on use if a token is expired.
+3. Refreshable OAuth profiles can be refreshed automatically on use. Static
+   token profiles (including Claude CLI setup-token) are not refreshable by
+   Clawdbot.
 
 ## Troubleshooting
 
 ### “No credentials found”
 
-If the Anthropic OAuth profile is missing, run `claude setup-token` on the
+If the Anthropic token profile is missing, run `claude setup-token` on the
 **gateway host**, then re-check:
 
 ```bash
