@@ -9,6 +9,7 @@
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
 - Commands: accept /models as an alias for /model.
+- Commands: add `/usage` as an alias for `/status`. (#492) — thanks @lc0rp
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Gateway: decode dns-sd escaped UTF-8 in discovery output and show scan progress immediately. — thanks @steipete
