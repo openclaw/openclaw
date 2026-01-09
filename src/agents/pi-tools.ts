@@ -206,11 +206,109 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "definitions",
 ]);
 
-function cleanSchemaForGemini(schema: unknown): unknown {
+type SchemaDefs = Map<string, unknown>;
+
+function extendSchemaDefs(
+  defs: SchemaDefs | undefined,
+  schema: Record<string, unknown>,
+): SchemaDefs | undefined {
+  const defsEntry =
+    schema.$defs &&
+    typeof schema.$defs === "object" &&
+    !Array.isArray(schema.$defs)
+      ? (schema.$defs as Record<string, unknown>)
+      : undefined;
+  const legacyDefsEntry =
+    schema.definitions &&
+    typeof schema.definitions === "object" &&
+    !Array.isArray(schema.definitions)
+      ? (schema.definitions as Record<string, unknown>)
+      : undefined;
+
+  if (!defsEntry && !legacyDefsEntry) return defs;
+
+  const next = defs ? new Map(defs) : new Map<string, unknown>();
+  if (defsEntry) {
+    for (const [key, value] of Object.entries(defsEntry)) next.set(key, value);
+  }
+  if (legacyDefsEntry) {
+    for (const [key, value] of Object.entries(legacyDefsEntry))
+      next.set(key, value);
+  }
+  return next;
+}
+
+function decodeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll("~1", "/").replaceAll("~0", "~");
+}
+
+function tryResolveLocalRef(
+  ref: string,
+  defs: SchemaDefs | undefined,
+): unknown | undefined {
+  if (!defs) return undefined;
+  const match = ref.match(/^#\/(?:\$defs|definitions)\/(.+)$/);
+  if (!match) return undefined;
+  const name = decodeJsonPointerSegment(match[1] ?? "");
+  if (!name) return undefined;
+  return defs.get(name);
+}
+
+function cleanSchemaForGeminiWithDefs(
+  schema: unknown,
+  defs: SchemaDefs | undefined,
+  refStack: Set<string> | undefined,
+): unknown {
   if (!schema || typeof schema !== "object") return schema;
-  if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
+  if (Array.isArray(schema)) {
+    return schema.map((item) =>
+      cleanSchemaForGeminiWithDefs(item, defs, refStack),
+    );
+  }
 
   const obj = schema as Record<string, unknown>;
+  const nextDefs = extendSchemaDefs(defs, obj);
+
+  const refValue = typeof obj.$ref === "string" ? obj.$ref : undefined;
+  if (refValue) {
+    if (refStack?.has(refValue)) {
+      return {};
+    }
+
+    const resolved = tryResolveLocalRef(refValue, nextDefs);
+    if (resolved) {
+      const nextRefStack = refStack ? new Set(refStack) : new Set<string>();
+      nextRefStack.add(refValue);
+
+      const cleaned = cleanSchemaForGeminiWithDefs(
+        resolved,
+        nextDefs,
+        nextRefStack,
+      );
+      if (!cleaned || typeof cleaned !== "object" || Array.isArray(cleaned)) {
+        return cleaned;
+      }
+
+      const result: Record<string, unknown> = {
+        ...(cleaned as Record<string, unknown>),
+      };
+      for (const key of ["description", "title", "default", "examples"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
+      return result;
+    }
+
+    const result: Record<string, unknown> = {};
+    for (const key of ["description", "title", "default", "examples"]) {
+      if (key in obj && obj[key] !== undefined) {
+        result[key] = obj[key];
+      }
+    }
+    return result;
+  }
+
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
   const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
 
@@ -273,26 +371,47 @@ function cleanSchemaForGemini(schema: unknown): unknown {
       // Recursively clean nested properties
       const props = value as Record<string, unknown>;
       cleaned[key] = Object.fromEntries(
-        Object.entries(props).map(([k, v]) => [k, cleanSchemaForGemini(v)]),
+        Object.entries(props).map(([k, v]) => [
+          k,
+          cleanSchemaForGeminiWithDefs(v, nextDefs, refStack),
+        ]),
       );
     } else if (key === "items" && value && typeof value === "object") {
       // Recursively clean array items schema
-      cleaned[key] = cleanSchemaForGemini(value);
+      cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
     } else if (key === "anyOf" && Array.isArray(value)) {
       // Clean each anyOf variant
-      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
+      cleaned[key] = value.map((variant) =>
+        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+      );
     } else if (key === "oneOf" && Array.isArray(value)) {
       // Clean each oneOf variant
-      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
+      cleaned[key] = value.map((variant) =>
+        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+      );
     } else if (key === "allOf" && Array.isArray(value)) {
       // Clean each allOf variant
-      cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
+      cleaned[key] = value.map((variant) =>
+        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+      );
     } else {
       cleaned[key] = value;
     }
   }
 
   return cleaned;
+}
+
+function cleanSchemaForGemini(schema: unknown): unknown {
+  if (!schema || typeof schema !== "object") return schema;
+  if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
+
+  const defs = extendSchemaDefs(undefined, schema as Record<string, unknown>);
+  return cleanSchemaForGeminiWithDefs(schema, defs, undefined);
+}
+
+function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
+  return cleanSchemaForGemini(schema);
 }
 
 function normalizeToolParameters(tool: AnyAgentTool): AnyAgentTool {
@@ -631,6 +750,10 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
     },
   };
 }
+
+export const __testing = {
+  cleanToolSchemaForGemini,
+} as const;
 
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;

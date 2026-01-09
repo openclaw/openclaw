@@ -4,7 +4,7 @@ import path from "node:path";
 
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { createClawdbotCodingTools } from "./pi-tools.js";
+import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
 describe("createClawdbotCodingTools", () => {
@@ -62,6 +62,28 @@ describe("createClawdbotCodingTools", () => {
     expect(format?.type).toBe("string");
     expect(format?.anyOf).toBeUndefined();
     expect(format?.enum).toEqual(["aria", "ai"]);
+  });
+
+  it("inlines local $ref before removing unsupported keywords", () => {
+    const cleaned = __testing.cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        foo: { $ref: "#/$defs/Foo" },
+      },
+      $defs: {
+        Foo: { type: "string", enum: ["a", "b"] },
+      },
+    }) as {
+      $defs?: unknown;
+      properties?: Record<string, unknown>;
+    };
+
+    expect(cleaned.$defs).toBeUndefined();
+    expect(cleaned.properties).toBeDefined();
+    expect(cleaned.properties?.foo).toMatchObject({
+      type: "string",
+      enum: ["a", "b"],
+    });
   });
 
   it("preserves action enums in normalized schemas", () => {
