@@ -41,6 +41,7 @@
 - WhatsApp: improve "no active web listener" errors (include account + relink hint). (#612) — thanks @YuriNachos
 - WhatsApp: add broadcast groups for multi-agent replies. (#547) — thanks @pasogott
 - WhatsApp: resolve @lid inbound senders via auth-dir mapping fallback + shared resolver. (#365)
+- WhatsApp: treat shared contact cards as inbound messages (prefer vCard FN). (#622) — thanks @mahmoudashraf93
 - iMessage: isolate group-ish threads by chat_id. (#535) — thanks @mdahmann
 - Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223
 - Deps: bump Pi to 0.40.0 and drop pi-ai patch (upstream 429 fix). (#543) — thanks @mcinteerj
