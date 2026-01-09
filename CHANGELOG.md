@@ -8,6 +8,7 @@
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
+- Discord: fix forum thread starters and cache channel lookups for thread context. (#585) — thanks @thewilloftheshadow
 - Commands: accept /models as an alias for /model.
 - Commands: add `/usage` as an alias for `/status`. (#492) — thanks @lc0rp
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
