@@ -328,12 +328,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   const versionLine = `🦞 ClawdBot ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
+  const usageCostLine =
+    usagePair && costLine ? `${usagePair} · ${costLine}` : usagePair ?? costLine;
 
   return [
     versionLine,
     modelLine,
-    usagePair,
-    costLine,
+    usageCostLine,
     `📚 ${contextLine}`,
     args.usageLine,
     `🧵 ${sessionLine}`,

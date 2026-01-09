@@ -93,8 +93,7 @@ describe("buildStatusMessage", () => {
 
     expect(text).toContain("🦞 ClawdBot");
     expect(text).toContain("🧠 Model: anthropic/pi:opus · 🔑 api-key");
-    expect(text).toContain("🧮 Tokens: 1.2k in / 800 out");
-    expect(text).toContain("💵 Cost: $0.0020");
+    expect(text).toContain("🧮 Tokens: 1.2k in / 800 out · 💵 Cost: $0.0020");
     expect(text).toContain("Context: 16k/32k (50%)");
     expect(text).toContain("🧹 Compactions: 2");
     expect(text).toContain("Session: agent:main:main");
