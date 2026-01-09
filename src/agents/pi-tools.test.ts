@@ -141,36 +141,13 @@ describe("createClawdbotCodingTools", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("scopes discord tool to discord provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(other.some((tool) => tool.name === "discord")).toBe(false);
-
-    const discord = createClawdbotCodingTools({ messageProvider: "discord" });
-    expect(discord.some((tool) => tool.name === "discord")).toBe(true);
-  });
-
-  it("scopes slack tool to slack provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(other.some((tool) => tool.name === "slack")).toBe(false);
-
-    const slack = createClawdbotCodingTools({ messageProvider: "slack" });
-    expect(slack.some((tool) => tool.name === "slack")).toBe(true);
-  });
-
-  it("scopes telegram tool to telegram provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(other.some((tool) => tool.name === "telegram")).toBe(false);
-
-    const telegram = createClawdbotCodingTools({ messageProvider: "telegram" });
-    expect(telegram.some((tool) => tool.name === "telegram")).toBe(true);
-  });
-
-  it("scopes whatsapp tool to whatsapp provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "slack" });
-    expect(other.some((tool) => tool.name === "whatsapp")).toBe(false);
-
-    const whatsapp = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(whatsapp.some((tool) => tool.name === "whatsapp")).toBe(true);
+  it("does not expose provider-specific message tools", () => {
+    const tools = createClawdbotCodingTools({ messageProvider: "discord" });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("discord")).toBe(false);
+    expect(names.has("slack")).toBe(false);
+    expect(names.has("telegram")).toBe(false);
+    expect(names.has("whatsapp")).toBe(false);
   });
 
   it("filters session tools for sub-agent sessions by default", () => {

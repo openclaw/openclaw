@@ -613,37 +613,6 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
-function normalizeMessageProvider(
-  messageProvider?: string,
-): string | undefined {
-  const trimmed = messageProvider?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
-}
-
-function shouldIncludeDiscordTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "discord" || normalized.startsWith("discord:");
-}
-
-function shouldIncludeSlackTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "slack" || normalized.startsWith("slack:");
-}
-
-function shouldIncludeTelegramTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "telegram" || normalized.startsWith("telegram:");
-}
-
-function shouldIncludeWhatsAppTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "whatsapp" || normalized.startsWith("whatsapp:");
-}
-
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
@@ -724,20 +693,9 @@ export function createClawdbotCodingTools(options?: {
       config: options?.config,
     }),
   ];
-  const allowDiscord = shouldIncludeDiscordTool(options?.messageProvider);
-  const allowSlack = shouldIncludeSlackTool(options?.messageProvider);
-  const allowTelegram = shouldIncludeTelegramTool(options?.messageProvider);
-  const allowWhatsApp = shouldIncludeWhatsAppTool(options?.messageProvider);
-  const filtered = tools.filter((tool) => {
-    if (tool.name === "discord") return allowDiscord;
-    if (tool.name === "slack") return allowSlack;
-    if (tool.name === "telegram") return allowTelegram;
-    if (tool.name === "whatsapp") return allowWhatsApp;
-    return true;
-  });
   const toolsFiltered = effectiveToolsPolicy
-    ? filterToolsByPolicy(filtered, effectiveToolsPolicy)
-    : filtered;
+    ? filterToolsByPolicy(tools, effectiveToolsPolicy)
+    : tools;
   const sandboxed = sandbox
     ? filterToolsByPolicy(toolsFiltered, sandbox.tools)
     : toolsFiltered;

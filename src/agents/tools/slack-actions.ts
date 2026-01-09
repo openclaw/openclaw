@@ -91,9 +91,11 @@ export async function handleSlackAction(
         const to = readStringParam(params, "to", { required: true });
         const content = readStringParam(params, "content", { required: true });
         const mediaUrl = readStringParam(params, "mediaUrl");
+        const threadTs = readStringParam(params, "threadTs");
         const result = await sendSlackMessage(to, content, {
           accountId: accountId ?? undefined,
           mediaUrl: mediaUrl ?? undefined,
+          threadTs: threadTs ?? undefined,
         });
         return jsonResult({ ok: true, result });
       }
