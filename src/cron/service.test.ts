@@ -136,7 +136,7 @@ describe("CronService", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        channel: "telegram",
+        channel: " TeLeGrAm ",
         to: "7200373102",
       },
       state: {},
@@ -164,6 +164,56 @@ describe("CronService", () => {
     const payload = job?.payload as unknown as Record<string, unknown>;
     expect(payload.provider).toBe("telegram");
     expect("channel" in payload).toBe(false);
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("canonicalizes payload.provider casing on load", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const rawJob = {
+      id: "legacy-2",
+      name: "legacy",
+      enabled: true,
+      createdAtMs: Date.now(),
+      updatedAtMs: Date.now(),
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+        deliver: true,
+        provider: "Telegram",
+        to: "7200373102",
+      },
+      state: {},
+    };
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({ version: 1, jobs: [rawJob] }, null, 2),
+      "utf-8",
+    );
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const jobs = await cron.list({ includeDisabled: true });
+    const job = jobs.find((j) => j.id === rawJob.id);
+    const payload = job?.payload as unknown as Record<string, unknown>;
+    expect(payload.provider).toBe("telegram");
 
     cron.stop();
     await store.cleanup();

@@ -2,30 +2,29 @@ import path from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runEmbeddedPiAgent as runEmbeddedPiAgentRunner } from "/src/agents/pi-embedded.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { runEmbeddedPiAgent as runEmbeddedPiAgentAutoReply } from "../agents/pi-embedded.js";
 import { getReplyFromConfig } from "./reply.js";
 
-vi.mock("/src/agents/pi-embedded.js", () => ({
+type RunEmbeddedPiAgent =
+  typeof import("../agents/pi-embedded.js").runEmbeddedPiAgent;
+type RunEmbeddedPiAgentParams = Parameters<RunEmbeddedPiAgent>[0];
+
+const piEmbeddedMock = vi.hoisted(() => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
+  runEmbeddedPiAgent: vi.fn<
+    ReturnType<RunEmbeddedPiAgent>,
+    Parameters<RunEmbeddedPiAgent>
+  >(),
   queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) =>
     `session:${key.trim() || "main"}`,
   isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  runEmbeddedPiAgent: vi.fn(),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
-  resolveEmbeddedSessionLane: (key: string) =>
-    `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-}));
+
+vi.mock("/src/agents/pi-embedded.js", () => piEmbeddedMock);
+vi.mock("../agents/pi-embedded.js", () => piEmbeddedMock);
 vi.mock("../agents/model-catalog.js", () => ({
   loadModelCatalog: vi.fn(),
 }));
@@ -36,8 +35,11 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 
 describe("block streaming", () => {
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgentAutoReply).mockReset();
-    vi.mocked(runEmbeddedPiAgentRunner).mockReset();
+    piEmbeddedMock.abortEmbeddedPiRun.mockReset().mockReturnValue(false);
+    piEmbeddedMock.queueEmbeddedPiMessage.mockReset().mockReturnValue(false);
+    piEmbeddedMock.isEmbeddedPiRunActive.mockReset().mockReturnValue(false);
+    piEmbeddedMock.isEmbeddedPiRunStreaming.mockReset().mockReturnValue(false);
+    piEmbeddedMock.runEmbeddedPiAgent.mockReset();
     vi.mocked(loadModelCatalog).mockResolvedValue([
       { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
       { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
@@ -63,9 +65,7 @@ describe("block streaming", () => {
       const onReplyStart = vi.fn(() => typingGate);
       const onBlockReply = vi.fn().mockResolvedValue(undefined);
 
-      const impl = async (
-        params: Parameters<typeof runEmbeddedPiAgentRunner>[0],
-      ) => {
+      const impl = async (params: RunEmbeddedPiAgentParams) => {
         void params.onBlockReply?.({ text: "hello" });
         return {
           payloads: [{ text: "hello" }],
@@ -75,8 +75,7 @@ describe("block streaming", () => {
           },
         };
       };
-      vi.mocked(runEmbeddedPiAgentAutoReply).mockImplementation(impl);
-      vi.mocked(runEmbeddedPiAgentRunner).mockImplementation(impl);
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
 
       const replyPromise = getReplyFromConfig(
         {
@@ -124,9 +123,7 @@ describe("block streaming", () => {
         seen.push(payload.text ?? "");
       });
 
-      const impl = async (
-        params: Parameters<typeof runEmbeddedPiAgentRunner>[0],
-      ) => {
+      const impl = async (params: RunEmbeddedPiAgentParams) => {
         void params.onBlockReply?.({ text: "first" });
         void params.onBlockReply?.({ text: "second" });
         return {
@@ -137,8 +134,7 @@ describe("block streaming", () => {
           },
         };
       };
-      vi.mocked(runEmbeddedPiAgentAutoReply).mockImplementation(impl);
-      vi.mocked(runEmbeddedPiAgentRunner).mockImplementation(impl);
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
 
       const replyPromise = getReplyFromConfig(
         {
@@ -178,9 +174,7 @@ describe("block streaming", () => {
     await withTempHome(async (home) => {
       const onBlockReply = vi.fn().mockResolvedValue(undefined);
 
-      const impl = async (
-        params: Parameters<typeof runEmbeddedPiAgentRunner>[0],
-      ) => {
+      const impl = async (params: RunEmbeddedPiAgentParams) => {
         void params.onBlockReply?.({ text: "chunk-1" });
         return {
           payloads: [{ text: "chunk-1\nchunk-2" }],
@@ -190,8 +184,7 @@ describe("block streaming", () => {
           },
         };
       };
-      vi.mocked(runEmbeddedPiAgentAutoReply).mockImplementation(impl);
-      vi.mocked(runEmbeddedPiAgentRunner).mockImplementation(impl);
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
 
       const res = await getReplyFromConfig(
         {
@@ -238,9 +231,7 @@ describe("block streaming", () => {
         });
       });
 
-      const impl = async (
-        params: Parameters<typeof runEmbeddedPiAgentRunner>[0],
-      ) => {
+      const impl = async (params: RunEmbeddedPiAgentParams) => {
         void params.onBlockReply?.({ text: "streamed" });
         return {
           payloads: [{ text: "final" }],
@@ -250,8 +241,7 @@ describe("block streaming", () => {
           },
         };
       };
-      vi.mocked(runEmbeddedPiAgentAutoReply).mockImplementation(impl);
-      vi.mocked(runEmbeddedPiAgentRunner).mockImplementation(impl);
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
 
       const replyPromise = getReplyFromConfig(
         {

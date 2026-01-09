@@ -14,7 +14,7 @@ describe("normalizeCronJobCreate", () => {
         kind: "agentTurn",
         message: "hi",
         deliver: true,
-        channel: "telegram",
+        channel: " TeLeGrAm ",
         to: "7200373102",
       },
     }) as unknown as Record<string, unknown>;
@@ -22,5 +22,25 @@ describe("normalizeCronJobCreate", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.provider).toBe("telegram");
     expect("channel" in payload).toBe(false);
+  });
+
+  it("canonicalizes payload.provider casing", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "legacy provider",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+        deliver: true,
+        provider: "Telegram",
+        to: "7200373102",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.provider).toBe("telegram");
   });
 });

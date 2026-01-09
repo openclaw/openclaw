@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 
 import { truncateUtf16Safe } from "../utils.js";
+import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { computeNextRunAtMs } from "./schedule.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import type {
@@ -320,22 +321,7 @@ export class CronService {
 
       const payload = raw.payload;
       if (payload && typeof payload === "object" && !Array.isArray(payload)) {
-        const legacyChannel =
-          typeof (payload as Record<string, unknown>).channel === "string"
-            ? String((payload as Record<string, unknown>).channel).trim()
-            : "";
-        const provider =
-          typeof (payload as Record<string, unknown>).provider === "string"
-            ? String((payload as Record<string, unknown>).provider).trim()
-            : "";
-        // Back-compat: older cron payloads used `channel` for delivery provider.
-        if (!provider && legacyChannel) {
-          (payload as Record<string, unknown>).provider =
-            legacyChannel.toLowerCase();
-          mutated = true;
-        }
-        if ("channel" in (payload as Record<string, unknown>)) {
-          delete (payload as Record<string, unknown>).channel;
+        if (migrateLegacyCronPayload(payload as Record<string, unknown>)) {
           mutated = true;
         }
       }
