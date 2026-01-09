@@ -37,6 +37,8 @@ Text + native (when enabled):
 - `/help`
 - `/commands`
 - `/status`
+- `/status` (show current status; includes a short usage line when available)
+- `/usage` (alias: `/status`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only)
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
@@ -48,7 +50,7 @@ Text + native (when enabled):
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
-- `/model <name>` (or `/<alias>` from `agents.defaults.models.*.alias`)
+- `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 
 Text-only:
@@ -56,6 +58,7 @@ Text-only:
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
+- `/status` and `/usage` show the same status output; for full provider usage breakdown, use `clawdbot status --usage`.
 - `/cost` appends per-response token usage; it only shows dollar cost when the model uses an API key (OAuth hides cost).
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.

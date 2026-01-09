@@ -14,122 +14,185 @@ export type NativeCommandSpec = {
   acceptsArgs: boolean;
 };
 
-const CHAT_COMMANDS: ChatCommandDefinition[] = [
-  {
-    key: "help",
-    nativeName: "help",
-    description: "Show available commands.",
-    textAliases: ["/help"],
-  },
-  {
-    key: "commands",
-    nativeName: "commands",
-    description: "List all slash commands.",
-    textAliases: ["/commands"],
-  },
-  {
-    key: "status",
-    nativeName: "status",
-    description: "Show current status.",
-    textAliases: ["/status"],
-  },
-  {
-    key: "debug",
-    nativeName: "debug",
-    description: "Set runtime debug overrides.",
-    textAliases: ["/debug"],
-    acceptsArgs: true,
-  },
-  {
-    key: "cost",
-    nativeName: "cost",
-    description: "Toggle per-response usage line.",
-    textAliases: ["/cost"],
-    acceptsArgs: true,
-  },
-  {
-    key: "stop",
-    nativeName: "stop",
-    description: "Stop the current run.",
-    textAliases: ["/stop"],
-  },
-  {
-    key: "restart",
-    nativeName: "restart",
-    description: "Restart Clawdbot.",
-    textAliases: ["/restart"],
-  },
-  {
-    key: "activation",
-    nativeName: "activation",
-    description: "Set group activation mode.",
-    textAliases: ["/activation"],
-    acceptsArgs: true,
-  },
-  {
-    key: "send",
-    nativeName: "send",
-    description: "Set send policy.",
-    textAliases: ["/send"],
-    acceptsArgs: true,
-  },
-  {
-    key: "reset",
-    nativeName: "reset",
-    description: "Reset the current session.",
-    textAliases: ["/reset"],
-  },
-  {
-    key: "new",
-    nativeName: "new",
-    description: "Start a new session.",
-    textAliases: ["/new"],
-  },
-  {
-    key: "think",
-    nativeName: "think",
-    description: "Set thinking level.",
-    textAliases: ["/thinking", "/think", "/t"],
-    acceptsArgs: true,
-  },
-  {
-    key: "verbose",
-    nativeName: "verbose",
-    description: "Toggle verbose mode.",
-    textAliases: ["/verbose", "/v"],
-    acceptsArgs: true,
-  },
-  {
-    key: "reasoning",
-    nativeName: "reasoning",
-    description: "Toggle reasoning visibility.",
-    textAliases: ["/reasoning", "/reason"],
-    acceptsArgs: true,
-  },
-  {
-    key: "elevated",
-    nativeName: "elevated",
-    description: "Toggle elevated mode.",
-    textAliases: ["/elevated", "/elev"],
-    acceptsArgs: true,
-  },
-  {
-    key: "model",
-    nativeName: "model",
-    description: "Show or set the model.",
-    textAliases: ["/model", "/models"],
-    acceptsArgs: true,
-  },
-  {
-    key: "queue",
-    nativeName: "queue",
-    description: "Adjust queue settings.",
-    textAliases: ["/queue"],
-    acceptsArgs: true,
-  },
-];
+function defineChatCommand(
+  command: Omit<ChatCommandDefinition, "textAliases"> & { textAlias: string },
+): ChatCommandDefinition {
+  return {
+    key: command.key,
+    nativeName: command.nativeName,
+    description: command.description,
+    acceptsArgs: command.acceptsArgs,
+    textAliases: [command.textAlias],
+  };
+}
+
+function registerAlias(
+  commands: ChatCommandDefinition[],
+  key: string,
+  ...aliases: string[]
+): void {
+  const command = commands.find((entry) => entry.key === key);
+  if (!command) {
+    throw new Error(`registerAlias: unknown command key: ${key}`);
+  }
+  const existing = new Set(command.textAliases.map((alias) => alias.trim()));
+  for (const alias of aliases) {
+    const trimmed = alias.trim();
+    if (!trimmed) continue;
+    if (existing.has(trimmed)) continue;
+    existing.add(trimmed);
+    command.textAliases.push(trimmed);
+  }
+}
+
+export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
+  const commands: ChatCommandDefinition[] = [
+    defineChatCommand({
+      key: "help",
+      nativeName: "help",
+      description: "Show available commands.",
+      textAlias: "/help",
+    }),
+    defineChatCommand({
+      key: "commands",
+      nativeName: "commands",
+      description: "List all slash commands.",
+      textAlias: "/commands",
+    }),
+    defineChatCommand({
+      key: "status",
+      nativeName: "status",
+      description: "Show current status.",
+      textAlias: "/status",
+    }),
+    defineChatCommand({
+      key: "debug",
+      nativeName: "debug",
+      description: "Set runtime debug overrides.",
+      textAlias: "/debug",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "cost",
+      nativeName: "cost",
+      description: "Toggle per-response usage line.",
+      textAlias: "/cost",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "stop",
+      nativeName: "stop",
+      description: "Stop the current run.",
+      textAlias: "/stop",
+    }),
+    defineChatCommand({
+      key: "restart",
+      nativeName: "restart",
+      description: "Restart Clawdbot.",
+      textAlias: "/restart",
+    }),
+    defineChatCommand({
+      key: "activation",
+      nativeName: "activation",
+      description: "Set group activation mode.",
+      textAlias: "/activation",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "send",
+      nativeName: "send",
+      description: "Set send policy.",
+      textAlias: "/send",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "reset",
+      nativeName: "reset",
+      description: "Reset the current session.",
+      textAlias: "/reset",
+    }),
+    defineChatCommand({
+      key: "new",
+      nativeName: "new",
+      description: "Start a new session.",
+      textAlias: "/new",
+    }),
+    defineChatCommand({
+      key: "think",
+      nativeName: "think",
+      description: "Set thinking level.",
+      textAlias: "/think",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "verbose",
+      nativeName: "verbose",
+      description: "Toggle verbose mode.",
+      textAlias: "/verbose",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "reasoning",
+      nativeName: "reasoning",
+      description: "Toggle reasoning visibility.",
+      textAlias: "/reasoning",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "elevated",
+      nativeName: "elevated",
+      description: "Toggle elevated mode.",
+      textAlias: "/elevated",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "model",
+      nativeName: "model",
+      description: "Show or set the model.",
+      textAlias: "/model",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
+      key: "queue",
+      nativeName: "queue",
+      description: "Adjust queue settings.",
+      textAlias: "/queue",
+      acceptsArgs: true,
+    }),
+  ];
+
+  registerAlias(commands, "status", "/usage");
+  registerAlias(commands, "think", "/thinking", "/t");
+  registerAlias(commands, "verbose", "/v");
+  registerAlias(commands, "reasoning", "/reason");
+  registerAlias(commands, "elevated", "/elev");
+  registerAlias(commands, "model", "/models");
+
+  return commands;
+})();
 
 const NATIVE_COMMAND_SURFACES = new Set(["discord", "slack", "telegram"]);
+
+type TextAliasSpec = {
+  canonical: string;
+  acceptsArgs: boolean;
+};
+
+const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {
+  const map = new Map<string, TextAliasSpec>();
+  for (const command of CHAT_COMMANDS) {
+    const canonical = `/${command.key}`;
+    const acceptsArgs = Boolean(command.acceptsArgs);
+    for (const alias of command.textAliases) {
+      const normalized = alias.trim().toLowerCase();
+      if (!normalized) continue;
+      if (!map.has(normalized)) {
+        map.set(normalized, { canonical, acceptsArgs });
+      }
+    }
+  }
+  return map;
+})();
 
 let cachedDetection:
   | {
@@ -171,11 +234,31 @@ export function buildCommandText(commandName: string, args?: string): string {
 export function normalizeCommandBody(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) return trimmed;
-  const match = trimmed.match(/^\/([^\s:]+)\s*:(.*)$/);
-  if (!match) return trimmed;
-  const [, command, rest] = match;
-  const normalizedRest = rest.trimStart();
-  return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+
+  const colonMatch = trimmed.match(/^\/([^\s:]+)\s*:(.*)$/);
+  const normalized = colonMatch
+    ? (() => {
+        const [, command, rest] = colonMatch;
+        const normalizedRest = rest.trimStart();
+        return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+      })()
+    : trimmed;
+
+  const lowered = normalized.toLowerCase();
+  const exact = TEXT_ALIAS_MAP.get(lowered);
+  if (exact) return exact.canonical;
+
+  const tokenMatch = normalized.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
+  if (!tokenMatch) return normalized;
+  const [, token, rest] = tokenMatch;
+  const tokenKey = `/${token.toLowerCase()}`;
+  const tokenSpec = TEXT_ALIAS_MAP.get(tokenKey);
+  if (!tokenSpec) return normalized;
+  if (rest && !tokenSpec.acceptsArgs) return normalized;
+  const normalizedRest = rest?.trimStart();
+  return normalizedRest
+    ? `${tokenSpec.canonical} ${normalizedRest}`
+    : tokenSpec.canonical;
 }
 
 export function getCommandDetection(): { exact: Set<string>; regex: RegExp } {

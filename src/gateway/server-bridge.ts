@@ -80,6 +80,7 @@ import {
   type SessionsPatchResult,
 } from "./session-utils.js";
 import { applySessionsPatchToStore } from "./sessions-patch.js";
+import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
 import { formatForLog } from "./ws-log.js";
 
 export type BridgeHandlersContext = {
@@ -314,93 +315,20 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
 
           const p = params as SessionsResolveParams;
           const cfg = loadConfig();
-
-          const key = typeof p.key === "string" ? p.key.trim() : "";
-          const label = typeof p.label === "string" ? p.label.trim() : "";
-          const hasKey = key.length > 0;
-          const hasLabel = label.length > 0;
-          if (hasKey && hasLabel) {
+          const resolved = resolveSessionKeyFromResolveParams({ cfg, p });
+          if (!resolved.ok) {
             return {
               ok: false,
               error: {
-                code: ErrorCodes.INVALID_REQUEST,
-                message: "Provide either key or label (not both)",
-              },
-            };
-          }
-          if (!hasKey && !hasLabel) {
-            return {
-              ok: false,
-              error: {
-                code: ErrorCodes.INVALID_REQUEST,
-                message: "Either key or label is required",
-              },
-            };
-          }
-
-          if (hasKey) {
-            const target = resolveGatewaySessionStoreTarget({ cfg, key });
-            const store = loadSessionStore(target.storePath);
-            const existingKey = target.storeKeys.find(
-              (candidate) => store[candidate],
-            );
-            if (!existingKey) {
-              return {
-                ok: false,
-                error: {
-                  code: ErrorCodes.INVALID_REQUEST,
-                  message: `No session found: ${key}`,
-                },
-              };
-            }
-            return {
-              ok: true,
-              payloadJSON: JSON.stringify({
-                ok: true,
-                key: target.canonicalKey,
-              }),
-            };
-          }
-
-          const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-          const list = listSessionsFromStore({
-            cfg,
-            storePath,
-            store,
-            opts: {
-              includeGlobal: p.includeGlobal === true,
-              includeUnknown: p.includeUnknown === true,
-              label,
-              agentId: p.agentId,
-              spawnedBy: p.spawnedBy,
-              limit: 2,
-            },
-          });
-          if (list.sessions.length === 0) {
-            return {
-              ok: false,
-              error: {
-                code: ErrorCodes.INVALID_REQUEST,
-                message: `No session found with label: ${label}`,
-              },
-            };
-          }
-          if (list.sessions.length > 1) {
-            const keys = list.sessions.map((s) => s.key).join(", ");
-            return {
-              ok: false,
-              error: {
-                code: ErrorCodes.INVALID_REQUEST,
-                message: `Multiple sessions found with label: ${label} (${keys})`,
+                code: resolved.error.code,
+                message: resolved.error.message,
+                details: resolved.error.details,
               },
             };
           }
           return {
             ok: true,
-            payloadJSON: JSON.stringify({
-              ok: true,
-              key: list.sessions[0]?.key,
-            }),
+            payloadJSON: JSON.stringify({ ok: true, key: resolved.key }),
           };
         }
         case "sessions.patch": {

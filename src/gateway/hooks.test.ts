@@ -66,6 +66,16 @@ describe("gateway hooks helpers", () => {
       expect(ok.value.sessionKey).toBe("hook:fixed");
       expect(ok.value.provider).toBe("last");
       expect(ok.value.name).toBe("Hook");
+      expect(ok.value.deliver).toBe(true);
+    }
+
+    const explicitNoDeliver = normalizeAgentPayload(
+      { message: "hello", deliver: false },
+      { idFactory: () => "fixed" },
+    );
+    expect(explicitNoDeliver.ok).toBe(true);
+    if (explicitNoDeliver.ok) {
+      expect(explicitNoDeliver.value.deliver).toBe(false);
     }
 
     const imsg = normalizeAgentPayload(

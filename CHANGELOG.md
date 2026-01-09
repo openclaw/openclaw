@@ -8,13 +8,16 @@
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
+- Discord: fix forum thread starters and cache channel lookups for thread context. (#585) — thanks @thewilloftheshadow
 - Commands: accept /models as an alias for /model.
+- Commands: add `/usage` as an alias for `/status`. (#492) — thanks @lc0rp
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Gateway: decode dns-sd escaped UTF-8 in discovery output and show scan progress immediately. — thanks @steipete
 - Agent: add claude-cli/opus-4.5 runner via Claude CLI with resume support (tools disabled).
 - CLI: move `clawdbot message` to subcommands (`message send|poll|…`), fold Discord/Slack/Telegram/WhatsApp tools into `message`, and require `--provider` unless only one provider is configured.
 - CLI: improve `logs` output (pretty/plain/JSONL), add gateway unreachable hint, and document logging.
+- Hooks: default hook agent delivery to true. (#533) — thanks @mcinteerj
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
 - Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223
 - Deps: bump Pi to 0.40.0 and drop pi-ai patch (upstream 429 fix). (#543) — thanks @mcinteerj
@@ -89,7 +92,7 @@
 - Status: show Verbose/Elevated only when enabled.
 - Status: filter usage summary to the active model provider.
 - Status: map model providers to usage sources so unrelated usage doesn’t appear.
-- Status: allow Claude usage snapshot fallback via claude.ai session cookie (`CLAUDE_AI_SESSION_KEY` / `CLAUDE_WEB_COOKIE`) when OAuth token lacks `user:profile`.
+- Status: fix Claude usage snapshots when `anthropic:default` is a setup-token lacking `user:profile` by preferring `anthropic:claude-cli`; optional claude.ai fallback via `CLAUDE_AI_SESSION_KEY` / `CLAUDE_WEB_COOKIE`.
 - Commands: allow /elevated off in groups without a mention; keep /elevated on mention-gated.
 - Commands: keep multi-directive messages from clearing directive handling.
 - Commands: warn when /elevated runs in direct (unsandboxed) runtime.
