@@ -55,6 +55,7 @@
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
+- Onboarding: clarify WhatsApp owner number prompt and label pairing phone number.
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
 - Onboarding/Configure: add OpenAI API key flow that stores in shared `~/.clawdbot/.env` for launchd; simplify Anthropic token prompt order.

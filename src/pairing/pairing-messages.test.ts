@@ -26,7 +26,7 @@ describe("buildPairingReply", () => {
     },
     {
       provider: "whatsapp",
-      idLine: "Your WhatsApp sender id: +15550003333",
+      idLine: "Your WhatsApp phone number: +15550003333",
       code: "MNO345",
     },
   ] as const;

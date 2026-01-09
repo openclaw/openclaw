@@ -43,6 +43,7 @@ If you want pairing instead of allowlist, set `whatsapp.dmPolicy` to `pairing`. 
 
 ### Personal number (fallback)
 Quick fallback: run Clawdbot on **your own number**. Message yourself (WhatsApp “Message yourself”) for testing so you don’t spam contacts. Expect to read verification codes on your main phone during setup and experiments. **Must enable self-chat mode.**
+When the wizard asks for your personal WhatsApp number, enter the phone you will message from (the owner/sender), not the assistant number.
 
 **Sample config (personal number, self-chat):**
 ```json
