@@ -1212,7 +1212,6 @@ export type AgentDefaultsConfig = {
       | "msteams"
       | "signal"
       | "imessage"
-      | "msteams"
       | "none";
     /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
     to?: string;
