@@ -146,6 +146,8 @@ const resolveDevWorkspaceDir = (
   env: NodeJS.ProcessEnv = process.env,
 ): string => {
   const baseDir = resolveDefaultAgentWorkspaceDir(env, os.homedir);
+  const profile = env.CLAWDBOT_PROFILE?.trim().toLowerCase();
+  if (profile === "dev") return baseDir;
   return `${baseDir}-${DEV_AGENT_WORKSPACE_SUFFIX}`;
 };
 
@@ -536,7 +538,10 @@ async function runGatewayCommand(
   opts: GatewayRunOpts,
   params: GatewayRunParams = {},
 ) {
-  if (opts.reset && !opts.dev) {
+  const isDevProfile = process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() ===
+    "dev";
+  const devMode = Boolean(opts.dev) || isDevProfile;
+  if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");
     defaultRuntime.exit(1);
     return;
@@ -577,7 +582,7 @@ async function runGatewayCommand(
     process.env.CLAWDBOT_RAW_STREAM_PATH = rawStreamPath;
   }
 
-  if (opts.dev) {
+  if (devMode) {
     await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
 
