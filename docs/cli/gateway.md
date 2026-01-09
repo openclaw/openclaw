@@ -39,6 +39,8 @@ Notes:
 - `--password <password>`: password override (also sets `CLAWDBOT_GATEWAY_PASSWORD` for the process).
 - `--tailscale <off|serve|funnel>`: expose the Gateway via Tailscale.
 - `--tailscale-reset-on-exit`: reset Tailscale serve/funnel config on shutdown.
+- `--dev`: create a dev config + workspace if missing (skips BOOTSTRAP.md).
+- `--reset`: recreate the dev config (requires `--dev`).
 - `--force`: kill any existing listener on the selected port before starting.
 - `--verbose`: verbose logs.
 - `--claude-cli-logs`: only show claude-cli logs in the console (and enable its stdout/stderr).
@@ -81,6 +83,25 @@ If multiple gateways are reachable, it prints all of them and warns this is an u
 clawdbot gateway status
 clawdbot gateway status --json
 ```
+
+#### Remote over SSH (Mac app parity)
+
+The macOS app “Remote over SSH” mode uses a local port-forward so the remote gateway (which may be bound to loopback only) becomes reachable at `ws://127.0.0.1:<port>`.
+
+CLI equivalent:
+
+```bash
+clawdbot gateway status --ssh steipete@peters-mac-studio-1
+```
+
+Options:
+- `--ssh <target>`: `user@host` or `user@host:port` (port defaults to `22`).
+- `--ssh-identity <path>`: identity file.
+- `--ssh-auto`: pick the first discovered bridge host as SSH target (LAN/WAB only).
+
+Config (optional, used as defaults):
+- `gateway.remote.sshTarget`
+- `gateway.remote.sshIdentity`
 
 ### `gateway call <method>`
 

@@ -1,13 +1,18 @@
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 
 import type { Command } from "commander";
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { gatewayStatusCommand } from "../commands/gateway-status.js";
+import { moveToTrash } from "../commands/onboard-helpers.js";
 import {
   CONFIG_PATH_CLAWDBOT,
   type GatewayAuthMode,
   loadConfig,
   readConfigFileSnapshot,
   resolveGatewayPort,
+  writeConfigFile,
 } from "../config/config.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
@@ -34,6 +39,7 @@ import {
 } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
+import { resolveUserPath } from "../utils.js";
 import { forceFreePortAndWait } from "./ports.js";
 import { withProgress } from "./progress.js";
 
@@ -62,6 +68,8 @@ type GatewayRunOpts = {
   compact?: boolean;
   rawStream?: boolean;
   rawStreamPath?: unknown;
+  dev?: boolean;
+  reset?: boolean;
 };
 
 type GatewayRunParams = {
@@ -69,6 +77,33 @@ type GatewayRunParams = {
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
+const DEV_IDENTITY_NAME = "Clawdbot Dev";
+const DEV_IDENTITY_THEME = "helpful debug droid";
+const DEV_IDENTITY_EMOJI = "🤖";
+const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
+const DEV_AGENTS_TEMPLATE = `# AGENTS.md - Clawdbot Dev Workspace
+
+Default dev workspace for clawdbot gateway --dev.
+
+- Keep replies concise and direct.
+- Prefer observable debugging steps and logs.
+- Avoid destructive actions unless asked.
+`;
+const DEV_SOUL_TEMPLATE = `# SOUL.md - Dev Persona
+
+Helpful robotic debugging assistant.
+
+- Concise, structured answers.
+- Ask for missing context before guessing.
+- Prefer reproducible steps and logs.
+`;
+const DEV_IDENTITY_TEMPLATE = `# IDENTITY.md - Agent Identity
+
+- Name: ${DEV_IDENTITY_NAME}
+- Creature: debug droid
+- Vibe: ${DEV_IDENTITY_THEME}
+- Emoji: ${DEV_IDENTITY_EMOJI}
+`;
 
 type GatewayRunSignalAction = "stop" | "restart";
 
@@ -92,6 +127,72 @@ const toOptionString = (value: unknown): string | undefined => {
     return value.toString();
   return undefined;
 };
+
+const resolveDevWorkspaceDir = (
+  env: NodeJS.ProcessEnv = process.env,
+): string => {
+  const baseDir = resolveDefaultAgentWorkspaceDir(env, os.homedir);
+  return `${baseDir}-${DEV_AGENT_WORKSPACE_SUFFIX}`;
+};
+
+async function writeFileIfMissing(filePath: string, content: string) {
+  try {
+    await fs.promises.writeFile(filePath, content, {
+      encoding: "utf-8",
+      flag: "wx",
+    });
+  } catch (err) {
+    const anyErr = err as { code?: string };
+    if (anyErr.code !== "EEXIST") throw err;
+  }
+}
+
+async function ensureDevWorkspace(dir: string) {
+  const resolvedDir = resolveUserPath(dir);
+  await fs.promises.mkdir(resolvedDir, { recursive: true });
+  await writeFileIfMissing(
+    path.join(resolvedDir, "AGENTS.md"),
+    DEV_AGENTS_TEMPLATE,
+  );
+  await writeFileIfMissing(
+    path.join(resolvedDir, "SOUL.md"),
+    DEV_SOUL_TEMPLATE,
+  );
+  await writeFileIfMissing(
+    path.join(resolvedDir, "IDENTITY.md"),
+    DEV_IDENTITY_TEMPLATE,
+  );
+}
+
+async function ensureDevGatewayConfig(opts: { reset?: boolean }) {
+  const configExists = fs.existsSync(CONFIG_PATH_CLAWDBOT);
+  if (opts.reset && configExists) {
+    await moveToTrash(CONFIG_PATH_CLAWDBOT, defaultRuntime);
+  }
+
+  const shouldWrite = opts.reset || !configExists;
+  if (!shouldWrite) return;
+
+  const workspace = resolveDevWorkspaceDir();
+  await writeConfigFile({
+    gateway: {
+      mode: "local",
+      bind: "loopback",
+    },
+    agent: {
+      workspace,
+      skipBootstrap: true,
+    },
+    identity: {
+      name: DEV_IDENTITY_NAME,
+      theme: DEV_IDENTITY_THEME,
+      emoji: DEV_IDENTITY_EMOJI,
+    },
+  });
+  await ensureDevWorkspace(workspace);
+  defaultRuntime.log(`Dev config ready: ${CONFIG_PATH_CLAWDBOT}`);
+  defaultRuntime.log(`Dev workspace ready: ${resolveUserPath(workspace)}`);
+}
 
 type GatewayDiscoverOpts = {
   timeout?: string;
@@ -403,6 +504,11 @@ async function runGatewayCommand(
   opts: GatewayRunOpts,
   params: GatewayRunParams = {},
 ) {
+  if (opts.reset && !opts.dev) {
+    defaultRuntime.error("Use --reset with --dev.");
+    defaultRuntime.exit(1);
+    return;
+  }
   if (params.legacyTokenEnv) {
     const legacyToken = process.env.CLAWDIS_GATEWAY_TOKEN;
     if (legacyToken && !process.env.CLAWDBOT_GATEWAY_TOKEN) {
@@ -437,6 +543,10 @@ async function runGatewayCommand(
   const rawStreamPath = toOptionString(opts.rawStreamPath);
   if (rawStreamPath) {
     process.env.CLAWDBOT_RAW_STREAM_PATH = rawStreamPath;
+  }
+
+  if (opts.dev) {
+    await ensureDevGatewayConfig({ reset: Boolean(opts.reset) });
   }
 
   const cfg = loadConfig();
@@ -693,6 +803,12 @@ function addGatewayRunCommand(
       false,
     )
     .option(
+      "--dev",
+      "Create a dev config + workspace if missing (no BOOTSTRAP.md)",
+      false,
+    )
+    .option("--reset", "Recreate dev config (requires --dev)", false)
+    .option(
       "--force",
       "Kill any existing listener on the target port before starting",
       false,
@@ -824,6 +940,16 @@ export function registerGatewayCli(program: Command) {
     .option(
       "--url <url>",
       "Explicit Gateway WebSocket URL (still probes localhost)",
+    )
+    .option(
+      "--ssh <target>",
+      "SSH target for remote gateway tunnel (user@host or user@host:port)",
+    )
+    .option("--ssh-identity <path>", "SSH identity file path")
+    .option(
+      "--ssh-auto",
+      "Try to derive an SSH target from Bonjour discovery",
+      false,
     )
     .option("--token <token>", "Gateway token (applies to all probes)")
     .option("--password <password>", "Gateway password (applies to all probes)")

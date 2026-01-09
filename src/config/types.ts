@@ -875,6 +875,13 @@ export type GatewayTailscaleConfig = {
 export type GatewayRemoteConfig = {
   /** Remote Gateway WebSocket URL (ws:// or wss://). */
   url?: string;
+  /**
+   * Remote gateway over SSH, forwarding the gateway port to localhost.
+   * Format: "user@host" or "user@host:port" (port defaults to 22).
+   */
+  sshTarget?: string;
+  /** Optional SSH identity file path. */
+  sshIdentity?: string;
   /** Token for remote auth (when the gateway requires token auth). */
   token?: string;
   /** Password for remote auth (when the gateway requires password auth). */
