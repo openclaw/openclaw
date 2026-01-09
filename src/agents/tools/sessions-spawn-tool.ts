@@ -9,6 +9,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
+import type { GatewayMessageProvider } from "../../utils/message-provider.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { registerSubagentRun } from "../subagent-registry.js";
@@ -35,7 +36,7 @@ const SessionsSpawnToolSchema = Type.Object({
 
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
-  agentProvider?: string;
+  agentProvider?: GatewayMessageProvider;
   sandboxed?: boolean;
 }): AnyAgentTool {
   return {

@@ -155,13 +155,14 @@ export const agentHandlers: GatewayRequestHandlers = {
         ? sessionEntry.lastTo.trim()
         : "";
 
+    const wantsDelivery = request.deliver === true;
+
     const resolvedProvider = (() => {
       if (requestedProvider === "last") {
         // WebChat is not a deliverable surface. Treat it as "unset" for routing,
         // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        return lastProvider && lastProvider !== "webchat"
-          ? lastProvider
-          : "whatsapp";
+        if (lastProvider && lastProvider !== "webchat") return lastProvider;
+        return wantsDelivery ? "whatsapp" : "webchat";
       }
       if (
         requestedProvider === "whatsapp" ||
@@ -173,9 +174,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       ) {
         return requestedProvider;
       }
-      return lastProvider && lastProvider !== "webchat"
-        ? lastProvider
-        : "whatsapp";
+      if (lastProvider && lastProvider !== "webchat") return lastProvider;
+      return wantsDelivery ? "whatsapp" : "webchat";
     })();
 
     const resolvedTo = (() => {

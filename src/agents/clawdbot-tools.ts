@@ -1,4 +1,5 @@
 import type { ClawdbotConfig } from "../config/config.js";
+import type { GatewayMessageProvider } from "../utils/message-provider.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
@@ -17,7 +18,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 export function createClawdbotTools(options?: {
   browserControlUrl?: string;
   agentSessionKey?: string;
-  agentProvider?: string;
+  agentProvider?: GatewayMessageProvider;
   agentAccountId?: string;
   agentDir?: string;
   sandboxed?: boolean;

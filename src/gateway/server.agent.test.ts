@@ -103,9 +103,54 @@ describe("gateway server agent", () => {
     const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
     expect(call.sessionKey).toBe("agent:main:subagent:abc");
     expect(call.sessionId).toBe("sess-sub");
+    expectProviders(call, "webchat");
+    expect(call.deliver).toBe(false);
+    expect(call.to).toBeUndefined();
 
     ws.close();
     await server.close();
+  });
+
+  test("agent falls back to whatsapp when delivery requested and no last provider exists", async () => {
+    testState.allowFrom = ["+1555"];
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-missing-provider",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      deliver: true,
+      idempotencyKey: "idem-agent-missing-provider",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectProviders(call, "whatsapp");
+    expect(call.to).toBe("+1555");
+    expect(call.deliver).toBe(true);
+    expect(call.sessionId).toBe("sess-main-missing-provider");
+
+    ws.close();
+    await server.close();
+    testState.allowFrom = undefined;
   });
 
   test("agent routes main last-channel whatsapp", async () => {

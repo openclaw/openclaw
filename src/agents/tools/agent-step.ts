@@ -23,6 +23,7 @@ export async function runAgentStep(params: {
   message: string;
   extraSystemPrompt: string;
   timeoutMs: number;
+  provider?: string;
   lane?: string;
 }): Promise<string | undefined> {
   const stepIdem = crypto.randomUUID();
@@ -33,6 +34,7 @@ export async function runAgentStep(params: {
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
+      provider: params.provider ?? "webchat",
       lane: params.lane ?? "nested",
       extraSystemPrompt: params.extraSystemPrompt,
     },
