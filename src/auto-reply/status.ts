@@ -267,9 +267,9 @@ export function buildStatusMessage(args: StatusArgs): string {
   const optionParts = [
     `Runtime: ${runtime.label}`,
     `Think: ${thinkLevel}`,
-    `Verbose: ${verboseLevel}`,
+    verboseLevel === "on" ? "Verbose" : null,
     reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
-    `Elevated: ${elevatedLevel}`,
+    elevatedLevel === "on" ? "Elevated" : null,
   ];
   const optionsLine = optionParts.filter(Boolean).join(" · ");
   const activationParts = [

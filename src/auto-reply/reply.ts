@@ -329,11 +329,19 @@ export async function getReplyFromConfig(
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
-  const disableElevatedInGroup = isGroup && ctx.WasMentioned !== true;
   let parsedDirectives = parseInlineDirectives(rawBody, {
     modelAliases: configuredAliases,
-    disableElevated: disableElevatedInGroup,
   });
+  if (isGroup && ctx.WasMentioned !== true && parsedDirectives.hasElevatedDirective) {
+    if (parsedDirectives.elevatedLevel !== "off") {
+      parsedDirectives = {
+        ...parsedDirectives,
+        hasElevatedDirective: false,
+        elevatedLevel: undefined,
+        rawElevatedLevel: undefined,
+      };
+    }
+  }
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
@@ -348,7 +356,13 @@ export async function getReplyFromConfig(
       ? stripMentions(stripped, ctx, cfg, agentId)
       : stripped;
     if (noMentions.trim().length > 0) {
-      parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+      const directiveOnlyCheck = parseInlineDirectives(noMentions, {
+        modelAliases: configuredAliases,
+        disableElevated: disableElevatedInGroup,
+      });
+      if (directiveOnlyCheck.cleaned.trim().length > 0) {
+        parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+      }
     }
   }
   const directives = commandAuthorized

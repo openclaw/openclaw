@@ -74,8 +74,8 @@ describe("buildStatusMessage", () => {
     expect(text).toContain("Session: agent:main:main");
     expect(text).toContain("updated 10m ago");
     expect(text).toContain("Think: medium");
-    expect(text).toContain("Verbose: off");
-    expect(text).toContain("Elevated: on");
+    expect(text).not.toContain("Verbose");
+    expect(text).toContain("Elevated");
     expect(text).toContain("Queue: collect");
   });
 

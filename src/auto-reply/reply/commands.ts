@@ -37,6 +37,7 @@ import {
   normalizeCommandBody,
   shouldHandleTextCommands,
 } from "../commands-registry.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import {
   normalizeGroupActivation,
   parseActivationCommand,
@@ -424,6 +425,7 @@ export async function handleCommands(params: {
     try {
       const usageSummary = await loadProviderUsageSummary({
         timeoutMs: 3500,
+        providers: [normalizeProviderId(provider)],
       });
       usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
     } catch {

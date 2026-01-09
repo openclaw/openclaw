@@ -24,7 +24,12 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import {
+  resolveAgentIdFromSessionKey,
+  resolveAgentMainSessionKey,
+  type SessionEntry,
+  saveSessionStore,
+} from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
@@ -57,6 +62,8 @@ const SYSTEM_MARK = "⚙️";
 const formatOptionsLine = (options: string) => `Options: ${options}.`;
 const withOptions = (line: string, options: string) =>
   `${line}\n${formatOptionsLine(options)}`;
+const formatElevatedRuntimeHint = () =>
+  `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
 
 const maskApiKey = (value: string): string => {
   const trimmed = value.trim();
@@ -350,6 +357,21 @@ export async function handleDirectiveOnly(params: {
     currentReasoningLevel,
     currentElevatedLevel,
   } = params;
+  const runtimeIsSandboxed = (() => {
+    const sandboxMode = params.cfg.agent?.sandbox?.mode ?? "off";
+    if (sandboxMode === "off") return false;
+    const sessionKey = params.sessionKey?.trim();
+    if (!sessionKey) return false;
+    const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const mainKey = resolveAgentMainSessionKey({
+      cfg: params.cfg,
+      agentId,
+    });
+    if (sandboxMode === "all") return true;
+    return sessionKey !== mainKey;
+  })();
+  const shouldHintDirectRuntime =
+    directives.hasElevatedDirective && !runtimeIsSandboxed;
 
   if (directives.hasModelDirective) {
     const modelDirective = directives.rawModelDirective?.trim().toLowerCase();
@@ -463,7 +485,12 @@ export async function handleDirectiveOnly(params: {
       }
       const level = currentElevatedLevel ?? "off";
       return {
-        text: withOptions(`Current elevated level: ${level}.`, "on, off"),
+        text: [
+          withOptions(`Current elevated level: ${level}.`, "on, off"),
+          shouldHintDirectRuntime ? formatElevatedRuntimeHint() : null,
+        ]
+          .filter(Boolean)
+          .join("\n"),
       };
     }
     return {
@@ -681,6 +708,7 @@ export async function handleDirectiveOnly(params: {
         ? `${SYSTEM_MARK} Elevated mode disabled.`
         : `${SYSTEM_MARK} Elevated mode enabled.`,
     );
+    if (shouldHintDirectRuntime) parts.push(formatElevatedRuntimeHint());
   }
   if (modelSelection) {
     const label = `${modelSelection.provider}/${modelSelection.model}`;

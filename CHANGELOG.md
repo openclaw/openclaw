@@ -56,6 +56,11 @@
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
 - TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
+- Status: show Verbose/Elevated only when enabled.
+- Status: filter usage summary to the active model provider.
+- Commands: allow /elevated off in groups without a mention; keep /elevated on mention-gated.
+- Commands: keep multi-directive messages from clearing directive handling.
+- Commands: warn when /elevated runs in direct (unsandboxed) runtime.
 - Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
 - Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
 
