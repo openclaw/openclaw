@@ -825,14 +825,12 @@ export class ClawdbotApp extends LitElement {
     const tokenRaw = params.get("token");
     const passwordRaw = params.get("password");
     const sessionRaw = params.get("session");
-    let changed = false;
     let shouldCleanUrl = false;
 
     if (tokenRaw != null) {
       const token = tokenRaw.trim();
       if (token && !this.settings.token) {
         this.applySettings({ ...this.settings, token });
-        changed = true;
       }
       params.delete("token");
       shouldCleanUrl = true;
@@ -842,7 +840,6 @@ export class ClawdbotApp extends LitElement {
       const password = passwordRaw.trim();
       if (password) {
         this.password = password;
-        changed = true;
       }
       params.delete("password");
       shouldCleanUrl = true;
@@ -852,7 +849,6 @@ export class ClawdbotApp extends LitElement {
       const session = sessionRaw.trim();
       if (session) {
         this.sessionKey = session;
-        changed = true;
       }
       params.delete("session");
       shouldCleanUrl = true;
