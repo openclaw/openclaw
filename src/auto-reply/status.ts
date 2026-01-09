@@ -6,6 +6,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "../agents/defaults.js";
+import { resolveModelAuthMode } from "../agents/model-auth.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import {
   derivePromptTokens,
@@ -14,13 +15,16 @@ import {
 } from "../agents/usage.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
-  resolveMainSessionKey,
   resolveSessionFilePath,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveCommitHash } from "../infra/git-commit.js";
-import { VERSION } from "../version.js";
+import {
+  estimateUsageCost,
+  formatTokenCount as formatTokenCountShared,
+  formatUsd,
+  resolveModelCostConfig,
+} from "../utils/usage-format.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -29,6 +33,8 @@ import type {
 } from "./thinking.js";
 
 type AgentConfig = NonNullable<ClawdbotConfig["agent"]>;
+
+export const formatTokenCount = formatTokenCountShared;
 
 type QueueStatus = {
   mode?: string;
@@ -40,6 +46,7 @@ type QueueStatus = {
 };
 
 type StatusArgs = {
+  config?: ClawdbotConfig;
   agent: AgentConfig;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
@@ -53,24 +60,7 @@ type StatusArgs = {
   usageLine?: string;
   queue?: QueueStatus;
   includeTranscriptUsage?: boolean;
-  now?: number;
 };
-
-const formatAge = (ms?: number | null) => {
-  if (!ms || ms < 0) return "unknown";
-  const minutes = Math.round(ms / 60_000);
-  if (minutes < 1) return "just now";
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.round(minutes / 60);
-  if (hours < 48) return `${hours}h ago`;
-  const days = Math.round(hours / 24);
-  return `${days}d ago`;
-};
-
-const formatKTokens = (value: number) =>
-  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
-
-export const formatTokenCount = (value: number) => formatKTokens(value);
 
 const formatTokens = (
   total: number | null | undefined,
@@ -78,12 +68,12 @@ const formatTokens = (
 ) => {
   const ctx = contextTokens ?? null;
   if (total == null) {
-    const ctxLabel = ctx ? formatKTokens(ctx) : "?";
-    return `unknown/${ctxLabel}`;
+    const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
+    return `?/${ctxLabel}`;
   }
   const pct = ctx ? Math.min(999, Math.round((total / ctx) * 100)) : null;
-  const totalLabel = formatKTokens(total);
-  const ctxLabel = ctx ? formatKTokens(ctx) : "?";
+  const totalLabel = formatTokenCount(total);
+  const ctxLabel = ctx ? formatTokenCount(ctx) : "?";
   return `${totalLabel}/${ctxLabel}${pct !== null ? ` (${pct}%)` : ""}`;
 };
 
@@ -171,8 +161,15 @@ const readUsageFromSessionLog = (
   }
 };
 
+const formatUsagePair = (input?: number | null, output?: number | null) => {
+  if (input == null && output == null) return null;
+  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const outputLabel =
+    typeof output === "number" ? formatTokenCount(output) : "?";
+  return `usage ${inputLabel} in / ${outputLabel} out`;
+};
+
 export function buildStatusMessage(args: StatusArgs): string {
-  const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
   const resolved = resolveConfiguredModelRef({
     cfg: { agent: args.agent ?? {} },
@@ -188,6 +185,8 @@ export function buildStatusMessage(args: StatusArgs): string {
     lookupContextTokens(model) ??
     DEFAULT_CONTEXT_TOKENS;
 
+  let inputTokens = entry?.inputTokens;
+  let outputTokens = entry?.outputTokens;
   let totalTokens =
     entry?.totalTokens ??
     (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
@@ -205,6 +204,8 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (!contextTokens && logUsage.model) {
         contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
       }
+      if (!inputTokens || inputTokens === 0) inputTokens = logUsage.input;
+      if (!outputTokens || outputTokens === 0) outputTokens = logUsage.output;
     }
   }
 
@@ -218,33 +219,6 @@ export function buildStatusMessage(args: StatusArgs): string {
     args.agent?.elevatedDefault ??
     "on";
 
-  const runtime = (() => {
-    const sandboxMode = args.agent?.sandbox?.mode ?? "off";
-    if (sandboxMode === "off") return { label: "direct" };
-    const sessionScope = args.sessionScope ?? "per-sender";
-    const mainKey = resolveMainSessionKey({
-      session: { scope: sessionScope },
-    });
-    const sessionKey = args.sessionKey?.trim();
-    const sandboxed = sessionKey
-      ? sandboxMode === "all" || sessionKey !== mainKey.trim()
-      : false;
-    const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
-    return {
-      label: `${runtime}/${sandboxMode}`,
-    };
-  })();
-
-  const updatedAt = entry?.updatedAt;
-  const sessionLine = [
-    `Session: ${args.sessionKey ?? "unknown"}`,
-    typeof updatedAt === "number"
-      ? `updated ${formatAge(now - updatedAt)}`
-      : "no activity",
-  ]
-    .filter(Boolean)
-    .join(" • ");
-
   const isGroupSession =
     entry?.chatType === "group" ||
     entry?.chatType === "room" ||
@@ -255,52 +229,66 @@ export function buildStatusMessage(args: StatusArgs): string {
     ? (args.groupActivation ?? entry?.groupActivation ?? "mention")
     : undefined;
 
-  const contextLine = [
-    `Context: ${formatTokens(totalTokens, contextTokens ?? null)}`,
-    `🧹 Compactions: ${entry?.compactionCount ?? 0}`,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const authMode =
+    args.modelAuth ?? resolveModelAuthMode(provider, args.config);
+  const showCost = authMode === "api-key";
+  const costConfig = showCost
+    ? resolveModelCostConfig({
+        provider,
+        model,
+        config: args.config,
+      })
+    : undefined;
+  const hasUsage =
+    typeof inputTokens === "number" || typeof outputTokens === "number";
+  const cost =
+    showCost && hasUsage
+      ? estimateUsageCost({
+          usage: {
+            input: inputTokens ?? undefined,
+            output: outputTokens ?? undefined,
+          },
+          cost: costConfig,
+        })
+      : undefined;
+  const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
+
+  const parts: Array<string | null> = [];
+  parts.push(`status ${args.sessionKey ?? "unknown"}`);
+
+  const modelLabel = model ? `${provider}/${model}` : "unknown";
+  const authLabel = authMode && authMode !== "unknown" ? ` (${authMode})` : "";
+  parts.push(`model ${modelLabel}${authLabel}`);
+
+  const usagePair = formatUsagePair(inputTokens, outputTokens);
+  if (usagePair) parts.push(usagePair);
+  if (costLabel) parts.push(`cost ${costLabel}`);
+
+  const contextSummary = formatContextUsageShort(
+    totalTokens && totalTokens > 0 ? totalTokens : null,
+    contextTokens ?? null,
+  );
+  parts.push(contextSummary);
+  parts.push(`compactions ${entry?.compactionCount ?? 0}`);
+  parts.push(`think ${thinkLevel}`);
+  parts.push(`verbose ${verboseLevel}`);
+  parts.push(`reasoning ${reasoningLevel}`);
+  parts.push(`elevated ${elevatedLevel}`);
+  if (groupActivationValue) parts.push(`activation ${groupActivationValue}`);
 
   const queueMode = args.queue?.mode ?? "unknown";
   const queueDetails = formatQueueDetails(args.queue);
-  const optionParts = [
-    `Runtime: ${runtime.label}`,
-    `Think: ${thinkLevel}`,
-    verboseLevel === "on" ? "Verbose" : null,
-    reasoningLevel !== "off" ? `Reasoning: ${reasoningLevel}` : null,
-    elevatedLevel === "on" ? "Elevated" : null,
-  ];
-  const optionsLine = optionParts.filter(Boolean).join(" · ");
-  const activationParts = [
-    groupActivationValue ? `👥 Activation: ${groupActivationValue}` : null,
-    `🪢 Queue: ${queueMode}${queueDetails}`,
-  ];
-  const activationLine = activationParts.filter(Boolean).join(" · ");
+  parts.push(`queue ${queueMode}${queueDetails}`);
 
-  const modelLabel = model ? `${provider}/${model}` : "unknown";
-  const authLabel = args.modelAuth ? ` · 🔑 ${args.modelAuth}` : "";
-  const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
-  const commit = resolveCommitHash();
-  const versionLine = `🦞 ClawdBot ${VERSION}${commit ? ` (${commit})` : ""}`;
+  if (args.usageLine) parts.push(args.usageLine);
 
-  return [
-    versionLine,
-    modelLine,
-    `📚 ${contextLine}`,
-    args.usageLine,
-    `🧵 ${sessionLine}`,
-    `⚙️ ${optionsLine}`,
-    activationLine,
-  ]
-    .filter(Boolean)
-    .join("\n");
+  return parts.filter(Boolean).join(" · ");
 }
 
 export function buildHelpMessage(): string {
   return [
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink",
-    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id>",
+    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off",
   ].join("\n");
 }

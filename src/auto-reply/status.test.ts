@@ -63,20 +63,18 @@ describe("buildStatusMessage", () => {
       resolvedThink: "medium",
       resolvedVerbose: "off",
       queue: { mode: "collect", depth: 0 },
-      now: 10 * 60_000, // 10 minutes later
+      modelAuth: "api-key",
     });
 
-    expect(text).toContain("🦞 ClawdBot");
-    expect(text).toContain("🧠 Model:");
-    expect(text).toContain("Runtime: direct");
-    expect(text).toContain("Context: 16k/32k (50%)");
-    expect(text).toContain("🧹 Compactions: 2");
-    expect(text).toContain("Session: agent:main:main");
-    expect(text).toContain("updated 10m ago");
-    expect(text).toContain("Think: medium");
-    expect(text).not.toContain("Verbose");
-    expect(text).toContain("Elevated");
-    expect(text).toContain("Queue: collect");
+    expect(text).toContain("status agent:main:main");
+    expect(text).toContain("model anthropic/pi:opus (api-key)");
+    expect(text).toContain("Context 16k/32k (50%)");
+    expect(text).toContain("compactions 2");
+    expect(text).toContain("think medium");
+    expect(text).toContain("verbose off");
+    expect(text).toContain("reasoning off");
+    expect(text).toContain("elevated on");
+    expect(text).toContain("queue collect");
   });
 
   it("shows verbose/elevated labels only when enabled", () => {
@@ -91,10 +89,8 @@ describe("buildStatusMessage", () => {
       queue: { mode: "collect", depth: 0 },
     });
 
-    expect(text).toContain("Verbose");
-    expect(text).toContain("Elevated");
-    expect(text).not.toContain("Verbose:");
-    expect(text).not.toContain("Elevated:");
+    expect(text).toContain("verbose on");
+    expect(text).toContain("elevated on");
   });
 
   it("prefers model overrides over last-run model", () => {
@@ -115,9 +111,10 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:main",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
     });
 
-    expect(text).toContain("🧠 Model: openai/gpt-4.1-mini");
+    expect(text).toContain("model openai/gpt-4.1-mini");
   });
 
   it("keeps provider prefix from configured model", () => {
@@ -127,21 +124,23 @@ describe("buildStatusMessage", () => {
       },
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
     });
 
-    expect(text).toContain("🧠 Model: google-antigravity/claude-sonnet-4-5");
+    expect(text).toContain("model google-antigravity/claude-sonnet-4-5");
   });
 
   it("handles missing agent config gracefully", () => {
     const text = buildStatusMessage({
       agent: {},
       sessionScope: "per-sender",
-      webLinked: false,
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
     });
 
-    expect(text).toContain("🧠 Model:");
-    expect(text).toContain("Context:");
-    expect(text).toContain("Queue:");
+    expect(text).toContain("model");
+    expect(text).toContain("Context");
+    expect(text).toContain("queue collect");
   });
 
   it("includes group activation for group sessions", () => {
@@ -156,9 +155,10 @@ describe("buildStatusMessage", () => {
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
     });
 
-    expect(text).toContain("Activation: always");
+    expect(text).toContain("activation always");
   });
 
   it("shows queue details when overridden", () => {
@@ -175,10 +175,11 @@ describe("buildStatusMessage", () => {
         dropPolicy: "old",
         showDetails: true,
       },
+      modelAuth: "api-key",
     });
 
     expect(text).toContain(
-      "Queue: collect (depth 3 · debounce 2s · cap 5 · drop old)",
+      "queue collect (depth 3 · debounce 2s · cap 5 · drop old)",
     );
   });
 
@@ -190,12 +191,10 @@ describe("buildStatusMessage", () => {
       sessionScope: "per-sender",
       queue: { mode: "collect", depth: 0 },
       usageLine: "📊 Usage: Claude 80% left (5h)",
+      modelAuth: "api-key",
     });
 
-    const lines = text.split("\n");
-    const contextIndex = lines.findIndex((line) => line.startsWith("📚 "));
-    expect(contextIndex).toBeGreaterThan(-1);
-    expect(lines[contextIndex + 1]).toBe("📊 Usage: Claude 80% left (5h)");
+    expect(text).toContain("📊 Usage: Claude 80% left (5h)");
   });
 
   it("prefers cached prompt tokens from the session log", async () => {
@@ -255,9 +254,10 @@ describe("buildStatusMessage", () => {
         sessionScope: "per-sender",
         queue: { mode: "collect", depth: 0 },
         includeTranscriptUsage: true,
+        modelAuth: "api-key",
       });
 
-      expect(text).toContain("Context: 1.0k/32k");
+      expect(text).toContain("Context 1.0k/32k");
     } finally {
       restoreHomeEnv(previousHome);
       fs.rmSync(dir, { recursive: true, force: true });
