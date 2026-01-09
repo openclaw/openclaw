@@ -98,6 +98,35 @@ export function inferBasePathFromPathname(pathname: string): string {
   return `/${segments.join("/")}`;
 }
 
+export function iconForTab(tab: Tab): string {
+  switch (tab) {
+    case "chat":
+      return "💬";
+    case "overview":
+      return "📊";
+    case "connections":
+      return "🔗";
+    case "instances":
+      return "📡";
+    case "sessions":
+      return "📄";
+    case "cron":
+      return "⏰";
+    case "skills":
+      return "⚡️";
+    case "nodes":
+      return "🖥️";
+    case "config":
+      return "⚙️";
+    case "debug":
+      return "🐞";
+    case "logs":
+      return "🧾";
+    default:
+      return "📁";
+  }
+}
+
 export function titleForTab(tab: Tab) {
   switch (tab) {
     case "overview":

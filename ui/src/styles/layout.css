@@ -1,28 +1,28 @@
 .shell {
-  --shell-pad: 18px;
-  --shell-gap: 18px;
-  --shell-nav-col: minmax(220px, 280px);
-  --shell-topbar-row: auto;
+  --shell-pad: 16px;
+  --shell-gap: 16px;
+  --shell-nav-width: 220px;
+  --shell-topbar-height: 56px;
   --shell-focus-duration: 220ms;
   --shell-focus-ease: cubic-bezier(0.2, 0.85, 0.25, 1);
   min-height: 100vh;
   display: grid;
-  grid-template-columns: var(--shell-nav-col) minmax(0, 1fr);
-  grid-template-rows: var(--shell-topbar-row) 1fr;
+  grid-template-columns: var(--shell-nav-width) minmax(0, 1fr);
+  grid-template-rows: var(--shell-topbar-height) 1fr;
   grid-template-areas:
     "topbar topbar"
     "nav content";
-  gap: var(--shell-gap);
-  padding: var(--shell-pad);
+  gap: 0;
   animation: dashboard-enter 0.6s ease-out;
-  transition: padding var(--shell-focus-duration) var(--shell-focus-ease);
+  transition: grid-template-columns var(--shell-focus-duration) var(--shell-focus-ease);
+}
+
+.shell--nav-collapsed {
+  grid-template-columns: 0px minmax(0, 1fr);
 }
 
 .shell--chat-focus {
-  --shell-pad: 8px;
-  --shell-gap: 0px;
-  --shell-nav-col: 0px;
-  --shell-topbar-row: auto;
+  grid-template-columns: 0px minmax(0, 1fr);
 }
 
 .shell--chat-focus .content {
@@ -33,87 +33,145 @@
 .topbar {
   grid-area: topbar;
   position: sticky;
-  top: var(--shell-pad);
-  z-index: 20;
+  top: 0;
+  z-index: 40;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 16px 20px;
-  border: 1px solid var(--border);
-  border-radius: 18px;
-  background: linear-gradient(135deg, var(--chrome), rgba(255, 255, 255, 0.02));
+  gap: 16px;
+  padding: 0 20px;
+  height: var(--shell-topbar-height);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
   backdrop-filter: blur(18px);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.28);
-  overflow: hidden;
-  transform-origin: top center;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease),
-    transform var(--shell-focus-duration) var(--shell-focus-ease),
-    max-height var(--shell-focus-duration) var(--shell-focus-ease),
-    padding var(--shell-focus-duration) var(--shell-focus-ease),
-    border-width var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: max(0px, var(--topbar-height, 92px));
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar .nav-collapse-toggle {
+  width: 44px;
+  height: 44px;
+  margin-bottom: 0;
+}
+
+.topbar .nav-collapse-toggle__icon {
+  font-size: 22px;
 }
 
 .brand {
-  display: grid;
-  gap: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .brand-title {
   font-family: var(--font-display);
-  font-size: 20px;
-  letter-spacing: 0.6px;
+  font-size: 16px;
+  letter-spacing: 1px;
   text-transform: uppercase;
+  font-weight: 600;
+  line-height: 1.1;
 }
 
 .brand-sub {
+  font-size: 10px;
   color: var(--muted);
-  font-size: 12px;
-  letter-spacing: 1.2px;
+  letter-spacing: 0.8px;
   text-transform: uppercase;
+  line-height: 1;
 }
 
 .topbar-status {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 8px;
+}
+
+/* Smaller pill and theme toggle in topbar */
+.topbar-status .pill {
+  padding: 4px 10px;
+  gap: 6px;
+  font-size: 11px;
+}
+
+.topbar-status .statusDot {
+  width: 6px;
+  height: 6px;
+}
+
+.topbar-status .theme-toggle {
+  --theme-item: 22px;
+  --theme-gap: 4px;
+  --theme-pad: 4px;
+}
+
+.topbar-status .theme-icon {
+  width: 12px;
+  height: 12px;
 }
 
 .nav {
   grid-area: nav;
-  position: sticky;
-  top: calc(
-    var(--shell-pad) + var(--topbar-height, 0px) + var(--shell-gap)
-  );
-  align-self: start;
-  max-height: calc(
-    100vh - var(--topbar-height, 0px) - var(--shell-gap) -
-      var(--shell-pad) - var(--shell-pad)
-  );
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 20px;
+  border-right: 1px solid var(--border);
   background: var(--panel);
-  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.25);
   backdrop-filter: blur(18px);
-  transform-origin: left center;
-  transition: opacity var(--shell-focus-duration) var(--shell-focus-ease),
-    transform var(--shell-focus-duration) var(--shell-focus-ease),
-    max-width var(--shell-focus-duration) var(--shell-focus-ease),
-    padding var(--shell-focus-duration) var(--shell-focus-ease),
-    border-width var(--shell-focus-duration) var(--shell-focus-ease);
-  max-width: 320px;
+  transition: width var(--shell-focus-duration) var(--shell-focus-ease),
+    padding var(--shell-focus-duration) var(--shell-focus-ease);
 }
 
 .shell--chat-focus .nav {
-  opacity: 0;
-  transform: translateX(-12px);
-  max-width: 0px;
+  width: 0;
   padding: 0;
   border-width: 0;
   overflow: hidden;
   pointer-events: none;
+}
+
+/* Collapsed nav sidebar - completely hidden */
+.nav--collapsed {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  overflow: hidden;
+  border: none;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Nav collapse toggle button */
+.nav-collapse-toggle {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 150ms ease, border-color 150ms ease;
+  margin-bottom: 16px;
+}
+
+.nav-collapse-toggle:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border);
+}
+
+:root[data-theme="light"] .nav-collapse-toggle:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+.nav-collapse-toggle__icon {
+  font-size: 16px;
+  color: var(--muted);
 }
 
 .nav-group {
@@ -130,27 +188,77 @@
   border-bottom: none;
 }
 
+.nav-group__items {
+  display: grid;
+  gap: 4px;
+}
+
+.nav-group--collapsed .nav-group__items {
+  display: none;
+}
+
 .nav-label {
-  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 4px 0;
+  font-size: 11px;
+  font-weight: 500;
   text-transform: uppercase;
-  letter-spacing: 1.6px;
-  color: var(--muted);
+  letter-spacing: 1.4px;
+  color: var(--text);
+  opacity: 0.7;
+  margin-bottom: 4px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.nav-label:hover {
+  opacity: 1;
+}
+
+.nav-label__text {
+  flex: 1;
+}
+
+.nav-label__chevron {
+  font-size: 12px;
+  opacity: 0.6;
 }
 
 .nav-item {
   position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  justify-content: flex-start;
+  gap: 8px;
   padding: 10px 12px 10px 14px;
   border-radius: 12px;
   border: 1px solid transparent;
-  background: rgba(255, 255, 255, 0.02);
+  background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: border-color 160ms ease, background 160ms ease, color 160ms ease,
-    transform 160ms ease;
+  text-decoration: none;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.nav-item__icon {
+  font-size: 16px;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.nav-item__text {
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .nav-item:hover {
@@ -162,11 +270,11 @@
 .nav-item::before {
   content: "";
   position: absolute;
-  left: 6px;
+  left: 0;
   top: 50%;
   width: 4px;
   height: 60%;
-  border-radius: 999px;
+  border-radius: 0 999px 999px 0;
   transform: translateY(-50%);
   background: transparent;
 }
@@ -174,8 +282,7 @@
 .nav-item.active {
   color: var(--text);
   border-color: rgba(245, 159, 74, 0.45);
-  background: rgba(245, 159, 74, 0.16);
-  transform: translateX(2px);
+  background: rgba(245, 159, 74, 0.12);
 }
 
 .nav-item.active::before {
@@ -190,13 +297,12 @@
   flex-direction: column;
   gap: 20px;
   min-height: 0;
+  overflow-y: auto; /* Enable vertical scrolling for pages with long content */
+  overflow-x: hidden;
 }
 
 .shell--chat .content {
-  min-height: calc(
-    100vh - var(--topbar-height, 0px) - var(--shell-gap) -
-      var(--shell-pad) - var(--shell-pad)
-  );
+  /* No-op: keep chat layout consistent with other tabs */
 }
 
 .docs-link {
@@ -262,6 +368,26 @@
 .page-meta {
   display: flex;
   gap: 10px;
+}
+
+/* Chat view: header and controls side by side */
+.content--chat .content-header {
+  flex-direction: row;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.content--chat .content-header > div:first-child {
+  text-align: left;
+}
+
+.content--chat .page-meta {
+  justify-content: flex-start;
+}
+
+.content--chat .chat-controls {
+  flex-shrink: 0;
 }
 
 .grid {

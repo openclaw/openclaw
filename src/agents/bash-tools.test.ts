@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import {
   bashTool,
@@ -50,6 +50,16 @@ beforeEach(() => {
 });
 
 describe("bash tool backgrounding", () => {
+  const originalShell = process.env.SHELL;
+
+  beforeEach(() => {
+    if (!isWin) process.env.SHELL = "/bin/bash";
+  });
+
+  afterEach(() => {
+    if (!isWin) process.env.SHELL = originalShell;
+  });
+
   it(
     "backgrounds after yield and can be polled",
     async () => {

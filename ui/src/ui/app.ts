@@ -205,6 +205,7 @@ export class ClawdbotApp extends LitElement {
   @state() eventLog: EventLogEntry[] = [];
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
+  private sidebarCloseTimer: number | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -218,6 +219,11 @@ export class ClawdbotApp extends LitElement {
   @state() chatThinkingLevel: string | null = null;
   @state() chatQueue: ChatQueueItem[] = [];
   @state() toolOutputExpanded = new Set<string>();
+  // Sidebar state for tool output viewing
+  @state() sidebarOpen = false;
+  @state() sidebarContent: string | null = null;
+  @state() sidebarError: string | null = null;
+  @state() splitRatio = this.settings.splitRatio;
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -1147,6 +1153,37 @@ export class ClawdbotApp extends LitElement {
     await saveIMessageConfig(this);
     await loadConfig(this);
     await loadProviders(this, true);
+  }
+
+  // Sidebar handlers for tool output viewing
+  handleOpenSidebar(content: string) {
+    if (this.sidebarCloseTimer != null) {
+      window.clearTimeout(this.sidebarCloseTimer);
+      this.sidebarCloseTimer = null;
+    }
+    this.sidebarContent = content;
+    this.sidebarError = null;
+    this.sidebarOpen = true;
+  }
+
+  handleCloseSidebar() {
+    this.sidebarOpen = false;
+    // Clear content after transition
+    if (this.sidebarCloseTimer != null) {
+      window.clearTimeout(this.sidebarCloseTimer);
+    }
+    this.sidebarCloseTimer = window.setTimeout(() => {
+      if (this.sidebarOpen) return;
+      this.sidebarContent = null;
+      this.sidebarError = null;
+      this.sidebarCloseTimer = null;
+    }, 200);
+  }
+
+  handleSplitRatioChange(ratio: number) {
+    const newRatio = Math.max(0.4, Math.min(0.7, ratio));
+    this.splitRatio = newRatio;
+    this.applySettings({ ...this.settings, splitRatio: newRatio });
   }
 
   render() {
