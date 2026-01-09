@@ -103,7 +103,15 @@ export async function sanitizeSessionMessagesImages(
         content as ContentBlock[],
         label,
       )) as unknown as typeof toolMsg.content;
-      out.push({ ...toolMsg, content: nextContent });
+      // Sanitize tool call IDs for Google Cloud Code Assist compatibility
+      const sanitizedMsg = {
+        ...toolMsg,
+        content: nextContent,
+        ...(toolMsg.toolCallId && {
+          toolCallId: sanitizeToolCallId(toolMsg.toolCallId),
+        }),
+      };
+      out.push(sanitizedMsg);
       continue;
     }
 
@@ -133,14 +141,32 @@ export async function sanitizeSessionMessagesImages(
           if (rec.type !== "text" || typeof rec.text !== "string") return true;
           return rec.text.trim().length > 0;
         });
-        const sanitizedContent = (await sanitizeContentBlocksImages(
-          filteredContent as unknown as ContentBlock[],
+        // Also sanitize tool call IDs in assistant messages (function call blocks)
+        const sanitizedContent = await Promise.all(
+          filteredContent.map(async (block) => {
+            if (
+              block &&
+              typeof block === "object" &&
+              (block as { type?: unknown }).type === "functionCall" &&
+              (block as { id?: unknown }).id
+            ) {
+              const functionBlock = block as { type: string; id: string };
+              return {
+                ...functionBlock,
+                id: sanitizeToolCallId(functionBlock.id),
+              };
+            }
+            return block;
+          }),
+        );
+        const finalContent = (await sanitizeContentBlocksImages(
+          sanitizedContent as unknown as ContentBlock[],
           label,
         )) as unknown as typeof assistantMsg.content;
-        if (sanitizedContent.length === 0) {
+        if (finalContent.length === 0) {
           continue;
         }
-        out.push({ ...assistantMsg, content: sanitizedContent });
+        out.push({ ...assistantMsg, content: finalContent });
         continue;
       }
     }
@@ -482,6 +508,16 @@ export function normalizeTextForComparison(text: string): string {
  * Uses substring matching to handle LLM elaboration (e.g., wrapping in quotes,
  * adding context, or slight rephrasing that includes the original).
  */
+// ── Tool Call ID Sanitization (Google Cloud Code Assist) ───────────────────────
+// Google Cloud Code Assist rejects tool call IDs that contain invalid characters.
+// OpenAI Codex generates IDs like "call_abc123|item_456" with pipe characters,
+// but Google requires IDs matching ^[a-zA-Z0-9_-]+$ pattern.
+// This function sanitizes tool call IDs by replacing invalid characters with underscores.
+
+export function sanitizeToolCallId(id: string): string {
+  return id.replace(/[^a-zA-Z0-9_-]/g, "_");
+}
+
 export function isMessagingToolDuplicate(
   text: string,
   sentTexts: string[],

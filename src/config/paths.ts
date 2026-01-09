@@ -44,6 +44,9 @@ function resolveUserPath(input: string): string {
 
 export const STATE_DIR_CLAWDBOT = resolveStateDir();
 
+// Legacy exports for backward compatibility during Clawdis → Clawdbot rebrand
+export const STATE_DIR_CLAWDIS = STATE_DIR_CLAWDBOT;
+
 /**
  * Config file path (JSON5).
  * Can be overridden via CLAWDBOT_CONFIG_PATH environment variable.
@@ -59,6 +62,9 @@ export function resolveConfigPath(
 }
 
 export const CONFIG_PATH_CLAWDBOT = resolveConfigPath();
+
+// Legacy exports for backward compatibility during Clawdis → Clawdbot rebrand
+export const CONFIG_PATH_CLAWDIS = CONFIG_PATH_CLAWDBOT;
 
 export const DEFAULT_GATEWAY_PORT = 18789;
 
