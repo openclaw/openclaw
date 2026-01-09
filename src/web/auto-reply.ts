@@ -784,6 +784,7 @@ export async function monitorWebProvider(
     ...baseCfg,
     whatsapp: {
       ...baseCfg.whatsapp,
+      messagePrefix: account.messagePrefix,
       allowFrom: account.allowFrom,
       groupAllowFrom: account.groupAllowFrom,
       groupPolicy: account.groupPolicy,
@@ -1039,8 +1040,9 @@ export async function monitorWebProvider(
     };
 
     const buildLine = (msg: WebInboundMsg, agentId: string) => {
-      // Build message prefix: explicit config > identity name > default based on allowFrom
+      // WhatsApp inbound prefix: whatsapp.messagePrefix > legacy messages.messagePrefix > identity/defaults
       const messagePrefix = resolveMessagePrefix(cfg, agentId, {
+        configured: cfg.whatsapp?.messagePrefix,
         hasAllowFrom: (cfg.whatsapp?.allowFrom?.length ?? 0) > 0,
       });
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";

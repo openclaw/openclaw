@@ -1229,6 +1229,7 @@ export const ClawdbotSchema = z.object({
             .object({
               name: z.string().optional(),
               enabled: z.boolean().optional(),
+              messagePrefix: z.string().optional(),
               /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
               authDir: z.string().optional(),
               dmPolicy: DmPolicySchema.optional().default("pairing"),
@@ -1268,6 +1269,7 @@ export const ClawdbotSchema = z.object({
         )
         .optional(),
       dmPolicy: DmPolicySchema.optional().default("pairing"),
+      messagePrefix: z.string().optional(),
       selfChatMode: z.boolean().optional(),
       allowFrom: z.array(z.string()).optional(),
       groupAllowFrom: z.array(z.string()).optional(),

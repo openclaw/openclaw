@@ -77,7 +77,7 @@ Details: [Thinking + reasoning directives](/tools/thinking) and [Token use](/tok
 ## Prefixes, threading, and replies
 
 Outbound message formatting is centralized in `messages`:
-- `messages.responsePrefix` and `messages.messagePrefix`
+- `messages.responsePrefix` (outbound prefix) and `whatsapp.messagePrefix` (WhatsApp inbound prefix)
 - Reply threading via `replyToMode` and per-provider defaults
 
 Details: [Configuration](/gateway/configuration#messages) and provider docs.

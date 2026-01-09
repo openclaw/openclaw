@@ -69,7 +69,9 @@ export async function routeReply(
         cfg,
         resolveAgentIdFromSessionKey(params.sessionKey),
       ).responsePrefix
-    : cfg.messages?.responsePrefix;
+    : cfg.messages?.responsePrefix === "auto"
+      ? undefined
+      : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,
   });

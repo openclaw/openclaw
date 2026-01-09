@@ -926,8 +926,7 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 ```json5
 {
   messages: {
-    messagePrefix: "[clawdbot]",
-    responsePrefix: "🦞",
+    responsePrefix: "🦞", // or "auto"
     ackReaction: "👀",
     ackReactionScope: "group-mentions"
   }
@@ -938,11 +937,13 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
 streaming, final replies) across providers unless already present.
 
 If `messages.responsePrefix` is unset, no prefix is applied by default.
+Set it to `"auto"` to derive `[{identity.name}]` for the routed agent (when set).
 
-If `messages.messagePrefix` is unset, the default stays **unchanged**:
-`"[clawdbot]"` when `whatsapp.allowFrom` is empty, otherwise `""` (no prefix).
-When using `"[clawdbot]"`, Clawdbot will instead use `[{identity.name}]` when
-the routed agent has `identity.name` set.
+WhatsApp inbound prefix is configured via `whatsapp.messagePrefix` (deprecated:
+`messages.messagePrefix`). Default stays **unchanged**: `"[clawdbot]"` when
+`whatsapp.allowFrom` is empty, otherwise `""` (no prefix). When using
+`"[clawdbot]"`, Clawdbot will instead use `[{identity.name}]` when the routed
+agent has `identity.name` set.
 
 `ackReaction` sends a best-effort emoji reaction to acknowledge inbound messages
 on providers that support reactions (Slack/Discord/Telegram). Defaults to the

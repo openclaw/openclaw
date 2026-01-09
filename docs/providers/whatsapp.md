@@ -197,7 +197,7 @@ Behavior:
 - `whatsapp.actions.reactions` (gate WhatsApp tool reactions).
 - `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`)
 - `messages.groupChat.historyLimit`
-- `messages.messagePrefix` (inbound prefix)
+- `whatsapp.messagePrefix` (inbound prefix; per-account: `whatsapp.accounts.<accountId>.messagePrefix`; deprecated: `messages.messagePrefix`)
 - `messages.responsePrefix` (outbound prefix)
 - `agents.defaults.mediaMaxMb`
 - `agents.defaults.heartbeat.every`

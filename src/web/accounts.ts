@@ -15,6 +15,7 @@ export type ResolvedWhatsAppAccount = {
   accountId: string;
   name?: string;
   enabled: boolean;
+  messagePrefix?: string;
   authDir: string;
   isLegacyAuthDir: boolean;
   selfChatMode?: boolean;
@@ -111,6 +112,10 @@ export function resolveWhatsAppAccount(params: {
     accountId,
     name: accountCfg?.name?.trim() || undefined,
     enabled,
+    messagePrefix:
+      accountCfg?.messagePrefix ??
+      params.cfg.whatsapp?.messagePrefix ??
+      params.cfg.messages?.messagePrefix,
     authDir,
     isLegacyAuthDir: isLegacy,
     selfChatMode: accountCfg?.selfChatMode ?? params.cfg.whatsapp?.selfChatMode,

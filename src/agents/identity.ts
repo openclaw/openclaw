@@ -32,9 +32,9 @@ export function resolveIdentityNamePrefix(
 export function resolveMessagePrefix(
   cfg: ClawdbotConfig,
   agentId: string,
-  opts?: { hasAllowFrom?: boolean; fallback?: string },
+  opts?: { configured?: string; hasAllowFrom?: boolean; fallback?: string },
 ): string {
-  const configured = cfg.messages?.messagePrefix;
+  const configured = opts?.configured ?? cfg.messages?.messagePrefix;
   if (configured !== undefined) return configured;
 
   const hasAllowFrom = opts?.hasAllowFrom === true;
@@ -47,10 +47,15 @@ export function resolveMessagePrefix(
 
 export function resolveResponsePrefix(
   cfg: ClawdbotConfig,
-  _agentId: string,
+  agentId: string,
 ): string | undefined {
   const configured = cfg.messages?.responsePrefix;
-  if (configured !== undefined) return configured;
+  if (configured !== undefined) {
+    if (configured === "auto") {
+      return resolveIdentityNamePrefix(cfg, agentId);
+    }
+    return configured;
+  }
   return undefined;
 }
 

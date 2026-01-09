@@ -111,6 +111,11 @@ export type WhatsAppActionConfig = {
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
+  /**
+   * Inbound message prefix (WhatsApp only).
+   * Default: `[{agents.list[].identity.name}]` (or `[clawdbot]`) when allowFrom is empty, else `""`.
+   */
+  messagePrefix?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
   /**
@@ -152,6 +157,8 @@ export type WhatsAppAccountConfig = {
   name?: string;
   /** If false, do not start this WhatsApp account provider. Default: true. */
   enabled?: boolean;
+  /** Inbound message prefix override for this account (WhatsApp only). */
+  messagePrefix?: string;
   /** Override auth directory (Baileys multi-file auth state). */
   authDir?: string;
   /** Direct message access policy (default: pairing). */
@@ -931,8 +938,15 @@ export type AudioConfig = {
 };
 
 export type MessagesConfig = {
-  messagePrefix?: string; // Prefix added to all inbound messages (default: "[{agents.list[].identity.name}]" or "[clawdbot]" if no allowFrom, else "")
-  responsePrefix?: string; // Prefix auto-added to all outbound replies (default: none)
+  /** @deprecated Use `whatsapp.messagePrefix` (WhatsApp-only inbound prefix). */
+  messagePrefix?: string;
+  /**
+   * Prefix auto-added to all outbound replies.
+   * - string: explicit prefix
+   * - special value: `"auto"` derives `[{agents.list[].identity.name}]` for the routed agent (when set)
+   * Default: none
+   */
+  responsePrefix?: string;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
