@@ -9,6 +9,13 @@ import {
   removeSandboxContainer,
 } from "../agents/sandbox.js";
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  displayBrowsers,
+  displayContainers,
+  displayRecreatePreview,
+  displayRecreateResult,
+  displaySummary,
+} from "./sandbox-display.js";
 
 // --- Types ---
 
@@ -74,7 +81,7 @@ export async function sandboxRecreateCommand(
     return;
   }
 
-  displayRecreatePreview(filtered, runtime);
+  displayRecreatePreview(filtered.containers, filtered.browsers, runtime);
 
   if (!opts.force && !(await confirmRecreate())) {
     runtime.log("Cancelled.");
@@ -136,118 +143,6 @@ function createAgentMatcher(agentId: string) {
   return (item: ContainerItem) =>
     item.sessionKey === agentPrefix ||
     item.sessionKey.startsWith(`${agentPrefix}:`);
-}
-
-// --- Display Functions ---
-
-function displayContainers(
-  containers: SandboxContainerInfo[],
-  runtime: RuntimeEnv,
-): void {
-  if (containers.length === 0) {
-    runtime.log("No sandbox containers found.");
-    return;
-  }
-
-  runtime.log("\n📦 Sandbox Containers:\n");
-  for (const container of containers) {
-    runtime.log(`  ${container.containerName}`);
-    runtime.log(`    Status:  ${formatStatus(container.running)}`);
-    runtime.log(`    Image:   ${container.image} ${formatImageMatch(container.imageMatch)}`);
-    runtime.log(`    Age:     ${formatAge(Date.now() - container.createdAtMs)}`);
-    runtime.log(`    Idle:    ${formatAge(Date.now() - container.lastUsedAtMs)}`);
-    runtime.log(`    Session: ${container.sessionKey}`);
-    runtime.log("");
-  }
-}
-
-function displayBrowsers(
-  browsers: SandboxBrowserInfo[],
-  runtime: RuntimeEnv,
-): void {
-  if (browsers.length === 0) {
-    runtime.log("No sandbox browser containers found.");
-    return;
-  }
-
-  runtime.log("\n🌐 Sandbox Browser Containers:\n");
-  for (const browser of browsers) {
-    runtime.log(`  ${browser.containerName}`);
-    runtime.log(`    Status:  ${formatStatus(browser.running)}`);
-    runtime.log(`    Image:   ${browser.image} ${formatImageMatch(browser.imageMatch)}`);
-    runtime.log(`    CDP:     ${browser.cdpPort}`);
-    if (browser.noVncPort) {
-      runtime.log(`    noVNC:   ${browser.noVncPort}`);
-    }
-    runtime.log(`    Age:     ${formatAge(Date.now() - browser.createdAtMs)}`);
-    runtime.log(`    Idle:    ${formatAge(Date.now() - browser.lastUsedAtMs)}`);
-    runtime.log(`    Session: ${browser.sessionKey}`);
-    runtime.log("");
-  }
-}
-
-function displaySummary(
-  containers: SandboxContainerInfo[],
-  browsers: SandboxBrowserInfo[],
-  runtime: RuntimeEnv,
-): void {
-  const totalCount = containers.length + browsers.length;
-  const runningCount = countRunning(containers) + countRunning(browsers);
-  const mismatchCount = countMismatches(containers) + countMismatches(browsers);
-
-  runtime.log(`Total: ${totalCount} (${runningCount} running)`);
-
-  if (mismatchCount > 0) {
-    runtime.log(
-      `\n⚠️  ${mismatchCount} container(s) with image mismatch detected.`,
-    );
-    runtime.log(
-      `   Run 'clawd sandbox recreate --all' to update all containers.`,
-    );
-  }
-}
-
-function displayRecreatePreview(
-  filtered: FilteredContainers,
-  runtime: RuntimeEnv,
-): void {
-  runtime.log("\nContainers to be recreated:\n");
-
-  if (filtered.containers.length > 0) {
-    runtime.log("📦 Sandbox Containers:");
-    for (const container of filtered.containers) {
-      runtime.log(
-        `  - ${container.containerName} (${formatSimpleStatus(container.running)})`,
-      );
-    }
-  }
-
-  if (filtered.browsers.length > 0) {
-    runtime.log("\n🌐 Browser Containers:");
-    for (const browser of filtered.browsers) {
-      runtime.log(
-        `  - ${browser.containerName} (${formatSimpleStatus(browser.running)})`,
-      );
-    }
-  }
-
-  const total = filtered.containers.length + filtered.browsers.length;
-  runtime.log(`\nTotal: ${total} container(s)`);
-}
-
-function displayRecreateResult(
-  result: { successCount: number; failCount: number },
-  runtime: RuntimeEnv,
-): void {
-  runtime.log(
-    `\nDone: ${result.successCount} removed, ${result.failCount} failed`,
-  );
-
-  if (result.successCount > 0) {
-    runtime.log(
-      "\nContainers will be automatically recreated when the agent is next used.",
-    );
-  }
 }
 
 // --- Container Operations ---
@@ -312,40 +207,4 @@ async function removeContainer(
     runtime.error(`✗ Failed to remove ${containerName}: ${String(err)}`);
     return { success: false };
   }
-}
-
-// --- Formatting Helpers ---
-
-function formatStatus(running: boolean): string {
-  return running ? "🟢 running" : "⚫ stopped";
-}
-
-function formatSimpleStatus(running: boolean): string {
-  return running ? "running" : "stopped";
-}
-
-function formatImageMatch(matches: boolean): string {
-  return matches ? "✓" : "⚠️  mismatch";
-}
-
-function formatAge(ms: number): string {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) return `${days}d ${hours % 24}h`;
-  if (hours > 0) return `${hours}h ${minutes % 60}m`;
-  if (minutes > 0) return `${minutes}m`;
-  return `${seconds}s`;
-}
-
-// --- Counting Helpers ---
-
-function countRunning(items: ContainerItem[]): number {
-  return items.filter((item) => item.running).length;
-}
-
-function countMismatches(items: ContainerItem[]): number {
-  return items.filter((item) => !item.imageMatch).length;
 }
