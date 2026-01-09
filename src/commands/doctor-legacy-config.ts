@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -12,7 +12,11 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveUserPath } from "../utils.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 function resolveLegacyConfigPath(env: NodeJS.ProcessEnv): string {
   const override = env.CLAWDIS_CONFIG_PATH?.trim();

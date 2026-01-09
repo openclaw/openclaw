@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 
-import { confirm, select, text } from "@clack/prompts";
+import {
+  confirm as clackConfirm,
+  select as clackSelect,
+  text as clackText,
+} from "@clack/prompts";
 
 import {
   CLAUDE_CLI_PROFILE_ID,
@@ -11,8 +15,33 @@ import { normalizeProviderId } from "../../agents/model-selection.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { CONFIG_PATH_CLAWDBOT } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../../terminal/prompt-style.js";
 import { applyAuthProfileConfig } from "../onboard-auth.js";
 import { updateConfig } from "./shared.js";
+
+const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
+  clackConfirm({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const text = (params: Parameters<typeof clackText>[0]) =>
+  clackText({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  clackSelect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 type TokenProvider = "anthropic";
 

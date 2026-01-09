@@ -17,6 +17,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import type {
@@ -27,7 +28,7 @@ import type {
 
 export function guardCancel<T>(value: T, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
-    cancel("Setup cancelled.");
+    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
   }
   return value;

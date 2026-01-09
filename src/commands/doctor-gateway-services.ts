@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
@@ -31,6 +31,10 @@ import {
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 function detectGatewayRuntime(
   programArguments: string[] | undefined,

@@ -1,10 +1,14 @@
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import {
   enableSystemdUserLinger,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 export type LingerPrompter = {
   confirm?: (params: {
