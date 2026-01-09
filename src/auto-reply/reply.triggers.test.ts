@@ -53,13 +53,27 @@ vi.mock("../web/session.js", () => webMocks);
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const base = await fs.mkdtemp(join(tmpdir(), "clawdbot-triggers-"));
   const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  const previousHomeDrive = process.env.HOMEDRIVE;
+  const previousHomePath = process.env.HOMEPATH;
   process.env.HOME = base;
+  if (process.platform === "win32") {
+    process.env.USERPROFILE = base;
+    const driveMatch = base.match(/^([A-Za-z]:)(.*)$/);
+    if (driveMatch) {
+      process.env.HOMEDRIVE = driveMatch[1];
+      process.env.HOMEPATH = driveMatch[2] || "\\";
+    }
+  }
   try {
     vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(abortEmbeddedPiRun).mockClear();
     return await fn(base);
   } finally {
     process.env.HOME = previousHome;
+    process.env.USERPROFILE = previousUserProfile;
+    process.env.HOMEDRIVE = previousHomeDrive;
+    process.env.HOMEPATH = previousHomePath;
     await fs.rm(base, { recursive: true, force: true });
   }
 }
