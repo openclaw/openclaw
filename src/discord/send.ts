@@ -305,6 +305,11 @@ function parseRecipient(raw: string): DiscordRecipient {
     }
     return { kind: "user", id: candidate };
   }
+  if (/^\d+$/.test(trimmed)) {
+    throw new Error(
+      `Ambiguous Discord recipient "${trimmed}". Use "user:${trimmed}" for DMs or "channel:${trimmed}" for channel messages.`,
+    );
+  }
   return { kind: "channel", id: trimmed };
 }
 

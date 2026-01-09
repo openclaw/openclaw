@@ -109,6 +109,19 @@ describe("sendMessageDiscord", () => {
     expect(res.channelId).toBe("chan1");
   });
 
+  it("rejects bare numeric IDs as ambiguous", async () => {
+    const { rest } = makeRest();
+    await expect(
+      sendMessageDiscord("273512430271856640", "hello", { rest, token: "t" }),
+    ).rejects.toThrow(/Ambiguous Discord recipient/);
+    await expect(
+      sendMessageDiscord("273512430271856640", "hello", { rest, token: "t" }),
+    ).rejects.toThrow(/user:273512430271856640/);
+    await expect(
+      sendMessageDiscord("273512430271856640", "hello", { rest, token: "t" }),
+    ).rejects.toThrow(/channel:273512430271856640/);
+  });
+
   it("adds missing permission hints on 50013", async () => {
     const { rest, postMock, getMock } = makeRest();
     const perms = PermissionFlagsBits.ViewChannel;
