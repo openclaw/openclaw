@@ -9,6 +9,7 @@ const onboardCommand = vi.fn();
 const callGateway = vi.fn();
 const runProviderLogin = vi.fn();
 const runProviderLogout = vi.fn();
+const runTui = vi.fn();
 
 const runtime = {
   log: vi.fn(),
@@ -30,6 +31,9 @@ vi.mock("./provider-auth.js", () => ({
   runProviderLogin,
   runProviderLogout,
 }));
+vi.mock("../tui/tui.js", () => ({
+  runTui,
+}));
 vi.mock("../gateway/call.js", () => ({
   callGateway,
   randomIdempotencyKey: () => "idem-test",
@@ -43,6 +47,7 @@ const { buildProgram } = await import("./program.js");
 describe("cli program", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    runTui.mockResolvedValue(undefined);
   });
 
   it("runs message with required options", async () => {
@@ -60,6 +65,24 @@ describe("cli program", () => {
     const program = buildProgram();
     await program.parseAsync(["status"], { from: "user" });
     expect(statusCommand).toHaveBeenCalled();
+  });
+
+  it("runs tui without overriding timeout", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["tui"], { from: "user" });
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+  });
+
+  it("runs tui with explicit timeout override", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["tui", "--timeout-ms", "45000"], {
+      from: "user",
+    });
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: 45000 }),
+    );
   });
 
   it("runs config alias as configure", async () => {

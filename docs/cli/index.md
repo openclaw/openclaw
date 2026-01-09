@@ -673,5 +673,5 @@ Options:
 - `--deliver`
 - `--thinking <level>`
 - `--message <text>`
-- `--timeout-ms <ms>`
+- `--timeout-ms <ms>` (defaults to `agents.defaults.timeoutSeconds`)
 - `--history-limit <n>`
