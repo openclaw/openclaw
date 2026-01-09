@@ -9,6 +9,7 @@ import { formatUnknownError } from "./errors.js";
 import type { MSTeamsAdapter } from "./messenger.js";
 import { registerMSTeamsHandlers } from "./monitor-handler.js";
 import { createMSTeamsPollStoreFs, type MSTeamsPollStore } from "./polls.js";
+import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 const log = getChildLogger({ name: "msteams" });
@@ -65,25 +66,14 @@ export async function monitorMSTeamsProvider(
   log.info(`starting provider (port ${port})`);
 
   // Dynamic import to avoid loading SDK when provider is disabled
-  const agentsHosting = await import("@microsoft/agents-hosting");
   const express = await import("express");
 
-  const {
-    ActivityHandler,
-    CloudAdapter,
-    MsalTokenProvider,
-    authorizeJWT,
-    getAuthConfigWithDefaults,
-  } = agentsHosting;
+  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
+  const { ActivityHandler, MsalTokenProvider, authorizeJWT } = sdk;
 
   // Auth configuration - create early so adapter is available for deliverReplies
-  const authConfig = getAuthConfigWithDefaults({
-    clientId: creds.appId,
-    clientSecret: creds.appPassword,
-    tenantId: creds.tenantId,
-  });
   const tokenProvider = new MsalTokenProvider(authConfig);
-  const adapter = new CloudAdapter(authConfig);
+  const adapter = createMSTeamsAdapter(authConfig, sdk);
 
   const handler = registerMSTeamsHandlers(new ActivityHandler(), {
     cfg,

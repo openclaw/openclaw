@@ -1,6 +1,5 @@
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
-import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ClawdbotConfig } from "../config/types.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
@@ -23,11 +22,7 @@ import type {
   MSTeamsConversationStore,
   StoredConversationReference,
 } from "./conversation-store.js";
-import {
-  classifyMSTeamsSendError,
-  formatMSTeamsSendErrorHint,
-  formatUnknownError,
-} from "./errors.js";
+import { formatUnknownError } from "./errors.js";
 import {
   extractMSTeamsConversationMessageId,
   normalizeMSTeamsConversationId,
@@ -35,23 +30,15 @@ import {
   stripMSTeamsMentionTags,
   wasMSTeamsBotMentioned,
 } from "./inbound.js";
-import {
-  type MSTeamsAdapter,
-  renderReplyPayloadsToMessages,
-  sendMSTeamsMessages,
-} from "./messenger.js";
+import type { MSTeamsAdapter } from "./messenger.js";
+import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import {
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
 import { extractMSTeamsPollVote, type MSTeamsPollStore } from "./polls.js";
+import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
-
-export type MSTeamsMonitorLogger = {
-  debug: (message: string, meta?: Record<string, unknown>) => void;
-  info: (message: string, meta?: Record<string, unknown>) => void;
-  error: (message: string, meta?: Record<string, unknown>) => void;
-};
 
 export type MSTeamsAccessTokenProvider = {
   getAccessToken: (scope: string) => Promise<string>;
@@ -456,59 +443,18 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       );
     }
 
-    // Send typing indicator
-    const sendTypingIndicator = async () => {
-      try {
-        await context.sendActivities([{ type: "typing" }]);
-      } catch {
-        // Typing indicator is best-effort.
-      }
-    };
-
     // Create reply dispatcher
     const { dispatcher, replyOptions, markDispatchIdle } =
-      createReplyDispatcherWithTyping({
-        responsePrefix: cfg.messages?.responsePrefix,
-        deliver: async (payload) => {
-          const messages = renderReplyPayloadsToMessages([payload], {
-            textChunkLimit: textLimit,
-            chunkText: true,
-            mediaMode: "split",
-          });
-          await sendMSTeamsMessages({
-            replyStyle,
-            adapter,
-            appId,
-            conversationRef,
-            context,
-            messages,
-            // Enable default retry/backoff for throttling/transient failures.
-            retry: {},
-            onRetry: (event) => {
-              log.debug("retrying send", {
-                replyStyle,
-                ...event,
-              });
-            },
-          });
-        },
-        onError: (err, info) => {
-          const errMsg = formatUnknownError(err);
-          const classification = classifyMSTeamsSendError(err);
-          const hint = formatMSTeamsSendErrorHint(classification);
-          runtime.error?.(
-            danger(
-              `msteams ${info.kind} reply failed: ${errMsg}${hint ? ` (${hint})` : ""}`,
-            ),
-          );
-          log.error("reply failed", {
-            kind: info.kind,
-            error: errMsg,
-            classification,
-            hint,
-          });
-        },
-        onReplyStart: sendTypingIndicator,
+      createMSTeamsReplyDispatcher({
+        cfg,
+        runtime,
+        log,
+        adapter,
+        appId,
+        conversationRef,
+        context,
+        replyStyle,
+        textLimit,
       });
 
     // Dispatch to agent
