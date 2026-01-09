@@ -113,6 +113,6 @@ Sandbox settings are in `clawdbot.config.json`:
 
 ## See Also
 
-- [Sandbox Documentation](../gateway/sandboxing.md)
-- [Agent Configuration](../concepts/agent-workspace.md)
-- [Doctor Command](./doctor.md) - Check sandbox setup
+- [Sandbox Documentation](/gateway/sandboxing)
+- [Agent Configuration](/concepts/agent-workspace)
+- [Doctor Command](/gateway/doctor) - Check sandbox setup
