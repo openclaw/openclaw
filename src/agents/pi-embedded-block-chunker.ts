@@ -221,6 +221,10 @@ export class EmbeddedBlockChunker {
       if (sentenceIdx >= minChars) return { index: sentenceIdx };
     }
 
+    if (preference === "newline" && buffer.length < maxChars) {
+      return { index: -1 };
+    }
+
     for (let i = window.length - 1; i >= minChars; i--) {
       if (/\s/.test(window[i]) && isSafeFenceBreak(fenceSpans, i)) {
         return { index: i };
