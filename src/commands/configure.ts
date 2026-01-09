@@ -97,14 +97,17 @@ import {
 } from "./openai-codex-model-default.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
-type WizardSection =
-  | "model"
-  | "providers"
-  | "gateway"
-  | "daemon"
-  | "workspace"
-  | "skills"
-  | "health";
+export const CONFIGURE_WIZARD_SECTIONS = [
+  "workspace",
+  "model",
+  "gateway",
+  "daemon",
+  "providers",
+  "skills",
+  "health",
+] as const;
+
+export type WizardSection = (typeof CONFIGURE_WIZARD_SECTIONS)[number];
 
 type ProvidersWizardMode = "configure" | "remove";
 
@@ -1303,4 +1306,11 @@ export async function runConfigureWizard(
 
 export async function configureCommand(runtime: RuntimeEnv = defaultRuntime) {
   await runConfigureWizard({ command: "configure" }, runtime);
+}
+
+export async function configureCommandWithSections(
+  sections: WizardSection[],
+  runtime: RuntimeEnv = defaultRuntime,
+) {
+  await runConfigureWizard({ command: "configure", sections }, runtime);
 }

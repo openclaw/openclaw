@@ -5,7 +5,11 @@ import {
   agentsDeleteCommand,
   agentsListCommand,
 } from "../commands/agents.js";
-import { configureCommand } from "../commands/configure.js";
+import {
+  CONFIGURE_WIZARD_SECTIONS,
+  configureCommand,
+  configureCommandWithSections,
+} from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
 import { messageCommand } from "../commands/message.js";
@@ -349,9 +353,38 @@ export function buildProgram() {
     .description(
       "Interactive wizard to update models, providers, skills, and gateway",
     )
-    .action(async () => {
+    .option(
+      "--section <name>",
+      `Configure only one section (repeatable). One of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}`,
+      (value, previous: string[]) => [...previous, value],
+      [] as string[],
+    )
+    .action(async (opts) => {
       try {
-        await configureCommand(defaultRuntime);
+        const sections: string[] = Array.isArray(opts.section)
+          ? opts.section
+              .map((value: unknown) =>
+                typeof value === "string" ? value.trim() : "",
+              )
+              .filter(Boolean)
+          : [];
+        if (sections.length === 0) {
+          await configureCommand(defaultRuntime);
+          return;
+        }
+
+        const invalid = sections.filter(
+          (s) => !CONFIGURE_WIZARD_SECTIONS.includes(s as never),
+        );
+        if (invalid.length > 0) {
+          defaultRuntime.error(
+            `Invalid --section: ${invalid.join(", ")}. Expected one of: ${CONFIGURE_WIZARD_SECTIONS.join(", ")}.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+
+        await configureCommandWithSections(sections as never, defaultRuntime);
       } catch (err) {
         defaultRuntime.error(String(err));
         defaultRuntime.exit(1);
