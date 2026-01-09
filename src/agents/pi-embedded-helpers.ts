@@ -261,6 +261,30 @@ export function isRateLimitErrorMessage(raw: string): boolean {
   );
 }
 
+export function isBillingErrorMessage(raw: string): boolean {
+  const value = raw.toLowerCase();
+  if (!value) return false;
+  return (
+    /\b402\b/.test(value) ||
+    value.includes("payment required") ||
+    value.includes("insufficient credits") ||
+    value.includes("credit balance") ||
+    value.includes("plans & billing") ||
+    (value.includes("billing") &&
+      (value.includes("upgrade") ||
+        value.includes("credits") ||
+        value.includes("payment") ||
+        value.includes("plan")))
+  );
+}
+
+export function isBillingAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
+  if (!msg || msg.stopReason !== "error") return false;
+  return isBillingErrorMessage(msg.errorMessage ?? "");
+}
+
 export function isAuthErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) return false;

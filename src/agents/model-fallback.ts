@@ -9,6 +9,7 @@ import {
 } from "./model-selection.js";
 import {
   isAuthErrorMessage,
+  isBillingErrorMessage,
   isRateLimitErrorMessage,
 } from "./pi-embedded-helpers.js";
 
@@ -82,7 +83,7 @@ function isTimeoutErrorMessage(raw: string): boolean {
 
 function shouldFallbackForError(err: unknown): boolean {
   const statusCode = getStatusCode(err);
-  if (statusCode && [401, 403, 429].includes(statusCode)) return true;
+  if (statusCode && [401, 402, 403, 429].includes(statusCode)) return true;
   const code = getErrorCode(err).toUpperCase();
   if (
     ["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(
@@ -96,6 +97,7 @@ function shouldFallbackForError(err: unknown): boolean {
   return (
     isAuthErrorMessage(message) ||
     isRateLimitErrorMessage(message) ||
+    isBillingErrorMessage(message) ||
     isTimeoutErrorMessage(message)
   );
 }
