@@ -13,6 +13,7 @@ Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio
 - iMessage provider backed by `imsg` on macOS.
 - Deterministic routing: replies always go back to iMessage.
 - DMs share the agent's main session; groups are isolated (`imessage:group:<chat_id>`).
+- If a multi-participant thread arrives with `is_group=false`, you can still isolate it by `chat_id` using `imessage.groups` (see “Group-ish threads” below).
 
 ## Requirements
 - macOS with Messages signed in.
@@ -24,35 +25,61 @@ Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio
 1) Ensure Messages is signed in on this Mac.
 2) Configure iMessage and start the gateway.
 
-### Remote/SSH variant (optional)
-If you want iMessage on another Mac, set `imessage.cliPath` to a wrapper that
-execs `ssh` and runs `imsg rpc` on the remote host. Clawdbot only needs a
-stdio stream; `imsg` still runs on the remote macOS host.
+### Dedicated bot macOS user (for isolated identity)
+If you want the bot to send from a **separate iMessage identity** (and keep your personal Messages clean), use a dedicated Apple ID + a dedicated macOS user.
 
-Example wrapper (save somewhere in your PATH and `chmod +x`):
+1) Create a dedicated Apple ID (example: `my-cool-bot@icloud.com`).
+   - Apple may require a phone number for verification / 2FA.
+2) Create a macOS user (example: `clawdshome`) and sign into it.
+3) Open Messages in that macOS user and sign into iMessage using the bot Apple ID.
+4) Enable Remote Login (System Settings → General → Sharing → Remote Login).
+5) Install `imsg`:
+   - `brew install steipete/tap/imsg`
+6) Set up SSH so `ssh <bot-macos-user>@localhost true` works without a password.
+7) Point `imessage.accounts.bot.cliPath` at an SSH wrapper that runs `imsg` as the bot user.
+
+First-run note: sending/receiving may require GUI approvals (Automation + Full Disk Access) in the *bot macOS user*. If `imsg rpc` looks stuck or exits, log into that user (Screen Sharing helps), run a one-time `imsg chats --limit 1` / `imsg send ...`, approve prompts, then retry.
+
+Example wrapper (`chmod +x`). Replace `<bot-macos-user>` with your actual macOS username:
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Run an interactive SSH once first to accept host keys:
+#   ssh <bot-macos-user>@localhost true
+exec /usr/bin/ssh -o BatchMode=yes -o ConnectTimeout=5 -T <bot-macos-user>@localhost \
+  "/usr/local/bin/imsg" "$@"
+```
+
+Example config:
+```json5
+{
+  imessage: {
+    enabled: true,
+    accounts: {
+      bot: {
+        name: "Bot",
+        enabled: true,
+        cliPath: "/path/to/imsg-bot",
+        dbPath: "/Users/<bot-macos-user>/Library/Messages/chat.db"
+      }
+    }
+  }
+}
+```
+
+For single-account setups, use flat options (`imessage.cliPath`, `imessage.dbPath`) instead of the `accounts` map.
+
+### Remote/SSH variant (optional)
+If you want iMessage on another Mac, set `imessage.cliPath` to a wrapper that runs `imsg` on the remote macOS host over SSH. Clawdbot only needs stdio.
+
+Example wrapper:
 ```bash
 #!/usr/bin/env bash
 exec ssh -T mac-mini imsg "$@"
 ```
 
-Notes:
-- Remote Mac must have Messages signed in and `imsg` installed.
-- Full Disk Access + Automation prompts happen on the remote Mac.
-- Use SSH keys (no password prompt) so the gateway can launch `imsg rpc` unattended.
-
-Example:
-```json5
-{
-  imessage: {
-    enabled: true,
-    cliPath: "/usr/local/bin/imessage-remote",
-    dmPolicy: "pairing",
-    allowFrom: ["+15555550123"]
-  }
-}
-```
-
-Multi-account support: use `imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
+Multi-account support: use `imessage.accounts` with per-account config and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern. Don’t commit `~/.clawdbot/clawdbot.json` (it often contains tokens).
 
 ## Access control (DMs + groups)
 DMs:
@@ -72,6 +99,27 @@ Groups:
 ## How it works (behavior)
 - `imsg` streams message events; the gateway normalizes them into the shared provider envelope.
 - Replies always route back to the same chat id or handle.
+
+## Group-ish threads (`is_group=false`)
+Some iMessage threads can have multiple participants but still arrive with `is_group=false` depending on how Messages stores the chat identifier.
+
+If you explicitly configure a `chat_id` under `imessage.groups`, Clawdbot treats that thread as a “group” for:
+- session isolation (separate `imessage:group:<chat_id>` session key)
+- group allowlisting / mention gating behavior
+
+Example:
+```json5
+{
+  imessage: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15555550123"],
+    groups: {
+      "42": { "requireMention": false }
+    }
+  }
+}
+```
+This is useful when you want an isolated personality/model for a specific thread (see [Multi-agent routing](/concepts/multi-agent)). For filesystem isolation, see [Sandboxing](/gateway/sandboxing).
 
 ## Media + limits
 - Optional attachment ingestion via `imessage.includeAttachments`.
