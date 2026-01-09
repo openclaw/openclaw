@@ -38,6 +38,68 @@ Full setup walkthrough (28m) by VelvetShark.
 
 [Watch on YouTube](https://www.youtube.com/watch?v=SaWSPZoPX34)
 
+## 🆕 Fresh from Discord
+
+<CardGroup cols={2}>
+
+<Card title="Tesco Shop Autopilot" icon="cart-shopping" href="https://x.com/i/status/2009724862470689131">
+  **@marchattonhere** • `automation` `browser` `shopping`
+
+  Weekly meal plan → regulars → book delivery slot → confirm order. No APIs, just browser control.
+
+  <img src="/assets/showcase/tesco-shop.jpg" alt="Tesco shop automation via chat" />
+</Card>
+
+<Card title="SNAG Screenshot-to-Markdown" icon="scissors" href="https://github.com/am-will/snag">
+  **@am-will** • `devtools` `screenshots` `markdown`
+
+  Hotkey a screen region → Gemini vision → instant Markdown in your clipboard.
+
+  <img src="/assets/showcase/snag.png" alt="SNAG screenshot-to-markdown tool" />
+</Card>
+
+<Card title="Agents UI" icon="window-maximize" href="https://releaseflow.net/kitze/agents-ui">
+  **@kitze** • `ui` `skills` `sync`
+
+  Desktop app to manage skills/commands across Agents, Claude, Codex, and Clawdbot.
+
+  <img src="/assets/showcase/agents-ui.jpg" alt="Agents UI app" />
+</Card>
+
+<Card title="Telegram Voice Notes (papla.media)" icon="microphone" href="https://papla.media/docs">
+  **Community** • `voice` `tts` `telegram`
+
+  Wraps papla.media TTS and sends results as Telegram voice notes (no annoying autoplay).
+
+  <img src="/assets/showcase/papla-tts.jpg" alt="Telegram voice note output from TTS" />
+</Card>
+
+<Card title="CodexMonitor" icon="eye" href="https://clawdhub.com/odrobnik/codexmonitor">
+  **@odrobnik** • `devtools` `codex` `brew`
+
+  Homebrew-installed helper to list/inspect/watch local OpenAI Codex sessions (CLI + VS Code).
+
+  <img src="/assets/showcase/codexmonitor.png" alt="CodexMonitor on ClawdHub" />
+</Card>
+
+<Card title="Bambu 3D Printer Control" icon="print" href="https://clawdhub.com/tobiasbischoff/bambu-cli">
+  **@tobiasbischoff** • `hardware` `3d-printing` `skill`
+
+  Control and troubleshoot BambuLab printers: status, jobs, camera, AMS, calibration, and more.
+
+  <img src="/assets/showcase/bambu-cli.png" alt="Bambu CLI skill on ClawdHub" />
+</Card>
+
+<Card title="Vienna Transport (Wiener Linien)" icon="train" href="https://clawdhub.com/hjanuschka/wienerlinien">
+  **@hjanuschka** • `travel` `transport` `skill`
+
+  Real-time departures, disruptions, elevator status, and routing for Vienna's public transport.
+
+  <img src="/assets/showcase/wienerlinien.png" alt="Wiener Linien skill on ClawdHub" />
+</Card>
+
+</CardGroup>
+
 ## 🤖 Automation & Workflows
 
 <CardGroup cols={2}>
