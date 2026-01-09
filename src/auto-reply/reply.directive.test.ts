@@ -159,6 +159,9 @@ describe("directive behavior", () => {
       expect(text).toContain(
         "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
       );
+      expect(text).toContain(
+        "Options: modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
+      );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -182,6 +185,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: high");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -204,6 +208,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: off");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -358,6 +363,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: high");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -380,6 +386,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: off");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -403,6 +410,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current verbose level: on");
+      expect(text).toContain("Options: on, off.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -425,6 +433,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current reasoning level: off");
+      expect(text).toContain("Options: on, off, stream.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -458,6 +467,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current elevated level: on");
+      expect(text).toContain("Options: on, off.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
