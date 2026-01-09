@@ -96,6 +96,7 @@
 - CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
 - Gateway/CLI: add `clawdbot gateway --dev/--reset` to auto-create a dev config/workspace with a robot identity (no BOOTSTRAP.md), and reset wipes config/creds/sessions/workspace (subcommand --dev no longer collides with global --dev profile). — thanks @steipete
 - Configure: stop prompting to open the Control UI (still shown in onboarding). — thanks @steipete
+- Telegram: suppress grammY getUpdates stack traces; log concise retry message instead. — thanks @steipete
 - Config: fix Minimax hosted onboarding to write `agents.defaults` and allow `msteams` as a heartbeat target. — thanks @steipete
 
 ## 2026.1.8
