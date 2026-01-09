@@ -81,43 +81,25 @@ const DEV_IDENTITY_NAME = "C3-PO";
 const DEV_IDENTITY_THEME = "protocol droid";
 const DEV_IDENTITY_EMOJI = "🤖";
 const DEV_AGENT_WORKSPACE_SUFFIX = "dev";
-const DEV_AGENTS_TEMPLATE = `# AGENTS.md - Clawdbot Dev Workspace
+const DEV_TEMPLATE_DIR = path.resolve(
+  path.dirname(new URL(import.meta.url).pathname),
+  "../../docs/reference/templates",
+);
 
-Default dev workspace for clawdbot gateway --dev.
-
-- Keep replies concise and direct.
-- Prefer observable debugging steps and logs.
-- Avoid destructive actions unless asked.
-`;
-const DEV_SOUL_TEMPLATE = `# SOUL.md - Dev Persona
-
-Protocol droid for debugging and operations.
-
-- Concise, structured answers.
-- Ask for missing context before guessing.
-- Prefer reproducible steps and logs.
-`;
-const DEV_TOOLS_TEMPLATE = `# TOOLS.md - Dev Tool Notes
-
-Use local tools carefully. Prefer read-only inspection before changes.
-`;
-const DEV_IDENTITY_TEMPLATE = `# IDENTITY.md - Agent Identity
-
-- Name: ${DEV_IDENTITY_NAME}
-- Creature: protocol droid
-- Vibe: ${DEV_IDENTITY_THEME}
-- Emoji: ${DEV_IDENTITY_EMOJI}
-`;
-const DEV_USER_TEMPLATE = `# USER.md - User Profile
-
-- Name:
-- Preferred address:
-- Notes:
-`;
-const DEV_HEARTBEAT_TEMPLATE = `# HEARTBEAT.md
-
-Keep it short. Check logs, health, and connectivity.
-`;
+async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+  try {
+    const raw = await fs.promises.readFile(
+      path.join(DEV_TEMPLATE_DIR, name),
+      "utf-8",
+    );
+    if (!raw.startsWith("---")) return raw;
+    const endIndex = raw.indexOf("\n---", 3);
+    if (endIndex === -1) return raw;
+    return raw.slice(endIndex + "\n---".length).replace(/^\s+/, "");
+  } catch {
+    return fallback;
+  }
+}
 
 type GatewayRunSignalAction = "stop" | "restart";
 
@@ -166,30 +148,35 @@ async function writeFileIfMissing(filePath: string, content: string) {
 async function ensureDevWorkspace(dir: string) {
   const resolvedDir = resolveUserPath(dir);
   await fs.promises.mkdir(resolvedDir, { recursive: true });
-  await writeFileIfMissing(
-    path.join(resolvedDir, "AGENTS.md"),
-    DEV_AGENTS_TEMPLATE,
-  );
-  await writeFileIfMissing(
-    path.join(resolvedDir, "SOUL.md"),
-    DEV_SOUL_TEMPLATE,
-  );
-  await writeFileIfMissing(
-    path.join(resolvedDir, "IDENTITY.md"),
-    DEV_IDENTITY_TEMPLATE,
-  );
-  await writeFileIfMissing(
-    path.join(resolvedDir, "TOOLS.md"),
-    DEV_TOOLS_TEMPLATE,
-  );
-  await writeFileIfMissing(
-    path.join(resolvedDir, "USER.md"),
-    DEV_USER_TEMPLATE,
-  );
-  await writeFileIfMissing(
-    path.join(resolvedDir, "HEARTBEAT.md"),
-    DEV_HEARTBEAT_TEMPLATE,
-  );
+
+  const [agents, soul, tools, identity, user] = await Promise.all([
+    loadDevTemplate(
+      "AGENTS.dev.md",
+      `# AGENTS.md - Clawdbot Dev Workspace\n\nDefault dev workspace for clawdbot gateway --dev.\n`,
+    ),
+    loadDevTemplate(
+      "SOUL.dev.md",
+      `# SOUL.md - Dev Persona\n\nProtocol droid for debugging and operations.\n`,
+    ),
+    loadDevTemplate(
+      "TOOLS.dev.md",
+      `# TOOLS.md - User Tool Notes (editable)\n\nAdd your local tool notes here.\n`,
+    ),
+    loadDevTemplate(
+      "IDENTITY.dev.md",
+      `# IDENTITY.md - Agent Identity\n\n- Name: ${DEV_IDENTITY_NAME}\n- Creature: protocol droid\n- Vibe: ${DEV_IDENTITY_THEME}\n- Emoji: ${DEV_IDENTITY_EMOJI}\n`,
+    ),
+    loadDevTemplate(
+      "USER.dev.md",
+      `# USER.md - User Profile\n\n- Name:\n- Preferred address:\n- Notes:\n`,
+    ),
+  ]);
+
+  await writeFileIfMissing(path.join(resolvedDir, "AGENTS.md"), agents);
+  await writeFileIfMissing(path.join(resolvedDir, "SOUL.md"), soul);
+  await writeFileIfMissing(path.join(resolvedDir, "TOOLS.md"), tools);
+  await writeFileIfMissing(path.join(resolvedDir, "IDENTITY.md"), identity);
+  await writeFileIfMissing(path.join(resolvedDir, "USER.md"), user);
 }
 
 async function ensureDevGatewayConfig(opts: { reset?: boolean }) {

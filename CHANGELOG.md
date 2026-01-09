@@ -103,6 +103,7 @@
 - Configure: stop prompting to open the Control UI (still shown in onboarding). — thanks @steipete
 - Telegram: suppress grammY getUpdates stack traces; log concise retry message instead. — thanks @steipete
 - Gateway/CLI: allow dev profile (`clawdbot --dev`) to auto-create the dev config + workspace. — thanks @steipete
+- Dev templates: ship C-3PO dev workspace defaults as docs templates and use them for dev bootstrap. — thanks @steipete
 - Config: fix Minimax hosted onboarding to write `agents.defaults` and allow `msteams` as a heartbeat target. — thanks @steipete
 
 ## 2026.1.8
