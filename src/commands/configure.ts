@@ -78,11 +78,8 @@ import {
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  detectBrowserOpenSupport,
   ensureWorkspaceAndSessions,
-  formatControlUiSshHint,
   guardCancel,
-  openUrl,
   printWizardHeader,
   probeGatewayReachable,
   randomToken,
@@ -1141,41 +1138,6 @@ export async function runConfigureWizard(
     ].join("\n"),
     "Control UI",
   );
-
-  const browserSupport = await detectBrowserOpenSupport();
-  if (gatewayProbe.ok) {
-    if (!browserSupport.ok) {
-      note(
-        formatControlUiSshHint({
-          port: gatewayPort,
-          basePath: nextConfig.gateway?.controlUi?.basePath,
-          token: gatewayToken,
-        }),
-        "Open Control UI",
-      );
-    } else {
-      const wantsOpen = guardCancel(
-        await confirm({
-          message: "Open Control UI now?",
-          initialValue: false,
-        }),
-        runtime,
-      );
-      if (wantsOpen) {
-        const opened = await openUrl(links.httpUrl);
-        if (!opened) {
-          note(
-            formatControlUiSshHint({
-              port: gatewayPort,
-              basePath: nextConfig.gateway?.controlUi?.basePath,
-              token: gatewayToken,
-            }),
-            "Open Control UI",
-          );
-        }
-      }
-    }
-  }
 
   outro("Configure complete.");
 }
