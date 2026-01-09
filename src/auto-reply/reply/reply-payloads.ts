@@ -1,9 +1,10 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
+import type { ReplyToMode } from "../../config/types.js";
+import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
-
-export type ReplyToModeFilter = (payload: ReplyPayload) => ReplyPayload;
+import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 export function applyReplyTagsToPayload(
   payload: ReplyPayload,
@@ -32,10 +33,15 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
 
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
-  applyReplyToMode: ReplyToModeFilter;
+  replyToMode: ReplyToMode;
+  replyToChannel?: OriginatingChannelType;
   currentMessageId?: string;
 }): ReplyPayload[] {
-  const { payloads, applyReplyToMode, currentMessageId } = params;
+  const { payloads, replyToMode, replyToChannel, currentMessageId } = params;
+  const applyReplyToMode = createReplyToModeFilterForChannel(
+    replyToMode,
+    replyToChannel,
+  );
   return payloads
     .map((payload) => applyReplyTagsToPayload(payload, currentMessageId))
     .filter(isRenderablePayload)

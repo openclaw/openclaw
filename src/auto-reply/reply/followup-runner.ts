@@ -19,10 +19,7 @@ import {
   filterMessagingToolDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
-import {
-  createReplyToModeFilter,
-  resolveReplyToMode,
-} from "./reply-threading.js";
+import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 import { incrementCompactionCount } from "./session-updates.js";
 import type { TypingController } from "./typing.js";
@@ -195,14 +192,12 @@ export function createFollowupRunner(params: {
         (queued.run.messageProvider?.toLowerCase() as
           | OriginatingChannelType
           | undefined);
-      const applyReplyToMode = createReplyToModeFilter(
-        resolveReplyToMode(queued.run.config, replyToChannel),
-        { allowTagsWhenOff: replyToChannel === "slack" },
-      );
+      const replyToMode = resolveReplyToMode(queued.run.config, replyToChannel);
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({
         payloads: sanitizedPayloads,
-        applyReplyToMode,
+        replyToMode,
+        replyToChannel,
       });
 
       const dedupedPayloads = filterMessagingToolDuplicates({
