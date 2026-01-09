@@ -68,7 +68,7 @@ export class EmbeddedBlockChunker {
       const breakResult =
         force && this.#buffer.length <= maxChars
           ? this.#pickSoftBreakIndex(this.#buffer, 1)
-          : this.#pickBreakIndex(this.#buffer);
+          : this.#pickBreakIndex(this.#buffer, force ? 1 : undefined);
       if (breakResult.index <= 0) {
         if (force) {
           emit(this.#buffer);
@@ -169,8 +169,11 @@ export class EmbeddedBlockChunker {
     return { index: -1 };
   }
 
-  #pickBreakIndex(buffer: string): BreakResult {
-    const minChars = Math.max(1, Math.floor(this.#chunking.minChars));
+  #pickBreakIndex(buffer: string, minCharsOverride?: number): BreakResult {
+    const minChars = Math.max(
+      1,
+      Math.floor(minCharsOverride ?? this.#chunking.minChars),
+    );
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
     if (buffer.length < minChars) return { index: -1 };
     const window = buffer.slice(0, Math.min(maxChars, buffer.length));

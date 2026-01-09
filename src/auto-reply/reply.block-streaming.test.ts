@@ -74,6 +74,7 @@ describe("block streaming", () => {
         {
           onReplyStart,
           onBlockReply,
+          disableBlockStreaming: false,
         },
         {
           agents: {
@@ -131,6 +132,7 @@ describe("block streaming", () => {
         {
           onReplyStart,
           onBlockReply,
+          disableBlockStreaming: false,
         },
         {
           agents: {
@@ -178,6 +180,7 @@ describe("block streaming", () => {
         },
         {
           onBlockReply,
+          disableBlockStreaming: false,
         },
         {
           agents: {
@@ -234,6 +237,7 @@ describe("block streaming", () => {
         {
           onBlockReply,
           blockReplyTimeoutMs: 10,
+          disableBlockStreaming: false,
         },
         {
           agents: {
