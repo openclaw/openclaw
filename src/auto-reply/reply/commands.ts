@@ -20,6 +20,12 @@ import {
 } from "../../agents/pi-embedded.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
+  getConfigOverrides,
+  resetConfigOverrides,
+  setConfigOverride,
+  unsetConfigOverride,
+} from "../../config/runtime-overrides.js";
+import {
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   type SessionEntry,
@@ -40,12 +46,6 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
-import {
-  getConfigOverrides,
-  resetConfigOverrides,
-  setConfigOverride,
-  unsetConfigOverride,
-} from "../../config/runtime-overrides.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   normalizeCommandBody,
@@ -627,7 +627,10 @@ export async function handleCommands(params: {
       return { shouldContinue: false };
     }
     if (debugCommand.action === "error") {
-      return { shouldContinue: false, reply: { text: `⚠️ ${debugCommand.message}` } };
+      return {
+        shouldContinue: false,
+        reply: { text: `⚠️ ${debugCommand.message}` },
+      };
     }
     if (debugCommand.action === "show") {
       const overrides = getConfigOverrides();
@@ -641,7 +644,9 @@ export async function handleCommands(params: {
       const json = JSON.stringify(overrides, null, 2);
       return {
         shouldContinue: false,
-        reply: { text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\`` },
+        reply: {
+          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\``,
+        },
       };
     }
     if (debugCommand.action === "reset") {
@@ -662,7 +667,9 @@ export async function handleCommands(params: {
       if (!result.removed) {
         return {
           shouldContinue: false,
-          reply: { text: `⚙️ No debug override found for ${debugCommand.path}.` },
+          reply: {
+            text: `⚙️ No debug override found for ${debugCommand.path}.`,
+          },
         };
       }
       return {

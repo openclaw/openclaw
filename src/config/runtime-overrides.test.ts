@@ -1,6 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
-
-import type { ClawdbotConfig } from "./types.js";
+import { beforeEach, describe, expect, it } from "vitest";
 import {
   applyConfigOverrides,
   getConfigOverrides,
@@ -8,6 +6,7 @@ import {
   setConfigOverride,
   unsetConfigOverride,
 } from "./runtime-overrides.js";
+import type { ClawdbotConfig } from "./types.js";
 
 describe("runtime overrides", () => {
   beforeEach(() => {

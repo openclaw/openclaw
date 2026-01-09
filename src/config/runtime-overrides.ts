@@ -81,13 +81,19 @@ export function resetConfigOverrides(): void {
   overrides = {};
 }
 
-export function setConfigOverride(pathRaw: string, value: unknown): {
+export function setConfigOverride(
+  pathRaw: string,
+  value: unknown,
+): {
   ok: boolean;
   error?: string;
 } {
   const path = parsePath(pathRaw);
   if (!path) {
-    return { ok: false, error: "Invalid path. Use dot notation (e.g. foo.bar)." };
+    return {
+      ok: false,
+      error: "Invalid path. Use dot notation (e.g. foo.bar).",
+    };
   }
   setOverrideAtPath(overrides, path, value);
   return { ok: true };
