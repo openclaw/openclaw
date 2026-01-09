@@ -12,7 +12,9 @@ type RenderEnv = {
 
 const md = new MarkdownIt({
   html: false,
-  linkify: true,
+  // Slack will auto-link plain URLs; keeping linkify off avoids double-rendering
+  // (e.g. "https://x.com" becoming "https://x.com (https://x.com)").
+  linkify: false,
   breaks: false,
   typographer: false,
 });
@@ -21,13 +23,60 @@ md.enable("strikethrough");
 
 /**
  * Escape special characters for Slack mrkdwn format.
- * Slack requires escaping &, <, > to prevent injection.
+ *
+ * By default, Slack uses angle-bracket markup for mentions and links
+ * (e.g. "<@U123>", "<https://…|text>"). We preserve those tokens so agents
+ * can intentionally include them, while escaping other uses of "<" and ">".
  */
-function escapeSlackMrkdwn(text: string): string {
+function escapeSlackMrkdwnSegment(text: string): string {
   return text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
+}
+
+const SLACK_ANGLE_TOKEN_RE = /<[^>\n]+>/g;
+
+function isAllowedSlackAngleToken(token: string): boolean {
+  if (!token.startsWith("<") || !token.endsWith(">")) return false;
+  const inner = token.slice(1, -1);
+  return (
+    inner.startsWith("@") ||
+    inner.startsWith("#") ||
+    inner.startsWith("!") ||
+    inner.startsWith("mailto:") ||
+    inner.startsWith("tel:") ||
+    inner.startsWith("http://") ||
+    inner.startsWith("https://") ||
+    inner.startsWith("slack://")
+  );
+}
+
+function escapeSlackMrkdwnText(text: string): string {
+  if (!text.includes("&") && !text.includes("<") && !text.includes(">")) {
+    return text;
+  }
+
+  SLACK_ANGLE_TOKEN_RE.lastIndex = 0;
+  const out: string[] = [];
+  let lastIndex = 0;
+
+  for (
+    let match = SLACK_ANGLE_TOKEN_RE.exec(text);
+    match;
+    match = SLACK_ANGLE_TOKEN_RE.exec(text)
+  ) {
+    const matchIndex = match.index ?? 0;
+    out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex, matchIndex)));
+    const token = match[0] ?? "";
+    out.push(
+      isAllowedSlackAngleToken(token) ? token : escapeSlackMrkdwnSegment(token),
+    );
+    lastIndex = matchIndex + token.length;
+  }
+
+  out.push(escapeSlackMrkdwnSegment(text.slice(lastIndex)));
+  return out.join("");
 }
 
 function getListStack(env: RenderEnv): ListState[] {
@@ -41,7 +90,7 @@ function getLinkStack(env: RenderEnv): { href: string }[] {
 }
 
 md.renderer.rules.text = (tokens, idx) =>
-  escapeSlackMrkdwn(tokens[idx]?.content ?? "");
+  escapeSlackMrkdwnText(tokens[idx]?.content ?? "");
 
 md.renderer.rules.softbreak = () => "\n";
 md.renderer.rules.hardbreak = () => "\n";
@@ -55,7 +104,7 @@ md.renderer.rules.paragraph_close = (_tokens, _idx, _opts, env) => {
 md.renderer.rules.heading_open = () => "*";
 md.renderer.rules.heading_close = () => "*\n\n";
 
-md.renderer.rules.blockquote_open = () => "&gt; ";
+md.renderer.rules.blockquote_open = () => "> ";
 md.renderer.rules.blockquote_close = () => "\n";
 
 md.renderer.rules.bullet_list_open = (_tokens, _idx, _opts, env) => {
@@ -99,15 +148,14 @@ md.renderer.rules.s_open = () => "~";
 md.renderer.rules.s_close = () => "~";
 
 md.renderer.rules.code_inline = (tokens, idx) =>
-  `\`${escapeSlackMrkdwn(tokens[idx]?.content ?? "")}\``;
+  `\`${escapeSlackMrkdwnSegment(tokens[idx]?.content ?? "")}\``;
 
 md.renderer.rules.code_block = (tokens, idx) =>
-  `\`\`\`\n${escapeSlackMrkdwn(tokens[idx]?.content ?? "")}\`\`\`\n`;
+  `\`\`\`\n${escapeSlackMrkdwnSegment(tokens[idx]?.content ?? "")}\`\`\`\n`;
 
 md.renderer.rules.fence = (tokens, idx) =>
-  `\`\`\`\n${escapeSlackMrkdwn(tokens[idx]?.content ?? "")}\`\`\`\n`;
+  `\`\`\`\n${escapeSlackMrkdwnSegment(tokens[idx]?.content ?? "")}\`\`\`\n`;
 
-// Slack links use <url|text> format
 md.renderer.rules.link_open = (tokens, idx, _opts, env) => {
   const href = tokens[idx]?.attrGet("href") ?? "";
   const stack = getLinkStack(env as RenderEnv);
@@ -118,20 +166,20 @@ md.renderer.rules.link_close = (_tokens, _idx, _opts, env) => {
   const stack = getLinkStack(env as RenderEnv);
   const link = stack.pop();
   if (link?.href) {
-    return ` (${escapeSlackMrkdwn(link.href)})`;
+    return ` (${escapeSlackMrkdwnSegment(link.href)})`;
   }
   return "";
 };
 
 md.renderer.rules.image = (tokens, idx) => {
   const alt = tokens[idx]?.content ?? "";
-  return escapeSlackMrkdwn(alt);
+  return escapeSlackMrkdwnSegment(alt);
 };
 
 md.renderer.rules.html_block = (tokens, idx) =>
-  escapeSlackMrkdwn(tokens[idx]?.content ?? "");
+  escapeSlackMrkdwnSegment(tokens[idx]?.content ?? "");
 md.renderer.rules.html_inline = (tokens, idx) =>
-  escapeSlackMrkdwn(tokens[idx]?.content ?? "");
+  escapeSlackMrkdwnSegment(tokens[idx]?.content ?? "");
 
 md.renderer.rules.table_open = () => "";
 md.renderer.rules.table_close = () => "";
@@ -148,6 +196,30 @@ md.renderer.rules.td_close = () => "\t";
 
 md.renderer.rules.hr = () => "\n";
 
+function protectSlackAngleLinks(markdown: string): {
+  markdown: string;
+  tokens: string[];
+} {
+  const tokens: string[] = [];
+  const protectedMarkdown = (markdown ?? "").replace(
+    /<(?:https?:\/\/|mailto:|tel:|slack:\/\/)[^>\n]+>/g,
+    (match) => {
+      const id = tokens.length;
+      tokens.push(match);
+      return `⟦clawdbot-slacktok:${id}⟧`;
+    },
+  );
+  return { markdown: protectedMarkdown, tokens };
+}
+
+function restoreSlackAngleLinks(text: string, tokens: string[]): string {
+  let out = text;
+  for (let i = 0; i < tokens.length; i++) {
+    out = out.replaceAll(`⟦clawdbot-slacktok:${i}⟧`, tokens[i] ?? "");
+  }
+  return out;
+}
+
 /**
  * Convert standard Markdown to Slack mrkdwn format.
  *
@@ -161,10 +233,12 @@ md.renderer.rules.hr = () => "\n";
  */
 export function markdownToSlackMrkdwn(markdown: string): string {
   const env: RenderEnv = {};
-  const rendered = md.render(markdown ?? "", env);
-  return rendered
+  const protectedLinks = protectSlackAngleLinks(markdown ?? "");
+  const rendered = md.render(protectedLinks.markdown, env);
+  const normalized = rendered
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\t+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trimEnd();
+  return restoreSlackAngleLinks(normalized, protectedLinks.tokens);
 }

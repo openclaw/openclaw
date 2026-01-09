@@ -152,6 +152,19 @@ export async function handleSlackAction(
           mediaUrl: mediaUrl ?? undefined,
           threadTs: threadTs ?? undefined,
         });
+
+        // Keep "first" mode consistent even when the agent explicitly provided
+        // threadTs: once we send a message to the current channel, consider the
+        // first reply "used" so later tool calls don't auto-thread again.
+        if (context?.hasRepliedRef && context.currentChannelId) {
+          const normalizedTarget = to.startsWith("channel:")
+            ? to.slice("channel:".length)
+            : to;
+          if (normalizedTarget === context.currentChannelId) {
+            context.hasRepliedRef.value = true;
+          }
+        }
+
         return jsonResult({ ok: true, result });
       }
       case "editMessage": {

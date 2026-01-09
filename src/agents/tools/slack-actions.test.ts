@@ -197,6 +197,52 @@ describe("handleSlackAction", () => {
     );
   });
 
+  it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
+    const cfg = { slack: { botToken: "tok" } } as ClawdbotConfig;
+    sendSlackMessage.mockClear();
+    const hasRepliedRef = { value: false };
+    const context = {
+      currentChannelId: "C123",
+      currentThreadTs: "1111111111.111111",
+      replyToMode: "first" as const,
+      hasRepliedRef,
+    };
+
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Explicit",
+        threadTs: "2222222222.222222",
+      },
+      cfg,
+      context,
+    );
+    expect(sendSlackMessage).toHaveBeenLastCalledWith(
+      "channel:C123",
+      "Explicit",
+      {
+        mediaUrl: undefined,
+        threadTs: "2222222222.222222",
+      },
+    );
+    expect(hasRepliedRef.value).toBe(true);
+
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "Second" },
+      cfg,
+      context,
+    );
+    expect(sendSlackMessage).toHaveBeenLastCalledWith(
+      "channel:C123",
+      "Second",
+      {
+        mediaUrl: undefined,
+        threadTs: undefined,
+      },
+    );
+  });
+
   it("replyToMode=first without hasRepliedRef does not thread", async () => {
     const cfg = { slack: { botToken: "tok" } } as ClawdbotConfig;
     sendSlackMessage.mockClear();

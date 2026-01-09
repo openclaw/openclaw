@@ -38,9 +38,21 @@ describe("markdownToSlackMrkdwn", () => {
     expect(res).toBe("see docs (https://example.com)");
   });
 
+  it("does not duplicate bare URLs", () => {
+    const res = markdownToSlackMrkdwn("see https://example.com");
+    expect(res).toBe("see https://example.com");
+  });
+
   it("escapes unsafe characters", () => {
     const res = markdownToSlackMrkdwn("a & b < c > d");
     expect(res).toBe("a &amp; b &lt; c &gt; d");
+  });
+
+  it("preserves Slack angle-bracket markup (mentions/links)", () => {
+    const res = markdownToSlackMrkdwn(
+      "hi <@U123> see <https://example.com|docs> and <!here>",
+    );
+    expect(res).toBe("hi <@U123> see <https://example.com|docs> and <!here>");
   });
 
   it("escapes raw HTML", () => {
@@ -68,9 +80,9 @@ describe("markdownToSlackMrkdwn", () => {
     expect(res).toBe("*Title*");
   });
 
-  it("renders blockquotes with escaped angle bracket", () => {
+  it("renders blockquotes", () => {
     const res = markdownToSlackMrkdwn("> Quote");
-    expect(res).toBe("&gt; Quote");
+    expect(res).toBe("> Quote");
   });
 
   it("handles adjacent list items", () => {

@@ -1074,13 +1074,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       message,
       replyToMode,
     });
-    // Base thread timestamp: where should first reply go?
-    // - "off": only thread if already in a thread
-    // - "first"/"all": start thread under the message
-    const baseThreadTs =
-      replyToMode === "off"
-        ? message.thread_ts
-        : (message.thread_ts ?? message.ts);
+    const messageTs = message.ts ?? message.event_ts;
+    const incomingThreadTs = message.thread_ts;
     let didSetStatus = false;
     // Shared mutable ref for tracking if a reply was sent (used by both
     // auto-reply path and tool path for "first" threading mode).
@@ -1100,7 +1095,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         deliver: async (payload) => {
           const effectiveThreadTs = resolveSlackThreadTs({
             replyToMode,
-            baseThreadTs,
+            incomingThreadTs,
+            messageTs,
             hasReplied: hasRepliedRef.value,
           });
           await deliverReplies({
@@ -1984,20 +1980,23 @@ export function isSlackRoomAllowedByPolicy(params: {
  */
 export function resolveSlackThreadTs(params: {
   replyToMode: "off" | "first" | "all";
-  baseThreadTs: string | undefined;
+  incomingThreadTs: string | undefined;
+  messageTs: string | undefined;
   hasReplied: boolean;
 }): string | undefined {
-  const { replyToMode, baseThreadTs, hasReplied } = params;
-  if (replyToMode === "off") {
-    // Always stay in thread if already in one
-    return baseThreadTs;
-  }
+  const { replyToMode, incomingThreadTs, messageTs, hasReplied } = params;
+  if (incomingThreadTs) return incomingThreadTs;
+  if (!messageTs) return undefined;
   if (replyToMode === "all") {
     // All replies go to thread
-    return baseThreadTs;
+    return messageTs;
   }
-  // "first": only first reply goes to thread
-  return hasReplied ? undefined : baseThreadTs;
+  if (replyToMode === "first") {
+    // "first": only first reply goes to thread
+    return hasReplied ? undefined : messageTs;
+  }
+  // "off": never start a thread
+  return undefined;
 }
 
 async function deliverSlackSlashReplies(params: {

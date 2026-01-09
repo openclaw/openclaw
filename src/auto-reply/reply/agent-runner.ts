@@ -86,13 +86,22 @@ function buildSlackThreadingContext(params: {
       hasRepliedRef: undefined,
     };
   }
+
+  // If we're already inside a thread, never jump replies out of it (even in
+  // replyToMode="off"/"first"). This keeps tool calls consistent with the
+  // auto-reply path.
+  const configuredReplyToMode = config?.slack?.replyToMode ?? "off";
+  const effectiveReplyToMode = sessionCtx.ThreadLabel
+    ? ("all" as const)
+    : configuredReplyToMode;
+
   return {
     // Extract channel from "channel:C123" format
     currentChannelId: sessionCtx.To?.startsWith("channel:")
       ? sessionCtx.To.slice("channel:".length)
       : undefined,
     currentThreadTs: sessionCtx.ReplyToId,
-    replyToMode: config?.slack?.replyToMode ?? "off",
+    replyToMode: effectiveReplyToMode,
     hasRepliedRef,
   };
 }
