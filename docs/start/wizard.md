@@ -78,7 +78,9 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
    - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.clawdbot/.env` so launchd can read it.
    - **API key**: stores the key for you.
-   - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
+   - **MiniMax M2.1 (minimax.io)**: config is auto‑written for the OpenAI-compatible `/v1` endpoint.
+   - **MiniMax API (platform.minimax.io)**: config is auto‑written for the Anthropic-compatible `/anthropic` endpoint.
+   - **MiniMax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
   - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).

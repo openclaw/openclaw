@@ -5,10 +5,73 @@ import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 
 const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
+const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
 export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
 const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
 const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
+// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+const MINIMAX_API_COST = {
+  input: 15,
+  output: 60,
+  cacheRead: 2,
+  cacheWrite: 10,
+};
+const MINIMAX_HOSTED_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const MINIMAX_LM_STUDIO_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+const MINIMAX_MODEL_CATALOG = {
+  "MiniMax-M2.1": { name: "MiniMax M2.1", reasoning: false },
+  "MiniMax-M2.1-lightning": {
+    name: "MiniMax M2.1 Lightning",
+    reasoning: false,
+  },
+  "MiniMax-M2": { name: "MiniMax M2", reasoning: true },
+} as const;
+
+type MinimaxCatalogId = keyof typeof MINIMAX_MODEL_CATALOG;
+
+function buildMinimaxModelDefinition(params: {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  cost: ModelDefinitionConfig["cost"];
+  contextWindow: number;
+  maxTokens: number;
+}): ModelDefinitionConfig {
+  const catalog = MINIMAX_MODEL_CATALOG[params.id as MinimaxCatalogId];
+  const fallbackReasoning = params.id === "MiniMax-M2";
+  return {
+    id: params.id,
+    name: params.name ?? catalog?.name ?? `MiniMax ${params.id}`,
+    reasoning: params.reasoning ?? catalog?.reasoning ?? fallbackReasoning,
+    input: ["text"],
+    cost: params.cost,
+    contextWindow: params.contextWindow,
+    maxTokens: params.maxTokens,
+  };
+}
+
+function buildMinimaxApiModelDefinition(
+  modelId: string,
+): ModelDefinitionConfig {
+  return buildMinimaxModelDefinition({
+    id: modelId,
+    cost: MINIMAX_API_COST,
+    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+  });
+}
 
 export async function writeOAuthCredentials(
   provider: OAuthProvider,
@@ -137,15 +200,14 @@ export function applyMinimaxProviderConfig(
       apiKey: "lmstudio",
       api: "openai-responses",
       models: [
-        {
+        buildMinimaxModelDefinition({
           id: "minimax-m2.1-gs32",
           name: "MiniMax M2.1 GS32",
           reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          cost: MINIMAX_LM_STUDIO_COST,
           contextWindow: 196608,
           maxTokens: 8192,
-        },
+        }),
       ],
     };
   }
@@ -177,15 +239,12 @@ export function applyMinimaxHostedProviderConfig(
   };
 
   const providers = { ...cfg.models?.providers };
-  const hostedModel: ModelDefinitionConfig = {
+  const hostedModel = buildMinimaxModelDefinition({
     id: MINIMAX_HOSTED_MODEL_ID,
-    name: "MiniMax M2.1",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: MINIMAX_HOSTED_COST,
     contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
-  };
+  });
   const existingProvider = providers.minimax;
   const existingModels = Array.isArray(existingProvider?.models)
     ? existingProvider.models
@@ -271,21 +330,10 @@ export function applyMinimaxApiProviderConfig(
 ): ClawdbotConfig {
   const providers = { ...cfg.models?.providers };
   providers.minimax = {
-    baseUrl: "https://api.minimax.io/anthropic",
+    baseUrl: MINIMAX_API_BASE_URL,
     apiKey: "", // Resolved via MINIMAX_API_KEY env var or auth profile
     api: "anthropic-messages",
-    models: [
-      {
-        id: modelId,
-        name: `MiniMax ${modelId}`,
-        reasoning: modelId === "MiniMax-M2",
-        input: ["text"],
-        // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
-        cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      },
-    ],
+    models: [buildMinimaxApiModelDefinition(modelId)],
   };
 
   const models = { ...cfg.agents?.defaults?.models };

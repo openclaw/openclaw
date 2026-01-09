@@ -3,6 +3,8 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
+  resolveApiKeyForProfile,
+  resolveAuthProfileOrder,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
@@ -45,6 +47,69 @@ import {
 import type { AuthChoice, OnboardOptions } from "./onboard-types.js";
 import { applyOpenAICodexModelDefault } from "./openai-codex-model-default.js";
 import { ensureSystemdUserLingerNonInteractive } from "./systemd-linger.js";
+
+type NonInteractiveApiKeySource = "flag" | "env" | "profile";
+
+async function resolveApiKeyFromProfiles(params: {
+  provider: string;
+  cfg: ClawdbotConfig;
+  agentDir?: string;
+}): Promise<string | null> {
+  const store = ensureAuthProfileStore(params.agentDir);
+  const order = resolveAuthProfileOrder({
+    cfg: params.cfg,
+    store,
+    provider: params.provider,
+  });
+  for (const profileId of order) {
+    const cred = store.profiles[profileId];
+    if (cred?.type !== "api_key") continue;
+    const resolved = await resolveApiKeyForProfile({
+      cfg: params.cfg,
+      store,
+      profileId,
+      agentDir: params.agentDir,
+    });
+    if (resolved?.apiKey) return resolved.apiKey;
+  }
+  return null;
+}
+
+async function resolveNonInteractiveApiKey(params: {
+  provider: string;
+  cfg: ClawdbotConfig;
+  flagValue?: string;
+  flagName: string;
+  envVar: string;
+  runtime: RuntimeEnv;
+  agentDir?: string;
+  allowProfile?: boolean;
+}): Promise<{ key: string; source: NonInteractiveApiKeySource } | null> {
+  const flagKey = params.flagValue?.trim();
+  if (flagKey) return { key: flagKey, source: "flag" };
+
+  const envResolved = resolveEnvApiKey(params.provider);
+  if (envResolved?.apiKey) return { key: envResolved.apiKey, source: "env" };
+
+  if (params.allowProfile ?? true) {
+    const profileKey = await resolveApiKeyFromProfiles({
+      provider: params.provider,
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+    });
+    if (profileKey) return { key: profileKey, source: "profile" };
+  }
+
+  const profileHint =
+    params.allowProfile === false
+      ? ""
+      : `, or existing ${params.provider} API-key profile`;
+  params.runtime.error(
+    `Missing ${params.flagName} (or ${params.envVar} in env${profileHint}).`,
+  );
+  params.runtime.exit(1);
+  return null;
+}
 
 export async function runNonInteractiveOnboarding(
   opts: OnboardOptions,
@@ -121,26 +186,36 @@ export async function runNonInteractiveOnboarding(
 
   const authChoice: AuthChoice = opts.authChoice ?? "skip";
   if (authChoice === "apiKey") {
-    const key = opts.anthropicApiKey?.trim();
-    if (!key) {
-      runtime.error("Missing --anthropic-api-key");
-      runtime.exit(1);
-      return;
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "anthropic",
+      cfg: baseConfig,
+      flagValue: opts.anthropicApiKey,
+      flagName: "--anthropic-api-key",
+      envVar: "ANTHROPIC_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setAnthropicApiKey(resolved.key);
     }
-    await setAnthropicApiKey(key);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",
       provider: "anthropic",
       mode: "api_key",
     });
   } else if (authChoice === "gemini-api-key") {
-    const key = opts.geminiApiKey?.trim();
-    if (!key) {
-      runtime.error("Missing --gemini-api-key");
-      runtime.exit(1);
-      return;
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "google",
+      cfg: baseConfig,
+      flagValue: opts.geminiApiKey,
+      flagName: "--gemini-api-key",
+      envVar: "GEMINI_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setGeminiApiKey(resolved.key);
     }
-    await setGeminiApiKey(key);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",
       provider: "google",
@@ -148,12 +223,17 @@ export async function runNonInteractiveOnboarding(
     });
     nextConfig = applyGoogleGeminiModelDefault(nextConfig).next;
   } else if (authChoice === "openai-api-key") {
-    const key = opts.openaiApiKey?.trim() || resolveEnvApiKey("openai")?.apiKey;
-    if (!key) {
-      runtime.error("Missing --openai-api-key (or OPENAI_API_KEY in env).");
-      runtime.exit(1);
-      return;
-    }
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "openai",
+      cfg: baseConfig,
+      flagValue: opts.openaiApiKey,
+      flagName: "--openai-api-key",
+      envVar: "OPENAI_API_KEY",
+      runtime,
+      allowProfile: false,
+    });
+    if (!resolved) return;
+    const key = resolved.key;
     const result = upsertSharedEnvVar({
       key: "OPENAI_API_KEY",
       value: key,
@@ -161,13 +241,18 @@ export async function runNonInteractiveOnboarding(
     process.env.OPENAI_API_KEY = key;
     runtime.log(`Saved OPENAI_API_KEY to ${result.path}`);
   } else if (authChoice === "minimax-cloud") {
-    const key = opts.minimaxApiKey?.trim();
-    if (!key) {
-      runtime.error("Missing --minimax-api-key");
-      runtime.exit(1);
-      return;
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "minimax",
+      cfg: baseConfig,
+      flagValue: opts.minimaxApiKey,
+      flagName: "--minimax-api-key",
+      envVar: "MINIMAX_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setMinimaxApiKey(resolved.key);
     }
-    await setMinimaxApiKey(key);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "minimax:default",
       provider: "minimax",
@@ -175,14 +260,18 @@ export async function runNonInteractiveOnboarding(
     });
     nextConfig = applyMinimaxHostedConfig(nextConfig);
   } else if (authChoice === "minimax-api") {
-    const key =
-      opts.minimaxApiKey?.trim() || resolveEnvApiKey("minimax")?.apiKey;
-    if (!key) {
-      runtime.error("Missing --minimax-api-key (or MINIMAX_API_KEY in env).");
-      runtime.exit(1);
-      return;
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "minimax",
+      cfg: baseConfig,
+      flagValue: opts.minimaxApiKey,
+      flagName: "--minimax-api-key",
+      envVar: "MINIMAX_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setMinimaxApiKey(resolved.key);
     }
-    await setMinimaxApiKey(key);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "minimax:default",
       provider: "minimax",
