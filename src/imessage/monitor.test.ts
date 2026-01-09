@@ -215,6 +215,46 @@ describe("monitorIMessageProvider", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it("treats configured chat_id as a group session even when is_group is false", async () => {
+    config = {
+      ...config,
+      imessage: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groups: { "2": { requireMention: false } },
+      },
+    };
+
+    const run = monitorIMessageProvider();
+    await waitForSubscribe();
+
+    notificationHandler?.({
+      method: "message",
+      params: {
+        message: {
+          id: 14,
+          chat_id: 2,
+          sender: "+15550001111",
+          is_from_me: false,
+          text: "hello",
+          is_group: false,
+        },
+      },
+    });
+
+    await flush();
+    closeResolve?.();
+    await run;
+
+    expect(replyMock).toHaveBeenCalled();
+    const ctx = replyMock.mock.calls[0]?.[0] as {
+      ChatType?: string;
+      SessionKey?: string;
+    };
+    expect(ctx.ChatType).toBe("group");
+    expect(ctx.SessionKey).toBe("agent:main:imessage:group:2");
+  });
+
   it("prefixes tool and final replies with responsePrefix", async () => {
     config = {
       ...config,
