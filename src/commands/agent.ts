@@ -337,6 +337,7 @@ export async function agentCommand(
       cfg,
       catalog: modelCatalog,
       defaultProvider,
+      defaultModel,
     });
     allowedModelKeys = allowed.allowedKeys;
     allowedModelCatalog = allowed.allowedCatalog;

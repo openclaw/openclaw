@@ -208,7 +208,6 @@ async function runClaudeCliOnce(params: {
   systemPrompt: string;
   timeoutMs: number;
   resumeSessionId?: string;
-  sessionId?: string;
 }): Promise<ClaudeCliOutput> {
   const args = [
     "-p",
@@ -226,8 +225,6 @@ async function runClaudeCliOnce(params: {
   ];
   if (params.resumeSessionId) {
     args.push("--resume", params.resumeSessionId);
-  } else if (params.sessionId) {
-    args.push("--session-id", params.sessionId);
   }
   args.push(params.prompt);
 
@@ -297,12 +294,11 @@ export async function runClaudeCliAgent(params: {
       systemPrompt,
       timeoutMs: params.timeoutMs,
       resumeSessionId: params.resumeSessionId,
-      sessionId: params.sessionId,
     });
   } catch (err) {
     if (!params.resumeSessionId) throw err;
     log.warn(
-      `claude-cli resume failed for ${params.resumeSessionId}; retrying with --session-id (${params.sessionId})`,
+      `claude-cli resume failed for ${params.resumeSessionId}; retrying without resume`,
     );
     output = await runClaudeCliOnce({
       prompt: params.prompt,
@@ -310,7 +306,6 @@ export async function runClaudeCliAgent(params: {
       modelId,
       systemPrompt,
       timeoutMs: params.timeoutMs,
-      sessionId: params.sessionId,
     });
   }
 
