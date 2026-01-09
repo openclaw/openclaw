@@ -180,7 +180,10 @@ async function ensureDevWorkspace(dir: string) {
     path.join(resolvedDir, "TOOLS.md"),
     DEV_TOOLS_TEMPLATE,
   );
-  await writeFileIfMissing(path.join(resolvedDir, "USER.md"), DEV_USER_TEMPLATE);
+  await writeFileIfMissing(
+    path.join(resolvedDir, "USER.md"),
+    DEV_USER_TEMPLATE,
+  );
   await writeFileIfMissing(
     path.join(resolvedDir, "HEARTBEAT.md"),
     DEV_HEARTBEAT_TEMPLATE,
