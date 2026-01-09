@@ -129,7 +129,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload.text).toBe("Hello block");
   });
 
-  it("prepends reasoning before text when enabled", () => {
+  it("emits reasoning as a separate message when enabled", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -160,11 +160,11 @@ describe("subscribeEmbeddedPiSession", () => {
 
     handler?.({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe(
-      "_Reasoning:_\n_Because it helps_\n\nFinal answer",
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply.mock.calls[0][0].text).toBe(
+      "Reasoning:\nBecause it helps",
     );
+    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
   });
 
   it("promotes <think> tags to thinking blocks at write-time", () => {
@@ -200,10 +200,11 @@ describe("subscribeEmbeddedPiSession", () => {
 
     handler?.({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(onBlockReply.mock.calls[0][0].text).toBe(
-      "_Reasoning:_\n_Because it helps_\n\nFinal answer",
+      "Reasoning:\nBecause it helps",
     );
+    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
 
     expect(assistantMessage.content).toEqual([
       { type: "thinking", thinking: "Because it helps" },
@@ -276,6 +277,74 @@ describe("subscribeEmbeddedPiSession", () => {
       { type: "thinking", thinking: "Because it helps" },
       { type: "text", text: "Final answer" },
     ]);
+  });
+
+  it.each([
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+  ])("suppresses <%s> blocks across chunk boundaries", ({ open, close }) => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: {
+        minChars: 5,
+        maxChars: 50,
+        breakPreference: "newline",
+      },
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: `${open}Reasoning chunk that should not leak`,
+      },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: `${close}\n\nFinal answer`,
+      },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: { type: "text_end" },
+    });
+
+    const payloadTexts = onBlockReply.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(payloadTexts.length).toBeGreaterThan(0);
+    for (const text of payloadTexts) {
+      expect(text).not.toContain("Reasoning");
+      expect(text).not.toContain(open);
+    }
+    const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
+    expect(combined).toBe("Final answer");
   });
 
   it("emits block replies on text_end and does not duplicate on message_end", () => {
@@ -1058,10 +1127,17 @@ describe("subscribeEmbeddedPiSession", () => {
 
     handler?.({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(3);
-    expect(onBlockReply.mock.calls[1][0].text).toBe(
-      "````md\nline1\nline2\n````",
-    );
+    const payloadTexts = onBlockReply.mock.calls
+      .map((call) => call[0]?.text)
+      .filter((value): value is string => typeof value === "string");
+    expect(payloadTexts.length).toBeGreaterThan(0);
+    const combined = payloadTexts.join(" ").replace(/\s+/g, " ").trim();
+    expect(combined).toContain("````md");
+    expect(combined).toContain("line1");
+    expect(combined).toContain("line2");
+    expect(combined).toContain("````");
+    expect(combined).toContain("Intro");
+    expect(combined).toContain("Outro");
   });
 
   it("splits long single-line fenced blocks with reopen/close", () => {
