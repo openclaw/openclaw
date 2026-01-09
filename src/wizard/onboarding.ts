@@ -328,6 +328,7 @@ export async function runOnboardingWizard(
   const authStore = ensureAuthProfileStore(undefined, {
     allowKeychainPrompt: false,
   });
+  const authChoiceFromPrompt = opts.authChoice === undefined;
   const authChoice =
     opts.authChoice ??
     ((await prompter.select({
@@ -348,15 +349,17 @@ export async function runOnboardingWizard(
   });
   nextConfig = authResult.config;
 
-  const modelSelection = await promptDefaultModel({
-    config: nextConfig,
-    prompter,
-    allowKeep: true,
-    ignoreAllowlist: true,
-    preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
-  });
-  if (modelSelection.model) {
-    nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+  if (authChoiceFromPrompt) {
+    const modelSelection = await promptDefaultModel({
+      config: nextConfig,
+      prompter,
+      allowKeep: true,
+      ignoreAllowlist: true,
+      preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+    });
+    if (modelSelection.model) {
+      nextConfig = applyPrimaryModel(nextConfig, modelSelection.model);
+    }
   }
 
   await warnIfModelConfigLooksOff(nextConfig, prompter);
