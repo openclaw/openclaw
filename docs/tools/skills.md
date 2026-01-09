@@ -23,6 +23,36 @@ If a skill name conflicts, precedence is:
 Additionally, you can configure extra skill folders (lowest precedence) via
 `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`.
 
+## Per-agent vs shared skills
+
+In **multi-agent** setups, each agent has its own workspace. That means:
+
+- **Per-agent skills** live in `<workspace>/skills` for that agent only.
+- **Shared skills** live in `~/.clawdbot/skills` (managed/local) and are visible
+  to **all agents** on the same machine.
+- **Shared folders** can also be added via `skills.load.extraDirs` (lowest
+  precedence) if you want a common skills pack used by multiple agents.
+
+If the same skill name exists in more than one place, the usual precedence
+applies: workspace wins, then managed/local, then bundled.
+
+## ClawdHub (install + sync)
+
+ClawdHub is the public skills registry for Clawdbot. Use it to discover,
+install, update, and back up skills. Full guide: [ClawdHub](/tools/clawdhub).
+
+Common flows:
+
+- Install a skill into your workspace:
+  - `clawdhub install <skill-slug>`
+- Update all installed skills:
+  - `clawdhub update --all`
+- Sync (scan + publish updates):
+  - `clawdhub sync --all`
+
+By default, `clawdhub` installs into `./skills` under your current working
+directory; Clawdbot picks that up as `<workspace>/skills` on the next session.
+
 ## Format (AgentSkills + Pi-compatible)
 
 `SKILL.md` must include at least:
@@ -132,6 +162,23 @@ This is **scoped to the agent run**, not a global shell environment.
 ## Session snapshot (performance)
 
 Clawdbot snapshots the eligible skills **when a session starts** and reuses that list for subsequent turns in the same session. Changes to skills or config take effect on the next new session.
+
+## Token impact (skills list)
+
+When skills are eligible, Clawdbot injects a compact XML list of available skills into the system prompt (via `formatSkillsForPrompt` in `pi-coding-agent`). The cost is deterministic:
+
+- **Base overhead (only when ≥1 skill):** 195 characters.
+- **Per skill:** 97 characters + the length of the XML-escaped `<name>`, `<description>`, and `<location>` values.
+
+Formula (characters):
+
+```
+total = 195 + Σ (97 + len(name_escaped) + len(description_escaped) + len(location_escaped))
+```
+
+Notes:
+- XML escaping expands `& < > " '` into entities (`&amp;`, `&lt;`, etc.), increasing length.
+- Token counts vary by model tokenizer. A rough OpenAI-style estimate is ~4 chars/token, so **97 chars ≈ 24 tokens** per skill plus your actual field lengths.
 
 ## Managed skills lifecycle
 

@@ -127,7 +127,9 @@ See also: [`docs/presence.md`](/concepts/presence) for how presence is produced/
 ## Typing and validation
 - Server validates every inbound frame with AJV against JSON Schema emitted from the protocol definitions.
 - Clients (TS/Swift) consume generated types (TS directly; Swift via the repo’s generator).
-- Types live in [`src/gateway/protocol/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/protocol/*.ts); regenerate schemas/models with `pnpm protocol:gen` (writes [`dist/protocol.schema.json`](https://github.com/clawdbot/clawdbot/blob/main/dist/protocol.schema.json)) and `pnpm protocol:gen:swift` (writes [`apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift)).
+- Protocol definitions are the source of truth; regenerate schema/models with:
+  - `pnpm protocol:gen`
+  - `pnpm protocol:gen:swift`
 
 ## Connection snapshot
 - `hello-ok` includes a `snapshot` with `presence`, `health`, `stateVersion`, and `uptimeMs` plus `policy {maxPayload,maxBufferedBytes,tickIntervalMs}` so clients can render immediately without extra requests.
@@ -156,6 +158,8 @@ See also: [`docs/presence.md`](/concepts/presence) for how presence is produced/
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
+  - `clawdbot daemon install` writes `~/Library/LaunchAgents/com.clawdbot.gateway.plist`.
+  - `clawdbot doctor` audits the LaunchAgent config and can update it to current defaults.
 
 ## Daemon management (CLI)
 
@@ -189,6 +193,14 @@ Bundled mac app:
   - `launchctl` only works if the LaunchAgent is installed; otherwise use `clawdbot daemon install` first.
 
 ## Supervision (systemd user unit)
+Clawdbot installs a **systemd user service** by default on Linux/WSL2. We
+recommend user services for single-user machines (simpler env, per-user config).
+Use a **system service** for multi-user or always-on servers (no lingering
+required, shared supervision).
+
+`clawdbot daemon install` writes the user unit. `clawdbot doctor` audits the
+unit and can update it to match the current recommended defaults.
+
 Create `~/.config/systemd/user/clawdbot-gateway.service`:
 ```
 [Unit]
@@ -242,7 +254,7 @@ Windows installs should use **WSL2** and follow the Linux systemd section above.
 
 ## CLI helpers
 - `clawdbot gateway health|status` — request health/status over the Gateway WS.
-- `clawdbot send --to <num> --message "hi" [--media ...]` — send via Gateway (idempotent for WhatsApp).
+- `clawdbot message send --to <num> --message "hi" [--media ...]` — send via Gateway (idempotent for WhatsApp).
 - `clawdbot agent --message "hi" --to <num>` — run an agent turn (waits for final by default).
 - `clawdbot gateway call <method> --params '{"k":"v"}'` — raw method invoker for debugging.
 - `clawdbot daemon stop|restart` — stop/restart the supervised gateway service (launchd/systemd).

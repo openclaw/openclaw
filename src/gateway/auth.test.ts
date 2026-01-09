@@ -12,4 +12,84 @@ describe("gateway auth", () => {
     });
     expect(res.ok).toBe(true);
   });
+
+  it("reports missing and mismatched token reasons", async () => {
+    const missing = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: null,
+    });
+    expect(missing.ok).toBe(false);
+    expect(missing.reason).toBe("token_missing");
+
+    const mismatch = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+    });
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch.reason).toBe("token_mismatch");
+  });
+
+  it("reports missing token config reason", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", allowTailscale: false },
+      connectAuth: { token: "anything" },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_missing_config");
+  });
+
+  it("reports missing and mismatched password reasons", async () => {
+    const missing = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: null,
+    });
+    expect(missing.ok).toBe(false);
+    expect(missing.reason).toBe("password_missing");
+
+    const mismatch = await authorizeGatewayConnect({
+      auth: { mode: "password", password: "secret", allowTailscale: false },
+      connectAuth: { password: "wrong" },
+    });
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch.reason).toBe("password_mismatch");
+  });
+
+  it("reports missing password config reason", async () => {
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "password", allowTailscale: false },
+      connectAuth: { password: "secret" },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("password_missing_config");
+  });
+
+  it("reports tailscale auth reasons when required", async () => {
+    const reqBase = {
+      socket: { remoteAddress: "100.100.100.100" },
+      headers: { host: "gateway.local" },
+    };
+
+    const missingUser = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: true },
+      connectAuth: null,
+      req: reqBase as never,
+    });
+    expect(missingUser.ok).toBe(false);
+    expect(missingUser.reason).toBe("tailscale_user_missing");
+
+    const missingProxy = await authorizeGatewayConnect({
+      auth: { mode: "none", allowTailscale: true },
+      connectAuth: null,
+      req: {
+        ...reqBase,
+        headers: {
+          host: "gateway.local",
+          "tailscale-user-login": "peter",
+          "tailscale-user-name": "Peter",
+        },
+      } as never,
+    });
+    expect(missingProxy.ok).toBe(false);
+    expect(missingProxy.reason).toBe("tailscale_proxy_missing");
+  });
 });

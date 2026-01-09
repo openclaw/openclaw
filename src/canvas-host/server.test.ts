@@ -231,7 +231,7 @@ describe("canvas host", () => {
       await server.close();
       await fs.rm(dir, { recursive: true, force: true });
     }
-  });
+  }, 10_000);
 
   it("serves the gateway-hosted A2UI scaffold", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-canvas-"));

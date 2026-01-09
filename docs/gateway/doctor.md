@@ -24,10 +24,23 @@ clawdbot doctor --yes
 Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
 ```bash
+clawdbot doctor --repair
+```
+
+Apply recommended repairs without prompting (repairs + restarts where safe).
+
+```bash
+clawdbot doctor --repair --force
+```
+
+Apply aggressive repairs too (overwrites custom supervisor configs).
+
+```bash
 clawdbot doctor --non-interactive
 ```
 
 Run without prompts and only apply safe migrations (config normalization + on-disk state moves). Skips restart/service/sandbox actions that require human confirmation.
+Legacy state migrations run automatically when detected.
 
 ```bash
 clawdbot doctor --deep
@@ -47,10 +60,14 @@ cat ~/.clawdbot/clawdbot.json
 - Legacy config migration and normalization.
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
+- Config file permission checks (chmod 600) when running locally.
+- Model auth health: checks OAuth expiry and can refresh expiring tokens.
 - Legacy workspace dir detection (`~/clawdis`, `~/clawdbot`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
 - Gateway runtime checks (service installed but not running; cached launchd label).
+- Supervisor config audit (launchd/systemd/schtasks) with optional repair.
+- Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
 - Gateway port collision diagnostics (default `18789`).
 - Security warnings for open DM policies.
 - systemd linger check on Linux.
@@ -116,44 +133,73 @@ Doctor checks:
   split between installs).
 - **Remote mode reminder**: if `gateway.mode=remote`, doctor reminds you to run
   it on the remote host (the state lives there).
+- **Config file permissions**: warns if `~/.clawdbot/clawdbot.json` is
+  group/world readable and offers to tighten to `600`.
 
-### 5) Sandbox image repair
+### 5) Model auth health (OAuth expiry)
+Doctor inspects OAuth profiles in the auth store, warns when tokens are
+expiring/expired, and can refresh them when safe. If the Anthropic Claude Code
+profile is stale, it suggests `claude setup-token` on the gateway host.
+Refresh prompts only appear when running interactively (TTY); `--non-interactive`
+skips refresh attempts.
+
+### 6) Sandbox image repair
 When sandboxing is enabled, doctor checks Docker images and offers to build or
 switch to legacy names if the current image is missing.
 
-### 6) Gateway service migrations and cleanup hints
+### 7) Gateway service migrations and cleanup hints
 Doctor detects legacy Clawdis gateway services (launchd/systemd/schtasks) and
 offers to remove them and install the Clawdbot service using the current gateway
 port. It can also scan for extra gateway-like services and print cleanup hints
 to ensure only one gateway runs per machine.
 
-### 7) Security warnings
+### 8) Security warnings
 Doctor emits warnings when a provider is open to DMs without an allowlist, or
 when a policy is configured in a dangerous way.
 
-### 8) systemd linger (Linux)
+### 9) systemd linger (Linux)
 If running as a systemd user service, doctor ensures lingering is enabled so the
 gateway stays alive after logout.
 
-### 9) Skills status
+### 10) Skills status
 Doctor prints a quick summary of eligible/missing/blocked skills for the current
 workspace.
 
-### 10) Gateway health check + restart
+### 11) Gateway health check + restart
 Doctor runs a health check and offers to restart the gateway when it looks
 unhealthy.
 
-### 11) Gateway runtime + port diagnostics
+### 12) Supervisor config audit + repair
+Doctor checks the installed supervisor config (launchd/systemd/schtasks) for
+missing or outdated defaults (e.g., systemd network-online dependencies and
+restart delay). When it finds a mismatch, it recommends an update and can
+rewrite the service file/task to the current defaults.
+
+Notes:
+- `clawdbot doctor` prompts before rewriting supervisor config.
+- `clawdbot doctor --yes` accepts the default repair prompts.
+- `clawdbot doctor --repair` applies recommended fixes without prompts.
+- `clawdbot doctor --repair --force` overwrites custom supervisor configs.
+- You can always force a full rewrite via `clawdbot daemon install --force`.
+
+### 13) Gateway runtime + port diagnostics
 Doctor inspects the daemon runtime (PID, last exit status) and warns when the
 service is installed but not actually running. It also checks for port collisions
 on the gateway port (default `18789`) and reports likely causes (gateway already
 running, SSH tunnel).
 
-### 12) Config write + wizard metadata
+### 14) Gateway runtime best practices
+Doctor warns when the gateway service runs on Bun or a version-managed Node path
+(`nvm`, `fnm`, `volta`, `asdf`, etc.). WhatsApp + Telegram providers require Node,
+and version-manager paths can break after upgrades because the daemon does not
+load your shell init. Doctor offers to migrate to a system Node install when
+available (Homebrew/apt/choco).
+
+### 15) Config write + wizard metadata
 Doctor persists any config changes and stamps wizard metadata to record the
 doctor run.
 
-### 13) Workspace tips (backup + memory system)
+### 16) Workspace tips (backup + memory system)
 Doctor suggests a workspace memory system when missing and prints a backup tip
 if the workspace is not already under git.
 

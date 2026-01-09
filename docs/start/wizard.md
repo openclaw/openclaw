@@ -34,7 +34,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Gateway port **18789**
 - Gateway auth **Off** (loopback only)
 - Tailscale exposure **Off**
-- Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for a number)
+- Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for your phone number)
 
 **Advanced** exposes every step (mode, workspace, gateway, providers, daemon, skills).
 
@@ -70,12 +70,13 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Full reset (also removes workspace)
 
 2) **Model/Auth**
-   - **Anthropic OAuth (Claude CLI)**: if `~/.claude/.credentials.json` exists, the wizard can reuse it.
-   - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
-   - **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
-   - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
-     - Sets `agent.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
-   - **API key**: stores the key for you.
+   - **Anthropic OAuth (Claude CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
+- **Anthropic token (paste setup-token)**: run `claude setup-token` in your terminal, then paste the token (you can name it; blank = default).
+- **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
+- **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
+  - Sets `agent.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+- **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.clawdbot/.env` so launchd can read it.
+- **API key**: stores the key for you.
    - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
@@ -120,7 +121,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 9) **Finish**
    - Summary + next steps, including iOS/Android/macOS apps for extra features.
   - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
-  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:install && pnpm ui:build`.
+  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 
 ## Remote mode
 
@@ -169,6 +170,17 @@ clawdbot onboard --non-interactive \
 ```
 
 Add `--json` for a machine‑readable summary.
+
+Gemini example:
+
+```bash
+clawdbot onboard --non-interactive \
+  --mode local \
+  --auth-choice gemini-api-key \
+  --gemini-api-key "$GEMINI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
 
 Add agent (non‑interactive) example:
 

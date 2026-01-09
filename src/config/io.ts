@@ -13,6 +13,7 @@ import {
   findDuplicateAgentDirs,
 } from "./agent-dirs.js";
 import {
+  applyContextPruningDefaults,
   applyIdentityDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
@@ -40,6 +41,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "ANTHROPIC_OAUTH_TOKEN",
   "GEMINI_API_KEY",
   "ZAI_API_KEY",
+  "OPENROUTER_API_KEY",
   "MINIMAX_API_KEY",
   "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
@@ -74,6 +76,31 @@ function warnOnConfigMiskeys(
     logger.warn(
       'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
     );
+  }
+}
+
+function applyConfigEnv(cfg: ClawdbotConfig, env: NodeJS.ProcessEnv): void {
+  const envConfig = cfg.env;
+  if (!envConfig) return;
+
+  const entries: Record<string, string> = {};
+
+  if (envConfig.vars) {
+    for (const [key, value] of Object.entries(envConfig.vars)) {
+      if (!value) continue;
+      entries[key] = value;
+    }
+  }
+
+  for (const [key, value] of Object.entries(envConfig)) {
+    if (key === "shellEnv" || key === "vars") continue;
+    if (typeof value !== "string" || !value.trim()) continue;
+    entries[key] = value;
+  }
+
+  for (const [key, value] of Object.entries(entries)) {
+    if (env[key]?.trim()) continue;
+    env[key] = value;
   }
 }
 
@@ -135,10 +162,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return {};
       }
       const cfg = applyModelDefaults(
-        applySessionDefaults(
-          applyLoggingDefaults(
-            applyMessageDefaults(
-              applyIdentityDefaults(validated.data as ClawdbotConfig),
+        applyContextPruningDefaults(
+          applySessionDefaults(
+            applyLoggingDefaults(
+              applyMessageDefaults(
+                applyIdentityDefaults(validated.data as ClawdbotConfig),
+              ),
             ),
           ),
         ),
@@ -151,6 +180,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (duplicates.length > 0) {
         throw new DuplicateAgentDirError(duplicates);
       }
+
+      applyConfigEnv(cfg, deps.env);
 
       const enabled =
         shouldEnableShellEnvFallback(deps.env) ||
@@ -182,7 +213,11 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     const exists = deps.fs.existsSync(configPath);
     if (!exists) {
       const config = applyTalkApiKey(
-        applyModelDefaults(applySessionDefaults(applyMessageDefaults({}))),
+        applyModelDefaults(
+          applyContextPruningDefaults(
+            applySessionDefaults(applyMessageDefaults({})),
+          ),
+        ),
       );
       const legacyIssues: LegacyConfigIssue[] = [];
       return {

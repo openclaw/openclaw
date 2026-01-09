@@ -28,6 +28,13 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     textAliases: ["/status"],
   },
   {
+    key: "cost",
+    nativeName: "cost",
+    description: "Toggle per-response usage line.",
+    textAliases: ["/cost"],
+    acceptsArgs: true,
+  },
+  {
     key: "stop",
     nativeName: "stop",
     description: "Stop the current run.",
@@ -97,7 +104,7 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     key: "model",
     nativeName: "model",
     description: "Show or set the model.",
-    textAliases: ["/model"],
+    textAliases: ["/model", "/models"],
     acceptsArgs: true,
   },
   {

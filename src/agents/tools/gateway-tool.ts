@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
+import type { ClawdbotConfig } from "../../config/config.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
@@ -45,6 +46,7 @@ const GatewayToolSchema = Type.Union([
 
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
+  config?: ClawdbotConfig;
 }): AnyAgentTool {
   return {
     label: "Gateway",
@@ -56,6 +58,11 @@ export function createGatewayTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       if (action === "restart") {
+        if (opts?.config?.commands?.restart !== true) {
+          throw new Error(
+            "Gateway restart is disabled. Set commands.restart=true to enable.",
+          );
+        }
         const delayMs =
           typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
             ? Math.floor(params.delayMs)
@@ -64,6 +71,9 @@ export function createGatewayTool(opts?: {
           typeof params.reason === "string" && params.reason.trim()
             ? params.reason.trim().slice(0, 200)
             : undefined;
+        console.info(
+          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
+        );
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,

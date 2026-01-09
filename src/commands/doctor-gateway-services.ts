@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveGatewayPort, resolveIsNixMode } from "../config/paths.js";
@@ -14,14 +14,39 @@ import {
   uninstallLegacyGatewayServices,
 } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import {
+  resolvePreferredNodePath,
+  resolveSystemNodePath,
+} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import {
+  auditGatewayServiceConfig,
+  needsNodeRuntimeMigration,
+} from "../daemon/service-audit.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
+
+function detectGatewayRuntime(
+  programArguments: string[] | undefined,
+): GatewayDaemonRuntime {
+  const first = programArguments?.[0];
+  if (first) {
+    const base = path.basename(first).toLowerCase();
+    if (base === "bun" || base === "bun.exe") return "bun";
+    if (base === "node" || base === "node.exe") return "node";
+  }
+  return DEFAULT_GATEWAY_DAEMON_RUNTIME;
+}
 
 export async function maybeMigrateLegacyGatewayService(
   cfg: ClawdbotConfig,
@@ -90,19 +115,24 @@ export async function maybeMigrateLegacyGatewayService(
     process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
     process.argv[1]?.endsWith(".ts");
   const port = resolveGatewayPort(cfg, process.env);
+  const nodePath = await resolvePreferredNodePath({
+    env: process.env,
+    runtime: daemonRuntime,
+  });
   const { programArguments, workingDirectory } =
     await resolveGatewayProgramArguments({
       port,
       dev: devMode,
       runtime: daemonRuntime,
+      nodePath,
     });
-  const environment: Record<string, string | undefined> = {
-    PATH: process.env.PATH,
-    CLAWDBOT_GATEWAY_TOKEN:
-      cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-    CLAWDBOT_LAUNCHD_LABEL:
+  const environment = buildServiceEnvironment({
+    env: process.env,
+    port,
+    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    launchdLabel:
       process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-  };
+  });
   await service.install({
     env: process.env,
     stdout: process.stdout,
@@ -110,6 +140,116 @@ export async function maybeMigrateLegacyGatewayService(
     workingDirectory,
     environment,
   });
+}
+
+export async function maybeRepairGatewayServiceConfig(
+  cfg: ClawdbotConfig,
+  mode: "local" | "remote",
+  runtime: RuntimeEnv,
+  prompter: DoctorPrompter,
+) {
+  if (resolveIsNixMode(process.env)) {
+    note("Nix mode detected; skip service updates.", "Gateway");
+    return;
+  }
+
+  if (mode === "remote") {
+    note("Gateway mode is remote; skipped local service audit.", "Gateway");
+    return;
+  }
+
+  const service = resolveGatewayService();
+  let command: Awaited<ReturnType<typeof service.readCommand>> | null = null;
+  try {
+    command = await service.readCommand(process.env);
+  } catch {
+    command = null;
+  }
+  if (!command) return;
+
+  const audit = await auditGatewayServiceConfig({
+    env: process.env,
+    command,
+  });
+  if (audit.issues.length === 0) return;
+
+  note(
+    audit.issues
+      .map((issue) =>
+        issue.detail
+          ? `- ${issue.message} (${issue.detail})`
+          : `- ${issue.message}`,
+      )
+      .join("\n"),
+    "Gateway service config",
+  );
+
+  const aggressiveIssues = audit.issues.filter(
+    (issue) => issue.level === "aggressive",
+  );
+  const needsAggressive = aggressiveIssues.length > 0;
+
+  if (needsAggressive && !prompter.shouldForce) {
+    note(
+      "Custom or unexpected service edits detected. Rerun with --force to overwrite.",
+      "Gateway service config",
+    );
+  }
+
+  const repair = needsAggressive
+    ? await prompter.confirmAggressive({
+        message: "Overwrite gateway service config with current defaults now?",
+        initialValue: Boolean(prompter.shouldForce),
+      })
+    : await prompter.confirmRepair({
+        message:
+          "Update gateway service config to the recommended defaults now?",
+        initialValue: true,
+      });
+  if (!repair) return;
+
+  const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
+  const systemNodePath = needsNodeRuntime
+    ? await resolveSystemNodePath(process.env)
+    : null;
+  if (needsNodeRuntime && !systemNodePath) {
+    note(
+      "System Node 22+ not found. Install via Homebrew/apt/choco and rerun doctor to migrate off Bun/version managers.",
+      "Gateway runtime",
+    );
+  }
+
+  const devMode =
+    process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
+    process.argv[1]?.endsWith(".ts");
+  const port = resolveGatewayPort(cfg, process.env);
+  const runtimeChoice = detectGatewayRuntime(command.programArguments);
+  const { programArguments, workingDirectory } =
+    await resolveGatewayProgramArguments({
+      port,
+      dev: devMode,
+      runtime: needsNodeRuntime && systemNodePath ? "node" : runtimeChoice,
+      nodePath: systemNodePath ?? undefined,
+    });
+  const environment = buildServiceEnvironment({
+    env: process.env,
+    port,
+    token: cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    launchdLabel:
+      process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+  });
+
+  try {
+    await service.install({
+      env: process.env,
+      stdout: process.stdout,
+      programArguments,
+      workingDirectory,
+      environment,
+    });
+  } catch (err) {
+    runtime.error(`Gateway service update failed: ${String(err)}`);
+  }
 }
 
 export async function maybeScanExtraGatewayServices(options: DoctorOptions) {

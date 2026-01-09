@@ -12,9 +12,9 @@ describe("gateway tool", () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
 
     try {
-      const tool = createClawdbotTools().find(
-        (candidate) => candidate.name === "gateway",
-      );
+      const tool = createClawdbotTools({
+        config: { commands: { restart: true } },
+      }).find((candidate) => candidate.name === "gateway");
       expect(tool).toBeDefined();
       if (!tool) throw new Error("missing gateway tool");
 

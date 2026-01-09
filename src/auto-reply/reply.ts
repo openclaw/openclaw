@@ -40,7 +40,11 @@ import { getAbortMemory } from "./reply/abort.js";
 import { runReplyAgent } from "./reply/agent-runner.js";
 import { resolveBlockStreamingChunking } from "./reply/block-streaming.js";
 import { applySessionHints } from "./reply/body.js";
-import { buildCommandContext, handleCommands } from "./reply/commands.js";
+import {
+  buildCommandContext,
+  buildStatusReply,
+  handleCommands,
+} from "./reply/commands.js";
 import {
   handleDirectiveOnly,
   type InlineDirectives,
@@ -332,6 +336,20 @@ export async function getReplyFromConfig(
   let parsedDirectives = parseInlineDirectives(rawBody, {
     modelAliases: configuredAliases,
   });
+  if (
+    isGroup &&
+    ctx.WasMentioned !== true &&
+    parsedDirectives.hasElevatedDirective
+  ) {
+    if (parsedDirectives.elevatedLevel !== "off") {
+      parsedDirectives = {
+        ...parsedDirectives,
+        hasElevatedDirective: false,
+        elevatedLevel: undefined,
+        rawElevatedLevel: undefined,
+      };
+    }
+  }
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
@@ -342,9 +360,16 @@ export async function getReplyFromConfig(
     parsedDirectives.hasQueueDirective;
   if (hasDirective) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
-    const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
+    const noMentions = isGroup
+      ? stripMentions(stripped, ctx, cfg, agentId)
+      : stripped;
     if (noMentions.trim().length > 0) {
-      parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+      const directiveOnlyCheck = parseInlineDirectives(noMentions, {
+        modelAliases: configuredAliases,
+      });
+      if (directiveOnlyCheck.cleaned.trim().length > 0) {
+        parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+      }
     }
   }
   const directives = commandAuthorized
@@ -461,12 +486,28 @@ export async function getReplyFromConfig(
     ? undefined
     : directives.rawModelDirective;
 
+  const command = buildCommandContext({
+    ctx,
+    cfg,
+    agentId,
+    sessionKey,
+    isGroup,
+    triggerBodyNormalized,
+    commandAuthorized,
+  });
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg,
+    surface: command.surface,
+    commandSource: ctx.CommandSource,
+  });
+
   if (
     isDirectiveOnly({
       directives,
       cleanedBody: directives.cleaned,
       ctx,
       cfg,
+      agentId,
       isGroup,
     })
   ) {
@@ -505,8 +546,36 @@ export async function getReplyFromConfig(
       currentReasoningLevel,
       currentElevatedLevel,
     });
+    let statusReply: ReplyPayload | undefined;
+    if (directives.hasStatusDirective && allowTextCommands) {
+      statusReply = await buildStatusReply({
+        cfg,
+        command,
+        sessionEntry,
+        sessionKey,
+        sessionScope,
+        provider,
+        model,
+        contextTokens,
+        resolvedThinkLevel:
+          currentThinkLevel ??
+          (agentCfg?.thinkingDefault as ThinkLevel | undefined),
+        resolvedVerboseLevel: (currentVerboseLevel ?? "off") as VerboseLevel,
+        resolvedReasoningLevel: (currentReasoningLevel ??
+          "off") as ReasoningLevel,
+        resolvedElevatedLevel: currentElevatedLevel,
+        resolveDefaultThinkingLevel: async () =>
+          currentThinkLevel ??
+          (agentCfg?.thinkingDefault as ThinkLevel | undefined),
+        isGroup,
+        defaultGroupActivation: () => defaultActivation,
+      });
+    }
     typing.cleanup();
-    return directiveReply;
+    if (statusReply?.text && directiveReply?.text) {
+      return { text: `${directiveReply.text}\n${statusReply.text}` };
+    }
+    return statusReply ?? directiveReply;
   }
 
   const persisted = await persistInlineDirectives({
@@ -546,19 +615,6 @@ export async function getReplyFromConfig(
         }
       : undefined;
 
-  const command = buildCommandContext({
-    ctx,
-    cfg,
-    sessionKey,
-    isGroup,
-    triggerBodyNormalized,
-    commandAuthorized,
-  });
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: command.surface,
-    commandSource: ctx.CommandSource,
-  });
   const isEmptyConfig = Object.keys(cfg).length === 0;
   if (
     command.isWhatsAppProvider &&
@@ -579,6 +635,7 @@ export async function getReplyFromConfig(
     ctx,
     cfg,
     command,
+    agentId,
     directives,
     sessionEntry,
     sessionStore,

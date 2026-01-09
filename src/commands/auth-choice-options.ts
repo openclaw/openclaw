@@ -45,8 +45,11 @@ function formatOAuthHint(
 export function buildAuthChoiceOptions(params: {
   store: AuthProfileStore;
   includeSkip: boolean;
+  includeClaudeCliIfMissing?: boolean;
+  platform?: NodeJS.Platform;
 }): AuthChoiceOption[] {
   const options: AuthChoiceOption[] = [];
+  const platform = params.platform ?? process.platform;
 
   const codexCli = params.store.profiles[CODEX_CLI_PROFILE_ID];
   if (codexCli?.type === "oauth") {
@@ -58,25 +61,38 @@ export function buildAuthChoiceOptions(params: {
   }
 
   const claudeCli = params.store.profiles[CLAUDE_CLI_PROFILE_ID];
-  if (claudeCli?.type === "oauth") {
+  if (claudeCli?.type === "oauth" || claudeCli?.type === "token") {
     options.push({
       value: "claude-cli",
       label: "Anthropic OAuth (Claude CLI)",
       hint: formatOAuthHint(claudeCli.expires),
     });
+  } else if (params.includeClaudeCliIfMissing && platform === "darwin") {
+    options.push({
+      value: "claude-cli",
+      label: "Anthropic OAuth (Claude CLI)",
+      hint: "requires Keychain access",
+    });
   }
 
-  options.push({ value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" });
+  options.push({
+    value: "token",
+    label: "Anthropic token (paste setup-token)",
+    hint: "Run `claude setup-token`, then paste the token",
+  });
 
   options.push({
     value: "openai-codex",
     label: "OpenAI Codex (ChatGPT OAuth)",
   });
+  options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({
     value: "antigravity",
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
   });
+  options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
+  // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({ value: "minimax-cloud", label: "MiniMax M2.1 (minimax.io)" });
   options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
   if (params.includeSkip) {

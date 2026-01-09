@@ -5,7 +5,6 @@ read_when:
 ---
 # Discord (Bot API)
 
-Updated: 2026-01-07
 
 Status: ready for DM and guild text channels via the official Discord bot gateway.
 
@@ -138,6 +137,7 @@ Example “single server, only allow me, only allow #help”:
 Notes:
 - `requireMention: true` means the bot only replies when mentioned (recommended for shared channels).
 - `routing.groupChat.mentionPatterns` also count as mentions for guild messages.
+- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
 - If `channels` is present, any channel not listed is denied by default.
 
 ### 6) Verify it works
@@ -146,12 +146,14 @@ Notes:
 3. If nothing happens: check **Troubleshooting** below.
 
 ### Troubleshooting
+- First: run `clawdbot doctor` and `clawdbot providers status --probe` (actionable warnings + quick audits).
 - **“Used disallowed intents”**: enable **Message Content Intent** (and likely **Server Members Intent**) in the Developer Portal, then restart the gateway.
 - **Bot connects but never replies in a guild channel**:
   - Missing **Message Content Intent**, or
   - The bot lacks channel permissions (View/Send/Read History), or
   - Your config requires mentions and you didn’t mention it, or
   - Your guild/channel allowlist denies the channel/user.
+- **Permission audits** (`providers status --probe`) only check numeric channel IDs. If you use slugs/names as `discord.guilds.*.channels` keys, the audit can’t verify permissions.
 - **DMs don’t work**: `discord.dm.enabled=false`, `discord.dm.policy="disabled"`, or you haven’t been approved yet (`discord.dm.policy="pairing"`).
 
 ## Capabilities & limits
@@ -273,7 +275,7 @@ Reaction notifications use `guilds.<id>.reactionNotifications`:
 | messages | enabled | Read/send/edit/delete |
 | threads | enabled | Create/list/reply |
 | pins | enabled | Pin/unpin/list |
-| search | enabled | Message search (preview spec) |
+| search | enabled | Message search (preview feature) |
 | memberInfo | enabled | Member info |
 | roleInfo | enabled | Role list |
 | channelInfo | enabled | Channel info + list |

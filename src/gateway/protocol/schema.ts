@@ -314,6 +314,7 @@ export const SessionsListParamsSchema = Type.Object(
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
     spawnedBy: Type.Optional(NonEmptyString),
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );
@@ -324,6 +325,9 @@ export const SessionsPatchParamsSchema = Type.Object(
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    responseUsage: Type.Optional(
+      Type.Union([Type.Literal("on"), Type.Literal("off"), Type.Null()]),
+    ),
     elevatedLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -586,6 +590,29 @@ export const ModelChoiceSchema = Type.Object(
     provider: NonEmptyString,
     contextWindow: Type.Optional(Type.Integer({ minimum: 1 })),
     reasoning: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentSummarySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    name: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const AgentsListParamsSchema = Type.Object(
+  {},
+  { additionalProperties: false },
+);
+
+export const AgentsListResultSchema = Type.Object(
+  {
+    defaultId: NonEmptyString,
+    mainKey: NonEmptyString,
+    scope: Type.Union([Type.Literal("per-sender"), Type.Literal("global")]),
+    agents: Type.Array(AgentSummarySchema),
   },
   { additionalProperties: false },
 );
@@ -927,6 +954,9 @@ export const ProtocolSchemas: Record<string, TSchema> = {
   ProvidersStatusParams: ProvidersStatusParamsSchema,
   WebLoginStartParams: WebLoginStartParamsSchema,
   WebLoginWaitParams: WebLoginWaitParamsSchema,
+  AgentSummary: AgentSummarySchema,
+  AgentsListParams: AgentsListParamsSchema,
+  AgentsListResult: AgentsListResultSchema,
   ModelChoice: ModelChoiceSchema,
   ModelsListParams: ModelsListParamsSchema,
   ModelsListResult: ModelsListResultSchema,
@@ -1000,6 +1030,9 @@ export type TalkModeParams = Static<typeof TalkModeParamsSchema>;
 export type ProvidersStatusParams = Static<typeof ProvidersStatusParamsSchema>;
 export type WebLoginStartParams = Static<typeof WebLoginStartParamsSchema>;
 export type WebLoginWaitParams = Static<typeof WebLoginWaitParamsSchema>;
+export type AgentSummary = Static<typeof AgentSummarySchema>;
+export type AgentsListParams = Static<typeof AgentsListParamsSchema>;
+export type AgentsListResult = Static<typeof AgentsListResultSchema>;
 export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;

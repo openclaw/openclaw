@@ -136,7 +136,7 @@ export async function initSessionState(params: {
   // web inbox before we get here. They prevented reset triggers like "/new"
   // from matching, so strip structural wrappers when checking for resets.
   const strippedForReset = isGroup
-    ? stripMentions(triggerBodyNormalized, ctx, cfg)
+    ? stripMentions(triggerBodyNormalized, ctx, cfg, agentId)
     : triggerBodyNormalized;
   for (const trigger of resetTriggers) {
     if (!trigger) continue;
@@ -194,6 +194,7 @@ export async function initSessionState(params: {
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
+    responseUsage: baseEntry?.responseUsage,
     modelOverride: persistedModelOverride ?? baseEntry?.modelOverride,
     providerOverride: persistedProviderOverride ?? baseEntry?.providerOverride,
     sendPolicy: baseEntry?.sendPolicy,

@@ -5,6 +5,10 @@ import {
   resolveDiscordAccount,
 } from "../discord/accounts.js";
 import { monitorDiscordProvider } from "../discord/index.js";
+import type {
+  DiscordApplicationSummary,
+  DiscordProbe,
+} from "../discord/probe.js";
 import { probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
 import {
@@ -56,6 +60,8 @@ export type DiscordRuntimeStatus = {
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
+  bot?: DiscordProbe["bot"];
+  application?: DiscordApplicationSummary;
 };
 
 export type SlackRuntimeStatus = {
@@ -82,6 +88,14 @@ export type IMessageRuntimeStatus = {
   dbPath?: string | null;
 };
 
+export type MSTeamsRuntimeStatus = {
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  port?: number | null;
+};
+
 export type ProviderRuntimeSnapshot = {
   whatsapp: WebProviderStatus;
   whatsappAccounts?: Record<string, WebProviderStatus>;
@@ -95,6 +109,7 @@ export type ProviderRuntimeSnapshot = {
   signalAccounts?: Record<string, SignalRuntimeStatus>;
   imessage: IMessageRuntimeStatus;
   imessageAccounts?: Record<string, IMessageRuntimeStatus>;
+  msteams: MSTeamsRuntimeStatus;
 };
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -107,12 +122,14 @@ type ProviderManagerOptions = {
   logSlack: SubsystemLogger;
   logSignal: SubsystemLogger;
   logIMessage: SubsystemLogger;
+  logMSTeams: SubsystemLogger;
   whatsappRuntimeEnv: RuntimeEnv;
   telegramRuntimeEnv: RuntimeEnv;
   discordRuntimeEnv: RuntimeEnv;
   slackRuntimeEnv: RuntimeEnv;
   signalRuntimeEnv: RuntimeEnv;
   imessageRuntimeEnv: RuntimeEnv;
+  msteamsRuntimeEnv: RuntimeEnv;
 };
 
 export type ProviderManager = {
@@ -130,6 +147,8 @@ export type ProviderManager = {
   stopSignalProvider: (accountId?: string) => Promise<void>;
   startIMessageProvider: (accountId?: string) => Promise<void>;
   stopIMessageProvider: (accountId?: string) => Promise<void>;
+  startMSTeamsProvider: () => Promise<void>;
+  stopMSTeamsProvider: () => Promise<void>;
   markWhatsAppLoggedOut: (cleared: boolean, accountId?: string) => void;
 };
 
@@ -144,12 +163,14 @@ export function createProviderManager(
     logSlack,
     logSignal,
     logIMessage,
+    logMSTeams,
     whatsappRuntimeEnv,
     telegramRuntimeEnv,
     discordRuntimeEnv,
     slackRuntimeEnv,
     signalRuntimeEnv,
     imessageRuntimeEnv,
+    msteamsRuntimeEnv,
   } = opts;
 
   const whatsappAborts = new Map<string, AbortController>();
@@ -158,7 +179,9 @@ export function createProviderManager(
   const slackAborts = new Map<string, AbortController>();
   const signalAborts = new Map<string, AbortController>();
   const imessageAborts = new Map<string, AbortController>();
+  let msteamsAbort: AbortController | null = null;
   const whatsappTasks = new Map<string, Promise<unknown>>();
+  let msteamsTask: Promise<unknown> | null = null;
   const telegramTasks = new Map<string, Promise<unknown>>();
   const discordTasks = new Map<string, Promise<unknown>>();
   const slackTasks = new Map<string, Promise<unknown>>();
@@ -194,6 +217,8 @@ export function createProviderManager(
     lastStartAt: null,
     lastStopAt: null,
     lastError: null,
+    bot: undefined,
+    application: undefined,
   });
   const defaultSlackStatus = (): SlackRuntimeStatus => ({
     running: false,
@@ -216,6 +241,13 @@ export function createProviderManager(
     cliPath: null,
     dbPath: null,
   });
+  let msteamsRuntime: MSTeamsRuntimeStatus = {
+    running: false,
+    lastStartAt: null,
+    lastStopAt: null,
+    lastError: null,
+    port: null,
+  };
 
   const updateWhatsAppStatus = (accountId: string, next: WebProviderStatus) => {
     whatsappRuntimes.set(accountId, next);
@@ -544,9 +576,28 @@ export function createProviderManager(
         }
         let discordBotLabel = "";
         try {
-          const probe = await probeDiscord(token, 2500);
+          const probe = await probeDiscord(token, 2500, {
+            includeApplication: true,
+          });
           const username = probe.ok ? probe.bot?.username?.trim() : null;
           if (username) discordBotLabel = ` (@${username})`;
+          const latest =
+            discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
+          discordRuntimes.set(account.accountId, {
+            ...latest,
+            bot: probe.bot,
+            application: probe.application,
+          });
+          const messageContent = probe.application?.intents?.messageContent;
+          if (messageContent === "disabled") {
+            logDiscord.warn(
+              `[${account.accountId}] Discord Message Content Intent is disabled; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
+            );
+          } else if (messageContent === "limited") {
+            logDiscord.info(
+              `[${account.accountId}] Discord Message Content Intent is limited; bots under 100 servers can use it without verification.`,
+            );
+          }
         } catch (err) {
           if (shouldLogVerbose()) {
             logDiscord.debug(
@@ -999,6 +1050,83 @@ export function createProviderManager(
     );
   };
 
+  const startMSTeamsProvider = async () => {
+    if (msteamsTask) return;
+    const cfg = loadConfig();
+    if (!cfg.msteams) {
+      msteamsRuntime = {
+        ...msteamsRuntime,
+        running: false,
+        lastError: "not configured",
+      };
+      if (shouldLogVerbose()) {
+        logMSTeams.debug("msteams provider not configured (no msteams config)");
+      }
+      return;
+    }
+    if (cfg.msteams?.enabled === false) {
+      msteamsRuntime = {
+        ...msteamsRuntime,
+        running: false,
+        lastError: "disabled",
+      };
+      if (shouldLogVerbose()) {
+        logMSTeams.debug("msteams provider disabled (msteams.enabled=false)");
+      }
+      return;
+    }
+    const { monitorMSTeamsProvider } = await import("../msteams/index.js");
+    const port = cfg.msteams?.webhook?.port ?? 3978;
+    logMSTeams.info(`starting provider (port ${port})`);
+    msteamsAbort = new AbortController();
+    msteamsRuntime = {
+      ...msteamsRuntime,
+      running: true,
+      lastStartAt: Date.now(),
+      lastError: null,
+      port,
+    };
+    const task = monitorMSTeamsProvider({
+      cfg,
+      runtime: msteamsRuntimeEnv,
+      abortSignal: msteamsAbort.signal,
+    })
+      .catch((err) => {
+        msteamsRuntime = {
+          ...msteamsRuntime,
+          lastError: formatError(err),
+        };
+        logMSTeams.error(`provider exited: ${formatError(err)}`);
+      })
+      .finally(() => {
+        msteamsAbort = null;
+        msteamsTask = null;
+        msteamsRuntime = {
+          ...msteamsRuntime,
+          running: false,
+          lastStopAt: Date.now(),
+        };
+      });
+    msteamsTask = task;
+  };
+
+  const stopMSTeamsProvider = async () => {
+    if (!msteamsAbort && !msteamsTask) return;
+    msteamsAbort?.abort();
+    try {
+      await msteamsTask;
+    } catch {
+      // ignore
+    }
+    msteamsAbort = null;
+    msteamsTask = null;
+    msteamsRuntime = {
+      ...msteamsRuntime,
+      running: false,
+      lastStopAt: Date.now(),
+    };
+  };
+
   const startProviders = async () => {
     await startWhatsAppProvider();
     await startDiscordProvider();
@@ -1006,6 +1134,7 @@ export function createProviderManager(
     await startTelegramProvider();
     await startSignalProvider();
     await startIMessageProvider();
+    await startMSTeamsProvider();
   };
 
   const markWhatsAppLoggedOut = (cleared: boolean, accountId?: string) => {
@@ -1153,6 +1282,7 @@ export function createProviderManager(
       signalAccounts,
       imessage,
       imessageAccounts,
+      msteams: { ...msteamsRuntime },
     };
   };
 
@@ -1171,6 +1301,8 @@ export function createProviderManager(
     stopSignalProvider,
     startIMessageProvider,
     stopIMessageProvider,
+    startMSTeamsProvider,
+    stopMSTeamsProvider,
     markWhatsAppLoggedOut,
   };
 }

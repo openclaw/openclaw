@@ -11,13 +11,13 @@
   "dependencies": {
     "dompurify": "^3.3.1",
     "lit": "^3.3.2",
-    "marked": "^17.0.1"
+    "marked": "^17.0.1",
+    "vite": "7.3.1"
   },
   "devDependencies": {
     "@vitest/browser-playwright": "4.0.16",
     "playwright": "^1.57.0",
     "typescript": "^5.9.3",
-    "vite": "7.3.1",
     "vitest": "4.0.16"
   }
 }

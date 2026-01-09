@@ -18,6 +18,8 @@ This allows you to run multiple agents with different security profiles:
 - Family/work agents with restricted tools
 - Public-facing agents in sandboxes
 
+For how sandboxing behaves at runtime, see [Sandboxing](/gateway/sandboxing).
+
 ---
 
 ## Configuration Examples
@@ -167,6 +169,14 @@ The filtering order is:
 Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
 If `routing.agents[id].sandbox.tools` is set, it replaces `agent.sandbox.tools` for that agent.
 
+### Elevated Mode (global)
+`agent.elevated` is **global** and **sender-based** (per-provider allowlist). It is **not** configurable per agent.
+
+Mitigation patterns:
+- Deny `bash` for untrusted agents (`routing.agents[id].tools.deny: ["bash"]`)
+- Avoid allowlisting senders that route to restricted agents
+- Disable elevated globally (`agent.elevated.enabled: false`) if you only want sandboxed execution
+
 ---
 
 ## Migration from Single Agent
@@ -239,6 +249,15 @@ The global `agent.workspace` and `agent.sandbox` are still supported for backwar
   }
 }
 ```
+
+---
+
+## Common Pitfall: "non-main"
+
+`sandbox.mode: "non-main"` is based on `session.mainKey` (default `"main"`),
+not the agent id. Group/channel sessions always get their own keys, so they
+are treated as non-main and will be sandboxed. If you want an agent to never
+sandbox, set `routing.agents.<id>.sandbox.mode: "off"`.
 
 ---
 

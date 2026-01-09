@@ -2,7 +2,13 @@ import type { ContextPruningToolMatch } from "./settings.js";
 
 function normalizePatterns(patterns?: string[]): string[] {
   if (!Array.isArray(patterns)) return [];
-  return patterns.map((p) => String(p ?? "").trim()).filter(Boolean);
+  return patterns
+    .map((p) =>
+      String(p ?? "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
 }
 
 type CompiledPattern =
@@ -39,8 +45,9 @@ export function makeToolPrunablePredicate(
   const allow = compilePatterns(match.allow);
 
   return (toolName: string) => {
-    if (matchesAny(toolName, deny)) return false;
+    const normalized = toolName.trim().toLowerCase();
+    if (matchesAny(normalized, deny)) return false;
     if (allow.length === 0) return true;
-    return matchesAny(toolName, allow);
+    return matchesAny(normalized, allow);
   };
 }

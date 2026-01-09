@@ -1,17 +1,16 @@
 import path from "node:path";
 
 import {
-  confirm,
-  intro,
-  multiselect,
-  note,
-  outro,
-  select,
+  confirm as clackConfirm,
+  intro as clackIntro,
+  multiselect as clackMultiselect,
+  note as clackNote,
+  outro as clackOutro,
+  select as clackSelect,
+  text as clackText,
   spinner,
-  text,
 } from "@clack/prompts";
 import {
-  loginAnthropic,
   loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
@@ -20,7 +19,9 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -31,10 +32,18 @@ import {
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -44,16 +53,25 @@ import {
 } from "./antigravity-oauth.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
+import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   setAnthropicApiKey,
+  setGeminiApiKey,
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
@@ -93,6 +111,43 @@ type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
 };
+
+const intro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+const outro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
+const text = (params: Parameters<typeof clackText>[0]) =>
+  clackText({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
+  clackConfirm({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  clackSelect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
+const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
+  clackMultiselect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 const startOscSpinner = (label: string) => {
   const spin = spinner();
@@ -286,17 +341,23 @@ async function promptAuthConfig(
     await select({
       message: "Model/auth choice",
       options: buildAuthChoiceOptions({
-        store: ensureAuthProfileStore(),
+        store: ensureAuthProfileStore(undefined, {
+          allowKeychainPrompt: false,
+        }),
         includeSkip: true,
+        includeClaudeCliIfMissing: true,
       }),
     }),
     runtime,
   ) as
     | "oauth"
     | "claude-cli"
+    | "token"
     | "openai-codex"
+    | "openai-api-key"
     | "codex-cli"
     | "antigravity"
+    | "gemini-api-key"
     | "apiKey"
     | "minimax-cloud"
     | "minimax"
@@ -304,52 +365,138 @@ async function promptAuthConfig(
 
   let next = cfg;
 
-  if (authChoice === "oauth") {
-    note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
-    );
-    const spin = startOscSpinner("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = guardCancel(
-            await text({
-              message: "Paste authorization code (code#state)",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
-            runtime,
-          );
-          return String(code);
-        },
+  if (authChoice === "claude-cli") {
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID] && process.stdin.isTTY) {
+      note(
+        [
+          "No Claude CLI credentials found yet.",
+          "If you have a Claude Pro/Max subscription, run `claude setup-token`.",
+        ].join("\n"),
+        "Claude CLI",
       );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        next = applyAuthProfileConfig(next, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
+      const runNow = guardCancel(
+        await confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (runNow) {
+        const res = await (async () => {
+          const { spawnSync } = await import("node:child_process");
+          return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+        })();
+        if (res.error) {
+          note(
+            `Failed to run claude: ${String(res.error)}`,
+            "Claude setup-token",
+          );
+        }
       }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      runtime.error(String(err));
-      note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
     }
-  } else if (authChoice === "claude-cli") {
     next = applyAuthProfileConfig(next, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
     });
+  } else if (authChoice === "token" || authChoice === "oauth") {
+    const provider = guardCancel(
+      await select({
+        message: "Token provider",
+        options: [
+          {
+            value: "anthropic",
+            label: "Anthropic (only supported)",
+          },
+        ],
+      }),
+      runtime,
+    ) as "anthropic";
+
+    note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
+    );
+
+    const tokenRaw = guardCancel(
+      await text({
+        message: "Paste Anthropic setup-token",
+        validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+      }),
+      runtime,
+    );
+    const token = String(tokenRaw).trim();
+
+    const profileNameRaw = guardCancel(
+      await text({
+        message: "Token name (blank = default)",
+        placeholder: "default",
+      }),
+      runtime,
+    );
+    const profileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
+
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "token",
+        provider,
+        token,
+      },
+    });
+
+    next = applyAuthProfileConfig(next, { profileId, provider, mode: "token" });
+  } else if (authChoice === "openai-api-key") {
+    const envKey = resolveEnvApiKey("openai");
+    if (envKey) {
+      const useExisting = guardCancel(
+        await confirm({
+          message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (useExisting) {
+        const result = upsertSharedEnvVar({
+          key: "OPENAI_API_KEY",
+          value: envKey.apiKey,
+        });
+        if (!process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = envKey.apiKey;
+        }
+        note(
+          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+          "OpenAI API key",
+        );
+      }
+    }
+
+    const key = guardCancel(
+      await text({
+        message: "Enter OpenAI API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    const trimmed = String(key).trim();
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: trimmed,
+    });
+    process.env.OPENAI_API_KEY = trimmed;
+    note(
+      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+      "OpenAI API key",
+    );
   } else if (authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     note(
@@ -511,6 +658,28 @@ async function promptAuthConfig(
       runtime.error(String(err));
       note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
     }
+  } else if (authChoice === "gemini-api-key") {
+    const key = guardCancel(
+      await text({
+        message: "Enter Gemini API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    await setGeminiApiKey(String(key).trim());
+    next = applyAuthProfileConfig(next, {
+      profileId: "google:default",
+      provider: "google",
+      mode: "api_key",
+    });
+    const applied = applyGoogleGeminiModelDefault(next);
+    next = applied.next;
+    if (applied.changed) {
+      note(
+        `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+        "Model configured",
+      );
+    }
   } else if (authChoice === "apiKey") {
     const key = guardCancel(
       await text({
@@ -544,13 +713,24 @@ async function promptAuthConfig(
     next = applyMinimaxConfig(next);
   }
 
+  const currentModel =
+    typeof next.agent?.model === "string"
+      ? next.agent?.model
+      : (next.agent?.model?.primary ?? "");
+  const preferAnthropic =
+    authChoice === "claude-cli" ||
+    authChoice === "token" ||
+    authChoice === "oauth" ||
+    authChoice === "apiKey";
+  const modelInitialValue =
+    preferAnthropic && !currentModel.startsWith("anthropic/")
+      ? "anthropic/claude-opus-4-5"
+      : currentModel;
+
   const modelInput = guardCancel(
     await text({
       message: "Default model (blank to keep)",
-      initialValue:
-        typeof next.agent?.model === "string"
-          ? next.agent?.model
-          : (next.agent?.model?.primary ?? ""),
+      initialValue: modelInitialValue,
     }),
     runtime,
   );
@@ -629,18 +809,24 @@ async function maybeInstallDaemon(params: {
     const devMode =
       process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
       process.argv[1]?.endsWith(".ts");
+    const nodePath = await resolvePreferredNodePath({
+      env: process.env,
+      runtime: daemonRuntime,
+    });
     const { programArguments, workingDirectory } =
       await resolveGatewayProgramArguments({
         port: params.port,
         dev: devMode,
         runtime: daemonRuntime,
+        nodePath,
       });
-    const environment: Record<string, string | undefined> = {
-      PATH: process.env.PATH,
-      CLAWDBOT_GATEWAY_TOKEN: params.gatewayToken,
-      CLAWDBOT_LAUNCHD_LABEL:
+    const environment = buildServiceEnvironment({
+      env: process.env,
+      port: params.port,
+      token: params.gatewayToken,
+      launchdLabel:
         process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-    };
+    });
     await service.install({
       env: process.env,
       stdout: process.stdout,
@@ -766,13 +952,41 @@ export async function runConfigureWizard(
         await multiselect({
           message: "Select sections to configure",
           options: [
-            { value: "workspace", label: "Workspace" },
-            { value: "model", label: "Model/auth" },
-            { value: "gateway", label: "Gateway config" },
-            { value: "daemon", label: "Gateway daemon" },
-            { value: "providers", label: "Providers" },
-            { value: "skills", label: "Skills" },
-            { value: "health", label: "Health check" },
+            {
+              value: "workspace",
+              label: "Workspace",
+              hint: "Set agent workspace + ensure sessions",
+            },
+            {
+              value: "model",
+              label: "Model/auth",
+              hint: "Pick model + auth profile sources",
+            },
+            {
+              value: "gateway",
+              label: "Gateway config",
+              hint: "Port/bind/auth/control UI settings",
+            },
+            {
+              value: "daemon",
+              label: "Gateway daemon",
+              hint: "Install/manage the background service",
+            },
+            {
+              value: "providers",
+              label: "Providers",
+              hint: "Link WhatsApp/Telegram/etc and defaults",
+            },
+            {
+              value: "skills",
+              label: "Skills",
+              hint: "Install/enable workspace skills",
+            },
+            {
+              value: "health",
+              label: "Health check",
+              hint: "Run gateway + provider checks",
+            },
           ],
         }),
         runtime,
@@ -885,58 +1099,65 @@ export async function runConfigureWizard(
     runtime.error(controlUiAssets.message);
   }
 
+  const bind = nextConfig.gateway?.bind ?? "loopback";
+  const links = resolveControlUiLinks({
+    bind,
+    port: gatewayPort,
+    basePath: nextConfig.gateway?.controlUi?.basePath,
+  });
+  const gatewayProbe = await probeGatewayReachable({
+    url: links.wsUrl,
+    token:
+      nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    password:
+      nextConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD,
+  });
+  const gatewayStatusLine = gatewayProbe.ok
+    ? "Gateway: reachable"
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+
   note(
-    (() => {
-      const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({
-        bind,
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-      });
-      return [
-        `Web UI: ${links.httpUrl}`,
-        `Gateway WS: ${links.wsUrl}`,
-        "Docs: https://docs.clawd.bot/web/control-ui",
-      ].join("\n");
-    })(),
+    [
+      `Web UI: ${links.httpUrl}`,
+      `Gateway WS: ${links.wsUrl}`,
+      gatewayStatusLine,
+      "Docs: https://docs.clawd.bot/web/control-ui",
+    ].join("\n"),
     "Control UI",
   );
 
   const browserSupport = await detectBrowserOpenSupport();
-  if (!browserSupport.ok) {
-    note(
-      formatControlUiSshHint({
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-        token: gatewayToken,
-      }),
-      "Open Control UI",
-    );
-  } else {
-    const wantsOpen = guardCancel(
-      await confirm({
-        message: "Open Control UI now?",
-        initialValue: false,
-      }),
-      runtime,
-    );
-    if (wantsOpen) {
-      const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({
-        bind,
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-      });
-      const opened = await openUrl(links.httpUrl);
-      if (!opened) {
-        note(
-          formatControlUiSshHint({
-            port: gatewayPort,
-            basePath: nextConfig.gateway?.controlUi?.basePath,
-            token: gatewayToken,
-          }),
-          "Open Control UI",
-        );
+  if (gatewayProbe.ok) {
+    if (!browserSupport.ok) {
+      note(
+        formatControlUiSshHint({
+          port: gatewayPort,
+          basePath: nextConfig.gateway?.controlUi?.basePath,
+          token: gatewayToken,
+        }),
+        "Open Control UI",
+      );
+    } else {
+      const wantsOpen = guardCancel(
+        await confirm({
+          message: "Open Control UI now?",
+          initialValue: false,
+        }),
+        runtime,
+      );
+      if (wantsOpen) {
+        const opened = await openUrl(links.httpUrl);
+        if (!opened) {
+          note(
+            formatControlUiSshHint({
+              port: gatewayPort,
+              basePath: nextConfig.gateway?.controlUi?.basePath,
+              token: gatewayToken,
+            }),
+            "Open Control UI",
+          );
+        }
       }
     }
   }

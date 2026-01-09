@@ -19,6 +19,23 @@ Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It set
 
 If you want the deeper reference pages, jump to: [Wizard](/start/wizard), [Setup](/start/setup), [Pairing](/start/pairing), [Security](/gateway/security).
 
+Sandboxing note: `agent.sandbox.mode: "non-main"` uses `session.mainKey` (default `"main"`),
+so group/channel sessions are sandboxed. If you want the main agent to always
+run on host, set an explicit per-agent override:
+
+```json
+{
+  "routing": {
+    "agents": {
+      "main": {
+        "workspace": "~/clawd",
+        "sandbox": { "mode": "off" }
+      }
+    }
+  }
+}
+```
+
 ## 0) Prereqs
 
 - Node `>=22`
@@ -118,8 +135,7 @@ If you’re hacking on Clawdbot itself, run from source:
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 pnpm build
 pnpm clawdbot onboard --install-daemon
 ```
@@ -136,7 +152,7 @@ In a new terminal:
 
 ```bash
 clawdbot health
-clawdbot send --to +15555550123 --message "Hello from Clawdbot"
+clawdbot message send --to +15555550123 --message "Hello from Clawdbot"
 ```
 
 If `health` shows “no auth configured”, go back to the wizard and set OAuth/key auth — the agent won’t be able to respond without it.

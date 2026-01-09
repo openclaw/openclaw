@@ -50,6 +50,11 @@ vi.mock("./session.js", () => {
     readMessages: vi.fn().mockResolvedValue(undefined),
     updateMediaMessage: vi.fn(),
     logger: {},
+    signalRepository: {
+      lidMapping: {
+        getPNForLID: vi.fn().mockResolvedValue(null),
+      },
+    },
     user: { id: "123@s.whatsapp.net" },
   };
   return {
@@ -132,6 +137,89 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
+
+    await listener.close();
+  });
+
+  it("resolves LID JIDs using Baileys LID mapping store", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce(
+      "999:0@s.whatsapp.net",
+    );
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "abc", fromMe: false, remoteJid: "999@lid" },
+          message: { conversation: "ping" },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(getPNForLID).toHaveBeenCalledWith("999@lid");
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ body: "ping", from: "+999", to: "+123" }),
+    );
+
+    await listener.close();
+  });
+
+  it("resolves group participant LID JIDs via Baileys mapping", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const listener = await monitorWebInbox({ verbose: false, onMessage });
+    const sock = await createWaSocket();
+    const getPNForLID = vi.spyOn(
+      sock.signalRepository.lidMapping,
+      "getPNForLID",
+    );
+    sock.signalRepository.lidMapping.getPNForLID.mockResolvedValueOnce(
+      "444:0@s.whatsapp.net",
+    );
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: {
+            id: "abc",
+            fromMe: false,
+            remoteJid: "123@g.us",
+            participant: "444@lid",
+          },
+          message: { conversation: "ping" },
+          messageTimestamp: 1_700_000_000,
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(getPNForLID).toHaveBeenCalledWith("444@lid");
+    expect(onMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: "ping",
+        from: "123@g.us",
+        senderE164: "+444",
+        chatType: "group",
+      }),
+    );
 
     await listener.close();
   });
@@ -582,6 +670,9 @@ describe("web monitor inbox", () => {
     // Should NOT send read receipts for blocked senders (privacy + avoids Baileys Bad MAC churn).
     expect(sock.readMessages).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Your WhatsApp phone number: +999"),
+    });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });
@@ -1034,6 +1125,9 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Your WhatsApp phone number: +999"),
+    });
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });
 
@@ -1186,6 +1280,9 @@ describe("web monitor inbox", () => {
 
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
+    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
+      text: expect.stringContaining("Your WhatsApp phone number: +999"),
+    });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
     });

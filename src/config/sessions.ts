@@ -87,6 +87,7 @@ export type SessionEntry = {
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  responseUsage?: "on" | "off";
   providerOverride?: string;
   modelOverride?: string;
   authProfileOverride?: string;
@@ -111,6 +112,7 @@ export type SessionEntry = {
   model?: string;
   contextTokens?: number;
   compactionCount?: number;
+  claudeCliSessionId?: string;
   displayName?: string;
   provider?: string;
   subject?: string;

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 
+import { parseLogLine } from "../../logging/parse-log-line.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
@@ -10,14 +11,7 @@ export type ProvidersLogsOptions = {
   json?: boolean;
 };
 
-type LogLine = {
-  time?: string;
-  level?: string;
-  subsystem?: string;
-  module?: string;
-  message: string;
-  raw: string;
-};
+type LogLine = ReturnType<typeof parseLogLine>;
 
 const DEFAULT_LIMIT = 200;
 const MAX_BYTES = 1_000_000;
@@ -37,59 +31,7 @@ function parseProviderFilter(raw?: string) {
   return PROVIDERS.has(trimmed) ? trimmed : "all";
 }
 
-function extractMessage(value: Record<string, unknown>): string {
-  const parts: string[] = [];
-  for (const key of Object.keys(value)) {
-    if (!/^\d+$/.test(key)) continue;
-    const item = value[key];
-    if (typeof item === "string") {
-      parts.push(item);
-    } else if (item != null) {
-      parts.push(JSON.stringify(item));
-    }
-  }
-  return parts.join(" ");
-}
-
-function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
-  if (typeof raw !== "string") return {};
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      subsystem:
-        typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
-      module: typeof parsed.module === "string" ? parsed.module : undefined,
-    };
-  } catch {
-    return {};
-  }
-}
-
-function parseLogLine(raw: string): LogLine | null {
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    const meta = parsed._meta as Record<string, unknown> | undefined;
-    const nameMeta = parseMetaName(meta?.name);
-    return {
-      time:
-        typeof parsed.time === "string"
-          ? parsed.time
-          : typeof meta?.date === "string"
-            ? meta.date
-            : undefined,
-      level:
-        typeof meta?.logLevelName === "string" ? meta.logLevelName : undefined,
-      subsystem: nameMeta.subsystem,
-      module: nameMeta.module,
-      message: extractMessage(parsed),
-      raw,
-    };
-  } catch {
-    return null;
-  }
-}
-
-function matchesProvider(line: LogLine, provider: string) {
+function matchesProvider(line: NonNullable<LogLine>, provider: string) {
   if (provider === "all") return true;
   const needle = `gateway/providers/${provider}`;
   if (line.subsystem?.includes(needle)) return true;
@@ -139,7 +81,7 @@ export async function providersLogsCommand(
   const rawLines = await readTailLines(file, limit * 4);
   const parsed = rawLines
     .map(parseLogLine)
-    .filter((line): line is LogLine => Boolean(line));
+    .filter((line): line is NonNullable<LogLine> => Boolean(line));
   const filtered = parsed.filter((line) => matchesProvider(line, provider));
   const lines = filtered.slice(Math.max(0, filtered.length - limit));
 

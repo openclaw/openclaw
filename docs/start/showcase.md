@@ -1,6 +1,7 @@
 ---
 title: "Showcase"
 description: "Real-world Clawdbot projects from the community"
+summary: "Community-built projects and integrations powered by Clawdbot"
 ---
 
 # Showcase
@@ -43,8 +44,26 @@ Real projects from the community. See what people are building with Clawdbot.
 
 <Card title="Couch Potato Dev Mode" icon="couch" href="https://davekiss.com">
   **@davekiss** • `telegram` `website` `migration` `astro`
-  
+
   Rebuilt entire personal site via Telegram while watching Netflix — Notion → Astro, 18 posts migrated, DNS to Cloudflare. Never opened a laptop.
+</Card>
+
+<Card title="Job Search Agent" icon="briefcase">
+  **@attol8** • `automation` `api` `skill`
+
+  Searches job listings, matches against CV keywords, and returns relevant opportunities with links. Built in 30 minutes using JSearch API.
+</Card>
+
+<Card title="TradingView Analysis" icon="chart-line">
+  **@bheem1798** • `finance` `browser` `automation`
+
+  Logs into TradingView via browser automation, screenshots charts, and performs technical analysis on demand. No API needed—just browser control.
+</Card>
+
+<Card title="Slack Auto-Support" icon="slack">
+  **@henrymascot** • `slack` `automation` `support`
+
+  Watches company Slack channel, responds helpfully, and forwards notifications to Telegram. Autonomously fixed a production bug in a deployed app without being asked.
 </Card>
 
 </CardGroup>

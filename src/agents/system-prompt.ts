@@ -224,6 +224,11 @@ export function buildAgentSystemPrompt(params: {
     "- [[reply_to:<id>]] replies to a specific message id when you have it.",
     "Tags are stripped before sending; support depends on the current provider config.",
     "",
+    "## Messaging",
+    "- Reply in current session → automatically routes to the source provider (Signal, Telegram, etc.)",
+    "- Cross-session messaging → use sessions_send(sessionKey, message)",
+    "- Never use bash/curl for provider messaging; Clawdbot handles all routing internally.",
+    "",
   ];
 
   if (extraSystemPrompt) {

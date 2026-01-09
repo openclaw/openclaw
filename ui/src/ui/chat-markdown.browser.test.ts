@@ -30,6 +30,7 @@ describe("chat markdown rendering", () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
+    const timestamp = Date.now();
     app.chatMessages = [
       {
         role: "assistant",
@@ -37,9 +38,11 @@ describe("chat markdown rendering", () => {
           { type: "toolcall", name: "noop", arguments: {} },
           { type: "toolresult", name: "noop", text: "Hello **world**" },
         ],
-        timestamp: Date.now(),
+        timestamp,
       },
     ];
+    // Expand the tool output card so its markdown is rendered into the DOM.
+    app.toolOutputExpanded = new Set([`${timestamp}:1`]);
 
     await app.updateComplete;
 
@@ -47,4 +50,3 @@ describe("chat markdown rendering", () => {
     expect(strong?.textContent).toBe("world");
   });
 });
-

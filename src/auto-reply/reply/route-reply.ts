@@ -10,6 +10,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { sendMessageMSTeams } from "../../msteams/send.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -54,7 +55,8 @@ export type RouteReplyResult = {
 export async function routeReply(
   params: RouteReplyParams,
 ): Promise<RouteReplyResult> {
-  const { payload, channel, to, accountId, threadId, abortSignal } = params;
+  const { payload, channel, to, accountId, threadId, cfg, abortSignal } =
+    params;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const text = payload.text ?? "";
@@ -145,6 +147,16 @@ export async function routeReply(
         };
       }
 
+      case "msteams": {
+        const result = await sendMessageMSTeams({
+          cfg,
+          to,
+          text,
+          mediaUrl,
+        });
+        return { ok: true, messageId: result.messageId };
+      }
+
       default: {
         const _exhaustive: never = channel;
         return { ok: false, error: `Unknown channel: ${String(_exhaustive)}` };
@@ -195,7 +207,8 @@ export function isRoutableChannel(
   | "discord"
   | "signal"
   | "imessage"
-  | "whatsapp" {
+  | "whatsapp"
+  | "msteams" {
   if (!channel) return false;
   return [
     "telegram",
@@ -204,5 +217,6 @@ export function isRoutableChannel(
     "signal",
     "imessage",
     "whatsapp",
+    "msteams",
   ].includes(channel);
 }

@@ -12,6 +12,13 @@ file tools and for workspace context. Keep it private and treat it as memory.
 This is separate from `~/.clawdbot/`, which stores config, credentials, and
 sessions.
 
+**Important:** the workspace is the **default cwd**, not a hard sandbox. Tools
+resolve relative paths against the workspace, but absolute paths can still reach
+elsewhere on the host unless sandboxing is enabled. If you need isolation, use
+[`agent.sandbox`](/gateway/sandboxing) (and/or per‑agent sandbox config).
+When sandboxing is enabled and `workspaceAccess` is not `"rw"`, tools operate
+inside a sandbox workspace under `~/.clawdbot/sandboxes`, not your host workspace.
+
 ## Default location
 
 - Default: `~/clawd`

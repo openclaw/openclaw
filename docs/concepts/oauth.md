@@ -43,14 +43,19 @@ All of the above also respect `$CLAWDBOT_STATE_DIR` (state dir override). Full r
 
 If you already signed in with the external CLIs *on the gateway host*, Clawdbot can reuse those tokens without starting a separate OAuth flow:
 
-- Claude Code: reads `~/.claude/.credentials.json` → profile `anthropic:claude-cli`
+- Claude Code: `anthropic:claude-cli`
+  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
+  - Linux/Windows: `~/.claude/.credentials.json`
 - Codex CLI: reads `~/.codex/auth.json` → profile `openai-codex:codex-cli`
 
 Sync happens when Clawdbot loads the auth store (so it stays up-to-date when the CLIs refresh tokens).
+On macOS, the first read may trigger a Keychain prompt; run `clawdbot models status`
+in a terminal once if the Gateway runs headless and can’t access the entry.
 
 How to verify:
 
 ```bash
+clawdbot models status
 clawdbot providers list
 ```
 
@@ -97,7 +102,7 @@ At runtime:
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
 
-See implementation: `src/agents/auth-profiles.ts`.
+The refresh flow is automatic; you generally don’t need to manage tokens manually.
 
 ## Multiple accounts (profiles) + routing
 

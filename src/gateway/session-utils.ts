@@ -17,8 +17,10 @@ import {
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
+  type SessionScope,
 } from "../config/sessions.js";
 import {
+  DEFAULT_MAIN_KEY,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
@@ -49,11 +51,18 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  responseUsage?: "on" | "off";
+  modelProvider?: string;
   model?: string;
   contextTokens?: number;
   lastProvider?: SessionEntry["lastProvider"];
   lastTo?: string;
   lastAccountId?: string;
+};
+
+export type GatewayAgentRow = {
+  id: string;
+  name?: string;
 };
 
 export type SessionsListResult = {
@@ -237,6 +246,39 @@ function listConfiguredAgentIds(cfg: ClawdbotConfig): string[] {
   return sorted;
 }
 
+export function listAgentsForGateway(cfg: ClawdbotConfig): {
+  defaultId: string;
+  mainKey: string;
+  scope: SessionScope;
+  agents: GatewayAgentRow[];
+} {
+  const defaultId = normalizeAgentId(cfg.routing?.defaultAgentId);
+  const mainKey =
+    (cfg.session?.mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  const scope = cfg.session?.scope ?? "per-sender";
+  const configured = cfg.routing?.agents;
+  const configuredById = new Map<string, { name?: string }>();
+  if (configured && typeof configured === "object") {
+    for (const [key, value] of Object.entries(configured)) {
+      if (!value || typeof value !== "object") continue;
+      configuredById.set(normalizeAgentId(key), {
+        name:
+          typeof value.name === "string" && value.name.trim()
+            ? value.name.trim()
+            : undefined,
+      });
+    }
+  }
+  const agents = listConfiguredAgentIds(cfg).map((id) => {
+    const meta = configuredById.get(id);
+    return {
+      id,
+      name: meta?.name,
+    };
+  });
+  return { defaultId, mainKey, scope, agents };
+}
+
 function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   if (key === "global" || key === "unknown") return key;
   if (key.startsWith("agent:")) return key;
@@ -394,6 +436,8 @@ export function listSessionsFromStore(params: {
   const includeGlobal = opts.includeGlobal === true;
   const includeUnknown = opts.includeUnknown === true;
   const spawnedBy = typeof opts.spawnedBy === "string" ? opts.spawnedBy : "";
+  const agentId =
+    typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   const activeMinutes =
     typeof opts.activeMinutes === "number" &&
     Number.isFinite(opts.activeMinutes)
@@ -404,6 +448,12 @@ export function listSessionsFromStore(params: {
     .filter(([key]) => {
       if (!includeGlobal && key === "global") return false;
       if (!includeUnknown && key === "unknown") return false;
+      if (agentId) {
+        if (key === "global" || key === "unknown") return false;
+        const parsed = parseAgentSessionKey(key);
+        if (!parsed) return false;
+        return normalizeAgentId(parsed.agentId) === agentId;
+      }
       return true;
     })
     .filter(([key, entry]) => {
@@ -455,6 +505,8 @@ export function listSessionsFromStore(params: {
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: total,
+        responseUsage: entry?.responseUsage,
+        modelProvider: entry?.modelProvider,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
         lastProvider: entry?.lastProvider,

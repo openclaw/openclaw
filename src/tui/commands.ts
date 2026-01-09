@@ -31,6 +31,8 @@ export function getSlashCommands(): SlashCommand[] {
   return [
     { name: "help", description: "Show slash command help" },
     { name: "status", description: "Show gateway status summary" },
+    { name: "agent", description: "Switch agent (or open picker)" },
+    { name: "agents", description: "Open agent picker" },
     { name: "session", description: "Switch session (or open picker)" },
     { name: "sessions", description: "Open session picker" },
     {
@@ -59,6 +61,14 @@ export function getSlashCommands(): SlashCommand[] {
       description: "Set reasoning on/off",
       getArgumentCompletions: (prefix) =>
         REASONING_LEVELS.filter((v) => v.startsWith(prefix.toLowerCase())).map(
+          (value) => ({ value, label: value }),
+        ),
+    },
+    {
+      name: "cost",
+      description: "Toggle per-response usage line",
+      getArgumentCompletions: (prefix) =>
+        TOGGLE.filter((v) => v.startsWith(prefix.toLowerCase())).map(
           (value) => ({ value, label: value }),
         ),
     },
@@ -108,11 +118,13 @@ export function helpText(): string {
     "Slash commands:",
     "/help",
     "/status",
+    "/agent <id> (or /agents)",
     "/session <key> (or /sessions)",
     "/model <provider/model> (or /models)",
     "/think <off|minimal|low|medium|high>",
     "/verbose <on|off>",
     "/reasoning <on|off>",
+    "/cost <on|off>",
     "/elevated <on|off>",
     "/elev <on|off>",
     "/activation <mention|always>",

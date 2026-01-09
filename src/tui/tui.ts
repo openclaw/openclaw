@@ -6,7 +6,14 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import { normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -14,7 +21,7 @@ import {
   createSelectList,
   createSettingsList,
 } from "./components/selectors.js";
-import { GatewayChatClient } from "./gateway-chat.js";
+import { type GatewayAgentsList, GatewayChatClient } from "./gateway-chat.js";
 import { editorTheme, theme } from "./theme/theme.js";
 
 export type TuiOptions = {
@@ -47,10 +54,21 @@ type SessionInfo = {
   verboseLevel?: string;
   reasoningLevel?: string;
   model?: string;
+  modelProvider?: string;
   contextTokens?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
   totalTokens?: number | null;
+  responseUsage?: "on" | "off";
   updatedAt?: number | null;
   displayName?: string;
+};
+
+type SessionScope = "per-sender" | "global";
+
+type AgentSummary = {
+  id: string;
+  name?: string;
 };
 
 function extractTextBlocks(
@@ -87,13 +105,16 @@ function extractTextFromMessage(
 }
 
 function formatTokens(total?: number | null, context?: number | null) {
-  if (!total && !context) return "tokens ?";
-  if (!context) return `tokens ${total ?? 0}`;
+  if (total == null && context == null) return "tokens ?";
+  const totalLabel = total == null ? "?" : formatTokenCount(total);
+  if (context == null) return `tokens ${totalLabel}`;
   const pct =
     typeof total === "number" && context > 0
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
-  return `tokens ${total ?? 0}/${context}${pct !== null ? ` (${pct}%)` : ""}`;
+  return `tokens ${totalLabel}/${formatTokenCount(context)}${
+    pct !== null ? ` (${pct}%)` : ""
+  }`;
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -106,9 +127,18 @@ function asString(value: unknown, fallback = ""): string {
 
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
-  const defaultSession =
-    (opts.session ?? config.session?.mainKey ?? "main").trim() || "main";
-  let currentSessionKey = defaultSession;
+  const initialSessionInput = (opts.session ?? "").trim();
+  let sessionScope: SessionScope = (config.session?.scope ??
+    "per-sender") as SessionScope;
+  let sessionMainKey = (config.session?.mainKey ?? "main").trim() || "main";
+  let agentDefaultId = normalizeAgentId(
+    config.routing?.defaultAgentId ?? "main",
+  );
+  let currentAgentId = agentDefaultId;
+  let agents: AgentSummary[] = [];
+  const agentNames = new Map<string, string>();
+  let currentSessionKey = "";
+  let initialSessionApplied = false;
   let currentSessionId: string | null = null;
   let activeChatRunId: string | null = null;
   const finalizedRuns = new Map<string, number>();
@@ -144,10 +174,39 @@ export async function runTui(opts: TuiOptions) {
   tui.addChild(root);
   tui.setFocus(editor);
 
+  const formatSessionKey = (key: string) => {
+    if (key === "global" || key === "unknown") return key;
+    const parsed = parseAgentSessionKey(key);
+    return parsed?.rest ?? key;
+  };
+
+  const formatAgentLabel = (id: string) => {
+    const name = agentNames.get(id);
+    return name ? `${id} (${name})` : id;
+  };
+
+  const resolveSessionKey = (raw?: string) => {
+    const trimmed = (raw ?? "").trim();
+    if (sessionScope === "global") return "global";
+    if (!trimmed) {
+      return buildAgentMainSessionKey({
+        agentId: currentAgentId,
+        mainKey: sessionMainKey,
+      });
+    }
+    if (trimmed === "global" || trimmed === "unknown") return trimmed;
+    if (trimmed.startsWith("agent:")) return trimmed;
+    return `agent:${currentAgentId}:${trimmed}`;
+  };
+
+  currentSessionKey = resolveSessionKey(initialSessionInput);
+
   const updateHeader = () => {
+    const sessionLabel = formatSessionKey(currentSessionKey);
+    const agentLabel = formatAgentLabel(currentAgentId);
     header.setText(
       theme.header(
-        `clawdbot tui - ${client.connection.url} - session ${currentSessionKey}`,
+        `clawdbot tui - ${client.connection.url} - agent ${agentLabel} - session ${sessionLabel}`,
       ),
     );
   };
@@ -158,10 +217,16 @@ export async function runTui(opts: TuiOptions) {
 
   const updateFooter = () => {
     const connection = isConnected ? "connected" : "disconnected";
+    const sessionKeyLabel = formatSessionKey(currentSessionKey);
     const sessionLabel = sessionInfo.displayName
-      ? `${currentSessionKey} (${sessionInfo.displayName})`
-      : currentSessionKey;
-    const modelLabel = sessionInfo.model ?? "unknown";
+      ? `${sessionKeyLabel} (${sessionInfo.displayName})`
+      : sessionKeyLabel;
+    const agentLabel = formatAgentLabel(currentAgentId);
+    const modelLabel = sessionInfo.model
+      ? sessionInfo.modelProvider
+        ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
+        : sessionInfo.model
+      : "unknown";
     const tokens = formatTokens(
       sessionInfo.totalTokens ?? null,
       sessionInfo.contextTokens ?? null,
@@ -172,7 +237,7 @@ export async function runTui(opts: TuiOptions) {
     const deliver = deliverDefault ? "on" : "off";
     footer.setText(
       theme.dim(
-        `${connection} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose} | reasoning ${reasoning} | ${tokens} | deliver ${deliver}`,
+        `${connection} | agent ${agentLabel} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose} | reasoning ${reasoning} | ${tokens} | deliver ${deliver}`,
       ),
     );
   };
@@ -188,22 +253,93 @@ export async function runTui(opts: TuiOptions) {
     tui.setFocus(component);
   };
 
+  const initialSessionAgentId = (() => {
+    if (!initialSessionInput) return null;
+    const parsed = parseAgentSessionKey(initialSessionInput);
+    return parsed ? normalizeAgentId(parsed.agentId) : null;
+  })();
+
+  const applyAgentsResult = (result: GatewayAgentsList) => {
+    agentDefaultId = normalizeAgentId(result.defaultId);
+    sessionMainKey = result.mainKey.trim() || sessionMainKey;
+    sessionScope = result.scope ?? sessionScope;
+    agents = result.agents.map((agent) => ({
+      id: normalizeAgentId(agent.id),
+      name: agent.name?.trim() || undefined,
+    }));
+    agentNames.clear();
+    for (const agent of agents) {
+      if (agent.name) agentNames.set(agent.id, agent.name);
+    }
+    if (!initialSessionApplied) {
+      if (initialSessionAgentId) {
+        if (agents.some((agent) => agent.id === initialSessionAgentId)) {
+          currentAgentId = initialSessionAgentId;
+        }
+      } else if (!agents.some((agent) => agent.id === currentAgentId)) {
+        currentAgentId =
+          agents[0]?.id ?? normalizeAgentId(result.defaultId ?? currentAgentId);
+      }
+      const nextSessionKey = resolveSessionKey(initialSessionInput);
+      if (nextSessionKey !== currentSessionKey) {
+        currentSessionKey = nextSessionKey;
+      }
+      initialSessionApplied = true;
+    } else if (!agents.some((agent) => agent.id === currentAgentId)) {
+      currentAgentId =
+        agents[0]?.id ?? normalizeAgentId(result.defaultId ?? currentAgentId);
+    }
+    updateHeader();
+    updateFooter();
+  };
+
+  const refreshAgents = async () => {
+    try {
+      const result = await client.listAgents();
+      applyAgentsResult(result);
+    } catch (err) {
+      chatLog.addSystem(`agents list failed: ${String(err)}`);
+    }
+  };
+
+  const updateAgentFromSessionKey = (key: string) => {
+    const parsed = parseAgentSessionKey(key);
+    if (!parsed) return;
+    const next = normalizeAgentId(parsed.agentId);
+    if (next !== currentAgentId) {
+      currentAgentId = next;
+    }
+  };
+
   const refreshSessionInfo = async () => {
     try {
+      const listAgentId =
+        currentSessionKey === "global" || currentSessionKey === "unknown"
+          ? undefined
+          : currentAgentId;
       const result = await client.listSessions({
         includeGlobal: false,
         includeUnknown: false,
+        agentId: listAgentId,
       });
-      const entry = result.sessions.find(
-        (row) => row.key === currentSessionKey,
-      );
+      const entry = result.sessions.find((row) => {
+        // Exact match
+        if (row.key === currentSessionKey) return true;
+        // Also match canonical keys like "agent:default:main" against "main"
+        const parsed = parseAgentSessionKey(row.key);
+        return parsed?.rest === currentSessionKey;
+      });
       sessionInfo = {
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         model: entry?.model ?? result.defaults?.model ?? undefined,
+        modelProvider: entry?.modelProvider,
         contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
+        inputTokens: entry?.inputTokens ?? null,
+        outputTokens: entry?.outputTokens ?? null,
         totalTokens: entry?.totalTokens ?? null,
+        responseUsage: entry?.responseUsage,
         updatedAt: entry?.updatedAt ?? null,
         displayName: entry?.displayName,
       };
@@ -272,12 +408,15 @@ export async function runTui(opts: TuiOptions) {
     tui.requestRender();
   };
 
-  const setSession = async (key: string) => {
-    currentSessionKey = key;
+  const setSession = async (rawKey: string) => {
+    const nextKey = resolveSessionKey(rawKey);
+    updateAgentFromSessionKey(nextKey);
+    currentSessionKey = nextKey;
     activeChatRunId = null;
     currentSessionId = null;
     historyLoaded = false;
     updateHeader();
+    updateFooter();
     await loadHistory();
   };
 
@@ -429,15 +568,51 @@ export async function runTui(opts: TuiOptions) {
     }
   };
 
+  const setAgent = async (id: string) => {
+    currentAgentId = normalizeAgentId(id);
+    await setSession("");
+  };
+
+  const openAgentSelector = async () => {
+    await refreshAgents();
+    if (agents.length === 0) {
+      chatLog.addSystem("no agents found");
+      tui.requestRender();
+      return;
+    }
+    const items = agents.map((agent) => ({
+      value: agent.id,
+      label: agent.name ? `${agent.id} (${agent.name})` : agent.id,
+      description: agent.id === agentDefaultId ? "default" : "",
+    }));
+    const selector = createSelectList(items, 9);
+    selector.onSelect = (item) => {
+      void (async () => {
+        closeOverlay();
+        await setAgent(item.value);
+        tui.requestRender();
+      })();
+    };
+    selector.onCancel = () => {
+      closeOverlay();
+      tui.requestRender();
+    };
+    openOverlay(selector);
+    tui.requestRender();
+  };
+
   const openSessionSelector = async () => {
     try {
       const result = await client.listSessions({
         includeGlobal: false,
         includeUnknown: false,
+        agentId: currentAgentId,
       });
       const items = result.sessions.map((session) => ({
         value: session.key,
-        label: session.displayName ?? session.key,
+        label: session.displayName
+          ? `${session.displayName} (${formatSessionKey(session.key)})`
+          : formatSessionKey(session.key),
         description: session.updatedAt
           ? new Date(session.updatedAt).toLocaleString()
           : "",
@@ -528,6 +703,16 @@ export async function runTui(opts: TuiOptions) {
           chatLog.addSystem(`status failed: ${String(err)}`);
         }
         break;
+      case "agent":
+        if (!args) {
+          await openAgentSelector();
+        } else {
+          await setAgent(args);
+        }
+        break;
+      case "agents":
+        await openAgentSelector();
+        break;
       case "session":
         if (!args) {
           await openSessionSelector();
@@ -605,6 +790,28 @@ export async function runTui(opts: TuiOptions) {
           chatLog.addSystem(`reasoning failed: ${String(err)}`);
         }
         break;
+      case "cost": {
+        const normalized = args ? normalizeUsageDisplay(args) : undefined;
+        if (args && !normalized) {
+          chatLog.addSystem("usage: /cost <on|off>");
+          break;
+        }
+        const current = sessionInfo.responseUsage === "on" ? "on" : "off";
+        const next = normalized ?? (current === "on" ? "off" : "on");
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            responseUsage: next === "off" ? null : next,
+          });
+          chatLog.addSystem(
+            next === "on" ? "usage line enabled" : "usage line disabled",
+          );
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`cost failed: ${String(err)}`);
+        }
+        break;
+      }
       case "elevated":
         if (!args) {
           chatLog.addSystem("usage: /elevated <on|off>");
@@ -744,6 +951,9 @@ export async function runTui(opts: TuiOptions) {
   editor.onCtrlL = () => {
     void openModelSelector();
   };
+  editor.onCtrlG = () => {
+    void openAgentSelector();
+  };
   editor.onCtrlP = () => {
     void openSessionSelector();
   };
@@ -760,17 +970,19 @@ export async function runTui(opts: TuiOptions) {
   client.onConnected = () => {
     isConnected = true;
     setStatus("connected");
-    updateHeader();
-    if (!historyLoaded) {
-      void loadHistory().then(() => {
+    void (async () => {
+      await refreshAgents();
+      updateHeader();
+      if (!historyLoaded) {
+        await loadHistory();
         chatLog.addSystem("gateway connected");
         tui.requestRender();
-      });
-    } else {
-      chatLog.addSystem("gateway reconnected");
-    }
-    updateFooter();
-    tui.requestRender();
+      } else {
+        chatLog.addSystem("gateway reconnected");
+      }
+      updateFooter();
+      tui.requestRender();
+    })();
   };
 
   client.onDisconnected = (reason) => {

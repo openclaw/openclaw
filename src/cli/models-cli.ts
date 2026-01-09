@@ -4,6 +4,9 @@ import {
   modelsAliasesAddCommand,
   modelsAliasesListCommand,
   modelsAliasesRemoveCommand,
+  modelsAuthAddCommand,
+  modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand,
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
@@ -57,6 +60,11 @@ export function registerModelsCli(program: Command) {
     .description("Show configured model state")
     .option("--json", "Output JSON", false)
     .option("--plain", "Plain output", false)
+    .option(
+      "--check",
+      "Exit non-zero if auth is expiring/expired (1=expired/missing, 2=expiring)",
+      false,
+    )
     .action(async (opts) => {
       try {
         await modelsStatusCommand(opts, defaultRuntime);
@@ -289,4 +297,63 @@ export function registerModelsCli(program: Command) {
       defaultRuntime.exit(1);
     }
   });
+
+  const auth = models.command("auth").description("Manage model auth profiles");
+
+  auth
+    .command("add")
+    .description("Interactive auth helper (setup-token or paste token)")
+    .action(async () => {
+      try {
+        await modelsAuthAddCommand({}, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  auth
+    .command("setup-token")
+    .description("Run a provider CLI to create/sync a token (TTY required)")
+    .option("--provider <name>", "Provider id (default: anthropic)")
+    .option("--yes", "Skip confirmation", false)
+    .action(async (opts) => {
+      try {
+        await modelsAuthSetupTokenCommand(
+          {
+            provider: opts.provider as string | undefined,
+            yes: Boolean(opts.yes),
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  auth
+    .command("paste-token")
+    .description("Paste a token into auth-profiles.json and update config")
+    .requiredOption("--provider <name>", "Provider id (e.g. anthropic)")
+    .option("--profile-id <id>", "Auth profile id (default: <provider>:manual)")
+    .option(
+      "--expires-in <duration>",
+      "Optional expiry duration (e.g. 365d, 12h). Stored as absolute expiresAt.",
+    )
+    .action(async (opts) => {
+      try {
+        await modelsAuthPasteTokenCommand(
+          {
+            provider: opts.provider as string | undefined,
+            profileId: opts.profileId as string | undefined,
+            expiresIn: opts.expiresIn as string | undefined,
+          },
+          defaultRuntime,
+        );
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 }

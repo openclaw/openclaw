@@ -9,6 +9,7 @@ import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
@@ -19,11 +20,21 @@ import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
 import { spawnSignalDaemon } from "./daemon.js";
+import {
+  formatSignalPairingIdLine,
+  formatSignalSenderDisplay,
+  formatSignalSenderId,
+  isSignalSenderAllowed,
+  resolveSignalPeerId,
+  resolveSignalRecipient,
+  resolveSignalSender,
+} from "./identity.js";
 import { sendMessageSignal } from "./send.js";
 import { runSignalSseLoop } from "./sse-reconnect.js";
 
 type SignalEnvelope = {
   sourceNumber?: string | null;
+  sourceUuid?: string | null;
   sourceName?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
@@ -89,28 +100,6 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
 
 function normalizeAllowList(raw?: Array<string | number>): string[] {
   return (raw ?? []).map((entry) => String(entry).trim()).filter(Boolean);
-}
-
-function isAllowedSender(sender: string, allowFrom: string[]): boolean {
-  if (allowFrom.length === 0) return false;
-  if (allowFrom.includes("*")) return true;
-  const normalizedAllow = allowFrom
-    .map((entry) => entry.replace(/^signal:/i, ""))
-    .map((entry) => normalizeE164(entry));
-  const normalizedSender = normalizeE164(sender);
-  return normalizedAllow.includes(normalizedSender);
-}
-
-export function isSignalGroupAllowed(params: {
-  groupPolicy: "open" | "disabled" | "allowlist";
-  allowFrom: string[];
-  sender: string;
-}): boolean {
-  const { groupPolicy, allowFrom, sender } = params;
-  if (groupPolicy === "disabled") return false;
-  if (groupPolicy === "open") return true;
-  if (allowFrom.length === 0) return false;
-  return isAllowedSender(sender, allowFrom);
 }
 
 async function waitForSignalDaemonReady(params: {
@@ -319,11 +308,19 @@ export async function monitorSignalProvider(
         envelope.dataMessage ?? envelope.editMessage?.dataMessage;
       if (!dataMessage) return;
 
-      const sender = envelope.sourceNumber?.trim();
+      const sender = resolveSignalSender(envelope);
       if (!sender) return;
-      if (account && normalizeE164(sender) === normalizeE164(account)) {
-        return;
+      if (account && sender.kind === "phone") {
+        if (sender.e164 === normalizeE164(account)) {
+          return;
+        }
       }
+      const senderDisplay = formatSignalSenderDisplay(sender);
+      const senderRecipient = resolveSignalRecipient(sender);
+      const senderPeerId = resolveSignalPeerId(sender);
+      const senderAllowId = formatSignalSenderId(sender);
+      if (!senderRecipient) return;
+      const senderIdLine = formatSignalPairingIdLine(sender);
       const groupId = dataMessage.groupInfo?.groupId ?? undefined;
       const groupName = dataMessage.groupInfo?.groupName ?? undefined;
       const isGroup = Boolean(groupId);
@@ -333,13 +330,15 @@ export async function monitorSignalProvider(
       const effectiveDmAllow = [...allowFrom, ...storeAllowFrom];
       const effectiveGroupAllow = [...groupAllowFrom, ...storeAllowFrom];
       const dmAllowed =
-        dmPolicy === "open" ? true : isAllowedSender(sender, effectiveDmAllow);
+        dmPolicy === "open"
+          ? true
+          : isSignalSenderAllowed(sender, effectiveDmAllow);
 
       if (!isGroup) {
         if (dmPolicy === "disabled") return;
         if (!dmAllowed) {
           if (dmPolicy === "pairing") {
-            const senderId = normalizeE164(sender);
+            const senderId = senderAllowId;
             const { code, created } = await upsertProviderPairingRequest({
               provider: "signal",
               id: senderId,
@@ -351,15 +350,12 @@ export async function monitorSignalProvider(
               logVerbose(`signal pairing request sender=${senderId}`);
               try {
                 await sendMessageSignal(
-                  senderId,
-                  [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider signal <code>",
-                  ].join("\n"),
+                  `signal:${senderRecipient}`,
+                  buildPairingReply({
+                    provider: "signal",
+                    idLine: senderIdLine,
+                    code,
+                  }),
                   {
                     baseUrl,
                     account,
@@ -375,7 +371,7 @@ export async function monitorSignalProvider(
             }
           } else {
             logVerbose(
-              `Blocked signal sender ${sender} (dmPolicy=${dmPolicy})`,
+              `Blocked signal sender ${senderDisplay} (dmPolicy=${dmPolicy})`,
             );
           }
           return;
@@ -392,9 +388,9 @@ export async function monitorSignalProvider(
           );
           return;
         }
-        if (!isAllowedSender(sender, effectiveGroupAllow)) {
+        if (!isSignalSenderAllowed(sender, effectiveGroupAllow)) {
           logVerbose(
-            `Blocked signal group sender ${sender} (not in groupAllowFrom)`,
+            `Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`,
           );
           return;
         }
@@ -402,7 +398,7 @@ export async function monitorSignalProvider(
 
       const commandAuthorized = isGroup
         ? effectiveGroupAllow.length > 0
-          ? isAllowedSender(sender, effectiveGroupAllow)
+          ? isSignalSenderAllowed(sender, effectiveGroupAllow)
           : true
         : dmAllowed;
       const messageText = (dataMessage.message ?? "").trim();
@@ -417,7 +413,7 @@ export async function monitorSignalProvider(
             baseUrl,
             account,
             attachment: firstAttachment,
-            sender,
+            sender: senderRecipient,
             groupId,
             maxBytes: mediaMaxBytes,
           });
@@ -444,7 +440,7 @@ export async function monitorSignalProvider(
 
       const fromLabel = isGroup
         ? `${groupName ?? "Signal Group"} id:${groupId}`
-        : `${envelope.sourceName ?? sender} id:${sender}`;
+        : `${envelope.sourceName ?? senderDisplay} id:${senderDisplay}`;
       const body = formatAgentEnvelope({
         provider: "Signal",
         from: fromLabel,
@@ -458,20 +454,24 @@ export async function monitorSignalProvider(
         accountId: accountInfo.accountId,
         peer: {
           kind: isGroup ? "group" : "dm",
-          id: isGroup ? (groupId ?? "unknown") : normalizeE164(sender),
+          id: isGroup ? (groupId ?? "unknown") : senderPeerId,
         },
       });
-      const signalTo = isGroup ? `group:${groupId}` : `signal:${sender}`;
+      const signalTo = isGroup
+        ? `group:${groupId}`
+        : `signal:${senderRecipient}`;
       const ctxPayload = {
         Body: body,
-        From: isGroup ? `group:${groupId ?? "unknown"}` : `signal:${sender}`,
+        From: isGroup
+          ? `group:${groupId ?? "unknown"}`
+          : `signal:${senderRecipient}`,
         To: signalTo,
         SessionKey: route.sessionKey,
         AccountId: route.accountId,
         ChatType: isGroup ? "group" : "direct",
         GroupSubject: isGroup ? (groupName ?? undefined) : undefined,
-        SenderName: envelope.sourceName ?? sender,
-        SenderId: sender,
+        SenderName: envelope.sourceName ?? senderDisplay,
+        SenderId: senderDisplay,
         Provider: "signal" as const,
         Surface: "signal" as const,
         MessageSid: envelope.timestamp ? String(envelope.timestamp) : undefined,
@@ -494,7 +494,7 @@ export async function monitorSignalProvider(
           storePath,
           sessionKey: route.mainSessionKey,
           provider: "signal",
-          to: normalizeE164(sender),
+          to: senderRecipient,
           accountId: route.accountId,
         });
       }

@@ -1,14 +1,14 @@
 ---
-summary: "What the ClaudeBot system prompt contains and how it is assembled"
+summary: "What the Clawdbot system prompt contains and how it is assembled"
 read_when:
   - Editing system prompt text, tools list, or time/heartbeat sections
   - Changing workspace bootstrap or skills injection behavior
 ---
 # System Prompt
 
-ClaudeBot builds a custom system prompt for every agent run. The prompt is **Clawdbot-owned** and does not use the p-coding-agent default prompt.
+Clawdbot builds a custom system prompt for every agent run. The prompt is **Clawdbot-owned** and does not use the p-coding-agent default prompt.
 
-The prompt is assembled in `src/agents/system-prompt.ts` and injected by `src/agents/pi-embedded-runner.ts`.
+The prompt is assembled by Clawdbot and injected into each agent run.
 
 ## Structure
 
@@ -16,7 +16,7 @@ The prompt is intentionally compact and uses fixed sections:
 
 - **Tooling**: current tool list + short descriptions.
 - **Skills**: tells the model how to load skill instructions on demand.
-- **ClaudeBot Self-Update**: how to run `config.apply` and `update.run`.
+- **Clawdbot Self-Update**: how to run `config.apply` and `update.run`.
 - **Workspace**: working directory (`agent.workspace`).
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
 - **Time**: UTC default + the user’s local time (already converted).
@@ -56,9 +56,3 @@ Skills are **not** auto-injected. Instead, the prompt instructs the model to use
 ```
 
 This keeps the base prompt small while still enabling targeted skill usage.
-
-## Code references
-
-- Prompt text: `src/agents/system-prompt.ts`
-- Prompt assembly + injection: `src/agents/pi-embedded-runner.ts`
-- Bootstrap trimming: `src/agents/pi-embedded-helpers.ts`

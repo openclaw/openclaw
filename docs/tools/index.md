@@ -1,8 +1,8 @@
 ---
-summary: "Agent tool surface for Clawdbot (browser, canvas, nodes, cron) replacing clawdbot-* skills"
+summary: "Agent tool surface for Clawdbot (browser, canvas, nodes, message, cron) replacing legacy `clawdbot-*` skills"
 read_when:
   - Adding or modifying agent tools
-  - Retiring or changing clawdbot-* skills
+  - Retiring or changing `clawdbot-*` skills
 ---
 
 # Tools (Clawdbot)
@@ -36,13 +36,15 @@ Core parameters:
 - `yieldMs` (auto-background after timeout, default 10000)
 - `background` (immediate background)
 - `timeout` (seconds; kills the process if exceeded, default 1800)
-- `elevated` (bool; run on host if elevated mode is enabled/allowed)
+- `elevated` (bool; run on host if elevated mode is enabled/allowed; only changes behavior when the agent is sandboxed)
 - Need a real TTY? Use the tmux skill.
 
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
 - If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
+- `elevated` is gated by `agent.elevated` (global sender allowlist) and runs on the host.
+- `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
 
 ### `process`
 Manage background bash sessions.
@@ -146,6 +148,30 @@ Notes:
 - Only available when `agent.imageModel` is configured (primary or fallbacks).
 - Uses the image model directly (independent of the main chat model).
 
+### `message`
+Send messages and provider actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage.
+
+Core actions:
+- `send` (text + optional media)
+- `poll` (WhatsApp/Discord polls)
+- `react` / `reactions` / `read` / `edit` / `delete`
+- `pin` / `unpin` / `list-pins`
+- `permissions`
+- `thread-create` / `thread-list` / `thread-reply`
+- `search`
+- `sticker`
+- `member-info` / `role-info`
+- `emoji-list` / `emoji-upload` / `sticker-upload`
+- `role-add` / `role-remove`
+- `channel-info` / `channel-list`
+- `voice-status`
+- `event-list` / `event-create`
+- `timeout` / `kick` / `ban`
+
+Notes:
+- `send` routes WhatsApp via the Gateway; other providers go direct.
+- `poll` uses the Gateway for WhatsApp and direct Discord API for Discord.
+
 ### `cron`
 Manage Gateway cron jobs and wakeups.
 
@@ -169,6 +195,7 @@ Core actions:
 
 Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
+- `restart` is disabled by default; enable with `commands.restart: true`.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn`
 List sessions, inspect transcript history, or send to another session.
@@ -194,70 +221,6 @@ List agent ids that the current session may target with `sessions_spawn`.
 Notes:
 - Result is restricted to per-agent allowlists (`routing.agents.<agentId>.subagents.allowAgents`).
 - When `["*"]` is configured, the tool includes all configured agents and marks `allowAny: true`.
-
-### `discord`
-Send Discord reactions, stickers, or polls.
-
-Core actions:
-- `react` (`channelId`, `messageId`, `emoji`)
-- `reactions` (`channelId`, `messageId`, optional `limit`)
-- `sticker` (`to`, `stickerIds`, optional `content`)
-- `poll` (`to`, `question`, `answers`, optional `allowMultiselect`, `durationHours`, `content`)
-- `permissions` (`channelId`)
-- `readMessages` (`channelId`, optional `limit`/`before`/`after`/`around`)
-- `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyTo`)
-- `editMessage` (`channelId`, `messageId`, `content`)
-- `deleteMessage` (`channelId`, `messageId`)
-- `threadCreate` (`channelId`, `name`, optional `messageId`, `autoArchiveMinutes`)
-- `threadList` (`guildId`, optional `channelId`, `includeArchived`, `before`, `limit`)
-- `threadReply` (`channelId`, `content`, optional `mediaUrl`, `replyTo`)
-- `pinMessage`/`unpinMessage` (`channelId`, `messageId`)
-- `listPins` (`channelId`)
-- `searchMessages` (`guildId`, `content`, optional `channelId`/`channelIds`, `authorId`/`authorIds`, `limit`)
-- `memberInfo` (`guildId`, `userId`)
-- `roleInfo` (`guildId`)
-- `emojiList` (`guildId`)
-- `roleAdd`/`roleRemove` (`guildId`, `userId`, `roleId`)
-- `channelInfo` (`channelId`)
-- `channelList` (`guildId`)
-- `voiceStatus` (`guildId`, `userId`)
-- `eventList` (`guildId`)
-- `eventCreate` (`guildId`, `name`, `startTime`, optional `endTime`, `description`, `channelId`, `entityType`, `location`)
-- `timeout` (`guildId`, `userId`, optional `durationMinutes`, `until`, `reason`)
-- `kick` (`guildId`, `userId`, optional `reason`)
-- `ban` (`guildId`, `userId`, optional `reason`, `deleteMessageDays`)
-
-Notes:
-- `to` accepts `channel:<id>` or `user:<id>`.
-- Polls require 2–10 answers and default to 24 hours.
-- `reactions` returns per-emoji user lists (limited to 100 per reaction).
-- Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- `discord.actions.*` gates Discord tool actions; `roles` + `moderation` default to `false`.
-- `searchMessages` follows the Discord preview spec (limit max 25, channel/author filters accept arrays).
-- The tool is only exposed when the current provider is Discord.
-
-### `whatsapp`
-Send WhatsApp reactions.
-
-Core actions:
-- `react` (`chatJid`, `messageId`, `emoji`, optional `remove`, `participant`, `fromMe`, `accountId`)
-
-Notes:
-- Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- `whatsapp.actions.*` gates WhatsApp tool actions.
-- The tool is only exposed when the current provider is WhatsApp.
-
-### `telegram`
-Send Telegram messages or reactions.
-
-Core actions:
-- `sendMessage` (`to`, `content`, optional `mediaUrl`, `replyToMessageId`, `messageThreadId`)
-- `react` (`chatId`, `messageId`, `emoji`, optional `remove`)
-
-Notes:
-- Reaction removal semantics: see [/tools/reactions](/tools/reactions).
-- `telegram.actions.*` gates Telegram tool actions.
-- The tool is only exposed when the current provider is Telegram.
 
 ## Parameters (common)
 
@@ -293,25 +256,12 @@ Node targeting:
 - Respect user consent for camera/screen capture.
 - Use `status/describe` to ensure permissions before invoking media commands.
 
-## How the model sees tools (pi-mono internals)
+## How tools are presented to the agent
 
-Tools are exposed to the model in **two parallel channels**:
+Tools are exposed in two parallel channels:
 
-1) **System prompt text**: a human-readable list + guidelines.
-2) **Provider tool schema**: the actual function/tool declarations sent to the model API.
+1) **System prompt text**: a human-readable list + guidance.
+2) **Tool schema**: the structured function definitions sent to the model API.
 
-In pi-mono:
-- System prompt builder: [`packages/coding-agent/src/core/system-prompt.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts)
-  - Builds the `Available tools:` list from `toolDescriptions`.
-  - Appends skills and project context.
-- Tool schemas passed to providers:
-  - OpenAI: [`packages/ai/src/providers/openai-responses.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) (`convertTools`)
-  - Anthropic: [`packages/ai/src/providers/anthropic.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) (`convertTools`)
-  - Gemini: [`packages/ai/src/providers/google-shared.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/google-shared.ts) (`convertTools`)
-- Tool execution loop:
-  - Agent loop: [`packages/ai/src/agent/agent-loop.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/agent/agent-loop.ts)
-  - Validates tool arguments and executes tools, then appends `toolResult` messages.
-
-In Clawdbot:
-- System prompt append: [`src/agents/system-prompt.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/system-prompt.ts)
-- Tool list injected via `createClawdbotCodingTools()` in [`src/agents/pi-tools.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-tools.ts)
+That means the agent sees both “what tools exist” and “how to call them.” If a tool
+doesn’t appear in the system prompt or the schema, the model cannot call it.

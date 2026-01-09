@@ -1,10 +1,14 @@
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { readProviderAllowFromStore } from "../pairing/pairing-store.js";
 import { readTelegramAllowFromStore } from "../telegram/pairing-store.js";
 import { resolveTelegramToken } from "../telegram/token.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { normalizeE164 } from "../utils.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 export async function noteSecurityWarnings(cfg: ClawdbotConfig) {
   const warnings: string[] = [];

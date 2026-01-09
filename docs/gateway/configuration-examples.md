@@ -1,9 +1,9 @@
 ---
 summary: "Schema-accurate configuration examples for common Clawdbot setups"
 read_when:
-  - Learning how to configure clawdbot
+  - Learning how to configure Clawdbot
   - Looking for configuration examples
-  - Setting up clawdbot for the first time
+  - Setting up Clawdbot for the first time
 ---
 # Configuration Examples
 
@@ -48,6 +48,10 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
 {
   // Environment + shell
   env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: {
+      GROQ_API_KEY: "gsk-..."
+    },
     shellEnv: {
       enabled: true,
       timeoutMs: 15000

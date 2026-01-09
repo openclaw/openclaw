@@ -91,6 +91,22 @@ Additionally, it loads:
 
 Neither `.env` file overrides existing env vars.
 
+You can also provide inline env vars in config. These are only applied if the
+process env is missing the key (same non-overriding rule):
+
+```json5
+{
+  env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: {
+      GROQ_API_KEY: "gsk-..."
+    }
+  }
+}
+```
+
+See [/environment](/environment) for full precedence and sources.
+
 ### `env.shellEnv` (optional)
 
 Opt-in convenience: if enabled and none of the expected keys are set yet, CLAWDBOT runs your login shell and imports only the missing expected keys (never overrides).
@@ -134,7 +150,9 @@ Overrides:
 On first use, Clawdbot imports `oauth.json` entries into `auth-profiles.json`.
 
 Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.json` (when present on the gateway host):
-- `~/.claude/.credentials.json` (Claude Code) → `anthropic:claude-cli`
+- Claude Code → `anthropic:claude-cli`
+  - macOS: Keychain item "Claude Code-credentials" (choose "Always Allow" to avoid launchd prompts)
+  - Linux/Windows: `~/.claude/.credentials.json`
 - `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
 
 ### `auth`
@@ -303,6 +321,7 @@ Group messages default to **require mention** (either metadata mention or regex 
 - **Metadata mentions**: Native platform @-mentions (e.g., WhatsApp tap-to-mention). Ignored in WhatsApp self-chat mode (see `whatsapp.allowFrom`).
 - **Text patterns**: Regex patterns defined in `mentionPatterns`. Always checked regardless of self-chat mode.
 - Mention gating is enforced only when mention detection is possible (native mentions or at least one `mentionPattern`).
+ - Per-agent override: `routing.agents.<agentId>.mentionPatterns` (useful when multiple agents share a group).
 
 ```json5
 {
@@ -310,6 +329,18 @@ Group messages default to **require mention** (either metadata mention or regex 
     groupChat: {
       mentionPatterns: ["@clawd", "clawdbot", "clawd"],
       historyLimit: 50
+    }
+  }
+}
+```
+
+Per-agent override (takes precedence when set, even `[]`):
+```json5
+{
+  routing: {
+    agents: {
+      work: { mentionPatterns: ["@workbot", "\\+15555550123"] },
+      personal: { mentionPatterns: ["@homebot", "\\+15555550999"] }
     }
   }
 }
@@ -560,6 +591,7 @@ Controls how chat commands are enabled across connectors.
   commands: {
     native: false,          // register native commands when supported
     text: true,             // parse slash commands in chat messages
+    restart: false,         // allow /restart + gateway restart tool
     useAccessGroups: true   // enforce access-group allowlists/policies for commands
   }
 }
@@ -570,6 +602,7 @@ Notes:
 - `commands.text: false` disables parsing chat messages for commands.
 - `commands.native: true` registers native commands on supported connectors (Discord/Slack/Telegram). Platforms without native commands still rely on text commands.
 - `commands.native: false` skips native registration; Discord/Telegram clear previously registered commands on startup. Slack commands are managed in the Slack app.
+- `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
 
 ### `web` (WhatsApp web provider)
@@ -994,7 +1027,7 @@ If you configure the same alias name (case-insensitive) yourself, your value win
 }
 ```
 
-#### `agent.contextPruning` (opt-in tool-result pruning)
+#### `agent.contextPruning` (tool-result pruning)
 
 `agent.contextPruning` prunes **old tool results** from the in-memory context right before a request is sent to the LLM.
 It does **not** modify the session history on disk (`*.jsonl` remains complete).
@@ -1025,12 +1058,23 @@ Notes / current limitations:
 - If the session doesn’t contain at least `keepLastAssistants` assistant messages yet, pruning is skipped.
 - In `aggressive` mode, `hardClear.enabled` is ignored (eligible tool results are always replaced with `hardClear.placeholder`).
 
-Example (minimal):
+Default (adaptive):
 ```json5
 {
   agent: {
     contextPruning: {
       mode: "adaptive"
+    }
+  }
+}
+```
+
+To disable:
+```json5
+{
+  agent: {
+    contextPruning: {
+      mode: "off"
     }
   }
 }
@@ -1167,6 +1211,12 @@ Example:
 }
 ```
 
+Notes:
+- `agent.elevated` is **global** (not per-agent). Availability is based on sender allowlists.
+- `/elevated on|off` stores state per session key; inline directives apply to a single message.
+- Elevated `bash` runs on the host and bypasses sandboxing.
+- Tool policy still applies; if `bash` is denied, elevated cannot be used.
+
 `agent.maxConcurrent` sets the maximum number of embedded agent runs that can
 execute in parallel across sessions. Each session is still serialized (one run
 per session key at a time). Default: 1.
@@ -1175,6 +1225,8 @@ per session key at a time). Default: 1.
 
 Optional **Docker sandboxing** for the embedded agent. Intended for non-main
 sessions so they cannot access your host system.
+
+Details: [Sandboxing](/gateway/sandboxing)
 
 Defaults (if enabled):
 - scope: `"agent"` (one container + workspace per agent)
@@ -1335,8 +1387,8 @@ Notes:
 - `z.ai/*` and `z-ai/*` are accepted aliases and normalize to `zai/*`.
 - If `ZAI_API_KEY` is missing, requests to `zai/*` will fail with an auth error at runtime.
 - Example error: `No API key found for provider "zai".`
-- Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. The GLM Coding
-  Plan uses the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
+- Z.AI’s general API endpoint is `https://api.z.ai/api/paas/v4`. GLM coding
+  requests use the dedicated Coding endpoint `https://api.z.ai/api/coding/paas/v4`.
   The built-in `zai` provider uses the Coding endpoint. If you need the general
   endpoint, define a custom provider in `models.providers` with the base URL
   override (see the custom providers section above).
@@ -1423,6 +1475,7 @@ Controls session scoping, idle expiry, reset triggers, and where the session sto
 
 Fields:
 - `mainKey`: direct-chat bucket key (default: `"main"`). Useful when you want to “rename” the primary DM thread without changing `agentId`.
+  - Sandbox note: `agent.sandbox.mode: "non-main"` uses this key to detect the main session. Any session key that does not match `mainKey` (groups/channels) is sandboxed.
 - `agentToAgent.maxPingPongTurns`: max reply-back turns between requester/target (0–5, default 5).
 - `sendPolicy.default`: `allow` or `deny` fallback when no rule matches.
 - `sendPolicy.rules[]`: match by `provider`, `chatType` (`direct|group|room`), or `keyPrefix` (e.g. `cron:`). First deny wins; otherwise allow.

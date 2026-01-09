@@ -28,6 +28,7 @@
 - Add brief code comments for tricky or non-obvious logic.
 - Keep files concise; extract helpers instead of “V2” copies. Use existing patterns for CLI options and dependency injection via `createDefaultDeps`.
 - Aim to keep files under ~700 LOC; guideline only (not a hard guardrail). Split/refactor when it improves clarity or testability.
+- Naming: use **Clawdbot** for product/app/docs headings; use `clawdbot` for CLI command, package/binary, paths, and config keys.
 
 ## Testing Guidelines
 - Framework: Vitest with V8 coverage thresholds (70% lines/branches/functions/statements).
@@ -63,6 +64,7 @@
 
 ## Agent-Specific Notes
 - Vocabulary: "makeup" = "mac app".
+- When answering questions, respond with high-confidence answers only: verify in code; do not guess.
 - Gateway currently runs only as the menubar app; there is no separate LaunchAgent/helper label installed. Restart via the Clawdbot Mac app or `scripts/restart-mac.sh`; to verify/kill use `launchctl print gui/$UID | grep clawdbot` rather than assuming a fixed label. **When debugging on macOS, start/stop the gateway via the app, not ad-hoc tmux sessions; kill any temporary tunnels before handoff.**
 - macOS logs: use `./scripts/clawlog.sh` (aka `vtlog`) to query unified logs for the Clawdbot subsystem; it supports follow/tail/category filters and expects passwordless sudo for `/usr/bin/log`.
 - If shared guardrails are available locally, review them; otherwise follow this repo's guidance.
@@ -81,6 +83,10 @@
 - **Multi-agent safety:** do **not** switch branches / check out a different branch unless explicitly requested.
 - **Multi-agent safety:** running multiple agents is OK as long as each agent has its own session.
 - **Multi-agent safety:** when you see unrecognized files, keep going; focus on your changes and commit only those.
+- Lobster seam: use the shared CLI palette in `src/terminal/palette.ts` (no hardcoded colors); apply palette to onboarding/config prompts and other TTY UI output as needed.
+- **Multi-agent safety:** focus reports on your edits; avoid guard-rail disclaimers unless truly blocked; when multiple agents touch the same file, continue if safe; end with a brief “other files present” note only if relevant.
+- Bug investigations: read source code of relevant npm dependencies and all related local code before concluding; aim for high-confidence root cause.
+- Code style: add brief comments for tricky logic; keep files under ~500 LOC when feasible (split/refactor as needed).
 - When asked to open a “session” file, open the Pi session logs under `~/.clawdbot/sessions/*.jsonl` (newest unless a specific ID is given), not the default `sessions.json`. If logs are needed from another machine, SSH via Tailscale and read the same path there.
 - Menubar dimming + restart flow mirrors Trimmy: use `scripts/restart-mac.sh` (kills all Clawdbot variants, runs `swift build`, packages, relaunches). Icon dimming depends on MenuBarExtraAccess wiring in AppMain; keep `appearsDisabled` updates intact when touching the status item.
 - Do not rebuild the macOS app over SSH; rebuilds must be run directly on the Mac.
@@ -88,17 +94,17 @@
 - Voice wake forwarding tips:
   - Command template should stay `clawdbot-mac agent --message "${text}" --thinking low`; `VoiceWakeForwarder` already shell-escapes `${text}`. Don’t add extra quotes.
   - launchd PATH is minimal; ensure the app’s launch agent PATH includes standard system paths plus your pnpm bin (typically `$HOME/Library/pnpm`) so `pnpm`/`clawdbot` binaries resolve when invoked via `clawdbot-mac`.
-  - For manual `clawdbot send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
+- For manual `clawdbot message send` messages that include `!`, use the heredoc pattern noted below to avoid the Bash tool’s escaping.
 
 ## Exclamation Mark Escaping Workaround
-The Claude Code Bash tool escapes `!` to `\\!` in command arguments. When using `clawdbot send` with messages containing exclamation marks, use heredoc syntax:
+The Claude Code Bash tool escapes `!` to `\\!` in command arguments. When using `clawdbot message send` with messages containing exclamation marks, use heredoc syntax:
 
 ```bash
 # WRONG - will send "Hello\\!" with backslash
-clawdbot send --to "+1234" --message 'Hello!'
+clawdbot message send --to "+1234" --message 'Hello!'
 
 # CORRECT - use heredoc to avoid escaping
-clawdbot send --to "+1234" --message "$(cat <<'EOF'
+clawdbot message send --to "+1234" --message "$(cat <<'EOF'
 Hello!
 EOF
 )"

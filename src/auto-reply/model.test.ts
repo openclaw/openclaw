@@ -10,6 +10,13 @@ describe("extractModelDirective", () => {
       expect(result.cleaned).toBe("");
     });
 
+    it("extracts /models with argument", () => {
+      const result = extractModelDirective("/models gpt-5");
+      expect(result.hasDirective).toBe(true);
+      expect(result.rawModel).toBe("gpt-5");
+      expect(result.cleaned).toBe("");
+    });
+
     it("extracts /model with provider/model format", () => {
       const result = extractModelDirective("/model anthropic/claude-opus-4-5");
       expect(result.hasDirective).toBe(true);
@@ -107,6 +114,12 @@ describe("extractModelDirective", () => {
   });
 
   describe("edge cases", () => {
+    it("preserves spacing when /model is followed by a path segment", () => {
+      const result = extractModelDirective("thats not /model gpt-5/tmp/hello");
+      expect(result.hasDirective).toBe(true);
+      expect(result.cleaned).toBe("thats not /hello");
+    });
+
     it("handles alias with special regex characters", () => {
       const result = extractModelDirective("/test.alias", {
         aliases: ["test.alias"],

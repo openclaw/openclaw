@@ -1,21 +1,44 @@
 ---
-summary: "Design notes for a direct `clawdbot agent` CLI subcommand without WhatsApp delivery"
+summary: "Direct `clawdbot agent` CLI runs (with optional delivery)"
 read_when:
   - Adding or modifying the agent CLI entrypoint
 ---
-# `clawdbot agent` (direct-to-agent invocation)
+# `clawdbot agent` (direct agent runs)
 
-`clawdbot agent` lets you talk to the **embedded** agent runtime directly (no chat send unless you opt in), while reusing the same session store and thinking/verbose persistence as inbound auto-replies.
+`clawdbot agent` runs a single agent turn without needing an inbound chat message.
+By default it goes **through the Gateway**; add `--local` to force the embedded
+runtime on the current machine.
 
 ## Behavior
+
 - Required: `--message <text>`
 - Session selection:
-  - If `--session-id` is given, reuse it.
-  - Else if `--to <e164>` is given, derive the session key from `session.scope` (direct chats collapse to `main`, or `global` when scope is global).
-- Runs the embedded Pi agent (configured via `agent`).
-- Thinking/verbose:
-  - Flags `--thinking <off|minimal|low|medium|high>` and `--verbose <on|off>` persist into the session store.
+  - `--to <E.164>` derives the session key (normal direct-chat routing), **or**
+  - `--session-id <id>` reuses an existing session by id
+- Runs the same embedded agent runtime as normal inbound replies.
+- Thinking/verbose flags persist into the session store.
 - Output:
-  - Default: prints text (and `MEDIA:<url>` lines) to stdout.
-  - `--json`: prints structured payloads + meta.
-- Optional: `--deliver` sends the reply back to the selected provider (`whatsapp`, `telegram`, `discord`, `signal`, `imessage`).
+  - default: prints reply text (plus `MEDIA:<url>` lines)
+  - `--json`: prints structured payload + metadata
+- Optional delivery back to a provider with `--deliver` + `--provider`.
+
+If the Gateway is unreachable, the CLI **falls back** to the embedded local run.
+
+## Examples
+
+```bash
+clawdbot agent --to +15555550123 --message "status update"
+clawdbot agent --session-id 1234 --message "Summarize inbox" --thinking medium
+clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json
+clawdbot agent --to +15555550123 --message "Summon reply" --deliver
+```
+
+## Flags
+
+- `--local`: run locally (requires provider keys in your shell)
+- `--deliver`: send the reply to the chosen provider (requires `--to`)
+- `--provider`: `whatsapp|telegram|discord|slack|signal|imessage` (default: `whatsapp`)
+- `--thinking <off|minimal|low|medium|high>`: persist thinking level
+- `--verbose <on|off>`: persist verbose level
+- `--timeout <seconds>`: override agent timeout
+- `--json`: output structured JSON

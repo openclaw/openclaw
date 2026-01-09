@@ -109,6 +109,8 @@ const requireOpenAllowFrom = (params: {
   });
 };
 
+const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
+
 const RetryConfigSchema = z
   .object({
     attempts: z.number().int().min(1).optional(),
@@ -126,6 +128,7 @@ const QueueModeBySurfaceSchema = z
     slack: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
+    msteams: QueueModeSchema.optional(),
     webchat: QueueModeSchema.optional(),
   })
   .optional();
@@ -455,6 +458,48 @@ const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   });
 });
 
+const MSTeamsChannelSchema = z.object({
+  requireMention: z.boolean().optional(),
+  replyStyle: MSTeamsReplyStyleSchema.optional(),
+});
+
+const MSTeamsTeamSchema = z.object({
+  requireMention: z.boolean().optional(),
+  replyStyle: MSTeamsReplyStyleSchema.optional(),
+  channels: z.record(z.string(), MSTeamsChannelSchema.optional()).optional(),
+});
+
+const MSTeamsConfigSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    appId: z.string().optional(),
+    appPassword: z.string().optional(),
+    tenantId: z.string().optional(),
+    webhook: z
+      .object({
+        port: z.number().int().positive().optional(),
+        path: z.string().optional(),
+      })
+      .optional(),
+    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    allowFrom: z.array(z.string()).optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    mediaAllowHosts: z.array(z.string()).optional(),
+    requireMention: z.boolean().optional(),
+    replyStyle: MSTeamsReplyStyleSchema.optional(),
+    teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
+  })
+  .superRefine((value, ctx) => {
+    requireOpenAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'msteams.dmPolicy="open" requires msteams.allowFrom to include "*"',
+    });
+  });
+
 const SessionSchema = z
   .object({
     scope: z.union([z.literal("per-sender"), z.literal("global")]).optional(),
@@ -520,6 +565,7 @@ const CommandsSchema = z
   .object({
     native: z.boolean().optional(),
     text: z.boolean().optional(),
+    restart: z.boolean().optional(),
     useAccessGroups: z.boolean().optional(),
   })
   .optional();
@@ -641,6 +687,7 @@ const RoutingSchema = z
             workspace: z.string().optional(),
             agentDir: z.string().optional(),
             model: z.string().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
             subagents: z
               .object({
                 allowAgents: z.array(z.string()).optional(),
@@ -740,6 +787,7 @@ const HookMappingSchema = z
         z.literal("slack"),
         z.literal("signal"),
         z.literal("imessage"),
+        z.literal("msteams"),
       ])
       .optional(),
     to: z.string().optional(),
@@ -793,7 +841,9 @@ export const ClawdbotSchema = z.object({
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
+      vars: z.record(z.string(), z.string()).optional(),
     })
+    .catchall(z.string())
     .optional(),
   identity: z
     .object({
@@ -891,7 +941,11 @@ export const ClawdbotSchema = z.object({
           z.string(),
           z.object({
             provider: z.string(),
-            mode: z.union([z.literal("api_key"), z.literal("oauth")]),
+            mode: z.union([
+              z.literal("api_key"),
+              z.literal("oauth"),
+              z.literal("token"),
+            ]),
             email: z.string().optional(),
           }),
         )
@@ -1041,6 +1095,7 @@ export const ClawdbotSchema = z.object({
               slack: z.array(z.union([z.string(), z.number()])).optional(),
               signal: z.array(z.union([z.string(), z.number()])).optional(),
               imessage: z.array(z.union([z.string(), z.number()])).optional(),
+              msteams: z.array(z.union([z.string(), z.number()])).optional(),
               webchat: z.array(z.union([z.string(), z.number()])).optional(),
             })
             .optional(),
@@ -1197,6 +1252,7 @@ export const ClawdbotSchema = z.object({
   slack: SlackConfigSchema.optional(),
   signal: SignalConfigSchema.optional(),
   imessage: IMessageConfigSchema.optional(),
+  msteams: MSTeamsConfigSchema.optional(),
   bridge: z
     .object({
       enabled: z.boolean().optional(),
@@ -1277,6 +1333,8 @@ export const ClawdbotSchema = z.object({
           url: z.string().optional(),
           token: z.string().optional(),
           password: z.string().optional(),
+          sshTarget: z.string().optional(),
+          sshIdentity: z.string().optional(),
         })
         .optional(),
       reload: z

@@ -3,25 +3,37 @@ summary: "How the mac app embeds the gateway WebChat and how to debug it"
 read_when:
   - Debugging mac WebChat view or loopback port
 ---
-# Web Chat (macOS app)
+# WebChat (macOS app)
 
-The macOS menu bar app shows the WebChat UI as a native SwiftUI view and reuses the **primary Clawd session** (`main`, or `global` when scope is global).
+The macOS menu bar app embeds the WebChat UI as a native SwiftUI view. It
+connects to the Gateway and defaults to the **main session** for the selected
+agent (with a session switcher for other sessions).
 
 - **Local mode**: connects directly to the local Gateway WebSocket.
-- **Remote mode**: forwards the Gateway WebSocket control port over SSH and uses that as the data plane.
+- **Remote mode**: forwards the Gateway control port over SSH and uses that
+  tunnel as the data plane.
 
 ## Launch & debugging
+
 - Manual: Lobster menu → “Open Chat”.
-- Auto-open for testing: run `dist/Clawdbot.app/Contents/MacOS/Clawdbot --webchat` (or pass `--webchat` to the binary launched by launchd). The window opens on startup.
-- Logs: see [`./scripts/clawlog.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/clawlog.sh) (subsystem `com.clawdbot`, category `WebChatSwiftUI`).
+- Auto‑open for testing:
+  ```bash
+  dist/Clawdbot.app/Contents/MacOS/Clawdbot --webchat
+  ```
+- Logs: `./scripts/clawlog.sh` (subsystem `com.clawdbot`, category `WebChatSwiftUI`).
 
 ## How it’s wired
-- Implementation: [`apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/Clawdbot/WebChatSwiftUI.swift) hosts `ClawdbotChatUI` and speaks to the Gateway over `GatewayConnection`.
-- Data plane: Gateway WebSocket methods `chat.history`, `chat.send`, `chat.abort`; events `chat`, `agent`, `presence`, `tick`, `health`.
-- Session: usually primary (`main`); multiple transports (WhatsApp/Telegram/Discord/Desktop) share the same key. The onboarding flow uses a dedicated `onboarding` session to keep first-run setup separate.
 
-## Security / surface area
+- Data plane: Gateway WS methods `chat.history`, `chat.send`, `chat.abort` and
+  events `chat`, `agent`, `presence`, `tick`, `health`.
+- Session: defaults to the primary session (`main`, or `global` when scope is
+  global). The UI can switch between sessions.
+- Onboarding uses a dedicated session to keep first‑run setup separate.
+
+## Security surface
+
 - Remote mode forwards only the Gateway WebSocket control port over SSH.
 
 ## Known limitations
-- The UI is optimized for the primary session and typical “chat” usage (not a full browser-based sandbox surface).
+
+- The UI is optimized for chat sessions (not a full browser sandbox).

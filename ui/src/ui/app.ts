@@ -18,6 +18,7 @@ import {
   type ThemeMode,
 } from "./theme";
 import { truncateText } from "./format";
+import { generateUUID } from "./uuid";
 import {
   startThemeTransition,
   type ThemeTransitionContext,
@@ -40,6 +41,7 @@ import type {
 import {
   defaultDiscordActions,
   defaultSlackActions,
+  type ChatQueueItem,
   type CronFormState,
   type DiscordForm,
   type IMessageForm,
@@ -49,7 +51,7 @@ import {
 } from "./ui-types";
 import {
   loadChatHistory,
-  sendChat,
+  sendChatMessage,
   handleChatEvent,
   type ChatEventPayload,
 } from "./controllers/chat";
@@ -214,6 +216,7 @@ export class ClawdbotApp extends LitElement {
   @state() chatStreamStartedAt: number | null = null;
   @state() chatRunId: string | null = null;
   @state() chatThinkingLevel: string | null = null;
+  @state() chatQueue: ChatQueueItem[] = [];
   @state() toolOutputExpanded = new Set<string>();
 
   @state() nodesLoading = false;
@@ -761,6 +764,7 @@ export class ClawdbotApp extends LitElement {
       const state = handleChatEvent(this, payload);
       if (state === "final" || state === "error" || state === "aborted") {
         this.resetToolStream();
+        void this.flushChatQueue();
       }
       if (state === "final") void loadChatHistory(this);
       return;
@@ -820,27 +824,37 @@ export class ClawdbotApp extends LitElement {
     const params = new URLSearchParams(window.location.search);
     const tokenRaw = params.get("token");
     const passwordRaw = params.get("password");
-    let changed = false;
+    const sessionRaw = params.get("session");
+    let shouldCleanUrl = false;
 
     if (tokenRaw != null) {
       const token = tokenRaw.trim();
       if (token && !this.settings.token) {
         this.applySettings({ ...this.settings, token });
-        changed = true;
       }
       params.delete("token");
+      shouldCleanUrl = true;
     }
 
     if (passwordRaw != null) {
       const password = passwordRaw.trim();
       if (password) {
         this.password = password;
-        changed = true;
       }
       params.delete("password");
+      shouldCleanUrl = true;
     }
 
-    if (!changed && tokenRaw == null && passwordRaw == null) return;
+    if (sessionRaw != null) {
+      const session = sessionRaw.trim();
+      if (session) {
+        this.sessionKey = session;
+      }
+      params.delete("session");
+      shouldCleanUrl = true;
+    }
+
+    if (!shouldCleanUrl) return;
     const url = new URL(window.location.href);
     url.search = params.toString();
     window.history.replaceState({}, "", url.toString());
@@ -1003,19 +1017,32 @@ export class ClawdbotApp extends LitElement {
   async loadCron() {
     await Promise.all([loadCronStatus(this), loadCronJobs(this)]);
   }
-  async handleSendChat(
-    messageOverride?: string,
-    opts?: { restoreDraft?: boolean },
+
+  private isChatBusy() {
+    return this.chatSending || Boolean(this.chatRunId);
+  }
+
+  private enqueueChatMessage(text: string) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    this.chatQueue = [
+      ...this.chatQueue,
+      {
+        id: generateUUID(),
+        text: trimmed,
+        createdAt: Date.now(),
+      },
+    ];
+  }
+
+  private async sendChatMessageNow(
+    message: string,
+    opts?: { previousDraft?: string; restoreDraft?: boolean },
   ) {
-    if (!this.connected) return;
-    const previousDraft = this.chatMessage;
-    if (messageOverride != null) {
-      this.chatMessage = messageOverride;
-    }
     this.resetToolStream();
-    const ok = await sendChat(this);
-    if (!ok && messageOverride != null) {
-      this.chatMessage = previousDraft;
+    const ok = await sendChatMessage(this, message);
+    if (!ok && opts?.previousDraft != null) {
+      this.chatMessage = opts.previousDraft;
     }
     if (ok) {
       this.setLastActiveSessionKey(this.sessionKey);
@@ -1028,10 +1055,53 @@ export class ClawdbotApp extends LitElement {
       this.resetToolStream();
       void loadChatHistory(this);
     }
-    if (ok && messageOverride != null && opts?.restoreDraft && previousDraft.trim()) {
-      this.chatMessage = previousDraft;
+    if (ok && opts?.restoreDraft && opts.previousDraft?.trim()) {
+      this.chatMessage = opts.previousDraft;
     }
     this.scheduleChatScroll();
+    if (ok && !this.chatRunId) {
+      void this.flushChatQueue();
+    }
+    return ok;
+  }
+
+  private async flushChatQueue() {
+    if (!this.connected || this.isChatBusy()) return;
+    const [next, ...rest] = this.chatQueue;
+    if (!next) return;
+    this.chatQueue = rest;
+    const ok = await this.sendChatMessageNow(next.text);
+    if (!ok) {
+      this.chatQueue = [next, ...this.chatQueue];
+    }
+  }
+
+  removeQueuedMessage(id: string) {
+    this.chatQueue = this.chatQueue.filter((item) => item.id !== id);
+  }
+
+  async handleSendChat(
+    messageOverride?: string,
+    opts?: { restoreDraft?: boolean },
+  ) {
+    if (!this.connected) return;
+    const previousDraft = this.chatMessage;
+    const message = (messageOverride ?? this.chatMessage).trim();
+    if (!message) return;
+
+    if (messageOverride == null) {
+      this.chatMessage = "";
+    }
+
+    if (this.isChatBusy()) {
+      this.enqueueChatMessage(message);
+      return;
+    }
+
+    await this.sendChatMessageNow(message, {
+      previousDraft: messageOverride == null ? previousDraft : undefined,
+      restoreDraft: Boolean(messageOverride && opts?.restoreDraft),
+    });
   }
 
   async handleWhatsAppStart(force: boolean) {

@@ -7,8 +7,26 @@ read_when:
 
 ## What it does
 - Elevated mode allows the bash tool to run with elevated privileges when the feature is available and the sender is approved.
+- **Optional for sandboxed agents**: elevated only changes behavior when the agent is running in a sandbox. If the agent already runs unsandboxed, elevated is effectively a no-op.
 - Directive forms: `/elevated on`, `/elevated off`, `/elev on`, `/elev off`.
 - Only `on|off` are accepted; anything else returns a hint and does not change state.
+
+## What it controls (and what it doesn’t)
+- **Global availability gate**: `agent.elevated` is global (not per-agent). If disabled or sender not allowlisted, elevated is unavailable everywhere.
+- **Per-session state**: `/elevated on|off` sets the elevated level for the current session key.
+- **Inline directive**: `/elevated on` inside a message applies to that message only.
+- **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
+- **Host execution**: elevated runs `bash` on the host (bypasses sandbox).
+- **Unsandboxed agents**: when there is no sandbox to bypass, elevated does not change where `bash` runs.
+- **Tool policy still applies**: if `bash` is denied by tool policy, elevated cannot be used.
+
+Note:
+- Sandbox on: `/elevated on` runs that `bash` command on the host.
+- Sandbox off: `/elevated on` does not change execution (already on host).
+
+## When elevated matters
+- Only impacts `bash` when the agent is running sandboxed (it drops the sandbox for that command).
+- For unsandboxed agents, elevated does not change execution; it only affects gating, logging, and status.
 
 ## Resolution order
 1. Inline directive on the message (applies only to that message).

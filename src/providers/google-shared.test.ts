@@ -27,7 +27,7 @@ const makeModel = (id: string): Model<"google-generative-ai"> =>
   }) as Model<"google-generative-ai">;
 
 describe("google-shared convertTools", () => {
-  it("adds type:object when properties/required exist but type is missing", () => {
+  it("preserves parameters when type is missing", () => {
     const tools = [
       {
         name: "noType",
@@ -46,12 +46,12 @@ describe("google-shared convertTools", () => {
       converted?.[0]?.functionDeclarations?.[0]?.parameters,
     );
 
-    expect(params.type).toBe("object");
+    expect(params.type).toBeUndefined();
     expect(params.properties).toBeDefined();
     expect(params.required).toEqual(["action"]);
   });
 
-  it("strips unsupported JSON Schema keywords", () => {
+  it("keeps unsupported JSON Schema keywords intact", () => {
     const tools = [
       {
         name: "example",
@@ -93,11 +93,11 @@ describe("google-shared convertTools", () => {
     const list = asRecord(properties.list);
     const items = asRecord(list.items);
 
-    expect(params).not.toHaveProperty("patternProperties");
-    expect(params).not.toHaveProperty("additionalProperties");
-    expect(mode).not.toHaveProperty("const");
-    expect(options).not.toHaveProperty("anyOf");
-    expect(items).not.toHaveProperty("const");
+    expect(params.patternProperties).toBeDefined();
+    expect(params.additionalProperties).toBe(false);
+    expect(mode.const).toBe("fast");
+    expect(options.anyOf).toBeDefined();
+    expect(items.const).toBe("item");
     expect(params.required).toEqual(["mode"]);
   });
 
@@ -147,7 +147,7 @@ describe("google-shared convertTools", () => {
 });
 
 describe("google-shared convertMessages", () => {
-  it("skips thinking blocks for Gemini to avoid mimicry", () => {
+  it("keeps thinking blocks when provider/model match", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
       messages: [
@@ -184,7 +184,13 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(0);
+    expect(contents).toHaveLength(1);
+    const parts = contents?.[0]?.parts ?? [];
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toMatchObject({
+      thought: true,
+      thoughtSignature: "sig",
+    });
   });
 
   it("keeps thought signatures for Claude models", () => {
@@ -232,7 +238,7 @@ describe("google-shared convertMessages", () => {
     });
   });
 
-  it("merges consecutive user messages to satisfy Gemini role alternation", () => {
+  it("does not merge consecutive user messages for Gemini", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
       messages: [
@@ -248,12 +254,12 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(1);
+    expect(contents).toHaveLength(2);
     expect(contents[0].role).toBe("user");
-    expect(contents[0].parts).toHaveLength(2);
+    expect(contents[1].role).toBe("user");
   });
 
-  it("merges consecutive user messages for non-Gemini Google models", () => {
+  it("does not merge consecutive user messages for non-Gemini Google models", () => {
     const model = makeModel("claude-3-opus");
     const context = {
       messages: [
@@ -269,12 +275,12 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(1);
+    expect(contents).toHaveLength(2);
     expect(contents[0].role).toBe("user");
-    expect(contents[0].parts).toHaveLength(2);
+    expect(contents[1].role).toBe("user");
   });
 
-  it("merges consecutive model messages to satisfy Gemini role alternation", () => {
+  it("does not merge consecutive model messages for Gemini", () => {
     const model = makeModel("gemini-1.5-pro");
     const context = {
       messages: [
@@ -332,10 +338,10 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(2);
+    expect(contents).toHaveLength(3);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
-    expect(contents[1].parts).toHaveLength(2);
+    expect(contents[2].role).toBe("model");
   });
 
   it("handles user message after tool result without model response in between", () => {
@@ -392,7 +398,7 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(3);
+    expect(contents).toHaveLength(4);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
     expect(contents[2].role).toBe("user");
@@ -402,6 +408,7 @@ describe("google-shared convertMessages", () => {
     );
     const toolResponse = asRecord(toolResponsePart);
     expect(toolResponse.functionResponse).toBeTruthy();
+    expect(contents[3].role).toBe("user");
   });
 
   it("ensures function call comes after user turn, not after model turn", () => {
@@ -469,10 +476,10 @@ describe("google-shared convertMessages", () => {
     } as unknown as Context;
 
     const contents = convertMessages(model, context);
-    expect(contents).toHaveLength(2);
+    expect(contents).toHaveLength(3);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
-    const toolCallPart = contents[1].parts?.find(
+    const toolCallPart = contents[2].parts?.find(
       (part) =>
         typeof part === "object" && part !== null && "functionCall" in part,
     );
