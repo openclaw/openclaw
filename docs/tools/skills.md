@@ -23,6 +23,19 @@ If a skill name conflicts, precedence is:
 Additionally, you can configure extra skill folders (lowest precedence) via
 `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`.
 
+## Per-agent vs shared skills
+
+In **multi-agent** setups, each agent has its own workspace. That means:
+
+- **Per-agent skills** live in `<workspace>/skills` for that agent only.
+- **Shared skills** live in `~/.clawdbot/skills` (managed/local) and are visible
+  to **all agents** on the same machine.
+- **Shared folders** can also be added via `skills.load.extraDirs` (lowest
+  precedence) if you want a common skills pack used by multiple agents.
+
+If the same skill name exists in more than one place, the usual precedence
+applies: workspace wins, then managed/local, then bundled.
+
 ## Format (AgentSkills + Pi-compatible)
 
 `SKILL.md` must include at least:
