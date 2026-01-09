@@ -1093,7 +1093,15 @@ export async function monitorWebProvider(
       msg: WebInboundMsg,
       route: ReturnType<typeof resolveAgentRoute>,
       groupHistoryKey: string,
-    ) => {
+      opts?: {
+        groupHistory?: Array<{
+          sender: string;
+          body: string;
+          timestamp?: number;
+        }>;
+        suppressGroupHistoryClear?: boolean;
+      },
+    ): Promise<boolean> => {
       status.lastMessageAt = Date.now();
       status.lastEventAt = status.lastMessageAt;
       emitStatus();
@@ -1102,7 +1110,8 @@ export async function monitorWebProvider(
       let shouldClearGroupHistory = false;
 
       if (msg.chatType === "group") {
-        const history = groupHistories.get(groupHistoryKey) ?? [];
+        const history =
+          opts?.groupHistory ?? groupHistories.get(groupHistoryKey) ?? [];
         const historyWithoutCurrent =
           history.length > 0 ? history.slice(0, -1) : [];
         if (historyWithoutCurrent.length > 0) {
@@ -1127,7 +1136,7 @@ export async function monitorWebProvider(
             ? `${msg.senderName} (${msg.senderE164})`
             : (msg.senderName ?? msg.senderE164 ?? "Unknown");
         combinedBody = `${combinedBody}\\n[from: ${senderLabel}]`;
-        shouldClearGroupHistory = true;
+        shouldClearGroupHistory = !(opts?.suppressGroupHistoryClear ?? false);
       }
 
       // Echo detection uses combined body so we don't respond twice.
@@ -1138,7 +1147,7 @@ export async function monitorWebProvider(
       if (recentlySent.has(combinedEchoKey)) {
         logVerbose(`Skipping auto-reply: detected echo for combined message`);
         recentlySent.delete(combinedEchoKey);
-        return;
+        return false;
       }
 
       const correlationId = msg.id ?? newConnectionId();
@@ -1324,12 +1333,14 @@ export async function monitorWebProvider(
         logVerbose(
           "Skipping auto-reply: silent token or no text/media returned from resolver",
         );
-        return;
+        return false;
       }
 
       if (shouldClearGroupHistory && didSendReply) {
         groupHistories.set(groupHistoryKey, []);
       }
+
+      return didSendReply;
     };
 
     const maybeBroadcastMessage = async (params: {
@@ -1352,14 +1363,18 @@ export async function monitorWebProvider(
         normalizeAgentId(agent.id),
       );
       const hasKnownAgents = (agentIds?.length ?? 0) > 0;
+      const groupHistorySnapshot =
+        msg.chatType === "group"
+          ? (groupHistories.get(groupHistoryKey) ?? [])
+          : undefined;
 
-      const processForAgent = (agentId: string) => {
+      const processForAgent = async (agentId: string): Promise<boolean> => {
         const normalizedAgentId = normalizeAgentId(agentId);
         if (hasKnownAgents && !agentIds?.includes(normalizedAgentId)) {
           whatsappInboundLog.warn(
             `Broadcast agent ${agentId} not found in agents.list; skipping`,
           );
-          return Promise.resolve();
+          return false;
         }
         const agentRoute = {
           ...route,
@@ -1378,19 +1393,35 @@ export async function monitorWebProvider(
           }),
         };
 
-        return processMessage(msg, agentRoute, groupHistoryKey).catch((err) => {
+        try {
+          return await processMessage(msg, agentRoute, groupHistoryKey, {
+            groupHistory: groupHistorySnapshot,
+            suppressGroupHistoryClear: true,
+          });
+        } catch (err) {
           whatsappInboundLog.error(
             `Broadcast agent ${agentId} failed: ${formatError(err)}`,
           );
-        });
+          return false;
+        }
       };
 
+      let didSendReply = false;
       if (strategy === "sequential") {
         for (const agentId of broadcastAgents) {
-          await processForAgent(agentId);
+          if (await processForAgent(agentId)) didSendReply = true;
         }
       } else {
-        await Promise.allSettled(broadcastAgents.map(processForAgent));
+        const results = await Promise.allSettled(
+          broadcastAgents.map(processForAgent),
+        );
+        didSendReply = results.some(
+          (result) => result.status === "fulfilled" && result.value,
+        );
+      }
+
+      if (msg.chatType === "group" && didSendReply) {
+        groupHistories.set(groupHistoryKey, []);
       }
 
       return true;
@@ -1561,7 +1592,7 @@ export async function monitorWebProvider(
           return;
         }
 
-        return processMessage(msg, route, groupHistoryKey);
+        await processMessage(msg, route, groupHistoryKey);
       },
     });
 
