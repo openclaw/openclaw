@@ -165,6 +165,7 @@ export async function buildStatusReply(params: {
       defaultGroupActivation())
     : undefined;
   const statusText = buildStatusMessage({
+    config: cfg,
     agent: {
       ...cfg.agent,
       model: {
@@ -566,6 +567,7 @@ export async function handleCommands(params: {
     const reply = await buildStatusReply({
       cfg,
       command,
+      provider: command.provider,
       sessionEntry,
       sessionKey,
       sessionScope,

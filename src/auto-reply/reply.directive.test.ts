@@ -933,6 +933,36 @@ describe("directive behavior", () => {
     });
   });
 
+  it("falls back to configured models when catalog is unavailable", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            workspace: path.join(home, "clawd"),
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model catalog unavailable");
+      expect(text).toContain("anthropic/claude-opus-4-5");
+      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("does not repeat missing auth labels on /model list", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();

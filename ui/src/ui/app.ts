@@ -824,27 +824,37 @@ export class ClawdbotApp extends LitElement {
     const params = new URLSearchParams(window.location.search);
     const tokenRaw = params.get("token");
     const passwordRaw = params.get("password");
-    let changed = false;
+    const sessionRaw = params.get("session");
+    let shouldCleanUrl = false;
 
     if (tokenRaw != null) {
       const token = tokenRaw.trim();
       if (token && !this.settings.token) {
         this.applySettings({ ...this.settings, token });
-        changed = true;
       }
       params.delete("token");
+      shouldCleanUrl = true;
     }
 
     if (passwordRaw != null) {
       const password = passwordRaw.trim();
       if (password) {
         this.password = password;
-        changed = true;
       }
       params.delete("password");
+      shouldCleanUrl = true;
     }
 
-    if (!changed && tokenRaw == null && passwordRaw == null) return;
+    if (sessionRaw != null) {
+      const session = sessionRaw.trim();
+      if (session) {
+        this.sessionKey = session;
+      }
+      params.delete("session");
+      shouldCleanUrl = true;
+    }
+
+    if (!shouldCleanUrl) return;
     const url = new URL(window.location.href);
     url.search = params.toString();
     window.history.replaceState({}, "", url.toString());
