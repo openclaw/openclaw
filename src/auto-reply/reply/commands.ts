@@ -153,6 +153,15 @@ export async function buildStatusReply(params: {
         agentDir: statusAgentDir,
       });
       usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
+      if (
+        !usageLine &&
+        (resolvedVerboseLevel === "on" || resolvedElevatedLevel === "on")
+      ) {
+        const entry = usageSummary.providers[0];
+        if (entry?.error) {
+          usageLine = `📊 Usage: ${entry.displayName} (${entry.error})`;
+        }
+      }
     }
   } catch {
     usageLine = null;

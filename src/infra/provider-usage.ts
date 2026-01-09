@@ -296,6 +296,9 @@ async function fetchClaudeUsage(
     {
       headers: {
         Authorization: `Bearer ${token}`,
+        "User-Agent": "clawdbot",
+        Accept: "application/json",
+        "anthropic-version": "2023-06-01",
         "anthropic-beta": "oauth-2025-04-20",
       },
     },
@@ -304,11 +307,22 @@ async function fetchClaudeUsage(
   );
 
   if (!res.ok) {
+    let message: string | undefined;
+    try {
+      const data = (await res.json()) as {
+        error?: { message?: unknown } | null;
+      };
+      const raw = data?.error?.message;
+      if (typeof raw === "string" && raw.trim()) message = raw.trim();
+    } catch {
+      // ignore parse errors
+    }
+    const suffix = message ? `: ${message}` : "";
     return {
       provider: "anthropic",
       displayName: PROVIDER_LABELS.anthropic,
       windows: [],
-      error: `HTTP ${res.status}`,
+      error: `HTTP ${res.status}${suffix}`,
     };
   }
 
