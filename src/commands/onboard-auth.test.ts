@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   applyAuthProfileConfig,
+  applyMinimaxApiConfig,
+  applyMinimaxApiProviderConfig,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 
@@ -103,5 +105,148 @@ describe("applyAuthProfileConfig", () => {
       "anthropic:claude-cli",
       "anthropic:default",
     ]);
+  });
+});
+
+describe("applyMinimaxApiConfig", () => {
+  it("adds minimax provider with correct settings", () => {
+    const cfg = applyMinimaxApiConfig({});
+    expect(cfg.models?.providers?.minimax).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      api: "anthropic-messages",
+    });
+  });
+
+  it("sets correct primary model", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning");
+    expect(cfg.agents?.defaults?.model?.primary).toBe(
+      "minimax/MiniMax-M2.1-lightning",
+    );
+  });
+
+  it("sets reasoning flag for MiniMax-M2 model", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2");
+    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(true);
+  });
+
+  it("does not set reasoning for non-M2 models", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
+    expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
+  });
+
+  it("preserves existing model fallbacks", () => {
+    const cfg = applyMinimaxApiConfig({
+      agents: {
+        defaults: {
+          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual([
+      "anthropic/claude-opus-4-5",
+    ]);
+  });
+
+  it("adds model alias", () => {
+    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
+    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"]?.alias).toBe(
+      "Minimax",
+    );
+  });
+
+  it("preserves existing model params when adding alias", () => {
+    const cfg = applyMinimaxApiConfig(
+      {
+        agents: {
+          defaults: {
+            models: {
+              "minimax/MiniMax-M2.1": {
+                alias: "MiniMax",
+                params: { custom: "value" },
+              },
+            },
+          },
+        },
+      },
+      "MiniMax-M2.1",
+    );
+    expect(
+      cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"],
+    ).toMatchObject({ alias: "Minimax", params: { custom: "value" } });
+  });
+
+  it("replaces existing minimax provider entirely", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          minimax: {
+            baseUrl: "https://old.example.com",
+            apiKey: "old-key",
+            api: "openai-completions",
+            models: [
+              {
+                id: "old-model",
+                name: "Old",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1000,
+                maxTokens: 100,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(cfg.models?.providers?.minimax?.baseUrl).toBe(
+      "https://api.minimax.io/anthropic",
+    );
+    expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
+    expect(cfg.models?.providers?.minimax?.models[0]?.id).toBe("MiniMax-M2.1");
+  });
+
+  it("preserves other providers when adding minimax", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "anthropic-key",
+            api: "anthropic-messages",
+            models: [
+              {
+                id: "claude-opus-4-5",
+                name: "Claude Opus 4.5",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 15, output: 75, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 200000,
+                maxTokens: 8192,
+              },
+            ],
+          },
+        },
+      },
+    });
+    expect(cfg.models?.providers?.anthropic).toBeDefined();
+    expect(cfg.models?.providers?.minimax).toBeDefined();
+  });
+
+  it("preserves existing models mode", () => {
+    const cfg = applyMinimaxApiConfig({
+      models: { mode: "replace", providers: {} },
+    });
+    expect(cfg.models?.mode).toBe("replace");
+  });
+});
+
+describe("applyMinimaxApiProviderConfig", () => {
+  it("does not overwrite existing primary model", () => {
+    const cfg = applyMinimaxApiProviderConfig({
+      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe(
+      "anthropic/claude-opus-4-5",
+    );
   });
 });

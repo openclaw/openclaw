@@ -1,14 +1,10 @@
-import { spawnSync } from "node:child_process";
 import path from "node:path";
 import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
-  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   type ClawdbotConfig,
   CONFIG_PATH_CLAWDBOT,
@@ -33,6 +29,7 @@ import { applyGoogleGeminiModelDefault } from "./google-gemini-model-default.js"
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
+  applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   setAnthropicApiKey,
@@ -177,6 +174,21 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
     nextConfig = applyMinimaxHostedConfig(nextConfig);
+  } else if (authChoice === "minimax-api") {
+    const key =
+      opts.minimaxApiKey?.trim() || resolveEnvApiKey("minimax")?.apiKey;
+    if (!key) {
+      runtime.error("Missing --minimax-api-key (or MINIMAX_API_KEY in env).");
+      runtime.exit(1);
+      return;
+    }
+    await setMinimaxApiKey(key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    nextConfig = applyMinimaxApiConfig(nextConfig);
   } else if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
@@ -210,82 +222,18 @@ export async function runNonInteractiveOnboarding(
     nextConfig = applyOpenAICodexModelDefault(nextConfig).next;
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
-  } else if (authChoice === "setup-token" || authChoice === "oauth") {
-    if (!process.stdin.isTTY) {
-      runtime.error("`claude setup-token` requires an interactive TTY.");
-      runtime.exit(1);
-      return;
-    }
-
-    const res = spawnSync("claude", ["setup-token"], { stdio: "inherit" });
-    if (res.error) throw res.error;
-    if (typeof res.status === "number" && res.status !== 0) {
-      runtime.error(`claude setup-token failed (exit ${res.status})`);
-      runtime.exit(1);
-      return;
-    }
-
-    const store = ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: true,
-    });
-    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
-      runtime.error(
-        `No Claude CLI credentials found after setup-token. Expected auth profile ${CLAUDE_CLI_PROFILE_ID}.`,
-      );
-      runtime.exit(1);
-      return;
-    }
-
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: CLAUDE_CLI_PROFILE_ID,
-      provider: "anthropic",
-      mode: "token",
-    });
-  } else if (authChoice === "token") {
-    const providerRaw = opts.tokenProvider?.trim();
-    const tokenRaw = opts.token?.trim();
-    if (!providerRaw) {
-      runtime.error(
-        "Missing --token-provider (required for --auth-choice token).",
-      );
-      runtime.exit(1);
-      return;
-    }
-    if (!tokenRaw) {
-      runtime.error("Missing --token (required for --auth-choice token).");
-      runtime.exit(1);
-      return;
-    }
-
-    const provider = normalizeProviderId(providerRaw);
-    const profileId = (
-      opts.tokenProfileId?.trim() || `${provider}:manual`
-    ).trim();
-    const expires =
-      opts.tokenExpiresIn?.trim() && opts.tokenExpiresIn.trim().length > 0
-        ? Date.now() +
-          parseDurationMs(String(opts.tokenExpiresIn).trim(), {
-            defaultUnit: "d",
-          })
-        : undefined;
-
-    upsertAuthProfile({
-      profileId,
-      credential: {
-        type: "token",
-        provider,
-        token: tokenRaw,
-        ...(expires ? { expires } : {}),
-      },
-    });
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId,
-      provider,
-      mode: "token",
-    });
-  } else if (authChoice === "openai-codex" || authChoice === "antigravity") {
+  } else if (
+    authChoice === "token" ||
+    authChoice === "oauth" ||
+    authChoice === "openai-codex" ||
+    authChoice === "antigravity"
+  ) {
     const label =
-      authChoice === "antigravity" ? "Antigravity" : "OpenAI Codex OAuth";
+      authChoice === "antigravity"
+        ? "Antigravity"
+        : authChoice === "token"
+          ? "Token"
+          : "OAuth";
     runtime.error(`${label} requires interactive mode.`);
     runtime.exit(1);
     return;

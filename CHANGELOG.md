@@ -6,12 +6,15 @@
 - Node bridge: harden keepalive + heartbeat handling (TCP keepalive, better disconnects, and keepalive config tests). (#577) — thanks @steipete
 - Control UI: improve mobile responsiveness. (#558) — thanks @carlulsoe
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
+- Docs: add Hetzner Docker VPS guide. (#556) — thanks @Iamadig
+- Docs: link Hetzner guide from install + platforms docs. (#592) — thanks @steipete
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
 - Discord: avoid category parent overrides for channel allowlists and refactor thread context helpers. (#588) — thanks @steipete
 - Discord: fix forum thread starters and cache channel lookups for thread context. (#585) — thanks @thewilloftheshadow
 - Commands: accept /models as an alias for /model.
 - Commands: add `/usage` as an alias for `/status`. (#492) — thanks @lc0rp
+- Models/Auth: add MiniMax Anthropic-compatible API onboarding (minimax-api). (#590) — thanks @mneves75
 - Commands: harden slash command registry and list text-only commands in `/commands`.
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Debugging: add raw model stream logging flags and document gateway watch mode.
@@ -28,6 +31,7 @@
 - Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
+- Agent: drop empty error assistant messages when sanitizing session history. (#591) — thanks @steipete
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Doctor: repair gateway service entrypoint when switching between npm and git installs; add Docker e2e coverage. — thanks @steipete

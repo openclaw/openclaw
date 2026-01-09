@@ -331,7 +331,11 @@ actor MacNodeBridgeSession {
                 let now = self.clock.now
                 if now > last.advanced(by: timeout) {
                     let age = last.duration(to: now)
-                    self.logger.warning("Node bridge heartbeat timed out; disconnecting (age: \(String(describing: age), privacy: .public)).")
+                    let ageDescription = String(describing: age)
+                    let message =
+                        "Node bridge heartbeat timed out; disconnecting " +
+                        "(age: \(ageDescription, privacy: .public))."
+                    self.logger.warning(message)
                     await self.disconnect()
                     return
                 }
@@ -341,7 +345,11 @@ actor MacNodeBridgeSession {
             do {
                 try await self.send(BridgePing(type: "ping", id: id))
             } catch {
-                self.logger.warning("Node bridge ping send failed; disconnecting (error: \(String(describing: error), privacy: .public)).")
+                let errorDescription = String(describing: error)
+                let message =
+                    "Node bridge ping send failed; disconnecting " +
+                    "(error: \(errorDescription, privacy: .public))."
+                self.logger.warning(message)
                 await self.disconnect()
                 return
             }
@@ -356,7 +364,11 @@ actor MacNodeBridgeSession {
     private func handleConnectionState(_ state: NWConnection.State) async {
         switch state {
         case let .failed(error):
-            self.logger.warning("Node bridge connection failed; disconnecting (error: \(String(describing: error), privacy: .public)).")
+            let errorDescription = String(describing: error)
+            let message =
+                "Node bridge connection failed; disconnecting " +
+                "(error: \(errorDescription, privacy: .public))."
+            self.logger.warning(message)
             await self.disconnect()
         case .cancelled:
             self.logger.warning("Node bridge connection cancelled; disconnecting.")

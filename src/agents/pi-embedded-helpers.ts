@@ -61,6 +61,27 @@ export async function ensureSessionHeader(params: {
 
 type ContentBlock = AgentToolResult<unknown>["content"][number];
 
+export function isEmptyAssistantMessageContent(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+): boolean {
+  const content = message.content;
+  if (content == null) return true;
+  if (!Array.isArray(content)) return false;
+  return content.every((block) => {
+    if (!block || typeof block !== "object") return true;
+    const rec = block as { type?: unknown; text?: unknown };
+    if (rec.type !== "text") return false;
+    return typeof rec.text !== "string" || rec.text.trim().length === 0;
+  });
+}
+
+function isEmptyAssistantErrorMessage(
+  message: Extract<AgentMessage, { role: "assistant" }>,
+): boolean {
+  if (message.stopReason !== "error") return false;
+  return isEmptyAssistantMessageContent(message);
+}
+
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
@@ -101,6 +122,9 @@ export async function sanitizeSessionMessagesImages(
 
     if (role === "assistant") {
       const assistantMsg = msg as Extract<AgentMessage, { role: "assistant" }>;
+      if (isEmptyAssistantErrorMessage(assistantMsg)) {
+        continue;
+      }
       const content = assistantMsg.content;
       if (Array.isArray(content)) {
         const filteredContent = content.filter((block) => {

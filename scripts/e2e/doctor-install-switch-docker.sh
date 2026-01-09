@@ -11,6 +11,7 @@ echo "Running doctor install switch E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
 
+  # Stub systemd/loginctl so doctor + daemon flows work in Docker.
   export PATH="/tmp/clawdbot-bin:$PATH"
   mkdir -p /tmp/clawdbot-bin
 
@@ -65,6 +66,7 @@ exit 0
 LOGINCTL
   chmod +x /tmp/clawdbot-bin/loginctl
 
+  # Install the npm-global variant from the local /app source.
   npm install -g --prefix /tmp/npm-prefix /app
 
   npm_bin="/tmp/npm-prefix/bin/clawdbot"
@@ -88,6 +90,8 @@ LOGINCTL
     fi
   }
 
+  # Each flow: install service with one variant, run doctor from the other,
+  # and verify ExecStart entrypoint switches accordingly.
   run_flow() {
     local name="$1"
     local install_cmd="$2"
