@@ -4,27 +4,34 @@ import JSZip from "jszip";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 
+import { isPathWithinBase } from "../../test/helpers/paths.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 
 describe("media store", () => {
-  it("creates and returns media directory", async () => {
-    await withTempHome(async () => {
+  async function withTempStore<T>(
+    fn: (store: typeof import("./store.js"), home: string) => Promise<T>,
+  ): Promise<T> {
+    return await withTempHome(async (home) => {
       vi.resetModules();
       const store = await import("./store.js");
+      return await fn(store, home);
+    });
+  }
 
+  it("creates and returns media directory", async () => {
+    await withTempStore(async (store, home) => {
       const dir = await store.ensureMediaDir();
-      const normalized = path.normalize(dir);
-      expect(normalized).toContain(`${path.sep}.clawdbot${path.sep}media`);
+      expect(isPathWithinBase(home, dir)).toBe(true);
+      expect(path.normalize(dir)).toContain(
+        `${path.sep}.clawdbot${path.sep}media`,
+      );
       const stat = await fs.stat(dir);
       expect(stat.isDirectory()).toBe(true);
     });
   });
 
   it("saves buffers and enforces size limit", async () => {
-    await withTempHome(async () => {
-      vi.resetModules();
-      const store = await import("./store.js");
-
+    await withTempStore(async (store) => {
       const buf = Buffer.from("hello");
       const saved = await store.saveMediaBuffer(buf, "text/plain");
       const savedStat = await fs.stat(saved.path);
@@ -49,10 +56,7 @@ describe("media store", () => {
   });
 
   it("copies local files and cleans old media", async () => {
-    await withTempHome(async (home) => {
-      vi.resetModules();
-      const store = await import("./store.js");
-
+    await withTempStore(async (store, home) => {
       const srcFile = path.join(home, "tmp-src.txt");
       await fs.mkdir(home, { recursive: true });
       await fs.writeFile(srcFile, "local file");
@@ -71,10 +75,7 @@ describe("media store", () => {
   });
 
   it("sets correct mime for xlsx by extension", async () => {
-    await withTempHome(async (home) => {
-      vi.resetModules();
-      const store = await import("./store.js");
-
+    await withTempStore(async (store, home) => {
       const xlsxPath = path.join(home, "sheet.xlsx");
       await fs.mkdir(home, { recursive: true });
       await fs.writeFile(xlsxPath, "not really an xlsx");
@@ -88,10 +89,7 @@ describe("media store", () => {
   });
 
   it("renames media based on detected mime even when extension is wrong", async () => {
-    await withTempHome(async (home) => {
-      vi.resetModules();
-      const store = await import("./store.js");
-
+    await withTempStore(async (store, home) => {
       const pngBytes = await sharp({
         create: { width: 2, height: 2, channels: 3, background: "#00ff00" },
       })
@@ -110,10 +108,7 @@ describe("media store", () => {
   });
 
   it("sniffs xlsx mime for zip buffers and renames extension", async () => {
-    await withTempHome(async (home) => {
-      vi.resetModules();
-      const store = await import("./store.js");
-
+    await withTempStore(async (store, home) => {
       const zip = new JSZip();
       zip.file(
         "[Content_Types].xml",
