@@ -26,6 +26,7 @@
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
+- Doctor: repair gateway service entrypoint when switching between npm and git installs; add Docker e2e coverage. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
 - Daemon: add KillMode=process to systemd units to avoid podman restart hangs. (#541) — thanks @ogulcancelik
 - Doctor: run legacy state migrations in non-interactive mode without prompts.
