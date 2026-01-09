@@ -22,7 +22,7 @@ export function extractReplyToTag(
 
   const idMatch = cleaned.match(/\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]/i);
   if (idMatch?.[1]) {
-    cleaned = cleaned.replace(/\[\[\s*reply_to\s*:[^\]\n]+\]\]/gi, " ");
+    cleaned = cleaned.replace(/\[\[\s*reply_to\s*:\s*[^\]\n]+\s*\]\]/gi, " ");
     replyToId = idMatch[1].trim();
     hasTag = true;
   }
