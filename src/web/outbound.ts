@@ -29,7 +29,7 @@ export async function sendMessageWhatsApp(
   const active = getActiveWebListener(options.accountId);
   if (!active) {
     throw new Error(
-      "No active gateway listener. Start the gateway before sending WhatsApp messages.",
+      "No active gateway listener. Start the gateway before sending messages.",
     );
   }
   const logger = getChildLogger({
@@ -111,7 +111,7 @@ export async function sendReactionWhatsApp(
   const active = getActiveWebListener(options.accountId);
   if (!active) {
     throw new Error(
-      "No active gateway listener. Start the gateway before sending WhatsApp reactions.",
+      "No active gateway listener. Start the gateway before sending reactions.",
     );
   }
   const logger = getChildLogger({
@@ -152,7 +152,7 @@ export async function sendPollWhatsApp(
   const active = getActiveWebListener(options.accountId);
   if (!active) {
     throw new Error(
-      "No active gateway listener. Start the gateway before sending WhatsApp polls.",
+      "No active gateway listener. Start the gateway before sending polls.",
     );
   }
   const logger = getChildLogger({
