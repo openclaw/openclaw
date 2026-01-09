@@ -13,6 +13,7 @@ This page describes the current CLI behavior. If commands change, update this do
 
 - `--dev`: isolate state under `~/.clawdbot-dev` and shift default ports.
 - `--profile <name>`: isolate state under `~/.clawdbot-<name>`.
+- `--no-color`: disable ANSI colors.
 - `-V`, `--version`, `-v`: print version and exit.
 
 ## Output styling
@@ -20,7 +21,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - ANSI colors and progress indicators only render in TTY sessions.
 - OSC-8 hyperlinks render as clickable links in supported terminals; otherwise we fall back to plain URLs.
 - `--json` (and `--plain` where supported) disables styling for clean output.
-- `--no-color` disables ANSI styling where supported; `NO_COLOR=1` is also respected.
+- `--no-color` disables ANSI styling; `NO_COLOR=1` is also respected.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
 ## Color palette

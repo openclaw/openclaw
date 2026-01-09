@@ -78,6 +78,8 @@
 - Agent: bypass Anthropic OAuth tool-name blocks by capitalizing built-ins and keeping pruning tool matching case-insensitive. (#553) — thanks @andrewting19
 - Commands/Tools: disable /restart and gateway restart tool by default (enable with commands.restart=true).
 - Gateway/CLI: add `clawdbot gateway discover` (Bonjour scan on `local.` + `clawdbot.internal.`) with `--timeout` and `--json`. — thanks @steipete
+- Gateway/CLI: make `clawdbot gateway status` human-readable by default, add `--json`, and probe localhost + configured remote (warn on multiple gateways). — thanks @steipete
+- CLI: add global `--no-color` (and respect `NO_COLOR=1`) to disable ANSI output. — thanks @steipete
 - CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
 
 ## 2026.1.8

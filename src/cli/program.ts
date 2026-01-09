@@ -72,6 +72,8 @@ export function buildProgram() {
       "Use a named profile (isolates CLAWDBOT_STATE_DIR/CLAWDBOT_CONFIG_PATH under ~/.clawdbot-<name>)",
     );
 
+  program.option("--no-color", "Disable ANSI colors", false);
+
   program.configureHelp({
     optionTerm: (option) => theme.option(option.flags),
     subcommandTerm: (cmd) => theme.command(cmd.name()),

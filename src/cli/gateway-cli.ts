@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 import type { Command } from "commander";
+import { gatewayStatusCommand } from "../commands/gateway-status.js";
 import {
   CONFIG_PATH_CLAWDBOT,
   type GatewayAuthMode,
@@ -42,6 +43,7 @@ type GatewayRpcOpts = {
   password?: string;
   timeout?: string;
   expectFinal?: boolean;
+  json?: boolean;
 };
 
 type GatewayRunOpts = {
@@ -369,7 +371,8 @@ const gatewayCallOpts = (cmd: Command) =>
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
-    .option("--expect-final", "Wait for final response (agent)", false);
+    .option("--expect-final", "Wait for final response (agent)", false)
+    .option("--json", "Output JSON", false);
 
 const callGatewayCli = async (
   method: string,
@@ -380,7 +383,7 @@ const callGatewayCli = async (
     {
       label: `Gateway ${method}`,
       indeterminate: true,
-      enabled: true,
+      enabled: opts.json !== true,
     },
     async () =>
       await callGateway({
@@ -729,7 +732,7 @@ export function registerGatewayCli(program: Command) {
   gatewayCallOpts(
     gateway
       .command("call")
-      .description("Call a Gateway method and print JSON")
+      .description("Call a Gateway method")
       .argument(
         "<method>",
         "Method name (health/status/system-presence/cron.*)",
@@ -739,6 +742,18 @@ export function registerGatewayCli(program: Command) {
         try {
           const params = JSON.parse(String(opts.params ?? "{}"));
           const result = await callGatewayCli(method, opts, params);
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const rich = isRich();
+          defaultRuntime.log(
+            `${colorize(rich, theme.heading, "Gateway call")}: ${colorize(
+              rich,
+              theme.muted,
+              String(method),
+            )}`,
+          );
           defaultRuntime.log(JSON.stringify(result, null, 2));
         } catch (err) {
           defaultRuntime.error(`Gateway call failed: ${String(err)}`);
@@ -754,7 +769,46 @@ export function registerGatewayCli(program: Command) {
       .action(async (opts) => {
         try {
           const result = await callGatewayCli("health", opts);
-          defaultRuntime.log(JSON.stringify(result, null, 2));
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify(result, null, 2));
+            return;
+          }
+          const rich = isRich();
+          const obj =
+            result && typeof result === "object"
+              ? (result as Record<string, unknown>)
+              : {};
+          const durationMs =
+            typeof obj.durationMs === "number" ? obj.durationMs : null;
+          defaultRuntime.log(colorize(rich, theme.heading, "Gateway Health"));
+          defaultRuntime.log(
+            `${colorize(rich, theme.success, "OK")}${
+              durationMs != null ? ` (${durationMs}ms)` : ""
+            }`,
+          );
+          if (obj.web && typeof obj.web === "object") {
+            const web = obj.web as Record<string, unknown>;
+            const linked = web.linked === true;
+            defaultRuntime.log(
+              `Web: ${linked ? "linked" : "not linked"}${
+                typeof web.authAgeMs === "number" && linked
+                  ? ` (${Math.round(web.authAgeMs / 60_000)}m)`
+                  : ""
+              }`,
+            );
+          }
+          if (obj.telegram && typeof obj.telegram === "object") {
+            const tg = obj.telegram as Record<string, unknown>;
+            defaultRuntime.log(
+              `Telegram: ${tg.configured === true ? "configured" : "not configured"}`,
+            );
+          }
+          if (obj.discord && typeof obj.discord === "object") {
+            const dc = obj.discord as Record<string, unknown>;
+            defaultRuntime.log(
+              `Discord: ${dc.configured === true ? "configured" : "not configured"}`,
+            );
+          }
         } catch (err) {
           defaultRuntime.error(String(err));
           defaultRuntime.exit(1);
@@ -762,20 +816,27 @@ export function registerGatewayCli(program: Command) {
       }),
   );
 
-  gatewayCallOpts(
-    gateway
-      .command("status")
-      .description("Fetch Gateway status")
-      .action(async (opts) => {
-        try {
-          const result = await callGatewayCli("status", opts);
-          defaultRuntime.log(JSON.stringify(result, null, 2));
-        } catch (err) {
-          defaultRuntime.error(String(err));
-          defaultRuntime.exit(1);
-        }
-      }),
-  );
+  gateway
+    .command("status")
+    .description(
+      "Show gateway reachability + discovery + health + status summary (local + remote)",
+    )
+    .option(
+      "--url <url>",
+      "Explicit Gateway WebSocket URL (still probes localhost)",
+    )
+    .option("--token <token>", "Gateway token (applies to all probes)")
+    .option("--password <password>", "Gateway password (applies to all probes)")
+    .option("--timeout <ms>", "Overall probe budget in ms", "3000")
+    .option("--json", "Output JSON", false)
+    .action(async (opts) => {
+      try {
+        await gatewayStatusCommand(opts, defaultRuntime);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
 
   gateway
     .command("discover")

@@ -1,8 +1,10 @@
-import chalk from "chalk";
+import chalk, { Chalk } from "chalk";
 
 import { LOBSTER_PALETTE } from "./palette.js";
 
-const hex = (value: string) => chalk.hex(value);
+const baseChalk = process.env.NO_COLOR ? new Chalk({ level: 0 }) : chalk;
+
+const hex = (value: string) => baseChalk.hex(value);
 
 export const theme = {
   accent: hex(LOBSTER_PALETTE.accent),
@@ -13,12 +15,13 @@ export const theme = {
   warn: hex(LOBSTER_PALETTE.warn),
   error: hex(LOBSTER_PALETTE.error),
   muted: hex(LOBSTER_PALETTE.muted),
-  heading: chalk.bold.hex(LOBSTER_PALETTE.accent),
+  heading: baseChalk.bold.hex(LOBSTER_PALETTE.accent),
   command: hex(LOBSTER_PALETTE.accentBright),
   option: hex(LOBSTER_PALETTE.warn),
 } as const;
 
-export const isRich = () => Boolean(process.stdout.isTTY && chalk.level > 0);
+export const isRich = () =>
+  Boolean(process.stdout.isTTY && baseChalk.level > 0);
 
 export const colorize = (
   rich: boolean,
