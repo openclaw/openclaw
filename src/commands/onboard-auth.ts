@@ -256,7 +256,7 @@ export function applyMinimaxHostedConfig(
       defaults: {
         ...next.agents?.defaults,
         model: {
-          ...(next.agents?.defaults?.model ?? {}),
+          ...next.agents?.defaults?.model,
           primary: MINIMAX_HOSTED_MODEL_REF,
         },
       },
