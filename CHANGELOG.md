@@ -12,6 +12,7 @@
 - Control UI: improve mobile responsiveness. (#558) — thanks @carlulsoe
 - Control UI: persist per-session verbose off and hide tool cards unless verbose is on. (#262) — thanks @steipete
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
+- Sandbox: allow `session_status` tool in sandboxed sessions by default. — thanks @steipete
 - CLI: add `clawdbot config --section <name>` to jump straight into a wizard section (repeatable).
 - Docs: add Hetzner Docker VPS guide. (#556) — thanks @Iamadig
 - Docs: link Hetzner guide from install + platforms docs. (#592) — thanks @steipete
