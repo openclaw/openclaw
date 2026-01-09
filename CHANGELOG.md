@@ -6,6 +6,7 @@
 - Node bridge: harden keepalive + heartbeat handling (TCP keepalive, better disconnects, and keepalive config tests). (#577) — thanks @steipete
 - Control UI: improve mobile responsiveness. (#558) — thanks @carlulsoe
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
+- CLI: add `clawdbot config --section <name>` to jump straight into a wizard section (repeatable).
 - Docs: add Hetzner Docker VPS guide. (#556) — thanks @Iamadig
 - Docs: link Hetzner guide from install + platforms docs. (#592) — thanks @steipete
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
@@ -36,6 +37,7 @@
 - Agent: skip empty error assistant messages when rebuilding session context to avoid tool-chain corruption. (#561) — thanks @mukhtharcm
 - Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
+- Config: write `clawdbot.json` atomically (temp file + replace) and keep a best-effort `.bak` backup.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Agent: drop empty error assistant messages when sanitizing session history. (#591) — thanks @steipete
 - Agent: inject eligible skills list into the system prompt so bundled skills load from their actual locations. (#551) — thanks @gabriel-trigo
