@@ -2,14 +2,13 @@ diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-
 index 0000000..1111111 100644
 --- a/dist/providers/google-gemini-cli.js
 +++ b/dist/providers/google-gemini-cli.js
-@@ -248,6 +248,13 @@ async function* streamGeminiCli(model, context, credentials, options) {
+@@ -248,6 +248,12 @@ async function* streamGeminiCli(model, context, credentials, options) {
                          break; // Success, exit retry loop
                      }
                      const errorText = await response.text();
-+                    // PATCH: Fail immediately on 429 to let caller rotate accounts
++                    // PATCH: Fail immediately on 429 for Antigravity to let caller rotate accounts.
 +                    // Antigravity rate limits can have very long retry delays (10+ minutes).
-+                    // Instead of waiting, throw immediately so clawdbot can rotate to another account.
-+                    if (response.status === 429) {
++                    if (isAntigravity && response.status === 429) {
 +                        console.log(`[pi-ai] 429 rate limit - failing fast to rotate account`);
 +                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
 +                    }
