@@ -1033,11 +1033,12 @@ export async function monitorWebProvider(
     };
 
     const buildLine = (msg: WebInboundMsg) => {
-      // Build message prefix: explicit config > default based on allowFrom
+      // Build message prefix: explicit config > identity name > default "clawdbot"
       let messagePrefix = cfg.messages?.messagePrefix;
       if (messagePrefix === undefined) {
         const hasAllowFrom = (cfg.whatsapp?.allowFrom?.length ?? 0) > 0;
-        messagePrefix = hasAllowFrom ? "" : "[clawdbot]";
+        const identityName = cfg.identity?.name?.trim() || "clawdbot";
+        messagePrefix = hasAllowFrom ? "" : `[${identityName}]`;
       }
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
       const senderLabel =
