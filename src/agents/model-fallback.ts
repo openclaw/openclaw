@@ -54,7 +54,20 @@ function getErrorCode(err: unknown): string {
 
 function getErrorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
-  return String(err ?? "");
+  if (typeof err === "string") return err;
+  if (
+    typeof err === "number" ||
+    typeof err === "boolean" ||
+    typeof err === "bigint"
+  ) {
+    return String(err);
+  }
+  if (typeof err === "symbol") return err.description ?? "";
+  if (err && typeof err === "object") {
+    const message = (err as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return "";
 }
 
 function isTimeoutErrorMessage(raw: string): boolean {
