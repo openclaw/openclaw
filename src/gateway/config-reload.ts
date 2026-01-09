@@ -308,6 +308,9 @@ export function startGatewayConfigReloader(opts: {
       settings = resolveGatewayReloadSettings(nextConfig);
       if (changedPaths.length === 0) return;
 
+      opts.log.info(
+        `config change detected; evaluating reload (${changedPaths.join(", ")})`,
+      );
       const plan = buildGatewayReloadPlan(changedPaths);
       if (settings.mode === "off") {
         opts.log.info("config reload disabled (gateway.reload.mode=off)");
