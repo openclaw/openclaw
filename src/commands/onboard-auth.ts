@@ -126,7 +126,7 @@ export function applyAuthProfileConfig(
 export function applyMinimaxProviderConfig(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
-  const models = { ...cfg.agent?.models };
+  const models = { ...cfg.agents?.defaults?.models };
   models["anthropic/claude-opus-4-5"] = {
     ...models["anthropic/claude-opus-4-5"],
     alias: models["anthropic/claude-opus-4-5"]?.alias ?? "Opus",
@@ -158,9 +158,12 @@ export function applyMinimaxProviderConfig(
 
   return {
     ...cfg,
-    agent: {
-      ...cfg.agent,
-      models,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
     },
     models: {
       mode: cfg.models?.mode ?? "merge",
@@ -224,17 +227,21 @@ export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const next = applyMinimaxProviderConfig(cfg);
   return {
     ...next,
-    agent: {
-      ...next.agent,
-      model: {
-        ...(next.agent?.model &&
-        "fallbacks" in (next.agent.model as Record<string, unknown>)
-          ? {
-              fallbacks: (next.agent.model as { fallbacks?: string[] })
-                .fallbacks,
-            }
-          : undefined),
-        primary: "lmstudio/minimax-m2.1-gs32",
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(next.agents?.defaults?.model &&
+          "fallbacks" in (next.agents.defaults.model as Record<string, unknown>)
+            ? {
+                fallbacks: (
+                  next.agents.defaults.model as { fallbacks?: string[] }
+                ).fallbacks,
+              }
+            : undefined),
+          primary: "lmstudio/minimax-m2.1-gs32",
+        },
       },
     },
   };

@@ -92,7 +92,8 @@ export async function runOnboardingWizard(
     })) as "keep" | "modify" | "reset";
 
     if (action === "reset") {
-      const workspaceDefault = baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE;
+      const workspaceDefault =
+        baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
       const resetScope = (await prompter.select({
         message: "Reset scope",
         options: [
@@ -276,10 +277,11 @@ export async function runOnboardingWizard(
   const workspaceInput =
     opts.workspace ??
     (flow === "quickstart"
-      ? (baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE)
+      ? (baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE)
       : await prompter.text({
           message: "Workspace directory",
-          initialValue: baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE,
+          initialValue:
+            baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE,
         }));
 
   const workspaceDir = resolveUserPath(
@@ -288,9 +290,12 @@ export async function runOnboardingWizard(
 
   let nextConfig: ClawdbotConfig = {
     ...baseConfig,
-    agent: {
-      ...baseConfig.agent,
-      workspace: workspaceDir,
+    agents: {
+      ...baseConfig.agents,
+      defaults: {
+        ...baseConfig.agents?.defaults,
+        workspace: workspaceDir,
+      },
     },
     gateway: {
       ...baseConfig.gateway,
@@ -505,7 +510,7 @@ export async function runOnboardingWizard(
   await writeConfigFile(nextConfig);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
   nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);

@@ -284,7 +284,7 @@ Runbook: [iOS connect](https://docs.clawd.bot/ios).
 
 ## Agent workspace + skills
 
-- Workspace root: `~/clawd` (configurable via `agent.workspace`).
+- Workspace root: `~/clawd` (configurable via `agents.defaults.workspace`).
 - Injected prompt files: `AGENTS.md`, `SOUL.md`, `TOOLS.md`.
 - Skills: `~/clawd/skills/<skill>/SKILL.md`.
 
@@ -305,7 +305,7 @@ Minimal `~/.clawdbot/clawdbot.json` (model + defaults):
 ## Security model (important)
 
 - **Default:** tools run on the host for the **main** session, so the agent has full access when it’s just you.
-- **Group/channel safety:** set `agent.sandbox.mode: "non-main"` to run **non‑main sessions** (groups/channels) inside per‑session Docker sandboxes; bash then runs in Docker for those sessions.
+- **Group/channel safety:** set `agents.defaults.sandbox.mode: "non-main"` to run **non‑main sessions** (groups/channels) inside per‑session Docker sandboxes; bash then runs in Docker for those sessions.
 - **Sandbox defaults:** allowlist `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`; denylist `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`.
 
 Details: [Security guide](https://docs.clawd.bot/security) · [Docker + sandboxing](https://docs.clawd.bot/docker) · [Sandbox config](https://docs.clawd.bot/configuration)

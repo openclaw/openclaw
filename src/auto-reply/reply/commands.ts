@@ -163,18 +163,19 @@ export async function buildStatusReply(params: {
     ? (normalizeGroupActivation(sessionEntry?.groupActivation) ??
       defaultGroupActivation())
     : undefined;
+  const agentDefaults = cfg.agents?.defaults ?? {};
   const statusText = buildStatusMessage({
     config: cfg,
     agent: {
-      ...cfg.agent,
+      ...agentDefaults,
       model: {
-        ...cfg.agent?.model,
+        ...agentDefaults.model,
         primary: `${provider}/${model}`,
       },
       contextTokens,
-      thinkingDefault: cfg.agent?.thinkingDefault,
-      verboseDefault: cfg.agent?.verboseDefault,
-      elevatedDefault: cfg.agent?.elevatedDefault,
+      thinkingDefault: agentDefaults.thinkingDefault,
+      verboseDefault: agentDefaults.verboseDefault,
+      elevatedDefault: agentDefaults.elevatedDefault,
     },
     sessionEntry,
     sessionKey,

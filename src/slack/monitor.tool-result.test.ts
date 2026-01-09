@@ -105,7 +105,6 @@ beforeEach(() => {
       ackReactionScope: "group-mentions",
     },
     slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
-    routing: { allowFrom: [] },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();
@@ -208,14 +207,13 @@ describe("monitorSlackProvider tool results", () => {
 
   it("accepts channel messages when mentionPatterns match", async () => {
     config = {
-      messages: { responsePrefix: "PFX" },
+      messages: {
+        responsePrefix: "PFX",
+        groupChat: { mentionPatterns: ["\\bclawd\\b"] },
+      },
       slack: {
         dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         channels: { C1: { allow: true, requireMention: true } },
-      },
-      routing: {
-        allowFrom: [],
-        groupChat: { mentionPatterns: ["\\bclawd\\b"] },
       },
     };
     replyMock.mockResolvedValue({ text: "hi" });
@@ -378,7 +376,6 @@ describe("monitorSlackProvider tool results", () => {
         dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         channels: { C1: { allow: true, requireMention: false } },
       },
-      routing: { allowFrom: [] },
     };
 
     const controller = new AbortController();
@@ -429,12 +426,9 @@ describe("monitorSlackProvider tool results", () => {
         dm: { enabled: true, policy: "open", allowFrom: ["*"] },
         channels: { C1: { allow: true, requireMention: false } },
       },
-      routing: {
-        allowFrom: [],
-        bindings: [
-          { agentId: "support", match: { provider: "slack", teamId: "T1" } },
-        ],
-      },
+      bindings: [
+        { agentId: "support", match: { provider: "slack", teamId: "T1" } },
+      ],
     };
 
     const client = getSlackClient();

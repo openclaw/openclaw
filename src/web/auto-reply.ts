@@ -341,7 +341,7 @@ export async function runWebHeartbeatOnce(opts: {
 
     const replyResult = await replyResolver(
       {
-        Body: resolveHeartbeatPrompt(cfg.agent?.heartbeat?.prompt),
+        Body: resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
@@ -377,7 +377,8 @@ export async function runWebHeartbeatOnce(opts: {
     );
     const ackMaxChars = Math.max(
       0,
-      cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     );
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",
@@ -786,7 +787,7 @@ export async function monitorWebProvider(
       groups: account.groups,
     },
   } satisfies ReturnType<typeof loadConfig>;
-  const configuredMaxMb = cfg.agent?.mediaMaxMb;
+  const configuredMaxMb = cfg.agents?.defaults?.mediaMaxMb;
   const maxMediaBytes =
     typeof configuredMaxMb === "number" && configuredMaxMb > 0
       ? configuredMaxMb * 1024 * 1024
@@ -800,7 +801,7 @@ export async function monitorWebProvider(
     buildMentionConfig(cfg, agentId);
   const baseMentionConfig = resolveMentionConfig();
   const groupHistoryLimit =
-    cfg.routing?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
     string,
     Array<{ sender: string; body: string; timestamp?: number }>

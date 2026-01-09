@@ -22,7 +22,10 @@ import {
 import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentIdFromSessionKey,
+} from "./agent-scope.js";
 import { syncSkillsToWorkspace } from "./skills.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
@@ -345,15 +348,14 @@ export function resolveSandboxConfigForAgent(
   cfg?: ClawdbotConfig,
   agentId?: string,
 ): SandboxConfig {
-  const agent = cfg?.agent?.sandbox;
+  const agent = cfg?.agents?.defaults?.sandbox;
 
   // Agent-specific sandbox config overrides global
   let agentSandbox: typeof agent | undefined;
-  if (agentId && cfg?.routing?.agents) {
-    const agentConfig = cfg.routing.agents[agentId];
-    if (agentConfig && typeof agentConfig === "object") {
-      agentSandbox = agentConfig.sandbox;
-    }
+  const agentConfig =
+    cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  if (agentConfig?.sandbox) {
+    agentSandbox = agentConfig.sandbox;
   }
 
   const scope = resolveSandboxScope({
@@ -382,9 +384,13 @@ export function resolveSandboxConfigForAgent(
     }),
     tools: {
       allow:
-        agentSandbox?.tools?.allow ?? agent?.tools?.allow ?? DEFAULT_TOOL_ALLOW,
+        agentConfig?.tools?.sandbox?.tools?.allow ??
+        cfg?.tools?.sandbox?.tools?.allow ??
+        DEFAULT_TOOL_ALLOW,
       deny:
-        agentSandbox?.tools?.deny ?? agent?.tools?.deny ?? DEFAULT_TOOL_DENY,
+        agentConfig?.tools?.sandbox?.tools?.deny ??
+        cfg?.tools?.sandbox?.tools?.deny ??
+        DEFAULT_TOOL_DENY,
     },
     prune: resolveSandboxPruneConfig({
       scope,
@@ -1059,7 +1065,7 @@ export async function resolveSandboxContext(params: {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
-      params.config?.agent?.skipBootstrap,
+      params.config?.agents?.defaults?.skipBootstrap,
     );
     if (cfg.workspaceAccess === "none") {
       try {
@@ -1133,7 +1139,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
-      params.config?.agent?.skipBootstrap,
+      params.config?.agents?.defaults?.skipBootstrap,
     );
     if (cfg.workspaceAccess === "none") {
       try {

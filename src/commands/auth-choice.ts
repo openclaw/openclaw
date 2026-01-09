@@ -65,13 +65,16 @@ export async function warnIfModelConfigLooksOff(
     agentModelOverride && agentModelOverride.length > 0
       ? {
           ...config,
-          agent: {
-            ...config.agent,
-            model: {
-              ...(typeof config.agent?.model === "object"
-                ? config.agent.model
-                : undefined),
-              primary: agentModelOverride,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              model: {
+                ...(typeof config.agents?.defaults?.model === "object"
+                  ? config.agents.defaults.model
+                  : undefined),
+                primary: agentModelOverride,
+              },
             },
           },
         }
@@ -92,7 +95,7 @@ export async function warnIfModelConfigLooksOff(
     );
     if (!known) {
       warnings.push(
-        `Model not found: ${ref.provider}/${ref.model}. Update agent.model or run /models list.`,
+        `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
       );
     }
   }
@@ -111,7 +114,7 @@ export async function warnIfModelConfigLooksOff(
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agent.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
+        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
       );
     }
   }
@@ -454,30 +457,36 @@ export async function applyAuthChoice(params: {
         const modelKey = "google-antigravity/claude-opus-4-5-thinking";
         nextConfig = {
           ...nextConfig,
-          agent: {
-            ...nextConfig.agent,
-            models: {
-              ...nextConfig.agent?.models,
-              [modelKey]: nextConfig.agent?.models?.[modelKey] ?? {},
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              models: {
+                ...nextConfig.agents?.defaults?.models,
+                [modelKey]:
+                  nextConfig.agents?.defaults?.models?.[modelKey] ?? {},
+              },
             },
           },
         };
         if (params.setDefaultModel) {
+          const existingModel = nextConfig.agents?.defaults?.model;
           nextConfig = {
             ...nextConfig,
-            agent: {
-              ...nextConfig.agent,
-              model: {
-                ...(nextConfig.agent?.model &&
-                "fallbacks" in
-                  (nextConfig.agent.model as Record<string, unknown>)
-                  ? {
-                      fallbacks: (
-                        nextConfig.agent.model as { fallbacks?: string[] }
-                      ).fallbacks,
-                    }
-                  : undefined),
-                primary: modelKey,
+            agents: {
+              ...nextConfig.agents,
+              defaults: {
+                ...nextConfig.agents?.defaults,
+                model: {
+                  ...(existingModel &&
+                  "fallbacks" in (existingModel as Record<string, unknown>)
+                    ? {
+                        fallbacks: (existingModel as { fallbacks?: string[] })
+                          .fallbacks,
+                      }
+                    : undefined),
+                  primary: modelKey,
+                },
               },
             },
           };

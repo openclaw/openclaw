@@ -269,12 +269,11 @@ export async function runCronIsolatedAgentTurn(params: {
   sessionKey: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const agentCfg = params.cfg.agent;
-  const workspaceDirRaw =
-    params.cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const agentCfg = params.cfg.agents?.defaults;
+  const workspaceDirRaw = agentCfg?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !params.cfg.agent?.skipBootstrap,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
 
@@ -521,7 +520,8 @@ export async function runCronIsolatedAgentTurn(params: {
   // This allows cron jobs to silently ack when nothing to report but still deliver
   // actual content when there is something to say.
   const ackMaxChars =
-    params.cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+    params.cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+    DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   const skipHeartbeatDelivery =
     delivery && isHeartbeatOnlyResponse(payloads, Math.max(0, ackMaxChars));
 

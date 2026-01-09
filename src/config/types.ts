@@ -91,6 +91,12 @@ export type AgentElevatedAllowFromConfig = {
   webchat?: Array<string | number>;
 };
 
+export type IdentityConfig = {
+  name?: string;
+  theme?: string;
+  emoji?: string;
+};
+
 export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
@@ -762,83 +768,133 @@ export type GroupChatConfig = {
   historyLimit?: number;
 };
 
-export type RoutingConfig = {
-  transcribeAudio?: {
-    // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
-    command: string[];
-    timeoutSeconds?: number;
+export type QueueConfig = {
+  mode?: QueueMode;
+  byProvider?: QueueModeByProvider;
+  debounceMs?: number;
+  cap?: number;
+  drop?: QueueDropPolicy;
+};
+
+export type AgentToolsConfig = {
+  allow?: string[];
+  deny?: string[];
+  sandbox?: {
+    tools?: {
+      allow?: string[];
+      deny?: string[];
+    };
   };
-  groupChat?: GroupChatConfig;
-  /** Default agent id when no binding matches. Default: "main". */
-  defaultAgentId?: string;
+};
+
+export type ToolsConfig = {
+  allow?: string[];
+  deny?: string[];
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
     enabled?: boolean;
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
   };
-  agents?: Record<
-    string,
-    {
-      name?: string;
-      workspace?: string;
-      agentDir?: string;
-      model?: string;
-      /** Per-agent override for group mention patterns. */
-      mentionPatterns?: string[];
-      subagents?: {
-        /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
-        allowAgents?: string[];
-      };
-      sandbox?: {
-        mode?: "off" | "non-main" | "all";
-        /** Agent workspace access inside the sandbox. */
-        workspaceAccess?: "none" | "ro" | "rw";
-        /** Container/workspace scope for sandbox isolation. */
-        scope?: "session" | "agent" | "shared";
-        /** Legacy alias for scope ("session" when true, "shared" when false). */
-        perSession?: boolean;
-        workspaceRoot?: string;
-        /** Docker-specific sandbox overrides for this agent. */
-        docker?: SandboxDockerSettings;
-        /** Optional sandboxed browser overrides for this agent. */
-        browser?: SandboxBrowserSettings;
-        /** Tool allow/deny policy for sandboxed sessions (deny wins). */
-        tools?: {
-          allow?: string[];
-          deny?: string[];
-        };
-        /** Auto-prune overrides for this agent. */
-        prune?: SandboxPruneSettings;
-      };
-      tools?: {
-        allow?: string[];
-        deny?: string[];
-      };
-    }
-  >;
-  bindings?: Array<{
-    agentId: string;
-    match: {
-      provider: string;
-      accountId?: string;
-      peer?: { kind: "dm" | "group" | "channel"; id: string };
-      guildId?: string;
-      teamId?: string;
+  /** Elevated bash permissions for the host machine. */
+  elevated?: {
+    /** Enable or disable elevated mode (default: true). */
+    enabled?: boolean;
+    /** Approved senders for /elevated (per-provider allowlists). */
+    allowFrom?: AgentElevatedAllowFromConfig;
+  };
+  /** Bash tool defaults. */
+  bash?: {
+    /** Default time (ms) before a bash command auto-backgrounds. */
+    backgroundMs?: number;
+    /** Default timeout (seconds) before auto-killing bash commands. */
+    timeoutSec?: number;
+    /** How long to keep finished sessions in memory (ms). */
+    cleanupMs?: number;
+  };
+  /** Sub-agent tool policy defaults (deny wins). */
+  subagents?: {
+    tools?: {
+      allow?: string[];
+      deny?: string[];
     };
-  }>;
-  queue?: {
-    mode?: QueueMode;
-    byProvider?: QueueModeByProvider;
-    debounceMs?: number;
-    cap?: number;
-    drop?: QueueDropPolicy;
+  };
+  /** Sandbox tool policy defaults (deny wins). */
+  sandbox?: {
+    tools?: {
+      allow?: string[];
+      deny?: string[];
+    };
+  };
+};
+
+export type AgentConfig = {
+  id: string;
+  default?: boolean;
+  name?: string;
+  workspace?: string;
+  agentDir?: string;
+  model?: string;
+  identity?: IdentityConfig;
+  groupChat?: GroupChatConfig;
+  subagents?: {
+    /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
+    allowAgents?: string[];
+  };
+  sandbox?: {
+    mode?: "off" | "non-main" | "all";
+    /** Agent workspace access inside the sandbox. */
+    workspaceAccess?: "none" | "ro" | "rw";
+    /**
+     * Session tools visibility for sandboxed sessions.
+     * - "spawned": only allow session tools to target sessions spawned from this session (default)
+     * - "all": allow session tools to target any session
+     */
+    sessionToolsVisibility?: "spawned" | "all";
+    /** Container/workspace scope for sandbox isolation. */
+    scope?: "session" | "agent" | "shared";
+    /** Legacy alias for scope ("session" when true, "shared" when false). */
+    perSession?: boolean;
+    workspaceRoot?: string;
+    /** Docker-specific sandbox overrides for this agent. */
+    docker?: SandboxDockerSettings;
+    /** Optional sandboxed browser overrides for this agent. */
+    browser?: SandboxBrowserSettings;
+    /** Auto-prune overrides for this agent. */
+    prune?: SandboxPruneSettings;
+  };
+  tools?: AgentToolsConfig;
+};
+
+export type AgentsConfig = {
+  defaults?: AgentDefaultsConfig;
+  list?: AgentConfig[];
+};
+
+export type AgentBinding = {
+  agentId: string;
+  match: {
+    provider: string;
+    accountId?: string;
+    peer?: { kind: "dm" | "group" | "channel"; id: string };
+    guildId?: string;
+    teamId?: string;
+  };
+};
+
+export type AudioConfig = {
+  transcription?: {
+    // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
+    command: string[];
+    timeoutSeconds?: number;
   };
 };
 
 export type MessagesConfig = {
   messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
+  groupChat?: GroupChatConfig;
+  queue?: QueueConfig;
   /** Emoji reaction used to acknowledge inbound messages (empty disables). */
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
@@ -1097,6 +1153,113 @@ export type AgentContextPruningConfig = {
   };
 };
 
+export type AgentDefaultsConfig = {
+  /** Primary model and fallbacks (provider/model). */
+  model?: AgentModelListConfig;
+  /** Optional image-capable model and fallbacks (provider/model). */
+  imageModel?: AgentModelListConfig;
+  /** Model catalog with optional aliases (full provider/model keys). */
+  models?: Record<string, AgentModelEntryConfig>;
+  /** Agent working directory (preferred). Used as the default cwd for agent runs. */
+  workspace?: string;
+  /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
+  skipBootstrap?: boolean;
+  /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
+  userTimezone?: string;
+  /** Optional display-only context window override (used for % in status UIs). */
+  contextTokens?: number;
+  /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
+  contextPruning?: AgentContextPruningConfig;
+  /** Default thinking level when no /think directive is present. */
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
+  /** Default verbose level when no /verbose directive is present. */
+  verboseDefault?: "off" | "on";
+  /** Default elevated level when no /elevated directive is present. */
+  elevatedDefault?: "off" | "on";
+  /** Default block streaming level when no override is present. */
+  blockStreamingDefault?: "off" | "on";
+  /**
+   * Block streaming boundary:
+   * - "text_end": end of each assistant text content block (before tool calls)
+   * - "message_end": end of the whole assistant message (may include tool blocks)
+   */
+  blockStreamingBreak?: "text_end" | "message_end";
+  /** Soft block chunking for streamed replies (min/max chars, prefer paragraph/newline). */
+  blockStreamingChunk?: {
+    minChars?: number;
+    maxChars?: number;
+    breakPreference?: "paragraph" | "newline" | "sentence";
+  };
+  timeoutSeconds?: number;
+  /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
+  mediaMaxMb?: number;
+  typingIntervalSeconds?: number;
+  /** Typing indicator start mode (never|instant|thinking|message). */
+  typingMode?: TypingMode;
+  /** Periodic background heartbeat runs. */
+  heartbeat?: {
+    /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
+    every?: string;
+    /** Heartbeat model override (provider/model). */
+    model?: string;
+    /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|none). */
+    target?:
+      | "last"
+      | "whatsapp"
+      | "telegram"
+      | "discord"
+      | "slack"
+      | "signal"
+      | "imessage"
+      | "none";
+    /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
+    to?: string;
+    /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time."). */
+    prompt?: string;
+    /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
+    ackMaxChars?: number;
+  };
+  /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
+  maxConcurrent?: number;
+  /** Sub-agent defaults (spawned via sessions_spawn). */
+  subagents?: {
+    /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
+    maxConcurrent?: number;
+    /** Auto-archive sub-agent sessions after N minutes (default: 60). */
+    archiveAfterMinutes?: number;
+  };
+  /** Optional sandbox settings for non-main sessions. */
+  sandbox?: {
+    /** Enable sandboxing for sessions. */
+    mode?: "off" | "non-main" | "all";
+    /**
+     * Agent workspace access inside the sandbox.
+     * - "none": do not mount the agent workspace into the container; use a sandbox workspace under workspaceRoot
+     * - "ro": mount the agent workspace read-only; disables write/edit tools
+     * - "rw": mount the agent workspace read/write; enables write/edit tools
+     */
+    workspaceAccess?: "none" | "ro" | "rw";
+    /**
+     * Session tools visibility for sandboxed sessions.
+     * - "spawned": only allow session tools to target sessions spawned from this session (default)
+     * - "all": allow session tools to target any session
+     */
+    sessionToolsVisibility?: "spawned" | "all";
+    /** Container/workspace scope for sandbox isolation. */
+    scope?: "session" | "agent" | "shared";
+    /** Legacy alias for scope ("session" when true, "shared" when false). */
+    perSession?: boolean;
+    /** Root directory for sandbox workspaces. */
+    workspaceRoot?: string;
+    /** Docker-specific sandbox settings. */
+    docker?: SandboxDockerSettings;
+    /** Optional sandboxed browser settings. */
+    browser?: SandboxBrowserSettings;
+    /** Auto-prune sandbox containers. */
+    prune?: SandboxPruneSettings;
+  };
+};
+
 export type ClawdbotConfig = {
   auth?: AuthConfig;
   env?: {
@@ -1115,11 +1278,6 @@ export type ClawdbotConfig = {
       | { enabled?: boolean; timeoutMs?: number }
       | undefined;
   };
-  identity?: {
-    name?: string;
-    theme?: string;
-    emoji?: string;
-  };
   wizard?: {
     lastRunAt?: string;
     lastRunVersion?: string;
@@ -1135,145 +1293,10 @@ export type ClawdbotConfig = {
   };
   skills?: SkillsConfig;
   models?: ModelsConfig;
-  agent?: {
-    /** Primary model and fallbacks (provider/model). */
-    model?: AgentModelListConfig;
-    /** Optional image-capable model and fallbacks (provider/model). */
-    imageModel?: AgentModelListConfig;
-    /** Model catalog with optional aliases (full provider/model keys). */
-    models?: Record<string, AgentModelEntryConfig>;
-    /** Agent working directory (preferred). Used as the default cwd for agent runs. */
-    workspace?: string;
-    /** Skip bootstrap (BOOTSTRAP.md creation, etc.) for pre-configured deployments. */
-    skipBootstrap?: boolean;
-    /** Optional IANA timezone for the user (used in system prompt; defaults to host timezone). */
-    userTimezone?: string;
-    /** Optional display-only context window override (used for % in status UIs). */
-    contextTokens?: number;
-    /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
-    contextPruning?: AgentContextPruningConfig;
-    /** Default thinking level when no /think directive is present. */
-    thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
-    /** Default verbose level when no /verbose directive is present. */
-    verboseDefault?: "off" | "on";
-    /** Default elevated level when no /elevated directive is present. */
-    elevatedDefault?: "off" | "on";
-    /** Default block streaming level when no override is present. */
-    blockStreamingDefault?: "off" | "on";
-    /**
-     * Block streaming boundary:
-     * - "text_end": end of each assistant text content block (before tool calls)
-     * - "message_end": end of the whole assistant message (may include tool blocks)
-     */
-    blockStreamingBreak?: "text_end" | "message_end";
-    /** Soft block chunking for streamed replies (min/max chars, prefer paragraph/newline). */
-    blockStreamingChunk?: {
-      minChars?: number;
-      maxChars?: number;
-      breakPreference?: "paragraph" | "newline" | "sentence";
-    };
-    timeoutSeconds?: number;
-    /** Max inbound media size in MB for agent-visible attachments (text note or future image attach). */
-    mediaMaxMb?: number;
-    typingIntervalSeconds?: number;
-    /** Typing indicator start mode (never|instant|thinking|message). */
-    typingMode?: TypingMode;
-    /** Periodic background heartbeat runs. */
-    heartbeat?: {
-      /** Heartbeat interval (duration string, default unit: minutes; default: 30m). */
-      every?: string;
-      /** Heartbeat model override (provider/model). */
-      model?: string;
-      /** Delivery target (last|whatsapp|telegram|discord|signal|imessage|msteams|none). */
-      target?:
-        | "last"
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "msteams"
-        | "none";
-      /** Optional delivery override (E.164 for WhatsApp, chat id for Telegram). */
-      to?: string;
-      /** Override the heartbeat prompt body (default: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time."). */
-      prompt?: string;
-      /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
-      ackMaxChars?: number;
-    };
-    /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
-    maxConcurrent?: number;
-    /** Sub-agent defaults (spawned via sessions_spawn). */
-    subagents?: {
-      /** Max concurrent sub-agent runs (global lane: "subagent"). Default: 1. */
-      maxConcurrent?: number;
-      /** Auto-archive sub-agent sessions after N minutes (default: 60). */
-      archiveAfterMinutes?: number;
-      /** Tool allow/deny policy for sub-agent sessions (deny wins). */
-      tools?: {
-        allow?: string[];
-        deny?: string[];
-      };
-    };
-    /** Bash tool defaults. */
-    bash?: {
-      /** Default time (ms) before a bash command auto-backgrounds. */
-      backgroundMs?: number;
-      /** Default timeout (seconds) before auto-killing bash commands. */
-      timeoutSec?: number;
-      /** How long to keep finished sessions in memory (ms). */
-      cleanupMs?: number;
-    };
-    /** Elevated bash permissions for the host machine. */
-    elevated?: {
-      /** Enable or disable elevated mode (default: true). */
-      enabled?: boolean;
-      /** Approved senders for /elevated (per-provider allowlists). */
-      allowFrom?: AgentElevatedAllowFromConfig;
-    };
-    /** Optional sandbox settings for non-main sessions. */
-    sandbox?: {
-      /** Enable sandboxing for sessions. */
-      mode?: "off" | "non-main" | "all";
-      /**
-       * Agent workspace access inside the sandbox.
-       * - "none": do not mount the agent workspace into the container; use a sandbox workspace under workspaceRoot
-       * - "ro": mount the agent workspace read-only; disables write/edit tools
-       * - "rw": mount the agent workspace read/write; enables write/edit tools
-       */
-      workspaceAccess?: "none" | "ro" | "rw";
-      /**
-       * Session tools visibility for sandboxed sessions.
-       * - "spawned": only allow session tools to target sessions spawned from this session (default)
-       * - "all": allow session tools to target any session
-       */
-      sessionToolsVisibility?: "spawned" | "all";
-      /** Container/workspace scope for sandbox isolation. */
-      scope?: "session" | "agent" | "shared";
-      /** Legacy alias for scope ("session" when true, "shared" when false). */
-      perSession?: boolean;
-      /** Root directory for sandbox workspaces. */
-      workspaceRoot?: string;
-      /** Docker-specific sandbox settings. */
-      docker?: SandboxDockerSettings;
-      /** Optional sandboxed browser settings. */
-      browser?: SandboxBrowserSettings;
-      /** Tool allow/deny policy (deny wins). */
-      tools?: {
-        allow?: string[];
-        deny?: string[];
-      };
-      /** Auto-prune sandbox containers. */
-      prune?: SandboxPruneSettings;
-    };
-    /** Global tool allow/deny policy for all providers (deny wins). */
-    tools?: {
-      allow?: string[];
-      deny?: string[];
-    };
-  };
-  routing?: RoutingConfig;
+  agents?: AgentsConfig;
+  tools?: ToolsConfig;
+  bindings?: AgentBinding[];
+  audio?: AudioConfig;
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   session?: SessionConfig;

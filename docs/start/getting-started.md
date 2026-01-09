@@ -19,7 +19,7 @@ Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It set
 
 If you want the deeper reference pages, jump to: [Wizard](/start/wizard), [Setup](/start/setup), [Pairing](/start/pairing), [Security](/gateway/security).
 
-Sandboxing note: `agent.sandbox.mode: "non-main"` uses `session.mainKey` (default `"main"`),
+Sandboxing note: `agents.defaults.sandbox.mode: "non-main"` uses `session.mainKey` (default `"main"`),
 so group/channel sessions are sandboxed. If you want the main agent to always
 run on host, set an explicit per-agent override:
 

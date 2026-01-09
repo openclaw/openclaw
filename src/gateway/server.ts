@@ -687,10 +687,13 @@ export async function startGatewayServer(
     { controller: AbortController; sessionId: string; sessionKey: string }
   >();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
-  setCommandLaneConcurrency("main", cfgAtStart.agent?.maxConcurrent ?? 1);
+  setCommandLaneConcurrency(
+    "main",
+    cfgAtStart.agents?.defaults?.maxConcurrent ?? 1,
+  );
   setCommandLaneConcurrency(
     "subagent",
-    cfgAtStart.agent?.subagents?.maxConcurrent ?? 1,
+    cfgAtStart.agents?.defaults?.subagents?.maxConcurrent ?? 1,
   );
 
   const cronLogger = getChildLogger({
@@ -1975,10 +1978,13 @@ export async function startGatewayServer(
     }
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
-    setCommandLaneConcurrency("main", nextConfig.agent?.maxConcurrent ?? 1);
+    setCommandLaneConcurrency(
+      "main",
+      nextConfig.agents?.defaults?.maxConcurrent ?? 1,
+    );
     setCommandLaneConcurrency(
       "subagent",
-      nextConfig.agent?.subagents?.maxConcurrent ?? 1,
+      nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? 1,
     );
 
     if (plan.hotReasons.length > 0) {

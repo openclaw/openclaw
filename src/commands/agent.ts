@@ -181,13 +181,13 @@ export async function agentCommand(
   }
 
   const cfg = loadConfig();
-  const agentCfg = cfg.agent;
+  const agentCfg = cfg.agents?.defaults;
   const sessionAgentId = resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
 

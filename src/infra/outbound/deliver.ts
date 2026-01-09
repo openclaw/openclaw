@@ -82,7 +82,9 @@ function resolveMediaMaxBytes(
       : (cfg.imessage?.accounts?.[normalizedAccountId]?.mediaMaxMb ??
         cfg.imessage?.mediaMaxMb);
   if (providerLimit) return providerLimit * MB;
-  if (cfg.agent?.mediaMaxMb) return cfg.agent.mediaMaxMb * MB;
+  if (cfg.agents?.defaults?.mediaMaxMb) {
+    return cfg.agents.defaults.mediaMaxMb * MB;
+  }
   return undefined;
 }
 

@@ -857,7 +857,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           ).items;
           let thinkingLevel = entry?.thinkingLevel;
           if (!thinkingLevel) {
-            const configured = cfg.agent?.thinkingDefault;
+            const configured = cfg.agents?.defaults?.thinkingDefault;
             if (configured) {
               thinkingLevel = configured;
             } else {

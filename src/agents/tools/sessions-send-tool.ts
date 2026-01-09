@@ -54,7 +54,7 @@ export function createSessionsSendTool(opts?: {
       const cfg = loadConfig();
       const { mainKey, alias } = resolveMainSessionAlias(cfg);
       const visibility =
-        cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+        cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
       const requesterInternalKey =
         typeof opts?.agentSessionKey === "string" && opts.agentSessionKey.trim()
           ? resolveInternalSessionKey({
@@ -126,7 +126,7 @@ export function createSessionsSendTool(opts?: {
         mainKey,
       });
 
-      const routingA2A = cfg.routing?.agentToAgent;
+      const routingA2A = cfg.tools?.agentToAgent;
       const a2aEnabled = routingA2A?.enabled === true;
       const allowPatterns = Array.isArray(routingA2A?.allow)
         ? routingA2A.allow
@@ -156,7 +156,7 @@ export function createSessionsSendTool(opts?: {
             runId: crypto.randomUUID(),
             status: "forbidden",
             error:
-              "Agent-to-agent messaging is disabled. Set routing.agentToAgent.enabled=true to allow cross-agent sends.",
+              "Agent-to-agent messaging is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent sends.",
             sessionKey: displayKey,
           });
         }
@@ -165,7 +165,7 @@ export function createSessionsSendTool(opts?: {
             runId: crypto.randomUUID(),
             status: "forbidden",
             error:
-              "Agent-to-agent messaging denied by routing.agentToAgent.allow.",
+              "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
             sessionKey: displayKey,
           });
         }

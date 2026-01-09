@@ -13,7 +13,7 @@ vi.mock("../../config/config.js", async (importOriginal) => {
     loadConfig: () =>
       ({
         session: { scope: "per-sender", mainKey: "main" },
-        routing: { agentToAgent: { enabled: false } },
+        tools: { agentToAgent: { enabled: false } },
       }) as never,
   };
 });
@@ -25,7 +25,7 @@ describe("sessions_send gating", () => {
     callGatewayMock.mockReset();
   });
 
-  it("blocks cross-agent sends when routing.agentToAgent.enabled is false", async () => {
+  it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
     const tool = createSessionsSendTool({
       agentSessionKey: "agent:main:main",
       agentProvider: "whatsapp",

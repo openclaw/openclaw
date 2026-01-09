@@ -171,7 +171,7 @@ describe("createClawdbotCodingTools", () => {
       sessionKey: "agent:main:subagent:test",
       // Intentionally partial config; only fields used by pi-tools are provided.
       config: {
-        agent: {
+        tools: {
           subagents: {
             tools: {
               // Policy matching is case-insensitive
@@ -325,7 +325,7 @@ describe("createClawdbotCodingTools", () => {
 
   it("filters tools by agent tool policy even without sandbox", () => {
     const tools = createClawdbotCodingTools({
-      config: { agent: { tools: { deny: ["browser"] } } },
+      config: { tools: { deny: ["browser"] } },
     });
     // NOTE: bash is capitalized to bypass Anthropic OAuth blocking
     expect(tools.some((tool) => tool.name === "Bash")).toBe(true);

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { DEFAULT_IDENTITY_FILENAME } from "../agents/workspace.js";
@@ -114,6 +114,10 @@ type AgentBinding = {
   };
 };
 
+type AgentEntry = NonNullable<
+  NonNullable<ClawdbotConfig["agents"]>["list"]
+>[number];
+
 type AgentIdentity = {
   name?: string;
   emoji?: string;
@@ -140,15 +144,32 @@ function createQuietRuntime(runtime: RuntimeEnv): RuntimeEnv {
   return { ...runtime, log: () => {} };
 }
 
+function listAgentEntries(cfg: ClawdbotConfig): AgentEntry[] {
+  const list = cfg.agents?.list;
+  if (!Array.isArray(list)) return [];
+  return list.filter((entry): entry is AgentEntry =>
+    Boolean(entry && typeof entry === "object"),
+  );
+}
+
+function findAgentEntryIndex(list: AgentEntry[], agentId: string): number {
+  const id = normalizeAgentId(agentId);
+  return list.findIndex((entry) => normalizeAgentId(entry.id) === id);
+}
+
 function resolveAgentName(cfg: ClawdbotConfig, agentId: string) {
-  return cfg.routing?.agents?.[agentId]?.name?.trim() || undefined;
+  const entry = listAgentEntries(cfg).find(
+    (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
+  );
+  return entry?.name?.trim() || undefined;
 }
 
 function resolveAgentModel(cfg: ClawdbotConfig, agentId: string) {
-  if (agentId !== DEFAULT_AGENT_ID) {
-    return cfg.routing?.agents?.[agentId]?.model?.trim() || undefined;
-  }
-  const raw = cfg.agent?.model;
+  const entry = listAgentEntries(cfg).find(
+    (agent) => normalizeAgentId(agent.id) === normalizeAgentId(agentId),
+  );
+  if (entry?.model?.trim()) return entry.model.trim();
+  const raw = cfg.agents?.defaults?.model;
   if (typeof raw === "string") return raw;
   return raw?.primary?.trim() || undefined;
 }
@@ -183,37 +204,33 @@ function loadAgentIdentity(workspace: string): AgentIdentity | null {
 }
 
 export function buildAgentSummaries(cfg: ClawdbotConfig): AgentSummary[] {
-  const defaultAgentId = normalizeAgentId(
-    cfg.routing?.defaultAgentId ?? DEFAULT_AGENT_ID,
-  );
-  const agentIds = new Set<string>([
-    DEFAULT_AGENT_ID,
-    defaultAgentId,
-    ...Object.keys(cfg.routing?.agents ?? {}),
-  ]);
-
+  const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(cfg));
+  const configuredAgents = listAgentEntries(cfg);
+  const orderedIds =
+    configuredAgents.length > 0
+      ? configuredAgents.map((agent) => normalizeAgentId(agent.id))
+      : [defaultAgentId];
   const bindingCounts = new Map<string, number>();
-  for (const binding of cfg.routing?.bindings ?? []) {
+  for (const binding of cfg.bindings ?? []) {
     const agentId = normalizeAgentId(binding.agentId);
     bindingCounts.set(agentId, (bindingCounts.get(agentId) ?? 0) + 1);
   }
 
-  const ordered = [
-    DEFAULT_AGENT_ID,
-    ...[...agentIds]
-      .filter((id) => id !== DEFAULT_AGENT_ID)
-      .sort((a, b) => a.localeCompare(b)),
-  ];
+  const ordered = orderedIds.filter(
+    (id, index) => orderedIds.indexOf(id) === index,
+  );
 
   return ordered.map((id) => {
     const workspace = resolveAgentWorkspaceDir(cfg, id);
     const identity = loadAgentIdentity(workspace);
-    const fallbackIdentity = id === defaultAgentId ? cfg.identity : undefined;
-    const identityName = identity?.name ?? fallbackIdentity?.name?.trim();
-    const identityEmoji = identity?.emoji ?? fallbackIdentity?.emoji?.trim();
+    const configIdentity = configuredAgents.find(
+      (agent) => normalizeAgentId(agent.id) === id,
+    )?.identity;
+    const identityName = identity?.name ?? configIdentity?.name?.trim();
+    const identityEmoji = identity?.emoji ?? configIdentity?.emoji?.trim();
     const identitySource = identity
       ? "identity"
-      : fallbackIdentity && (identityName || identityEmoji)
+      : configIdentity && (identityName || identityEmoji)
         ? "config"
         : undefined;
     return {
@@ -242,22 +259,34 @@ export function applyAgentConfig(
   },
 ): ClawdbotConfig {
   const agentId = normalizeAgentId(params.agentId);
-  const existing = cfg.routing?.agents?.[agentId] ?? {};
   const name = params.name?.trim();
+  const list = listAgentEntries(cfg);
+  const index = findAgentEntryIndex(list, agentId);
+  const base = index >= 0 ? list[index] : { id: agentId };
+  const nextEntry: AgentEntry = {
+    ...base,
+    ...(name ? { name } : {}),
+    ...(params.workspace ? { workspace: params.workspace } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.model ? { model: params.model } : {}),
+  };
+  const nextList = [...list];
+  if (index >= 0) {
+    nextList[index] = nextEntry;
+  } else {
+    if (
+      nextList.length === 0 &&
+      agentId !== normalizeAgentId(resolveDefaultAgentId(cfg))
+    ) {
+      nextList.push({ id: resolveDefaultAgentId(cfg) });
+    }
+    nextList.push(nextEntry);
+  }
   return {
     ...cfg,
-    routing: {
-      ...cfg.routing,
-      agents: {
-        ...cfg.routing?.agents,
-        [agentId]: {
-          ...existing,
-          ...(name ? { name } : {}),
-          ...(params.workspace ? { workspace: params.workspace } : {}),
-          ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-          ...(params.model ? { model: params.model } : {}),
-        },
-      },
+    agents: {
+      ...cfg.agents,
+      list: nextList,
     },
   };
 }
@@ -283,7 +312,7 @@ export function applyAgentBindings(
   skipped: AgentBinding[];
   conflicts: Array<{ binding: AgentBinding; existingAgentId: string }>;
 } {
-  const existing = cfg.routing?.bindings ?? [];
+  const existing = cfg.bindings ?? [];
   const existingMatchMap = new Map<string, string>();
   for (const binding of existing) {
     const key = bindingMatchKey(binding.match);
@@ -320,10 +349,7 @@ export function applyAgentBindings(
   return {
     config: {
       ...cfg,
-      routing: {
-        ...cfg.routing,
-        bindings: [...existing, ...added],
-      },
+      bindings: [...existing, ...added],
     },
     added,
     skipped,
@@ -340,39 +366,41 @@ export function pruneAgentConfig(
   removedAllow: number;
 } {
   const id = normalizeAgentId(agentId);
-  const agents = { ...cfg.routing?.agents };
-  delete agents[id];
-  const nextAgents = Object.keys(agents).length > 0 ? agents : undefined;
+  const agents = listAgentEntries(cfg);
+  const nextAgentsList = agents.filter(
+    (entry) => normalizeAgentId(entry.id) !== id,
+  );
+  const nextAgents = nextAgentsList.length > 0 ? nextAgentsList : undefined;
 
-  const bindings = cfg.routing?.bindings ?? [];
+  const bindings = cfg.bindings ?? [];
   const filteredBindings = bindings.filter(
     (binding) => normalizeAgentId(binding.agentId) !== id,
   );
 
-  const allow = cfg.routing?.agentToAgent?.allow ?? [];
+  const allow = cfg.tools?.agentToAgent?.allow ?? [];
   const filteredAllow = allow.filter((entry) => entry !== id);
 
-  const nextRouting = {
-    ...cfg.routing,
-    ...(nextAgents ? { agents: nextAgents } : {}),
-    ...(nextAgents ? {} : { agents: undefined }),
-    bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
-    agentToAgent: cfg.routing?.agentToAgent
-      ? {
-          ...cfg.routing.agentToAgent,
+  const nextAgentsConfig = cfg.agents
+    ? { ...cfg.agents, list: nextAgents }
+    : nextAgents
+      ? { list: nextAgents }
+      : undefined;
+  const nextTools = cfg.tools?.agentToAgent
+    ? {
+        ...cfg.tools,
+        agentToAgent: {
+          ...cfg.tools.agentToAgent,
           allow: filteredAllow.length > 0 ? filteredAllow : undefined,
-        }
-      : undefined,
-    defaultAgentId:
-      normalizeAgentId(cfg.routing?.defaultAgentId ?? DEFAULT_AGENT_ID) === id
-        ? DEFAULT_AGENT_ID
-        : cfg.routing?.defaultAgentId,
-  };
+        },
+      }
+    : cfg.tools;
 
   return {
     config: {
       ...cfg,
-      routing: nextRouting,
+      agents: nextAgentsConfig,
+      bindings: filteredBindings.length > 0 ? filteredBindings : undefined,
+      tools: nextTools,
     },
     removedBindings: bindings.length - filteredBindings.length,
     removedAllow: allow.length - filteredAllow.length,
@@ -632,7 +660,7 @@ export async function agentsListCommand(
 
   const summaries = buildAgentSummaries(cfg);
   const bindingMap = new Map<string, AgentBinding[]>();
-  for (const binding of cfg.routing?.bindings ?? []) {
+  for (const binding of cfg.bindings ?? []) {
     const agentId = normalizeAgentId(binding.agentId);
     const list = bindingMap.get(agentId) ?? [];
     list.push(binding as AgentBinding);
@@ -818,7 +846,7 @@ export async function agentsAddCommand(
     if (agentId !== nameInput) {
       runtime.log(`Normalized agent id to "${agentId}".`);
     }
-    if (cfg.routing?.agents?.[agentId]) {
+    if (findAgentEntryIndex(listAgentEntries(cfg), agentId) >= 0) {
       runtime.error(`Agent "${agentId}" already exists.`);
       runtime.exit(1);
       return;
@@ -856,7 +884,9 @@ export async function agentsAddCommand(
     if (!opts.json) runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
     const quietRuntime = opts.json ? createQuietRuntime(runtime) : runtime;
     await ensureWorkspaceAndSessions(workspaceDir, quietRuntime, {
-      skipBootstrap: Boolean(bindingResult.config.agent?.skipBootstrap),
+      skipBootstrap: Boolean(
+        bindingResult.config.agents?.defaults?.skipBootstrap,
+      ),
       agentId,
     });
 
@@ -920,7 +950,9 @@ export async function agentsAddCommand(
       await prompter.note(`Normalized id to "${agentId}".`, "Agent id");
     }
 
-    const existingAgent = cfg.routing?.agents?.[agentId];
+    const existingAgent = listAgentEntries(cfg).find(
+      (agent) => normalizeAgentId(agent.id) === agentId,
+    );
     if (existingAgent) {
       const shouldUpdate = await prompter.confirm({
         message: `Agent "${agentId}" already exists. Update it?`,
@@ -1005,8 +1037,7 @@ export async function agentsAddCommand(
 
     if (selection.length > 0) {
       const wantsBindings = await prompter.confirm({
-        message:
-          "Route selected providers to this agent now? (routing.bindings)",
+        message: "Route selected providers to this agent now? (bindings)",
         initialValue: false,
       });
       if (wantsBindings) {
@@ -1033,7 +1064,7 @@ export async function agentsAddCommand(
       } else {
         await prompter.note(
           [
-            "Routing unchanged. Add routing.bindings when you're ready.",
+            "Routing unchanged. Add bindings when you're ready.",
             "Docs: https://docs.clawd.bot/concepts/multi-agent",
           ].join("\n"),
           "Routing",
@@ -1044,7 +1075,7 @@ export async function agentsAddCommand(
     await writeConfigFile(nextConfig);
     runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
     await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-      skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+      skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
       agentId,
     });
 
@@ -1091,7 +1122,7 @@ export async function agentsDeleteCommand(
     return;
   }
 
-  if (!cfg.routing?.agents?.[agentId]) {
+  if (findAgentEntryIndex(listAgentEntries(cfg), agentId) < 0) {
     runtime.error(`Agent "${agentId}" not found.`);
     runtime.exit(1);
     return;

@@ -5,6 +5,8 @@ import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
 import { Bot, InputFile, webhookCallback } from "grammy";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAckReaction } from "../agents/identity.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
   chunkMarkdownText,
@@ -225,7 +227,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const nativeEnabled = cfg.commands?.native === true;
   const nativeDisabledExplicit = cfg.commands?.native === false;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
@@ -260,7 +261,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     messageThreadId?: number;
     sessionKey?: string;
   }) => {
-    const agentId = params.agentId ?? cfg.agent?.id ?? "main";
+    const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
     const sessionKey =
       params.sessionKey ??
       `agent:${agentId}:telegram:group:${buildTelegramGroupPeerId(params.chatId, params.messageThreadId)}`;
@@ -500,6 +501,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
 
     // ACK reactions
+    const ackReaction = resolveAckReaction(cfg, route.agentId);
     const shouldAckReaction = () => {
       if (!ackReaction) return false;
       if (ackReactionScope === "all") return true;

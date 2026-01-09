@@ -328,12 +328,8 @@ describe("gateway server sessions", () => {
     testState.sessionConfig = {
       store: path.join(dir, "{agentId}", "sessions.json"),
     };
-    testState.routingConfig = {
-      defaultAgentId: "home",
-      agents: {
-        home: {},
-        work: {},
-      },
+    testState.agentsConfig = {
+      list: [{ id: "home", default: true }, { id: "work" }],
     };
     const homeDir = path.join(dir, "home");
     const workDir = path.join(dir, "work");

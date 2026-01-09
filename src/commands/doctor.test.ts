@@ -344,13 +344,15 @@ describe("doctor", () => {
         raw: "{}",
         parsed: {
           gateway: { mode: "local", bind: "loopback" },
-          agent: {
-            workspace: "/Users/steipete/clawd",
-            sandbox: {
-              workspaceRoot: "/Users/steipete/clawd/sandboxes",
-              docker: {
-                image: "clawdbot-sandbox",
-                containerPrefix: "clawdbot-sbx",
+          agents: {
+            defaults: {
+              workspace: "/Users/steipete/clawd",
+              sandbox: {
+                workspaceRoot: "/Users/steipete/clawd/sandboxes",
+                docker: {
+                  image: "clawdbot-sandbox",
+                  containerPrefix: "clawdbot-sbx",
+                },
               },
             },
           },
@@ -358,13 +360,15 @@ describe("doctor", () => {
         valid: true,
         config: {
           gateway: { mode: "local", bind: "loopback" },
-          agent: {
-            workspace: "/Users/steipete/clawd",
-            sandbox: {
-              workspaceRoot: "/Users/steipete/clawd/sandboxes",
-              docker: {
-                image: "clawdbot-sandbox",
-                containerPrefix: "clawdbot-sbx",
+          agents: {
+            defaults: {
+              workspace: "/Users/steipete/clawd",
+              sandbox: {
+                workspaceRoot: "/Users/steipete/clawd/sandboxes",
+                docker: {
+                  image: "clawdbot-sandbox",
+                  containerPrefix: "clawdbot-sbx",
+                },
               },
             },
           },
@@ -411,13 +415,15 @@ describe("doctor", () => {
     migrateLegacyConfig.mockReturnValueOnce({
       config: {
         gateway: { mode: "local", bind: "loopback" },
-        agent: {
-          workspace: "/Users/steipete/clawd",
-          sandbox: {
-            workspaceRoot: "/Users/steipete/clawd/sandboxes",
-            docker: {
-              image: "clawdis-sandbox",
-              containerPrefix: "clawdis-sbx",
+        agents: {
+          defaults: {
+            workspace: "/Users/steipete/clawd",
+            sandbox: {
+              workspaceRoot: "/Users/steipete/clawd/sandboxes",
+              docker: {
+                image: "clawdis-sandbox",
+                containerPrefix: "clawdis-sbx",
+              },
             },
           },
         },
@@ -438,11 +444,12 @@ describe("doctor", () => {
       string,
       unknown
     >;
-    const agent = written.agent as Record<string, unknown>;
-    const sandbox = agent.sandbox as Record<string, unknown>;
+    const agents = written.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const sandbox = defaults.sandbox as Record<string, unknown>;
     const docker = sandbox.docker as Record<string, unknown>;
 
-    expect(agent.workspace).toBe("/Users/steipete/clawd");
+    expect(defaults.workspace).toBe("/Users/steipete/clawd");
     expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawd/sandboxes");
     expect(docker.image).toBe("clawdbot-sandbox");
     expect(docker.containerPrefix).toBe("clawdbot-sbx");
@@ -456,15 +463,16 @@ describe("doctor", () => {
       parsed: {},
       valid: true,
       config: {
-        agent: {
-          sandbox: {
-            mode: "all",
-            scope: "shared",
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "shared",
+            },
           },
-        },
-        routing: {
-          agents: {
-            work: {
+          list: [
+            {
+              id: "work",
               workspace: "~/clawd-work",
               sandbox: {
                 mode: "all",
@@ -474,7 +482,7 @@ describe("doctor", () => {
                 },
               },
             },
-          },
+          ],
         },
       },
       issues: [],
@@ -497,7 +505,7 @@ describe("doctor", () => {
         ([message, title]) =>
           title === "Sandbox" &&
           typeof message === "string" &&
-          message.includes("routing.agents.work.sandbox") &&
+          message.includes('agents.list (id "work") sandbox docker') &&
           message.includes('scope resolves to "shared"'),
       ),
     ).toBe(true);
@@ -511,7 +519,7 @@ describe("doctor", () => {
       parsed: {},
       valid: true,
       config: {
-        agent: { workspace: "/Users/steipete/clawd" },
+        agents: { defaults: { workspace: "/Users/steipete/clawd" } },
       },
       issues: [],
       legacyIssues: [],
@@ -556,22 +564,26 @@ describe("doctor", () => {
       exists: true,
       raw: "{}",
       parsed: {
-        agent: {
-          sandbox: {
-            mode: "non-main",
-            docker: {
-              image: "clawdbot-sandbox-common:bookworm-slim",
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "non-main",
+              docker: {
+                image: "clawdbot-sandbox-common:bookworm-slim",
+              },
             },
           },
         },
       },
       valid: true,
       config: {
-        agent: {
-          sandbox: {
-            mode: "non-main",
-            docker: {
-              image: "clawdbot-sandbox-common:bookworm-slim",
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "non-main",
+              docker: {
+                image: "clawdbot-sandbox-common:bookworm-slim",
+              },
             },
           },
         },
@@ -614,8 +626,9 @@ describe("doctor", () => {
       string,
       unknown
     >;
-    const agent = written.agent as Record<string, unknown>;
-    const sandbox = agent.sandbox as Record<string, unknown>;
+    const agents = written.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const sandbox = defaults.sandbox as Record<string, unknown>;
     const docker = sandbox.docker as Record<string, unknown>;
 
     expect(docker.image).toBe("clawdis-sandbox-common:bookworm-slim");

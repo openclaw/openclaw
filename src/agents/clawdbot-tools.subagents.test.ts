@@ -314,14 +314,15 @@ describe("subagents", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             subagents: {
               allowAgents: ["beta"],
             },
           },
-        },
+        ],
       },
     };
 
@@ -365,14 +366,15 @@ describe("subagents", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             subagents: {
               allowAgents: ["*"],
             },
           },
-        },
+        ],
       },
     };
 
@@ -416,14 +418,15 @@ describe("subagents", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             subagents: {
               allowAgents: ["Research"],
             },
           },
-        },
+        ],
       },
     };
 
@@ -467,14 +470,15 @@ describe("subagents", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             subagents: {
               allowAgents: ["alpha"],
             },
           },
-        },
+        ],
       },
     };
 

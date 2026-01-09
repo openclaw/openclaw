@@ -24,7 +24,7 @@ let listenerStarted = false;
 
 function resolveArchiveAfterMs() {
   const cfg = loadConfig();
-  const minutes = cfg.agent?.subagents?.archiveAfterMinutes ?? 60;
+  const minutes = cfg.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
   if (!Number.isFinite(minutes) || minutes <= 0) return undefined;
   return Math.max(1, Math.floor(minutes)) * 60_000;
 }

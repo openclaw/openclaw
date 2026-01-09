@@ -14,7 +14,6 @@ import {
 } from "./agent-dirs.js";
 import {
   applyContextPruningDefaults,
-  applyIdentityDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
@@ -165,9 +164,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         applyContextPruningDefaults(
           applySessionDefaults(
             applyLoggingDefaults(
-              applyMessageDefaults(
-                applyIdentityDefaults(validated.data as ClawdbotConfig),
-              ),
+              applyMessageDefaults(validated.data as ClawdbotConfig),
             ),
           ),
         ),

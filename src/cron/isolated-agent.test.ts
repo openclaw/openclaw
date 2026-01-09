@@ -63,9 +63,11 @@ function makeCfg(
   overrides: Partial<ClawdbotConfig> = {},
 ): ClawdbotConfig {
   const base: ClawdbotConfig = {
-    agent: {
-      model: "anthropic/claude-opus-4-5",
-      workspace: path.join(home, "clawd"),
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "clawd"),
+      },
     },
     session: { store: storePath, mainKey: "main" },
   } as ClawdbotConfig;
@@ -738,7 +740,13 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       const cfg = makeCfg(home, storePath);
-      cfg.agent = { ...cfg.agent, heartbeat: { ackMaxChars: 0 } };
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      };
 
       const res = await runCronIsolatedAgentTurn({
         cfg,

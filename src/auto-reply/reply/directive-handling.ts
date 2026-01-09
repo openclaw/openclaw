@@ -23,6 +23,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -363,16 +364,16 @@ export async function handleDirectiveOnly(params: {
     currentElevatedLevel,
   } = params;
   const runtimeIsSandboxed = (() => {
-    const sandboxMode = params.cfg.agent?.sandbox?.mode ?? "off";
-    if (sandboxMode === "off") return false;
     const sessionKey = params.sessionKey?.trim();
     if (!sessionKey) return false;
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    const sandboxCfg = resolveSandboxConfigForAgent(params.cfg, agentId);
+    if (sandboxCfg.mode === "off") return false;
     const mainKey = resolveAgentMainSessionKey({
       cfg: params.cfg,
       agentId,
     });
-    if (sandboxMode === "all") return true;
+    if (sandboxCfg.mode === "all") return true;
     return sessionKey !== mainKey;
   })();
   const shouldHintDirectRuntime =
@@ -394,7 +395,9 @@ export async function handleDirectiveOnly(params: {
           provider: string;
           id: string;
         }> = [];
-        for (const raw of Object.keys(params.cfg.agent?.models ?? {})) {
+        for (const raw of Object.keys(
+          params.cfg.agents?.defaults?.models ?? {},
+        )) {
           const resolved = resolveModelRefFromString({
             raw: String(raw),
             defaultProvider,
@@ -851,7 +854,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg: ClawdbotConfig["agent"] | undefined;
+  agentCfg: NonNullable<ClawdbotConfig["agents"]>["defaults"] | undefined;
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
   const {
     directives,
@@ -1007,13 +1010,16 @@ export function resolveDefaultModel(params: {
     agentModelOverride && agentModelOverride.length > 0
       ? {
           ...params.cfg,
-          agent: {
-            ...params.cfg.agent,
-            model: {
-              ...(typeof params.cfg.agent?.model === "object"
-                ? params.cfg.agent.model
-                : undefined),
-              primary: agentModelOverride,
+          agents: {
+            ...params.cfg.agents,
+            defaults: {
+              ...params.cfg.agents?.defaults,
+              model: {
+                ...(typeof params.cfg.agents?.defaults?.model === "object"
+                  ? params.cfg.agents.defaults.model
+                  : undefined),
+                primary: agentModelOverride,
+              },
             },
           },
         }

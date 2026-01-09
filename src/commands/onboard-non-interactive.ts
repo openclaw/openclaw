@@ -96,14 +96,21 @@ export async function runNonInteractiveOnboarding(
   }
 
   const workspaceDir = resolveUserPath(
-    (opts.workspace ?? baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE).trim(),
+    (
+      opts.workspace ??
+      baseConfig.agents?.defaults?.workspace ??
+      DEFAULT_WORKSPACE
+    ).trim(),
   );
 
   let nextConfig: ClawdbotConfig = {
     ...baseConfig,
-    agent: {
-      ...baseConfig.agent,
-      workspace: workspaceDir,
+    agents: {
+      ...baseConfig.agents,
+      defaults: {
+        ...baseConfig.agents?.defaults,
+        workspace: workspaceDir,
+      },
     },
     gateway: {
       ...baseConfig.gateway,
@@ -311,7 +318,7 @@ export async function runNonInteractiveOnboarding(
   await writeConfigFile(nextConfig);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;

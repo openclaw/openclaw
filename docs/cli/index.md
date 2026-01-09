@@ -488,10 +488,10 @@ Options:
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 
 ### `models set <model>`
-Set `agent.model.primary`.
+Set `agents.defaults.model.primary`.
 
 ### `models set-image <model>`
-Set `agent.imageModel.primary`.
+Set `agents.defaults.imageModel.primary`.
 
 ### `models aliases list|add|remove`
 Options:

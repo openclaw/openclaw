@@ -17,7 +17,7 @@ read_when:
 ## Resolution order
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`agent.thinkingDefault` in config).
+3. Global default (`agents.defaults.thinkingDefault` in config).
 4. Fallback: low for reasoning-capable models; off otherwise.
 
 ## Setting a session default

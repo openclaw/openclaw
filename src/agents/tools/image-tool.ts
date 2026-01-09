@@ -23,7 +23,7 @@ import type { AnyAgentTool } from "./common.js";
 const DEFAULT_PROMPT = "Describe the image.";
 
 function ensureImageToolConfigured(cfg?: ClawdbotConfig): boolean {
-  const imageModel = cfg?.agent?.imageModel as
+  const imageModel = cfg?.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | string
     | undefined;
@@ -45,7 +45,7 @@ function pickMaxBytes(
   ) {
     return Math.floor(maxBytesMb * 1024 * 1024);
   }
-  const configured = cfg?.agent?.mediaMaxMb;
+  const configured = cfg?.agents?.defaults?.mediaMaxMb;
   if (
     typeof configured === "number" &&
     Number.isFinite(configured) &&
@@ -141,7 +141,7 @@ export function createImageTool(options?: {
     label: "Image",
     name: "image",
     description:
-      "Analyze an image with the configured image model (agent.imageModel). Provide a prompt and image path or URL.",
+      "Analyze an image with the configured image model (agents.defaults.imageModel). Provide a prompt and image path or URL.",
     parameters: Type.Object({
       prompt: Type.Optional(Type.String()),
       image: Type.String(),

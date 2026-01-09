@@ -875,7 +875,7 @@ describe("web auto-reply", () => {
 
       for (const fmt of formats) {
         // Force a small cap to ensure compression is exercised for every format.
-        setLoadConfigMock(() => ({ agent: { mediaMaxMb: 1 } }));
+        setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
         const sendMedia = vi.fn();
         const reply = vi.fn().mockResolvedValue(undefined);
         const sendComposing = vi.fn();
@@ -940,7 +940,7 @@ describe("web auto-reply", () => {
   );
 
   it("honors mediaMaxMb from config", async () => {
-    setLoadConfigMock(() => ({ agent: { mediaMaxMb: 1 } }));
+    setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
     const sendComposing = vi.fn();
@@ -1182,21 +1182,26 @@ describe("web auto-reply", () => {
         allowFrom: ["*"],
         groups: { "*": { requireMention: true } },
       },
-      routing: {
+      messages: {
         groupChat: { mentionPatterns: ["@global"] },
-        agents: {
-          work: { mentionPatterns: ["@workbot"] },
-        },
-        bindings: [
+      },
+      agents: {
+        list: [
           {
-            agentId: "work",
-            match: {
-              provider: "whatsapp",
-              peer: { kind: "group", id: "123@g.us" },
-            },
+            id: "work",
+            groupChat: { mentionPatterns: ["@workbot"] },
           },
         ],
       },
+      bindings: [
+        {
+          agentId: "work",
+          match: {
+            provider: "whatsapp",
+            peer: { kind: "group", id: "123@g.us" },
+          },
+        },
+      ],
     }));
 
     let capturedOnMessage:
@@ -1260,7 +1265,7 @@ describe("web auto-reply", () => {
         allowFrom: ["*"],
         groups: { "*": { requireMention: false } },
       },
-      routing: { groupChat: { mentionPatterns: ["@clawd"] } },
+      messages: { groupChat: { mentionPatterns: ["@clawd"] } },
     }));
 
     let capturedOnMessage:
@@ -1309,7 +1314,7 @@ describe("web auto-reply", () => {
         allowFrom: ["*"],
         groups: { "999@g.us": { requireMention: false } },
       },
-      routing: { groupChat: { mentionPatterns: ["@clawd"] } },
+      messages: { groupChat: { mentionPatterns: ["@clawd"] } },
     }));
 
     let capturedOnMessage:
@@ -1363,7 +1368,7 @@ describe("web auto-reply", () => {
           "123@g.us": { requireMention: false },
         },
       },
-      routing: { groupChat: { mentionPatterns: ["@clawd"] } },
+      messages: { groupChat: { mentionPatterns: ["@clawd"] } },
     }));
 
     let capturedOnMessage:
@@ -1419,7 +1424,7 @@ describe("web auto-reply", () => {
     });
 
     setLoadConfigMock(() => ({
-      routing: {
+      messages: {
         groupChat: { mentionPatterns: ["@clawd"] },
       },
       session: { store: storePath },
@@ -1498,7 +1503,7 @@ describe("web auto-reply", () => {
         allowFrom: ["+999"],
         groups: { "*": { requireMention: true } },
       },
-      routing: {
+      messages: {
         groupChat: {
           mentionPatterns: ["\\bclawd\\b"],
         },

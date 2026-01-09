@@ -13,16 +13,12 @@ and the agent should rely on them directly.
 
 ## Disabling tools
 
-You can globally allow/deny tools via `agent.tools` in `clawdbot.json`
+You can globally allow/deny tools via `tools.allow` / `tools.deny` in `clawdbot.json`
 (deny wins). This prevents disallowed tools from being sent to providers.
 
 ```json5
 {
-  agent: {
-    tools: {
-      deny: ["browser"]
-    }
-  }
+  tools: { deny: ["browser"] }
 }
 ```
 
@@ -43,7 +39,7 @@ Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
 - If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
-- `elevated` is gated by `agent.elevated` (global sender allowlist) and runs on the host.
+- `elevated` is gated by `tools.elevated` (global sender allowlist) and runs on the host.
 - `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
 
 ### `process`
@@ -145,7 +141,7 @@ Core parameters:
 - `maxBytesMb` (optional size cap)
 
 Notes:
-- Only available when `agent.imageModel` is configured (primary or fallbacks).
+- Only available when `agents.defaults.imageModel` is configured (primary or fallbacks).
 - Uses the image model directly (independent of the main chat model).
 
 ### `message`
@@ -219,7 +215,7 @@ Notes:
 List agent ids that the current session may target with `sessions_spawn`.
 
 Notes:
-- Result is restricted to per-agent allowlists (`routing.agents.<agentId>.subagents.allowAgents`).
+- Result is restricted to per-agent allowlists (`agents.list[].subagents.allowAgents`).
 - When `["*"]` is configured, the tool includes all configured agents and marks `allowAny: true`.
 
 ## Parameters (common)

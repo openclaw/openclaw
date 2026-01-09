@@ -85,9 +85,11 @@ describe("block streaming", () => {
           onBlockReply,
         },
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
           },
           whatsapp: { allowFrom: ["*"] },
           session: { store: path.join(home, "sessions.json") },
@@ -140,9 +142,11 @@ describe("block streaming", () => {
           onBlockReply,
         },
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
           },
           telegram: { allowFrom: ["*"] },
           session: { store: path.join(home, "sessions.json") },
@@ -185,9 +189,11 @@ describe("block streaming", () => {
           onBlockReply,
         },
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
           },
           whatsapp: { allowFrom: ["*"] },
           session: { store: path.join(home, "sessions.json") },
@@ -239,9 +245,11 @@ describe("block streaming", () => {
           blockReplyTimeoutMs: 10,
         },
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: path.join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
           },
           telegram: { allowFrom: ["*"] },
           session: { store: path.join(home, "sessions.json") },

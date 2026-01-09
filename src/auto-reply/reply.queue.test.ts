@@ -50,13 +50,15 @@ async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
 
 function makeCfg(home: string, queue?: Record<string, unknown>) {
   return {
-    agent: {
-      model: "anthropic/claude-opus-4-5",
-      workspace: path.join(home, "clawd"),
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "clawd"),
+      },
     },
     whatsapp: { allowFrom: ["*"] },
     session: { store: path.join(home, "sessions.json") },
-    routing: queue ? { queue } : undefined,
+    messages: queue ? { queue } : undefined,
   };
 }
 

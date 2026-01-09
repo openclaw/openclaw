@@ -6,6 +6,7 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -131,9 +132,7 @@ export async function runTui(opts: TuiOptions) {
   let sessionScope: SessionScope = (config.session?.scope ??
     "per-sender") as SessionScope;
   let sessionMainKey = (config.session?.mainKey ?? "main").trim() || "main";
-  let agentDefaultId = normalizeAgentId(
-    config.routing?.defaultAgentId ?? "main",
-  );
+  let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();

@@ -132,19 +132,19 @@ Parameters:
 - `cleanup?` (`delete|keep`, default `keep`)
 
 Allowlist:
-- `routing.agents.<agentId>.subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
+- `agents.list[].subagents.allowAgents`: list of agent ids allowed via `agentId` (`["*"]` to allow any). Default: only the requester agent.
 
 Discovery:
 - Use `agents_list` to discover which agent ids are allowed for `sessions_spawn`.
 
 Behavior:
 - Starts a new `agent:<agentId>:subagent:<uuid>` session with `deliver: false`.
-- Sub-agents default to the full tool set **minus session tools** (configurable via `agent.subagents.tools`).
+- Sub-agents default to the full tool set **minus session tools** (configurable via `tools.subagents.tools`).
 - Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
 - After completion, Clawdbot runs a sub-agent **announce step** and posts the result to the requester chat provider.
 - Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
-- Sub-agent sessions are auto-archived after `agent.subagents.archiveAfterMinutes` (default: 60).
+- Sub-agent sessions are auto-archived after `agents.defaults.subagents.archiveAfterMinutes` (default: 60).
 - Announce replies include a stats line (runtime, tokens, sessionKey/sessionId, transcript path, and optional cost).
 
 ## Sandbox Session Visibility
@@ -155,10 +155,12 @@ Config:
 
 ```json5
 {
-  agent: {
-    sandbox: {
-      // default: "spawned"
-      sessionToolsVisibility: "spawned" // or "all"
+  agents: {
+    defaults: {
+      sandbox: {
+        // default: "spawned"
+        sessionToolsVisibility: "spawned" // or "all"
+      }
     }
   }
 }

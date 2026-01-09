@@ -130,7 +130,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   entry?: SessionEntry;
 }): OutboundTarget {
   const { cfg, entry } = params;
-  const rawTarget = cfg.agent?.heartbeat?.target;
+  const rawTarget = cfg.agents?.defaults?.heartbeat?.target;
   const target: HeartbeatTarget =
     rawTarget === "whatsapp" ||
     rawTarget === "telegram" ||
@@ -148,9 +148,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   const explicitTo =
-    typeof cfg.agent?.heartbeat?.to === "string" &&
-    cfg.agent.heartbeat.to.trim()
-      ? cfg.agent.heartbeat.to.trim()
+    typeof cfg.agents?.defaults?.heartbeat?.to === "string" &&
+    cfg.agents.defaults.heartbeat.to.trim()
+      ? cfg.agents.defaults.heartbeat.to.trim()
       : undefined;
 
   const lastProvider =

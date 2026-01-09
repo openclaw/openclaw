@@ -191,7 +191,7 @@ export function buildProgram() {
     .description("Initialize ~/.clawdbot/clawdbot.json and the agent workspace")
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/clawd; stored as agent.workspace)",
+      "Agent workspace directory (default: ~/clawd; stored as agents.defaults.workspace)",
     )
     .option("--wizard", "Run the interactive onboarding wizard", false)
     .option("--non-interactive", "Run the wizard without prompts", false)
@@ -1163,7 +1163,7 @@ Examples:
   clawdbot sessions --json          # machine-readable output
   clawdbot sessions --store ./tmp/sessions.json
 
-Shows token usage per session when the agent reports it; set agent.contextTokens to see % of your model window.`,
+Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to see % of your model window.`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));

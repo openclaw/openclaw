@@ -1081,7 +1081,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {

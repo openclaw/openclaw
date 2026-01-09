@@ -53,7 +53,9 @@ export function resolveHeartbeatIntervalMs(
   overrideEvery?: string,
 ) {
   const raw =
-    overrideEvery ?? cfg.agent?.heartbeat?.every ?? DEFAULT_HEARTBEAT_EVERY;
+    overrideEvery ??
+    cfg.agents?.defaults?.heartbeat?.every ??
+    DEFAULT_HEARTBEAT_EVERY;
   if (!raw) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
@@ -68,13 +70,14 @@ export function resolveHeartbeatIntervalMs(
 }
 
 export function resolveHeartbeatPrompt(cfg: ClawdbotConfig) {
-  return resolveHeartbeatPromptText(cfg.agent?.heartbeat?.prompt);
+  return resolveHeartbeatPromptText(cfg.agents?.defaults?.heartbeat?.prompt);
 }
 
 function resolveHeartbeatAckMaxChars(cfg: ClawdbotConfig) {
   return Math.max(
     0,
-    cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 }
 

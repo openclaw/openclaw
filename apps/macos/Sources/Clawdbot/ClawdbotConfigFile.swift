@@ -81,22 +81,33 @@ enum ClawdbotConfigFile {
 
     static func agentWorkspace() -> String? {
         let root = self.loadDict()
-        let agent = root["agent"] as? [String: Any]
-        return agent?["workspace"] as? String
+        let agents = root["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        return defaults?["workspace"] as? String
     }
 
     static func setAgentWorkspace(_ workspace: String?) {
         var root = self.loadDict()
-        var agent = root["agent"] as? [String: Any] ?? [:]
+        var agents = root["agents"] as? [String: Any] ?? [:]
+        var defaults = agents["defaults"] as? [String: Any] ?? [:]
         let trimmed = workspace?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
-            agent.removeValue(forKey: "workspace")
+            defaults.removeValue(forKey: "workspace")
         } else {
-            agent["workspace"] = trimmed
+            defaults["workspace"] = trimmed
         }
-        root["agent"] = agent
+        if defaults.isEmpty {
+            agents.removeValue(forKey: "defaults")
+        } else {
+            agents["defaults"] = defaults
+        }
+        if agents.isEmpty {
+            root.removeValue(forKey: "agents")
+        } else {
+            root["agents"] = agents
+        }
         self.saveDict(root)
-        self.logger.debug("agent workspace updated set=\(!trimmed.isEmpty)")
+        self.logger.debug("agents.defaults.workspace updated set=\(!trimmed.isEmpty)")
     }
 
     static func gatewayPassword() -> String? {

@@ -925,7 +925,10 @@ export function resolveAuthProfileOrder(params: {
 
     // Still put preferredProfile first if specified
     if (preferredProfile && ordered.includes(preferredProfile)) {
-      return [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)];
+      return [
+        preferredProfile,
+        ...ordered.filter((e) => e !== preferredProfile),
+      ];
     }
     return ordered;
   }

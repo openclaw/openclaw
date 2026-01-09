@@ -11,10 +11,8 @@ describe("resolveAgentConfig", () => {
 
   it("should return undefined when agent id does not exist", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          main: { workspace: "~/clawd" },
-        },
+      agents: {
+        list: [{ id: "main", workspace: "~/clawd" }],
       },
     };
     const result = resolveAgentConfig(cfg, "nonexistent");
@@ -23,15 +21,16 @@ describe("resolveAgentConfig", () => {
 
   it("should return basic agent config", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             name: "Main Agent",
             workspace: "~/clawd",
             agentDir: "~/.clawdbot/agents/main",
             model: "anthropic/claude-opus-4",
           },
-        },
+        ],
       },
     };
     const result = resolveAgentConfig(cfg, "main");
@@ -40,6 +39,9 @@ describe("resolveAgentConfig", () => {
       workspace: "~/clawd",
       agentDir: "~/.clawdbot/agents/main",
       model: "anthropic/claude-opus-4",
+      identity: undefined,
+      groupChat: undefined,
+      subagents: undefined,
       sandbox: undefined,
       tools: undefined,
     });
@@ -47,9 +49,10 @@ describe("resolveAgentConfig", () => {
 
   it("should return agent-specific sandbox config", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          work: {
+      agents: {
+        list: [
+          {
+            id: "work",
             workspace: "~/clawd-work",
             sandbox: {
               mode: "all",
@@ -57,13 +60,9 @@ describe("resolveAgentConfig", () => {
               perSession: false,
               workspaceAccess: "ro",
               workspaceRoot: "~/sandboxes",
-              tools: {
-                allow: ["read"],
-                deny: ["bash"],
-              },
             },
           },
-        },
+        ],
       },
     };
     const result = resolveAgentConfig(cfg, "work");
@@ -73,25 +72,22 @@ describe("resolveAgentConfig", () => {
       perSession: false,
       workspaceAccess: "ro",
       workspaceRoot: "~/sandboxes",
-      tools: {
-        allow: ["read"],
-        deny: ["bash"],
-      },
     });
   });
 
   it("should return agent-specific tools config", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          restricted: {
+      agents: {
+        list: [
+          {
+            id: "restricted",
             workspace: "~/clawd-restricted",
             tools: {
               allow: ["read"],
               deny: ["bash", "write", "edit"],
             },
           },
-        },
+        ],
       },
     };
     const result = resolveAgentConfig(cfg, "restricted");
@@ -103,9 +99,10 @@ describe("resolveAgentConfig", () => {
 
   it("should return both sandbox and tools config", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          family: {
+      agents: {
+        list: [
+          {
+            id: "family",
             workspace: "~/clawd-family",
             sandbox: {
               mode: "all",
@@ -116,7 +113,7 @@ describe("resolveAgentConfig", () => {
               deny: ["bash"],
             },
           },
-        },
+        ],
       },
     };
     const result = resolveAgentConfig(cfg, "family");
@@ -126,10 +123,8 @@ describe("resolveAgentConfig", () => {
 
   it("should normalize agent id", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          main: { workspace: "~/clawd" },
-        },
+      agents: {
+        list: [{ id: "main", workspace: "~/clawd" }],
       },
     };
     // Should normalize to "main" (default)

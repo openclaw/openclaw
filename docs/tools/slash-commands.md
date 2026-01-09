@@ -46,7 +46,7 @@ Text + native (when enabled):
 - `/verbose on|off` (alias: `/v`)
 - `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
-- `/model <name>` (or `/<alias>` from `agent.models.*.alias`)
+- `/model <name>` (or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
 
 Text-only:

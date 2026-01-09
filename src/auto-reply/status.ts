@@ -35,7 +35,9 @@ import type {
   VerboseLevel,
 } from "./thinking.js";
 
-type AgentConfig = NonNullable<ClawdbotConfig["agent"]>;
+type AgentConfig = Partial<
+  NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>
+>;
 
 export const formatTokenCount = formatTokenCountShared;
 
@@ -188,7 +190,11 @@ export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
   const resolved = resolveConfiguredModelRef({
-    cfg: { agent: args.agent ?? {} },
+    cfg: {
+      agents: {
+        defaults: args.agent ?? {},
+      },
+    } as ClawdbotConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });

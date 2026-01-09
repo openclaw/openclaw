@@ -186,9 +186,11 @@ describe("doctor legacy state migrations", () => {
     expect(result.changes).toEqual([]);
   });
 
-  it("routes legacy state to routing.defaultAgentId", async () => {
+  it("routes legacy state to the default agent entry", async () => {
     const root = await makeTempRoot();
-    const cfg: ClawdbotConfig = { routing: { defaultAgentId: "alpha" } };
+    const cfg: ClawdbotConfig = {
+      agents: { list: [{ id: "alpha", default: true }] },
+    };
     const legacySessionsDir = path.join(root, "sessions");
     fs.mkdirSync(legacySessionsDir, { recursive: true });
     writeJson5(path.join(legacySessionsDir, "sessions.json"), {

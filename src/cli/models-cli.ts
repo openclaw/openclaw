@@ -267,10 +267,14 @@ export function registerModelsCli(program: Command) {
     .option("--no-probe", "Skip live probes; list free candidates only")
     .option("--yes", "Accept defaults without prompting", false)
     .option("--no-input", "Disable prompts (use defaults)")
-    .option("--set-default", "Set agent.model to the first selection", false)
+    .option(
+      "--set-default",
+      "Set agents.defaults.model to the first selection",
+      false,
+    )
     .option(
       "--set-image",
-      "Set agent.imageModel to the first image selection",
+      "Set agents.defaults.imageModel to the first image selection",
       false,
     )
     .option("--json", "Output JSON", false)

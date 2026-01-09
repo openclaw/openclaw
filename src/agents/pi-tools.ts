@@ -429,7 +429,7 @@ const DEFAULT_SUBAGENT_TOOL_DENY = [
 ];
 
 function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
-  const configured = cfg?.agent?.subagents?.tools;
+  const configured = cfg?.tools?.subagents?.tools;
   const deny = [
     ...DEFAULT_SUBAGENT_TOOL_DENY,
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
@@ -466,7 +466,7 @@ function resolveEffectiveToolPolicy(params: {
       ? resolveAgentConfig(params.config, agentId)
       : undefined;
   const hasAgentTools = agentConfig?.tools !== undefined;
-  const globalTools = params.config?.agent?.tools;
+  const globalTools = params.config?.tools;
   return {
     agentId,
     policy: hasAgentTools ? agentConfig?.tools : globalTools,

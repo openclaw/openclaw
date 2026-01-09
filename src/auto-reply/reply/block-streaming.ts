@@ -34,7 +34,7 @@ export function resolveBlockStreamingChunking(
 } {
   const providerKey = normalizeChunkProvider(provider);
   const textLimit = resolveTextChunkLimit(cfg, providerKey);
-  const chunkCfg = cfg?.agent?.blockStreamingChunk;
+  const chunkCfg = cfg?.agents?.defaults?.blockStreamingChunk;
   const maxRequested = Math.max(
     1,
     Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX),

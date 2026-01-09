@@ -20,22 +20,20 @@ describe("resolveAgentRoute", () => {
 
   test("peer binding wins over account binding", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        bindings: [
-          {
-            agentId: "a",
-            match: {
-              provider: "whatsapp",
-              accountId: "biz",
-              peer: { kind: "dm", id: "+1000" },
-            },
+      bindings: [
+        {
+          agentId: "a",
+          match: {
+            provider: "whatsapp",
+            accountId: "biz",
+            peer: { kind: "dm", id: "+1000" },
           },
-          {
-            agentId: "b",
-            match: { provider: "whatsapp", accountId: "biz" },
-          },
-        ],
-      },
+        },
+        {
+          agentId: "b",
+          match: { provider: "whatsapp", accountId: "biz" },
+        },
+      ],
     };
     const route = resolveAgentRoute({
       cfg,
@@ -50,26 +48,24 @@ describe("resolveAgentRoute", () => {
 
   test("discord channel peer binding wins over guild binding", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        bindings: [
-          {
-            agentId: "chan",
-            match: {
-              provider: "discord",
-              accountId: "default",
-              peer: { kind: "channel", id: "c1" },
-            },
+      bindings: [
+        {
+          agentId: "chan",
+          match: {
+            provider: "discord",
+            accountId: "default",
+            peer: { kind: "channel", id: "c1" },
           },
-          {
-            agentId: "guild",
-            match: {
-              provider: "discord",
-              accountId: "default",
-              guildId: "g1",
-            },
+        },
+        {
+          agentId: "guild",
+          match: {
+            provider: "discord",
+            accountId: "default",
+            guildId: "g1",
           },
-        ],
-      },
+        },
+      ],
     };
     const route = resolveAgentRoute({
       cfg,
@@ -85,22 +81,20 @@ describe("resolveAgentRoute", () => {
 
   test("guild binding wins over account binding when peer not bound", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        bindings: [
-          {
-            agentId: "guild",
-            match: {
-              provider: "discord",
-              accountId: "default",
-              guildId: "g1",
-            },
+      bindings: [
+        {
+          agentId: "guild",
+          match: {
+            provider: "discord",
+            accountId: "default",
+            guildId: "g1",
           },
-          {
-            agentId: "acct",
-            match: { provider: "discord", accountId: "default" },
-          },
-        ],
-      },
+        },
+        {
+          agentId: "acct",
+          match: { provider: "discord", accountId: "default" },
+        },
+      ],
     };
     const route = resolveAgentRoute({
       cfg,
@@ -115,9 +109,7 @@ describe("resolveAgentRoute", () => {
 
   test("missing accountId in binding matches default account only", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        bindings: [{ agentId: "defaultAcct", match: { provider: "whatsapp" } }],
-      },
+      bindings: [{ agentId: "defaultAcct", match: { provider: "whatsapp" } }],
     };
 
     const defaultRoute = resolveAgentRoute({
@@ -140,14 +132,12 @@ describe("resolveAgentRoute", () => {
 
   test("accountId=* matches any account as a provider fallback", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        bindings: [
-          {
-            agentId: "any",
-            match: { provider: "whatsapp", accountId: "*" },
-          },
-        ],
-      },
+      bindings: [
+        {
+          agentId: "any",
+          match: { provider: "whatsapp", accountId: "*" },
+        },
+      ],
     };
     const route = resolveAgentRoute({
       cfg,
@@ -161,9 +151,8 @@ describe("resolveAgentRoute", () => {
 
   test("defaultAgentId is used when no binding matches", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        defaultAgentId: "home",
-        agents: { home: { workspace: "~/clawd-home" } },
+      agents: {
+        list: [{ id: "home", default: true, workspace: "~/clawd-home" }],
       },
     };
     const route = resolveAgentRoute({
