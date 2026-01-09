@@ -94,7 +94,7 @@
 - Gateway/Discovery: include `gatewayPort`/`sshPort`/`cliPath` in wide-area Bonjour records, and add a tailnet DNS fallback for `gateway discover` when split DNS isn’t configured. — thanks @steipete
 - CLI: add global `--no-color` (and respect `NO_COLOR=1`) to disable ANSI output. — thanks @steipete
 - CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
-- Gateway/CLI: add `clawdbot gateway --dev/--reset` to auto-create a dev config/workspace with a robot identity (no BOOTSTRAP.md), and reset wipes config/creds/sessions/workspace. — thanks @steipete
+- Gateway/CLI: add `clawdbot gateway --dev/--reset` to auto-create a dev config/workspace with a robot identity (no BOOTSTRAP.md), and reset wipes config/creds/sessions/workspace (subcommand --dev no longer collides with global --dev profile). — thanks @steipete
 - Configure: stop prompting to open the Control UI (still shown in onboarding). — thanks @steipete
 - Config: fix Minimax hosted onboarding to write `agents.defaults` and allow `msteams` as a heartbeat target. — thanks @steipete
 

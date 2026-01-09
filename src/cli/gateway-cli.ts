@@ -97,12 +97,26 @@ Protocol droid for debugging and operations.
 - Ask for missing context before guessing.
 - Prefer reproducible steps and logs.
 `;
+const DEV_TOOLS_TEMPLATE = `# TOOLS.md - Dev Tool Notes
+
+Use local tools carefully. Prefer read-only inspection before changes.
+`;
 const DEV_IDENTITY_TEMPLATE = `# IDENTITY.md - Agent Identity
 
 - Name: ${DEV_IDENTITY_NAME}
 - Creature: protocol droid
 - Vibe: ${DEV_IDENTITY_THEME}
 - Emoji: ${DEV_IDENTITY_EMOJI}
+`;
+const DEV_USER_TEMPLATE = `# USER.md - User Profile
+
+- Name:
+- Preferred address:
+- Notes:
+`;
+const DEV_HEARTBEAT_TEMPLATE = `# HEARTBEAT.md
+
+Keep it short. Check logs, health, and connectivity.
 `;
 
 type GatewayRunSignalAction = "stop" | "restart";
@@ -161,6 +175,15 @@ async function ensureDevWorkspace(dir: string) {
   await writeFileIfMissing(
     path.join(resolvedDir, "IDENTITY.md"),
     DEV_IDENTITY_TEMPLATE,
+  );
+  await writeFileIfMissing(
+    path.join(resolvedDir, "TOOLS.md"),
+    DEV_TOOLS_TEMPLATE,
+  );
+  await writeFileIfMissing(path.join(resolvedDir, "USER.md"), DEV_USER_TEMPLATE);
+  await writeFileIfMissing(
+    path.join(resolvedDir, "HEARTBEAT.md"),
+    DEV_HEARTBEAT_TEMPLATE,
   );
 }
 
