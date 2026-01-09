@@ -53,6 +53,7 @@ export function applyAuthProfileConfig(
     provider: string;
     mode: "api_key" | "oauth";
     email?: string;
+    preferProfileFirst?: boolean;
   },
 ): ClawdbotConfig {
   const profiles = {
@@ -67,13 +68,23 @@ export function applyAuthProfileConfig(
   // Only maintain `auth.order` when the user explicitly configured it.
   // Default behavior: no explicit order -> resolveAuthProfileOrder can round-robin by lastUsed.
   const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const preferProfileFirst = params.preferProfileFirst ?? true;
+  const reorderedProviderOrder =
+    existingProviderOrder && preferProfileFirst
+      ? [
+          params.profileId,
+          ...existingProviderOrder.filter(
+            (profileId) => profileId !== params.profileId,
+          ),
+        ]
+      : existingProviderOrder;
   const order =
     existingProviderOrder !== undefined
       ? {
           ...cfg.auth?.order,
-          [params.provider]: existingProviderOrder.includes(params.profileId)
-            ? existingProviderOrder
-            : [...existingProviderOrder, params.profileId],
+          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+            ? reorderedProviderOrder
+            : [...(reorderedProviderOrder ?? []), params.profileId],
         }
       : cfg.auth?.order;
   return {
