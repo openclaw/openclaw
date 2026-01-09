@@ -57,6 +57,7 @@ import {
   buildGroupHistoryKey,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
+  normalizeMainKey,
 } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { isSelfChatMode, jidToE164, normalizeE164 } from "../utils.js";
@@ -291,7 +292,7 @@ export async function runWebHeartbeatOnce(opts: {
   const cfg = cfgOverride ?? loadConfig();
   const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const mainKey = sessionCfg?.mainKey;
+  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const sessionKey = resolveSessionKey(sessionScope, { From: to }, mainKey);
   if (sessionId) {
     const storePath = resolveStorePath(cfg.session?.store);
@@ -539,7 +540,7 @@ function getSessionSnapshot(
   const key = resolveSessionKey(
     scope,
     { From: from, To: "", Body: "" },
-    sessionCfg?.mainKey,
+    normalizeMainKey(sessionCfg?.mainKey),
   );
   const store = loadSessionStore(resolveStorePath(sessionCfg?.store));
   const entry = store[key];

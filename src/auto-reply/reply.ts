@@ -29,6 +29,7 @@ import {
 import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
+import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
@@ -780,7 +781,7 @@ export async function getReplyFromConfig(
   const isGroupSession =
     sessionEntry?.chatType === "group" || sessionEntry?.chatType === "room";
   const isMainSession =
-    !isGroupSession && sessionKey === (sessionCfg?.mainKey ?? "main");
+    !isGroupSession && sessionKey === normalizeMainKey(sessionCfg?.mainKey);
   prefixedBodyBase = await prependSystemEvents({
     cfg,
     sessionKey,

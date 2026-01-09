@@ -53,7 +53,10 @@ import {
   upsertProviderPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
-import { resolveThreadSessionKeys } from "../routing/session-key.js";
+import {
+  normalizeMainKey,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { reactSlackMessage } from "./actions.js";
@@ -427,7 +430,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   });
   const sessionCfg = cfg.session;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const mainKey = (sessionCfg?.mainKey ?? "main").trim() || "main";
+  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
 
   const resolveSlackSystemEventSessionKey = (params: {
     channelId?: string | null;

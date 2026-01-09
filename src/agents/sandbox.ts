@@ -19,7 +19,7 @@ import {
   loadConfig,
   STATE_DIR_CLAWDBOT,
 } from "../config/config.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -1045,7 +1045,7 @@ export async function resolveSandboxContext(params: {
   if (!rawSessionKey) return null;
   const agentId = resolveAgentIdFromSessionKey(rawSessionKey);
   const cfg = resolveSandboxConfigForAgent(params.config, agentId);
-  const mainKey = params.config?.session?.mainKey?.trim() || "main";
+  const mainKey = normalizeMainKey(params.config?.session?.mainKey);
   if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
 
   await maybePruneSandboxes(cfg);
@@ -1121,7 +1121,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
   if (!rawSessionKey) return null;
   const agentId = resolveAgentIdFromSessionKey(rawSessionKey);
   const cfg = resolveSandboxConfigForAgent(params.config, agentId);
-  const mainKey = params.config?.session?.mainKey?.trim() || "main";
+  const mainKey = normalizeMainKey(params.config?.session?.mainKey);
   if (!shouldSandboxSession(cfg, rawSessionKey, mainKey)) return null;
 
   const agentWorkspaceDir = resolveUserPath(

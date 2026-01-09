@@ -6,6 +6,11 @@ function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
 }
 
+export function normalizeMainKey(value: string | undefined | null): string {
+  const trimmed = (value ?? "").trim();
+  return trimmed ? trimmed : DEFAULT_MAIN_KEY;
+}
+
 export type ParsedAgentSessionKey = {
   agentId: string;
   rest: string;
@@ -77,8 +82,7 @@ export function buildAgentMainSessionKey(params: {
   mainKey?: string | undefined;
 }): string {
   const agentId = normalizeAgentId(params.agentId);
-  const mainKey =
-    (params.mainKey ?? DEFAULT_MAIN_KEY).trim() || DEFAULT_MAIN_KEY;
+  const mainKey = normalizeMainKey(params.mainKey);
   return `agent:${agentId}:${mainKey}`;
 }
 
