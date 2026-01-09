@@ -69,9 +69,13 @@ export async function sendMessageWhatsApp(
     );
     if (!active) throw new Error("Active web listener missing");
     await active.sendComposingTo(to);
-    const sendOptions: ActiveWebSendOptions | undefined = options.gifPlayback
-      ? { gifPlayback: true }
-      : undefined;
+    const sendOptions: ActiveWebSendOptions | undefined =
+      options.gifPlayback || options.accountId
+        ? {
+            ...(options.gifPlayback ? { gifPlayback: true } : {}),
+            accountId: options.accountId,
+          }
+        : undefined;
     const result = sendOptions
       ? await active.sendMessage(to, text, mediaBuffer, mediaType, sendOptions)
       : await active.sendMessage(to, text, mediaBuffer, mediaType);
