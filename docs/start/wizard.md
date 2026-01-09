@@ -71,7 +71,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 2) **Model/Auth**
    - **Anthropic OAuth (Claude CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
-   - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
+   - **Anthropic token (paste setup-token)**: run `claude setup-token` in your terminal, then paste the token (you can name it; blank = default).
    - **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
    - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
      - Sets `agent.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
