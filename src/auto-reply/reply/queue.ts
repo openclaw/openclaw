@@ -337,6 +337,16 @@ function getFollowupQueue(
   FOLLOWUP_QUEUES.set(key, created);
   return created;
 }
+/**
+ * Check if a prompt is already queued using exact match.
+ */
+function isPromptAlreadyQueued(
+  prompt: string,
+  queue: FollowupQueueState,
+): boolean {
+  return queue.items.some((item) => item.prompt === prompt);
+}
+
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -345,6 +355,12 @@ export function enqueueFollowupRun(
   const queue = getFollowupQueue(key, settings);
   queue.lastEnqueuedAt = Date.now();
   queue.lastRun = run.run;
+
+  // Deduplicate: skip if the same prompt is already queued.
+  if (isPromptAlreadyQueued(run.prompt, queue)) {
+    return false;
+  }
+
   const cap = queue.cap;
   if (cap > 0 && queue.items.length >= cap) {
     if (queue.dropPolicy === "new") {
