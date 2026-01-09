@@ -37,6 +37,15 @@ const guildActions = new Set([
   "voiceStatus",
   "eventList",
   "eventCreate",
+  "channelCreate",
+  "channelEdit",
+  "channelDelete",
+  "channelMove",
+  "categoryCreate",
+  "categoryEdit",
+  "categoryDelete",
+  "channelPermissionSet",
+  "channelPermissionRemove",
 ]);
 
 const moderationActions = new Set(["timeout", "kick", "ban"]);
