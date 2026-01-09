@@ -1227,6 +1227,7 @@ export const ClawdbotSchema = z.object({
               groupAllowFrom: z.array(z.string()).optional(),
               groupPolicy: GroupPolicySchema.optional().default("open"),
               textChunkLimit: z.number().int().positive().optional(),
+              mediaMaxMb: z.number().int().positive().optional(),
               blockStreaming: z.boolean().optional(),
               blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
               groups: z
@@ -1262,6 +1263,7 @@ export const ClawdbotSchema = z.object({
       groupAllowFrom: z.array(z.string()).optional(),
       groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
+      mediaMaxMb: z.number().int().positive().optional().default(50),
       blockStreaming: z.boolean().optional(),
       blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
       actions: z

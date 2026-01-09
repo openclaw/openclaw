@@ -131,6 +131,8 @@ export type WhatsAppConfig = {
   groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
+  /** Maximum media file size in MB. Default: 50. */
+  mediaMaxMb?: number;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -160,6 +162,7 @@ export type WhatsAppAccountConfig = {
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
   textChunkLimit?: number;
+  mediaMaxMb?: number;
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;

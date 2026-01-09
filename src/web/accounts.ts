@@ -23,6 +23,7 @@ export type ResolvedWhatsAppAccount = {
   groupPolicy?: GroupPolicy;
   dmPolicy?: DmPolicy;
   textChunkLimit?: number;
+  mediaMaxMb?: number;
   blockStreaming?: boolean;
   groups?: WhatsAppAccountConfig["groups"];
 };
@@ -120,6 +121,7 @@ export function resolveWhatsAppAccount(params: {
     groupPolicy: accountCfg?.groupPolicy ?? params.cfg.whatsapp?.groupPolicy,
     textChunkLimit:
       accountCfg?.textChunkLimit ?? params.cfg.whatsapp?.textChunkLimit,
+    mediaMaxMb: accountCfg?.mediaMaxMb ?? params.cfg.whatsapp?.mediaMaxMb,
     blockStreaming:
       accountCfg?.blockStreaming ?? params.cfg.whatsapp?.blockStreaming,
     groups: accountCfg?.groups ?? params.cfg.whatsapp?.groups,
