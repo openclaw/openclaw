@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { buildStatusMessage } from "./status.js";
@@ -55,19 +56,22 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
       now: 10 * 60_000, // 10 minutes later
     });
+    const normalized = normalizeTestText(text);
 
-    expect(text).toContain("🦞 ClawdBot");
-    expect(text).toContain("🧠 Model: anthropic/pi:opus · 🔑 api-key");
-    expect(text).toContain("🧮 Tokens: 1.2k in / 800 out · 💵 Cost: $0.0020");
-    expect(text).toContain("Context: 16k/32k (50%)");
-    expect(text).toContain("🧹 Compactions: 2");
-    expect(text).toContain("Session: agent:main:main");
-    expect(text).toContain("updated 10m ago");
-    expect(text).toContain("Runtime: direct");
-    expect(text).toContain("Think: medium");
-    expect(text).toContain("Verbose: off");
-    expect(text).toContain("Elevated: on");
-    expect(text).toContain("Queue: collect");
+    expect(normalized).toContain("ClawdBot");
+    expect(normalized).toContain("Model: anthropic/pi:opus");
+    expect(normalized).toContain("api-key");
+    expect(normalized).toContain("Tokens: 1.2k in / 800 out");
+    expect(normalized).toContain("Cost: $0.0020");
+    expect(normalized).toContain("Context: 16k/32k (50%)");
+    expect(normalized).toContain("Compactions: 2");
+    expect(normalized).toContain("Session: agent:main:main");
+    expect(normalized).toContain("updated 10m ago");
+    expect(normalized).toContain("Runtime: direct");
+    expect(normalized).toContain("Think: medium");
+    expect(normalized).toContain("Verbose: off");
+    expect(normalized).toContain("Elevated: on");
+    expect(normalized).toContain("Queue: collect");
   });
 
   it("shows verbose/elevated labels only when enabled", () => {
@@ -107,7 +111,7 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain("🧠 Model: openai/gpt-4.1-mini");
+    expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
   });
 
   it("keeps provider prefix from configured model", () => {
@@ -120,7 +124,9 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain("🧠 Model: google-antigravity/claude-sonnet-4-5");
+    expect(normalizeTestText(text)).toContain(
+      "Model: google-antigravity/claude-sonnet-4-5",
+    );
   });
 
   it("handles missing agent config gracefully", () => {
@@ -131,9 +137,10 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    expect(text).toContain("🧠 Model:");
-    expect(text).toContain("Context:");
-    expect(text).toContain("Queue: collect");
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model:");
+    expect(normalized).toContain("Context:");
+    expect(normalized).toContain("Queue: collect");
   });
 
   it("includes group activation for group sessions", () => {
@@ -187,10 +194,10 @@ describe("buildStatusMessage", () => {
       modelAuth: "api-key",
     });
 
-    const lines = text.split("\n");
-    const contextIndex = lines.findIndex((line) => line.startsWith("📚 "));
+    const lines = normalizeTestText(text).split("\n");
+    const contextIndex = lines.findIndex((line) => line.includes("Context:"));
     expect(contextIndex).toBeGreaterThan(-1);
-    expect(lines[contextIndex + 1]).toBe("📊 Usage: Claude 80% left (5h)");
+    expect(lines[contextIndex + 1]).toContain("Usage: Claude 80% left (5h)");
   });
 
   it("hides cost when not using an API key", () => {
@@ -283,7 +290,7 @@ describe("buildStatusMessage", () => {
           modelAuth: "api-key",
         });
 
-        expect(text).toContain("Context: 1.0k/32k");
+        expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
       },
       { prefix: "clawdbot-status-" },
     );

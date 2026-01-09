@@ -30,22 +30,15 @@ vi.mock("../agents/model-catalog.js", () => ({
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
-      const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-      process.env.CLAWDBOT_AGENT_DIR = path.join(home, ".clawdbot", "agent");
-      process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
-      try {
-        return await fn(home);
-      } finally {
-        if (previousAgentDir === undefined)
-          delete process.env.CLAWDBOT_AGENT_DIR;
-        else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
-        if (previousPiAgentDir === undefined)
-          delete process.env.PI_CODING_AGENT_DIR;
-        else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-      }
+      return await fn(home);
     },
-    { prefix: "clawdbot-reply-" },
+    {
+      env: {
+        CLAWDBOT_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+        PI_CODING_AGENT_DIR: (home) => path.join(home, ".clawdbot", "agent"),
+      },
+      prefix: "clawdbot-reply-",
+    },
   );
 }
 

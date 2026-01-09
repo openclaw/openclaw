@@ -138,95 +138,92 @@ describe("provider usage loading", () => {
   it("discovers Claude usage from token auth profiles", async () => {
     await withTempHome(
       async (tempHome) => {
-        const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-        process.env.CLAWDBOT_STATE_DIR = path.join(tempHome, ".clawdbot");
         const agentDir = path.join(
-          process.env.CLAWDBOT_STATE_DIR,
+          process.env.CLAWDBOT_STATE_DIR ?? path.join(tempHome, ".clawdbot"),
           "agents",
           "main",
           "agent",
         );
-        try {
-          fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-          fs.writeFileSync(
-            path.join(agentDir, "auth-profiles.json"),
-            `${JSON.stringify(
-              {
-                version: 1,
-                order: { anthropic: ["anthropic:default"] },
-                profiles: {
-                  "anthropic:default": {
-                    type: "token",
-                    provider: "anthropic",
-                    token: "token-1",
-                    expires: Date.UTC(2100, 0, 1, 0, 0, 0),
-                  },
+        fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+        fs.writeFileSync(
+          path.join(agentDir, "auth-profiles.json"),
+          `${JSON.stringify(
+            {
+              version: 1,
+              order: { anthropic: ["anthropic:default"] },
+              profiles: {
+                "anthropic:default": {
+                  type: "token",
+                  provider: "anthropic",
+                  token: "token-1",
+                  expires: Date.UTC(2100, 0, 1, 0, 0, 0),
                 },
               },
-              null,
-              2,
-            )}\n`,
-            "utf8",
-          );
-          const store = ensureAuthProfileStore(agentDir, {
-            allowKeychainPrompt: false,
-          });
-          expect(listProfilesForProvider(store, "anthropic")).toContain(
-            "anthropic:default",
-          );
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+        const store = ensureAuthProfileStore(agentDir, {
+          allowKeychainPrompt: false,
+        });
+        expect(listProfilesForProvider(store, "anthropic")).toContain(
+          "anthropic:default",
+        );
 
-          const makeResponse = (status: number, body: unknown): Response => {
-            const payload =
-              typeof body === "string" ? body : JSON.stringify(body);
-            const headers =
-              typeof body === "string"
-                ? undefined
-                : { "Content-Type": "application/json" };
-            return new Response(payload, { status, headers });
-          };
+        const makeResponse = (status: number, body: unknown): Response => {
+          const payload =
+            typeof body === "string" ? body : JSON.stringify(body);
+          const headers =
+            typeof body === "string"
+              ? undefined
+              : { "Content-Type": "application/json" };
+          return new Response(payload, { status, headers });
+        };
 
-          const mockFetch = vi.fn<
-            Parameters<typeof fetch>,
-            ReturnType<typeof fetch>
-          >(async (input, init) => {
-            const url =
-              typeof input === "string"
-                ? input
-                : input instanceof URL
-                  ? input.toString()
-                  : input.url;
-            if (url.includes("api.anthropic.com/api/oauth/usage")) {
-              const headers = (init?.headers ?? {}) as Record<string, string>;
-              expect(headers.Authorization).toBe("Bearer token-1");
-              return makeResponse(200, {
-                five_hour: {
-                  utilization: 20,
-                  resets_at: "2026-01-07T01:00:00Z",
-                },
-              });
-            }
-            return makeResponse(404, "not found");
-          });
+        const mockFetch = vi.fn<
+          Parameters<typeof fetch>,
+          ReturnType<typeof fetch>
+        >(async (input, init) => {
+          const url =
+            typeof input === "string"
+              ? input
+              : input instanceof URL
+                ? input.toString()
+                : input.url;
+          if (url.includes("api.anthropic.com/api/oauth/usage")) {
+            const headers = (init?.headers ?? {}) as Record<string, string>;
+            expect(headers.Authorization).toBe("Bearer token-1");
+            return makeResponse(200, {
+              five_hour: {
+                utilization: 20,
+                resets_at: "2026-01-07T01:00:00Z",
+              },
+            });
+          }
+          return makeResponse(404, "not found");
+        });
 
-          const summary = await loadProviderUsageSummary({
-            now: Date.UTC(2026, 0, 7, 0, 0, 0),
-            providers: ["anthropic"],
-            agentDir,
-            fetch: mockFetch,
-          });
+        const summary = await loadProviderUsageSummary({
+          now: Date.UTC(2026, 0, 7, 0, 0, 0),
+          providers: ["anthropic"],
+          agentDir,
+          fetch: mockFetch,
+        });
 
-          expect(summary.providers).toHaveLength(1);
-          const claude = summary.providers[0];
-          expect(claude?.provider).toBe("anthropic");
-          expect(claude?.windows[0]?.label).toBe("5h");
-          expect(mockFetch).toHaveBeenCalled();
-        } finally {
-          if (previousStateDir === undefined)
-            delete process.env.CLAWDBOT_STATE_DIR;
-          else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-        }
+        expect(summary.providers).toHaveLength(1);
+        const claude = summary.providers[0];
+        expect(claude?.provider).toBe("anthropic");
+        expect(claude?.windows[0]?.label).toBe("5h");
+        expect(mockFetch).toHaveBeenCalled();
       },
-      { prefix: "clawdbot-provider-usage-" },
+      {
+        env: {
+          CLAWDBOT_STATE_DIR: (home) => path.join(home, ".clawdbot"),
+        },
+        prefix: "clawdbot-provider-usage-",
+      },
     );
   });
 
