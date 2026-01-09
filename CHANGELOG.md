@@ -46,6 +46,7 @@
 - Apps: refresh iOS/Android/macOS app icons for Clawdbot branding. (#521) — thanks @fishfisher
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
+- TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
 
 ## 2026.1.8
 
