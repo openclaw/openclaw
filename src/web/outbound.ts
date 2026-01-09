@@ -5,22 +5,13 @@ import { normalizePollInput, type PollInput } from "../polls.js";
 import { toWhatsappJid } from "../utils.js";
 import {
   type ActiveWebSendOptions,
-  getActiveWebListener,
+  requireActiveWebListener,
 } from "./active-listener.js";
 import { loadWebMedia } from "./media.js";
 
 const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
   "outbound",
 );
-
-function requireActiveListener(accountId?: string | null) {
-  const active = getActiveWebListener(accountId);
-  if (active) return active;
-  const id = (accountId ?? "").trim() || "default";
-  throw new Error(
-    `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: clawdbot providers login --provider whatsapp --account ${id}.`,
-  );
-}
 
 export async function sendMessageWhatsApp(
   to: string,
@@ -35,7 +26,8 @@ export async function sendMessageWhatsApp(
   let text = body;
   const correlationId = randomUUID();
   const startedAt = Date.now();
-  const active = requireActiveListener(options.accountId);
+  const { listener: active, accountId: resolvedAccountId } =
+    requireActiveWebListener(options.accountId);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
@@ -71,13 +63,14 @@ export async function sendMessageWhatsApp(
       { jid, hasMedia: Boolean(options.mediaUrl) },
       "sending message",
     );
-    if (!active) throw new Error("Active web listener missing");
     await active.sendComposingTo(to);
+    const hasExplicitAccountId = Boolean(options.accountId?.trim());
+    const accountId = hasExplicitAccountId ? resolvedAccountId : undefined;
     const sendOptions: ActiveWebSendOptions | undefined =
-      options.gifPlayback || options.accountId
+      options.gifPlayback || accountId
         ? {
             ...(options.gifPlayback ? { gifPlayback: true } : {}),
-            accountId: options.accountId,
+            accountId,
           }
         : undefined;
     const result = sendOptions
@@ -112,7 +105,7 @@ export async function sendReactionWhatsApp(
   },
 ): Promise<void> {
   const correlationId = randomUUID();
-  const active = requireActiveListener(options.accountId);
+  const { listener: active } = requireActiveWebListener(options.accountId);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
@@ -148,7 +141,7 @@ export async function sendPollWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = randomUUID();
   const startedAt = Date.now();
-  const active = requireActiveListener(options.accountId);
+  const { listener: active } = requireActiveWebListener(options.accountId);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
