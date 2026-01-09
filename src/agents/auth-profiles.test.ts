@@ -130,6 +130,27 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
 
+  it("pushes cooldown profiles to the end even with configured order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:default", "anthropic:work"] },
+          profiles: cfg.auth.profiles,
+        },
+      },
+      store: {
+        ...store,
+        usageStats: {
+          "anthropic:default": { cooldownUntil: now + 60_000 },
+          "anthropic:work": { lastUsed: 1 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+
   it("normalizes z.ai aliases in auth.order", () => {
     const order = resolveAuthProfileOrder({
       cfg: {

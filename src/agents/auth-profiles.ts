@@ -897,14 +897,37 @@ export function resolveAuthProfileOrder(params: {
 
   // If user specified explicit order in config, respect it exactly
   if (configuredOrder && configuredOrder.length > 0) {
-    // Still put preferredProfile first if specified
-    if (preferredProfile && deduped.includes(preferredProfile)) {
-      return [
-        preferredProfile,
-        ...deduped.filter((e) => e !== preferredProfile),
-      ];
+    // ...but still respect cooldown tracking to avoid repeatedly selecting a
+    // known-bad/rate-limited key as the first candidate.
+    const now = Date.now();
+    const available: string[] = [];
+    const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
+
+    for (const profileId of deduped) {
+      const cooldownUntil = store.usageStats?.[profileId]?.cooldownUntil;
+      if (
+        typeof cooldownUntil === "number" &&
+        Number.isFinite(cooldownUntil) &&
+        cooldownUntil > 0 &&
+        now < cooldownUntil
+      ) {
+        inCooldown.push({ profileId, cooldownUntil });
+      } else {
+        available.push(profileId);
+      }
     }
-    return deduped;
+
+    const cooldownSorted = inCooldown
+      .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
+      .map((entry) => entry.profileId);
+
+    const ordered = [...available, ...cooldownSorted];
+
+    // Still put preferredProfile first if specified
+    if (preferredProfile && ordered.includes(preferredProfile)) {
+      return [preferredProfile, ...ordered.filter((e) => e !== preferredProfile)];
+    }
+    return ordered;
   }
 
   // Otherwise, use round-robin: sort by lastUsed (oldest first)
