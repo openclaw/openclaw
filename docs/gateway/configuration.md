@@ -1464,6 +1464,67 @@ Notes:
 - Responses API enables clean reasoning/output separation; WhatsApp sees only final text.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio context length differs.
 
+### MiniMax API (platform.minimax.io)
+
+Use MiniMax's Anthropic-compatible API directly without LM Studio:
+
+```json5
+{
+  agent: {
+    model: { primary: "minimax/MiniMax-M2.1" },
+    models: {
+      "anthropic/claude-opus-4-5": { alias: "Opus" },
+      "minimax/MiniMax-M2.1": { alias: "Minimax" }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      minimax: {
+        baseUrl: "https://api.minimax.io/anthropic",
+        apiKey: "${MINIMAX_API_KEY}",
+        api: "anthropic-messages",
+        models: [
+          {
+            id: "MiniMax-M2.1",
+            name: "MiniMax M2.1",
+            reasoning: false,
+            input: ["text"],
+            // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            contextWindow: 200000,
+            maxTokens: 8192
+          },
+          {
+            id: "MiniMax-M2.1-lightning",
+            name: "MiniMax M2.1 Lightning",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            contextWindow: 200000,
+            maxTokens: 8192
+          },
+          {
+            id: "MiniMax-M2",
+            name: "MiniMax M2",
+            reasoning: true,
+            input: ["text"],
+            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            contextWindow: 200000,
+            maxTokens: 8192
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Set `MINIMAX_API_KEY` environment variable or use `clawdbot onboard --auth-choice minimax-api`
+- Available models: `MiniMax-M2.1` (default), `MiniMax-M2.1-lightning` (~100 tps), `MiniMax-M2` (reasoning)
+- Pricing is a placeholder; MiniMax doesn't publish public rates. Override in `models.json` for accurate cost tracking.
+
 Notes:
 - Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`,
   `google-generative-ai`
