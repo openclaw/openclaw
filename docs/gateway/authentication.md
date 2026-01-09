@@ -13,6 +13,22 @@ credentials**, including the 1‑year token created by `claude setup-token`.
 See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
 layout.
 
+## Preferred Anthropic setup (Claude CLI setup-token)
+
+For Anthropic, the **preferred** path is the Claude CLI setup-token, not an API key.
+Run it on the **gateway host**:
+
+```bash
+claude setup-token
+```
+
+Then verify and sync into Clawdbot:
+
+```bash
+clawdbot models status
+clawdbot doctor
+```
+
 ## Recommended: long‑lived Claude Code token
 
 Run this on the **gateway host** (the machine running the Gateway):

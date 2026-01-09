@@ -468,6 +468,13 @@ Common RPCs:
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
+Preferred Anthropic auth (CLI token, not API key):
+
+```bash
+claude setup-token
+clawdbot models status
+```
+
 ### `models` (root)
 `clawdbot models` is an alias for `models status`.
 
