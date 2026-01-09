@@ -277,6 +277,11 @@ async function runClaudeCliOnce(params: {
   const result = await runCommandWithTimeout(["claude", ...args], {
     timeoutMs: params.timeoutMs,
     cwd: params.workspaceDir,
+    env: (() => {
+      const next = { ...process.env };
+      delete next.ANTHROPIC_API_KEY;
+      return next;
+    })(),
   });
   if (process.env.CLAWDBOT_CLAUDE_CLI_LOG_OUTPUT === "1") {
     const stdoutDump = result.stdout.trim();

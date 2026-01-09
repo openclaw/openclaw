@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
-import { buildAllowedModelSet, modelKey } from "./model-selection.js";
+import { buildAllowedModelSet, modelKey, parseModelRef } from "./model-selection.js";
 
 const catalog = [
   {
@@ -52,5 +52,15 @@ describe("buildAllowedModelSet", () => {
     expect(
       allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5")),
     ).toBe(true);
+  });
+});
+
+describe("parseModelRef", () => {
+  it("normalizes anthropic/opus-4.5 to claude-opus-4-5", () => {
+    const ref = parseModelRef("anthropic/opus-4.5", "anthropic");
+    expect(ref).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+    });
   });
 });
