@@ -35,9 +35,11 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
+  applyOpencodeZenConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
+  setOpencodeZenApiKey,
 } from "./onboard-auth.js";
 import {
   applyWizardMetadata,
@@ -312,6 +314,25 @@ export async function runNonInteractiveOnboarding(
     nextConfig = applyOpenAICodexModelDefault(nextConfig).next;
   } else if (authChoice === "minimax") {
     nextConfig = applyMinimaxConfig(nextConfig);
+  } else if (authChoice === "opencode-zen") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "opencode-zen",
+      cfg: baseConfig,
+      flagValue: opts.opencodeZenApiKey,
+      flagName: "--opencode-zen-api-key",
+      envVar: "OPENCODE_ZEN_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setOpencodeZenApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "opencode-zen:default",
+      provider: "opencode-zen",
+      mode: "api_key",
+    });
+    nextConfig = applyOpencodeZenConfig(nextConfig);
   } else if (
     authChoice === "token" ||
     authChoice === "oauth" ||

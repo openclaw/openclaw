@@ -1,0 +1,88 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  getOpencodeZenStaticFallbackModels,
+  OPENCODE_ZEN_MODEL_ALIASES,
+  resolveOpencodeZenAlias,
+  resolveOpencodeZenModelApi,
+} from "./opencode-zen-models.js";
+
+describe("resolveOpencodeZenAlias", () => {
+  it("resolves opus alias", () => {
+    expect(resolveOpencodeZenAlias("opus")).toBe("claude-opus-4-5");
+  });
+
+  it("resolves gpt5 alias", () => {
+    expect(resolveOpencodeZenAlias("gpt5")).toBe("gpt-5.2");
+  });
+
+  it("resolves gemini alias", () => {
+    expect(resolveOpencodeZenAlias("gemini")).toBe("gemini-3-pro");
+  });
+
+  it("returns input if no alias exists", () => {
+    expect(resolveOpencodeZenAlias("some-unknown-model")).toBe(
+      "some-unknown-model",
+    );
+  });
+
+  it("is case-insensitive", () => {
+    expect(resolveOpencodeZenAlias("OPUS")).toBe("claude-opus-4-5");
+    expect(resolveOpencodeZenAlias("Gpt5")).toBe("gpt-5.2");
+  });
+});
+
+describe("resolveOpencodeZenModelApi", () => {
+  it("returns openai-completions for all models (OpenCode Zen is OpenAI-compatible)", () => {
+    expect(resolveOpencodeZenModelApi("claude-opus-4-5")).toBe(
+      "openai-completions",
+    );
+    expect(resolveOpencodeZenModelApi("gpt-5.2")).toBe("openai-completions");
+    expect(resolveOpencodeZenModelApi("gemini-3-pro")).toBe(
+      "openai-completions",
+    );
+    expect(resolveOpencodeZenModelApi("some-unknown-model")).toBe(
+      "openai-completions",
+    );
+  });
+});
+
+describe("getOpencodeZenStaticFallbackModels", () => {
+  it("returns an array of models", () => {
+    const models = getOpencodeZenStaticFallbackModels();
+    expect(Array.isArray(models)).toBe(true);
+    expect(models.length).toBeGreaterThan(0);
+  });
+
+  it("includes Claude, GPT, and Gemini models", () => {
+    const models = getOpencodeZenStaticFallbackModels();
+    const ids = models.map((m) => m.id);
+
+    expect(ids).toContain("claude-opus-4-5");
+    expect(ids).toContain("gpt-5.2");
+    expect(ids).toContain("gemini-3-pro");
+  });
+
+  it("returns valid ModelDefinitionConfig objects", () => {
+    const models = getOpencodeZenStaticFallbackModels();
+    for (const model of models) {
+      expect(model.id).toBeDefined();
+      expect(model.name).toBeDefined();
+      expect(typeof model.reasoning).toBe("boolean");
+      expect(Array.isArray(model.input)).toBe(true);
+      expect(model.cost).toBeDefined();
+      expect(typeof model.contextWindow).toBe("number");
+      expect(typeof model.maxTokens).toBe("number");
+    }
+  });
+});
+
+describe("OPENCODE_ZEN_MODEL_ALIASES", () => {
+  it("has expected aliases", () => {
+    expect(OPENCODE_ZEN_MODEL_ALIASES.opus).toBe("claude-opus-4-5");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.sonnet).toBe("claude-sonnet-4-20250514");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.gpt5).toBe("gpt-5.2");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.o1).toBe("o1-2025-04-16");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.gemini).toBe("gemini-3-pro");
+  });
+});

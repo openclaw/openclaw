@@ -14,7 +14,7 @@ export type AuthChoiceOption = {
 
 function formatOAuthHint(
   expires?: number,
-  opts?: { allowStale?: boolean },
+  opts?: { allowStale?: boolean }
 ): string {
   const rich = isRich();
   if (!expires) {
@@ -33,8 +33,8 @@ function formatOAuthHint(
     minutes >= 120
       ? `${Math.round(minutes / 60)}h`
       : minutes >= 60
-        ? "1h"
-        : `${Math.max(minutes, 1)}m`;
+      ? "1h"
+      : `${Math.max(minutes, 1)}m`;
   const label = `token ok · expires in ${duration}`;
   if (minutes <= 10) {
     return colorize(rich, theme.warn, label);
@@ -99,6 +99,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
+  options.push({
+    value: "opencode-zen",
+    label: "OpenCode Zen (multi-model proxy)",
+    hint: "Claude, GPT, Gemini via opencode.ai/zen",
+  });
   options.push({ value: "minimax-cloud", label: "MiniMax M2.1 (minimax.io)" });
   options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
   options.push({
