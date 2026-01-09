@@ -98,6 +98,7 @@
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
 - Sessions: support session `label` in store/list/UI and allow `sessions_send` lookup by label. (#570) — thanks @azade-c
+- Sessions: clarify `sessions_send` delivery semantics, log announce failures, and enforce Discord request timeouts. (#507) — thanks @steipete
 - Control UI: show/patch per-session reasoning level and render extracted reasoning in chat.
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Control UI: refactor chat layout with tool sidebar, grouped messages, and nav improvements. (#475) — thanks @rahthakor

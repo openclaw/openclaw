@@ -1,0 +1,53 @@
+--- a/dist/src/classes/RequestClient.js
++++ b/dist/src/classes/RequestClient.js
+@@ -118,6 +118,9 @@
+             }
+         }
+         this.abortController = new AbortController();
++        const timeoutMs = typeof this.options.timeout === "number" && this.options.timeout > 0
++            ? this.options.timeout
++            : undefined;
+         let body;
+         if (data?.body &&
+             typeof data.body === "object" &&
+@@ -178,12 +181,26 @@
+                 body = JSON.stringify(data.body);
+             }
+         }
+-        const response = await fetch(url, {
+-            method,
+-            headers,
+-            body,
+-            signal: this.abortController.signal
+-        });
++        let timeoutId;
++        if (timeoutMs !== undefined) {
++            timeoutId = setTimeout(() => {
++                this.abortController?.abort();
++            }, timeoutMs);
++        }
++        let response;
++        try {
++            response = await fetch(url, {
++                method,
++                headers,
++                body,
++                signal: this.abortController.signal
++            });
++        }
++        finally {
++            if (timeoutId) {
++                clearTimeout(timeoutId);
++            }
++        }
+         let rawBody = "";
+         let parsedBody;
+         try {
+@@ -405,4 +422,4 @@
+     }
+ }
+ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(ms, 0)));
+-//# sourceMappingURL=RequestClient.js.map
+\ No newline at end of file
++//# sourceMappingURL=RequestClient.js.map
+

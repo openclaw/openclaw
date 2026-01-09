@@ -76,6 +76,7 @@ Behavior:
 - `timeoutSeconds > 0`: wait up to N seconds for completion, then return `{ runId, status: "ok", reply }`.
 - If wait times out: `{ runId, status: "timeout", error }`. Run continues; call `sessions_history` later.
 - If the run fails: `{ runId, status: "error", error }`.
+- Announce delivery runs after the primary run completes and is best-effort; `status: "ok"` does not guarantee the announce was delivered.
 - Waits via gateway `agent.wait` (server-side) so reconnects don't drop the wait.
 - Agent-to-agent message context is injected for the primary run.
 - After the primary run completes, Clawdbot runs a **reply-back loop**:
