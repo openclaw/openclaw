@@ -46,6 +46,7 @@ import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
 import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { registerProvidersCli } from "./providers-cli.js";
+import { registerSandboxCli } from "./sandbox-cli.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
 
@@ -190,7 +191,7 @@ export function buildProgram() {
     .description("Initialize ~/.clawdbot/clawdbot.json and the agent workspace")
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/clawd; stored as agent.workspace)",
+      "Agent workspace directory (default: ~/clawd; stored as agents.defaults.workspace)",
     )
     .option("--wizard", "Run the interactive onboarding wizard", false)
     .option("--non-interactive", "Run the wizard without prompts", false)
@@ -239,11 +240,12 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: oauth|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax|skip",
+      "Auth: oauth|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip",
     )
     .option("--anthropic-api-key <key>", "Anthropic API key")
     .option("--openai-api-key <key>", "OpenAI API key")
     .option("--gemini-api-key <key>", "Gemini API key")
+    .option("--minimax-api-key <key>", "MiniMax API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|lan|tailnet|auto")
     .option("--gateway-auth <mode>", "Gateway auth: off|token|password")
@@ -276,12 +278,14 @@ export function buildProgram() {
               | "antigravity"
               | "gemini-api-key"
               | "apiKey"
+              | "minimax-cloud"
               | "minimax"
               | "skip"
               | undefined,
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
             openaiApiKey: opts.openaiApiKey as string | undefined,
             geminiApiKey: opts.geminiApiKey as string | undefined,
+            minimaxApiKey: opts.minimaxApiKey as string | undefined,
             gatewayPort:
               typeof opts.gatewayPort === "string"
                 ? Number.parseInt(opts.gatewayPort, 10)
@@ -1038,6 +1042,7 @@ Examples:
   registerLogsCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
+  registerSandboxCli(program);
   registerTuiCli(program);
   registerCronCli(program);
   registerDnsCli(program);
@@ -1158,7 +1163,7 @@ Examples:
   clawdbot sessions --json          # machine-readable output
   clawdbot sessions --store ./tmp/sessions.json
 
-Shows token usage per session when the agent reports it; set agent.contextTokens to see % of your model window.`,
+Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to see % of your model window.`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));

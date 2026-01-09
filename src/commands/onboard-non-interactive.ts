@@ -30,8 +30,10 @@ import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
+  applyMinimaxHostedConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setMinimaxApiKey,
 } from "./onboard-auth.js";
 import {
   applyWizardMetadata,
@@ -94,14 +96,21 @@ export async function runNonInteractiveOnboarding(
   }
 
   const workspaceDir = resolveUserPath(
-    (opts.workspace ?? baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE).trim(),
+    (
+      opts.workspace ??
+      baseConfig.agents?.defaults?.workspace ??
+      DEFAULT_WORKSPACE
+    ).trim(),
   );
 
   let nextConfig: ClawdbotConfig = {
     ...baseConfig,
-    agent: {
-      ...baseConfig.agent,
-      workspace: workspaceDir,
+    agents: {
+      ...baseConfig.agents,
+      defaults: {
+        ...baseConfig.agents?.defaults,
+        workspace: workspaceDir,
+      },
     },
     gateway: {
       ...baseConfig.gateway,
@@ -150,6 +159,20 @@ export async function runNonInteractiveOnboarding(
     });
     process.env.OPENAI_API_KEY = key;
     runtime.log(`Saved OPENAI_API_KEY to ${result.path}`);
+  } else if (authChoice === "minimax-cloud") {
+    const key = opts.minimaxApiKey?.trim();
+    if (!key) {
+      runtime.error("Missing --minimax-api-key");
+      runtime.exit(1);
+      return;
+    }
+    await setMinimaxApiKey(key);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    nextConfig = applyMinimaxHostedConfig(nextConfig);
   } else if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
@@ -295,7 +318,7 @@ export async function runNonInteractiveOnboarding(
   await writeConfigFile(nextConfig);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;

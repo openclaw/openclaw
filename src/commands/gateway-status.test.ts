@@ -10,6 +10,15 @@ const loadConfig = vi.fn(() => ({
 const resolveGatewayPort = vi.fn(() => 18789);
 const discoverGatewayBeacons = vi.fn(async () => []);
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.10");
+const sshStop = vi.fn(async () => {});
+const startSshPortForward = vi.fn(async () => ({
+  parsedTarget: { user: "me", host: "studio", port: 22 },
+  localPort: 18789,
+  remotePort: 18789,
+  pid: 123,
+  stderr: [],
+  stop: sshStop,
+}));
 const probeGateway = vi.fn(async ({ url }: { url: string }) => {
   if (url.includes("127.0.0.1")) {
     return {
@@ -71,6 +80,10 @@ vi.mock("../infra/tailnet.js", () => ({
   pickPrimaryTailnetIPv4: () => pickPrimaryTailnetIPv4(),
 }));
 
+vi.mock("../infra/ssh-tunnel.js", () => ({
+  startSshPortForward: (opts: unknown) => startSshPortForward(opts),
+}));
+
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: (opts: unknown) => probeGateway(opts),
 }));
@@ -127,5 +140,37 @@ describe("gateway-status command", () => {
     expect(targets.length).toBeGreaterThanOrEqual(2);
     expect(targets[0]?.health).toBeTruthy();
     expect(targets[0]?.summary).toBeTruthy();
+  });
+
+  it("supports SSH tunnel targets", async () => {
+    const runtimeLogs: string[] = [];
+    const runtime = {
+      log: (msg: string) => runtimeLogs.push(msg),
+      error: (_msg: string) => {},
+      exit: (code: number) => {
+        throw new Error(`__exit__:${code}`);
+      },
+    };
+
+    startSshPortForward.mockClear();
+    sshStop.mockClear();
+    probeGateway.mockClear();
+
+    const { gatewayStatusCommand } = await import("./gateway-status.js");
+    await gatewayStatusCommand(
+      { timeout: "1000", json: true, ssh: "me@studio" },
+      runtime as unknown as import("../runtime.js").RuntimeEnv,
+    );
+
+    expect(startSshPortForward).toHaveBeenCalledTimes(1);
+    expect(probeGateway).toHaveBeenCalled();
+    expect(sshStop).toHaveBeenCalledTimes(1);
+
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as Record<
+      string,
+      unknown
+    >;
+    const targets = parsed.targets as Array<Record<string, unknown>>;
+    expect(targets.some((t) => t.kind === "sshTunnel")).toBe(true);
   });
 });

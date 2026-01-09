@@ -283,6 +283,8 @@ export async function messageCommand(
     sendSlack: deps.sendMessageSlack,
     sendSignal: deps.sendMessageSignal,
     sendIMessage: deps.sendMessageIMessage,
+    sendMSTeams: (to, text, opts) =>
+      deps.sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }),
   };
 
   if (opts.dryRun && action !== "send" && action !== "poll") {
@@ -477,6 +479,10 @@ export async function messageCommand(
         }),
       ),
     );
+    const pollId = (result.result as { pollId?: string } | undefined)?.pollId;
+    if (pollId) {
+      runtime.log(success(`Poll id: ${pollId}`));
+    }
     if (opts.json) {
       runtime.log(
         JSON.stringify(
@@ -494,6 +500,7 @@ export async function messageCommand(
             options: result.options,
             maxSelections: result.maxSelections,
             durationHours: result.durationHours,
+            pollId,
           },
           null,
           2,

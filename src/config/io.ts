@@ -14,7 +14,6 @@ import {
 } from "./agent-dirs.js";
 import {
   applyContextPruningDefaults,
-  applyIdentityDefaults,
   applyLoggingDefaults,
   applyMessageDefaults,
   applyModelDefaults,
@@ -27,6 +26,7 @@ import {
   resolveConfigPath,
   resolveStateDir,
 } from "./paths.js";
+import { applyConfigOverrides } from "./runtime-overrides.js";
 import type {
   ClawdbotConfig,
   ConfigFileSnapshot,
@@ -165,9 +165,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         applyContextPruningDefaults(
           applySessionDefaults(
             applyLoggingDefaults(
-              applyMessageDefaults(
-                applyIdentityDefaults(validated.data as ClawdbotConfig),
-              ),
+              applyMessageDefaults(validated.data as ClawdbotConfig),
             ),
           ),
         ),
@@ -198,7 +196,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         });
       }
 
-      return cfg;
+      return applyConfigOverrides(cfg);
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);

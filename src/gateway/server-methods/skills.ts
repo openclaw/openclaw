@@ -1,9 +1,11 @@
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
 import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
-import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
-import { resolveUserPath } from "../../utils.js";
 import {
   ErrorCodes,
   errorShape,
@@ -28,8 +30,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
-    const workspaceDir = resolveUserPath(workspaceDirRaw);
+    const workspaceDir = resolveAgentWorkspaceDir(
+      cfg,
+      resolveDefaultAgentId(cfg),
+    );
     const report = buildWorkspaceSkillStatus(workspaceDir, {
       config: cfg,
     });
@@ -53,7 +57,10 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
     };
     const cfg = loadConfig();
-    const workspaceDirRaw = cfg.agent?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+    const workspaceDirRaw = resolveAgentWorkspaceDir(
+      cfg,
+      resolveDefaultAgentId(cfg),
+    );
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,

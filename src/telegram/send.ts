@@ -1,6 +1,5 @@
 import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
-import type { ApiClientOptions } from "grammy";
-import { Bot, InputFile } from "grammy";
+import { type ApiClientOptions, Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";

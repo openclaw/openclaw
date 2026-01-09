@@ -1,6 +1,5 @@
-import { stripHeartbeatToken } from "../heartbeat.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { TypingController } from "./typing.js";
 
 export type ReplyDispatchKind = "tool" | "block" | "final";
@@ -45,41 +44,14 @@ export type ReplyDispatcher = {
   getQueuedCounts: () => Record<ReplyDispatchKind, number>;
 };
 
-function normalizeReplyPayload(
+function normalizeReplyPayloadInternal(
   payload: ReplyPayload,
   opts: Pick<ReplyDispatcherOptions, "responsePrefix" | "onHeartbeatStrip">,
 ): ReplyPayload | null {
-  const hasMedia = Boolean(
-    payload.mediaUrl || (payload.mediaUrls?.length ?? 0) > 0,
-  );
-  const trimmed = payload.text?.trim() ?? "";
-  if (!trimmed && !hasMedia) return null;
-
-  // Avoid sending the explicit silent token when no media is attached.
-  if (trimmed === SILENT_REPLY_TOKEN && !hasMedia) return null;
-
-  let text = payload.text ?? undefined;
-  if (text && !trimmed) {
-    // Keep empty text when media exists so media-only replies still send.
-    text = "";
-  }
-  if (text?.includes(HEARTBEAT_TOKEN)) {
-    const stripped = stripHeartbeatToken(text, { mode: "message" });
-    if (stripped.didStrip) opts.onHeartbeatStrip?.();
-    if (stripped.shouldSkip && !hasMedia) return null;
-    text = stripped.text;
-  }
-
-  if (
-    opts.responsePrefix &&
-    text &&
-    text.trim() !== HEARTBEAT_TOKEN &&
-    !text.startsWith(opts.responsePrefix)
-  ) {
-    text = `${opts.responsePrefix} ${text}`;
-  }
-
-  return { ...payload, text };
+  return normalizeReplyPayload(payload, {
+    responsePrefix: opts.responsePrefix,
+    onHeartbeatStrip: opts.onHeartbeatStrip,
+  });
 }
 
 export function createReplyDispatcher(
@@ -96,7 +68,7 @@ export function createReplyDispatcher(
   };
 
   const enqueue = (kind: ReplyDispatchKind, payload: ReplyPayload) => {
-    const normalized = normalizeReplyPayload(payload, options);
+    const normalized = normalizeReplyPayloadInternal(payload, options);
     if (!normalized) return false;
     queuedCounts[kind] += 1;
     pending += 1;

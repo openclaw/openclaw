@@ -2,11 +2,7 @@ import {
   findDuplicateAgentDirs,
   formatDuplicateAgentDirError,
 } from "./agent-dirs.js";
-import {
-  applyIdentityDefaults,
-  applyModelDefaults,
-  applySessionDefaults,
-} from "./defaults.js";
+import { applyModelDefaults, applySessionDefaults } from "./defaults.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import type { ClawdbotConfig, ConfigValidationIssue } from "./types.js";
 import { ClawdbotSchema } from "./zod-schema.js";
@@ -42,7 +38,7 @@ export function validateConfigObject(
       ok: false,
       issues: [
         {
-          path: "routing.agents",
+          path: "agents.list",
           message: formatDuplicateAgentDirError(duplicates),
         },
       ],
@@ -51,9 +47,7 @@ export function validateConfigObject(
   return {
     ok: true,
     config: applyModelDefaults(
-      applySessionDefaults(
-        applyIdentityDefaults(validated.data as ClawdbotConfig),
-      ),
+      applySessionDefaults(validated.data as ClawdbotConfig),
     ),
   };
 }

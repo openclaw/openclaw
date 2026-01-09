@@ -2,6 +2,9 @@ import { loadConfig } from "../../config/config.js";
 import { sendMessageDiscord, sendPollDiscord } from "../../discord/index.js";
 import { shouldLogVerbose } from "../../globals.js";
 import { sendMessageIMessage } from "../../imessage/index.js";
+import { createMSTeamsPollStoreFs } from "../../msteams/polls.js";
+import { sendMessageMSTeams, sendPollMSTeams } from "../../msteams/send.js";
+import { normalizePollInput } from "../../polls.js";
 import { sendMessageSignal } from "../../signal/index.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -141,6 +144,26 @@ export const sendHandlers: GatewayRequestHandlers = {
           payload,
         });
         respond(true, payload, undefined, { provider });
+      } else if (provider === "msteams") {
+        const cfg = loadConfig();
+        const result = await sendMessageMSTeams({
+          cfg,
+          to,
+          text: message,
+          mediaUrl: request.mediaUrl,
+        });
+        const payload = {
+          runId: idem,
+          messageId: result.messageId,
+          conversationId: result.conversationId,
+          provider,
+        };
+        context.dedupe.set(`send:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { provider });
       } else {
         const cfg = loadConfig();
         const targetAccountId =
@@ -210,7 +233,11 @@ export const sendHandlers: GatewayRequestHandlers = {
     }
     const to = request.to.trim();
     const provider = normalizeMessageProvider(request.provider) ?? "whatsapp";
-    if (provider !== "whatsapp" && provider !== "discord") {
+    if (
+      provider !== "whatsapp" &&
+      provider !== "discord" &&
+      provider !== "msteams"
+    ) {
       respond(
         false,
         undefined,
@@ -238,6 +265,40 @@ export const sendHandlers: GatewayRequestHandlers = {
           runId: idem,
           messageId: result.messageId,
           channelId: result.channelId,
+          provider,
+        };
+        context.dedupe.set(`poll:${idem}`, {
+          ts: Date.now(),
+          ok: true,
+          payload,
+        });
+        respond(true, payload, undefined, { provider });
+      } else if (provider === "msteams") {
+        const cfg = loadConfig();
+        const normalized = normalizePollInput(poll, { maxOptions: 12 });
+        const result = await sendPollMSTeams({
+          cfg,
+          to,
+          question: normalized.question,
+          options: normalized.options,
+          maxSelections: normalized.maxSelections,
+        });
+        const pollStore = createMSTeamsPollStoreFs();
+        await pollStore.createPoll({
+          id: result.pollId,
+          question: normalized.question,
+          options: normalized.options,
+          maxSelections: normalized.maxSelections,
+          createdAt: new Date().toISOString(),
+          conversationId: result.conversationId,
+          messageId: result.messageId,
+          votes: {},
+        });
+        const payload = {
+          runId: idem,
+          messageId: result.messageId,
+          conversationId: result.conversationId,
+          pollId: result.pollId,
           provider,
         };
         context.dedupe.set(`poll:${idem}`, {

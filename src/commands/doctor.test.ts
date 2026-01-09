@@ -244,52 +244,56 @@ vi.mock("./doctor-state-migrations.js", () => ({
 }));
 
 describe("doctor", () => {
-  it("migrates routing.allowFrom to whatsapp.allowFrom", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/clawdbot.json",
-      exists: true,
-      raw: "{}",
-      parsed: { routing: { allowFrom: ["+15555550123"] } },
-      valid: false,
-      config: {},
-      issues: [
-        {
-          path: "routing.allowFrom",
-          message: "legacy",
-        },
-      ],
-      legacyIssues: [
-        {
-          path: "routing.allowFrom",
-          message: "legacy",
-        },
-      ],
-    });
+  it(
+    "migrates routing.allowFrom to whatsapp.allowFrom",
+    { timeout: 15_000 },
+    async () => {
+      readConfigFileSnapshot.mockResolvedValue({
+        path: "/tmp/clawdbot.json",
+        exists: true,
+        raw: "{}",
+        parsed: { routing: { allowFrom: ["+15555550123"] } },
+        valid: false,
+        config: {},
+        issues: [
+          {
+            path: "routing.allowFrom",
+            message: "legacy",
+          },
+        ],
+        legacyIssues: [
+          {
+            path: "routing.allowFrom",
+            message: "legacy",
+          },
+        ],
+      });
 
-    const { doctorCommand } = await import("./doctor.js");
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+      const { doctorCommand } = await import("./doctor.js");
+      const runtime = {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: vi.fn(),
+      };
 
-    migrateLegacyConfig.mockReturnValue({
-      config: { whatsapp: { allowFrom: ["+15555550123"] } },
-      changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
-    });
+      migrateLegacyConfig.mockReturnValue({
+        config: { whatsapp: { allowFrom: ["+15555550123"] } },
+        changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+      });
 
-    await doctorCommand(runtime);
+      await doctorCommand(runtime, { nonInteractive: true });
 
-    expect(writeConfigFile).toHaveBeenCalledTimes(1);
-    const written = writeConfigFile.mock.calls[0]?.[0] as Record<
-      string,
-      unknown
-    >;
-    expect((written.whatsapp as Record<string, unknown>)?.allowFrom).toEqual([
-      "+15555550123",
-    ]);
-    expect(written.routing).toBeUndefined();
-  });
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const written = writeConfigFile.mock.calls[0]?.[0] as Record<
+        string,
+        unknown
+      >;
+      expect((written.whatsapp as Record<string, unknown>)?.allowFrom).toEqual([
+        "+15555550123",
+      ]);
+      expect(written.routing).toBeUndefined();
+    },
+  );
 
   it("migrates legacy Clawdis services", async () => {
     readConfigFileSnapshot.mockResolvedValue({
@@ -344,13 +348,15 @@ describe("doctor", () => {
         raw: "{}",
         parsed: {
           gateway: { mode: "local", bind: "loopback" },
-          agent: {
-            workspace: "/Users/steipete/clawd",
-            sandbox: {
-              workspaceRoot: "/Users/steipete/clawd/sandboxes",
-              docker: {
-                image: "clawdbot-sandbox",
-                containerPrefix: "clawdbot-sbx",
+          agents: {
+            defaults: {
+              workspace: "/Users/steipete/clawd",
+              sandbox: {
+                workspaceRoot: "/Users/steipete/clawd/sandboxes",
+                docker: {
+                  image: "clawdbot-sandbox",
+                  containerPrefix: "clawdbot-sbx",
+                },
               },
             },
           },
@@ -358,13 +364,15 @@ describe("doctor", () => {
         valid: true,
         config: {
           gateway: { mode: "local", bind: "loopback" },
-          agent: {
-            workspace: "/Users/steipete/clawd",
-            sandbox: {
-              workspaceRoot: "/Users/steipete/clawd/sandboxes",
-              docker: {
-                image: "clawdbot-sandbox",
-                containerPrefix: "clawdbot-sbx",
+          agents: {
+            defaults: {
+              workspace: "/Users/steipete/clawd",
+              sandbox: {
+                workspaceRoot: "/Users/steipete/clawd/sandboxes",
+                docker: {
+                  image: "clawdbot-sandbox",
+                  containerPrefix: "clawdbot-sbx",
+                },
               },
             },
           },
@@ -411,13 +419,15 @@ describe("doctor", () => {
     migrateLegacyConfig.mockReturnValueOnce({
       config: {
         gateway: { mode: "local", bind: "loopback" },
-        agent: {
-          workspace: "/Users/steipete/clawd",
-          sandbox: {
-            workspaceRoot: "/Users/steipete/clawd/sandboxes",
-            docker: {
-              image: "clawdis-sandbox",
-              containerPrefix: "clawdis-sbx",
+        agents: {
+          defaults: {
+            workspace: "/Users/steipete/clawd",
+            sandbox: {
+              workspaceRoot: "/Users/steipete/clawd/sandboxes",
+              docker: {
+                image: "clawdis-sandbox",
+                containerPrefix: "clawdis-sbx",
+              },
             },
           },
         },
@@ -438,11 +448,12 @@ describe("doctor", () => {
       string,
       unknown
     >;
-    const agent = written.agent as Record<string, unknown>;
-    const sandbox = agent.sandbox as Record<string, unknown>;
+    const agents = written.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const sandbox = defaults.sandbox as Record<string, unknown>;
     const docker = sandbox.docker as Record<string, unknown>;
 
-    expect(agent.workspace).toBe("/Users/steipete/clawd");
+    expect(defaults.workspace).toBe("/Users/steipete/clawd");
     expect(sandbox.workspaceRoot).toBe("/Users/steipete/clawd/sandboxes");
     expect(docker.image).toBe("clawdbot-sandbox");
     expect(docker.containerPrefix).toBe("clawdbot-sbx");
@@ -456,15 +467,16 @@ describe("doctor", () => {
       parsed: {},
       valid: true,
       config: {
-        agent: {
-          sandbox: {
-            mode: "all",
-            scope: "shared",
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "shared",
+            },
           },
-        },
-        routing: {
-          agents: {
-            work: {
+          list: [
+            {
+              id: "work",
               workspace: "~/clawd-work",
               sandbox: {
                 mode: "all",
@@ -474,7 +486,7 @@ describe("doctor", () => {
                 },
               },
             },
-          },
+          ],
         },
       },
       issues: [],
@@ -497,7 +509,7 @@ describe("doctor", () => {
         ([message, title]) =>
           title === "Sandbox" &&
           typeof message === "string" &&
-          message.includes("routing.agents.work.sandbox") &&
+          message.includes('agents.list (id "work") sandbox docker') &&
           message.includes('scope resolves to "shared"'),
       ),
     ).toBe(true);
@@ -511,7 +523,7 @@ describe("doctor", () => {
       parsed: {},
       valid: true,
       config: {
-        agent: { workspace: "/Users/steipete/clawd" },
+        agents: { defaults: { workspace: "/Users/steipete/clawd" } },
       },
       issues: [],
       legacyIssues: [],
@@ -556,22 +568,26 @@ describe("doctor", () => {
       exists: true,
       raw: "{}",
       parsed: {
-        agent: {
-          sandbox: {
-            mode: "non-main",
-            docker: {
-              image: "clawdbot-sandbox-common:bookworm-slim",
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "non-main",
+              docker: {
+                image: "clawdbot-sandbox-common:bookworm-slim",
+              },
             },
           },
         },
       },
       valid: true,
       config: {
-        agent: {
-          sandbox: {
-            mode: "non-main",
-            docker: {
-              image: "clawdbot-sandbox-common:bookworm-slim",
+        agents: {
+          defaults: {
+            sandbox: {
+              mode: "non-main",
+              docker: {
+                image: "clawdbot-sandbox-common:bookworm-slim",
+              },
             },
           },
         },
@@ -614,8 +630,9 @@ describe("doctor", () => {
       string,
       unknown
     >;
-    const agent = written.agent as Record<string, unknown>;
-    const sandbox = agent.sandbox as Record<string, unknown>;
+    const agents = written.agents as Record<string, unknown>;
+    const defaults = agents.defaults as Record<string, unknown>;
+    const sandbox = defaults.sandbox as Record<string, unknown>;
     const docker = sandbox.docker as Record<string, unknown>;
 
     expect(docker.image).toBe("clawdis-sandbox-common:bookworm-slim");

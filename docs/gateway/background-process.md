@@ -32,9 +32,9 @@ Environment overrides:
 - `PI_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
 
 Config (preferred):
-- `agent.bash.backgroundMs` (default 10000)
-- `agent.bash.timeoutSec` (default 1800)
-- `agent.bash.cleanupMs` (default 1800000)
+- `tools.bash.backgroundMs` (default 10000)
+- `tools.bash.timeoutSec` (default 1800)
+- `tools.bash.cleanupMs` (default 1800000)
 
 ## process tool
 

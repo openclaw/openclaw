@@ -1,6 +1,10 @@
 import chalk from "chalk";
 import type { Command } from "commander";
 import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import {
   buildWorkspaceSkillStatus,
   type SkillStatusEntry,
   type SkillStatusReport,
@@ -363,7 +367,10 @@ export function registerSkillsCli(program: Command) {
     .action(async (opts) => {
       try {
         const config = loadConfig();
-        const workspaceDir = config.agent?.workspace ?? process.cwd();
+        const workspaceDir = resolveAgentWorkspaceDir(
+          config,
+          resolveDefaultAgentId(config),
+        );
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         console.log(formatSkillsList(report, opts));
       } catch (err) {
@@ -380,7 +387,10 @@ export function registerSkillsCli(program: Command) {
     .action(async (name, opts) => {
       try {
         const config = loadConfig();
-        const workspaceDir = config.agent?.workspace ?? process.cwd();
+        const workspaceDir = resolveAgentWorkspaceDir(
+          config,
+          resolveDefaultAgentId(config),
+        );
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         console.log(formatSkillInfo(report, name, opts));
       } catch (err) {
@@ -396,7 +406,10 @@ export function registerSkillsCli(program: Command) {
     .action(async (opts) => {
       try {
         const config = loadConfig();
-        const workspaceDir = config.agent?.workspace ?? process.cwd();
+        const workspaceDir = resolveAgentWorkspaceDir(
+          config,
+          resolveDefaultAgentId(config),
+        );
         const report = buildWorkspaceSkillStatus(workspaceDir, { config });
         console.log(formatSkillsCheck(report, opts));
       } catch (err) {
@@ -409,7 +422,10 @@ export function registerSkillsCli(program: Command) {
   skills.action(async () => {
     try {
       const config = loadConfig();
-      const workspaceDir = config.agent?.workspace ?? process.cwd();
+      const workspaceDir = resolveAgentWorkspaceDir(
+        config,
+        resolveDefaultAgentId(config),
+      );
       const report = buildWorkspaceSkillStatus(workspaceDir, { config });
       console.log(formatSkillsList(report, {}));
     } catch (err) {

@@ -3,17 +3,25 @@ import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import type { ClawdbotConfig, ConfigFileSnapshot } from "../config/types.js";
 import { type GatewayProbeResult, probeGateway } from "../gateway/probe.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
+import { startSshPortForward } from "../infra/ssh-tunnel.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 
-type TargetKind = "explicit" | "configRemote" | "localLoopback";
+type TargetKind = "explicit" | "configRemote" | "localLoopback" | "sshTunnel";
 
 type GatewayStatusTarget = {
   id: string;
   kind: TargetKind;
   url: string;
   active: boolean;
+  tunnel?: {
+    kind: "ssh";
+    target: string;
+    localPort: number;
+    remotePort: number;
+    pid: number | null;
+  };
 };
 
 type GatewayConfigSummary = {
@@ -121,7 +129,15 @@ function resolveTargets(
 
 function resolveProbeBudgetMs(overallMs: number, kind: TargetKind): number {
   if (kind === "localLoopback") return Math.min(800, overallMs);
+  if (kind === "sshTunnel") return Math.min(2000, overallMs);
   return Math.min(1500, overallMs);
+}
+
+function sanitizeSshTarget(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/^ssh\s+/, "");
 }
 
 function resolveAuthForTarget(
@@ -292,11 +308,13 @@ function renderTargetHeader(target: GatewayStatusTarget, rich: boolean) {
   const kindLabel =
     target.kind === "localLoopback"
       ? "Local loopback"
-      : target.kind === "configRemote"
-        ? target.active
-          ? "Remote (configured)"
-          : "Remote (configured, inactive)"
-        : "URL (explicit)";
+      : target.kind === "sshTunnel"
+        ? "Remote over SSH"
+        : target.kind === "configRemote"
+          ? target.active
+            ? "Remote (configured)"
+            : "Remote (configured, inactive)"
+          : "URL (explicit)";
   return `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`;
 }
 
@@ -319,6 +337,9 @@ export async function gatewayStatusCommand(
     password?: string;
     timeout?: unknown;
     json?: boolean;
+    ssh?: string;
+    sshIdentity?: string;
+    sshAuto?: boolean;
   },
   runtime: RuntimeEnv,
 ) {
@@ -327,7 +348,7 @@ export async function gatewayStatusCommand(
   const rich = isRich() && opts.json !== true;
   const overallTimeoutMs = parseTimeoutMs(opts.timeout, 3000);
 
-  const targets = resolveTargets(cfg, opts.url);
+  const baseTargets = resolveTargets(cfg, opts.url);
   const network = buildNetworkHints(cfg);
 
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
@@ -335,19 +356,16 @@ export async function gatewayStatusCommand(
     timeoutMs: discoveryTimeoutMs,
   });
 
-  const probePromises = targets.map(async (target) => {
-    const auth = resolveAuthForTarget(cfg, target, {
-      token: typeof opts.token === "string" ? opts.token : undefined,
-      password: typeof opts.password === "string" ? opts.password : undefined,
-    });
-    const timeoutMs = resolveProbeBudgetMs(overallTimeoutMs, target.kind);
-    const probe = await probeGateway({ url: target.url, auth, timeoutMs });
-    const configSummary = probe.configSnapshot
-      ? extractConfigSummary(probe.configSnapshot)
-      : null;
-    const self = pickGatewaySelfPresence(probe.presence);
-    return { target, probe, configSummary, self };
-  });
+  let sshTarget =
+    sanitizeSshTarget(opts.ssh) ??
+    sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
+  const sshIdentity =
+    sanitizeSshTarget(opts.sshIdentity) ??
+    sanitizeSshTarget(cfg.gateway?.remote?.sshIdentity);
+  const remotePort = resolveGatewayPort(cfg);
+
+  let sshTunnelError: string | null = null;
+  let sshTunnelStarted = false;
 
   const { discovery, probed } = await withProgress(
     {
@@ -356,15 +374,111 @@ export async function gatewayStatusCommand(
       enabled: opts.json !== true,
     },
     async () => {
-      const [discoveryRes, probesRes] = await Promise.allSettled([
-        discoveryPromise,
-        Promise.all(probePromises),
-      ]);
-      return {
-        discovery:
-          discoveryRes.status === "fulfilled" ? discoveryRes.value : [],
-        probed: probesRes.status === "fulfilled" ? probesRes.value : [],
+      const tryStartTunnel = async () => {
+        if (!sshTarget) return null;
+        try {
+          const tunnel = await startSshPortForward({
+            target: sshTarget,
+            identity: sshIdentity ?? undefined,
+            localPortPreferred: remotePort,
+            remotePort,
+            timeoutMs: Math.min(1500, overallTimeoutMs),
+          });
+          sshTunnelStarted = true;
+          return tunnel;
+        } catch (err) {
+          sshTunnelError = err instanceof Error ? err.message : String(err);
+          return null;
+        }
       };
+
+      const discoveryTask = discoveryPromise.catch(() => []);
+      const tunnelTask = sshTarget ? tryStartTunnel() : Promise.resolve(null);
+
+      const [discovery, tunnelFirst] = await Promise.all([
+        discoveryTask,
+        tunnelTask,
+      ]);
+
+      if (!sshTarget && opts.sshAuto) {
+        const user = process.env.USER?.trim() || "";
+        const candidates = discovery
+          .map((b) => {
+            const host = b.tailnetDns || b.lanHost || b.host;
+            if (!host?.trim()) return null;
+            const sshPort =
+              typeof b.sshPort === "number" && b.sshPort > 0 ? b.sshPort : 22;
+            const base = user ? `${user}@${host.trim()}` : host.trim();
+            return sshPort !== 22 ? `${base}:${sshPort}` : base;
+          })
+          .filter((x): x is string => Boolean(x));
+        if (candidates.length > 0) sshTarget = candidates[0] ?? null;
+      }
+
+      const tunnel =
+        tunnelFirst ||
+        (sshTarget && !sshTunnelStarted && !sshTunnelError
+          ? await tryStartTunnel()
+          : null);
+
+      const tunnelTarget: GatewayStatusTarget | null = tunnel
+        ? {
+            id: "sshTunnel",
+            kind: "sshTunnel",
+            url: `ws://127.0.0.1:${tunnel.localPort}`,
+            active: true,
+            tunnel: {
+              kind: "ssh",
+              target: sshTarget ?? "",
+              localPort: tunnel.localPort,
+              remotePort,
+              pid: tunnel.pid,
+            },
+          }
+        : null;
+
+      const targets: GatewayStatusTarget[] = tunnelTarget
+        ? [
+            tunnelTarget,
+            ...baseTargets.filter((t) => t.url !== tunnelTarget.url),
+          ]
+        : baseTargets;
+
+      try {
+        const probed = await Promise.all(
+          targets.map(async (target) => {
+            const auth = resolveAuthForTarget(cfg, target, {
+              token: typeof opts.token === "string" ? opts.token : undefined,
+              password:
+                typeof opts.password === "string" ? opts.password : undefined,
+            });
+            const timeoutMs = resolveProbeBudgetMs(
+              overallTimeoutMs,
+              target.kind,
+            );
+            const probe = await probeGateway({
+              url: target.url,
+              auth,
+              timeoutMs,
+            });
+            const configSummary = probe.configSnapshot
+              ? extractConfigSummary(probe.configSnapshot)
+              : null;
+            const self = pickGatewaySelfPresence(probe.presence);
+            return { target, probe, configSummary, self };
+          }),
+        );
+
+        return { discovery, probed };
+      } finally {
+        if (tunnel) {
+          try {
+            await tunnel.stop();
+          } catch {
+            // best-effort
+          }
+        }
+      }
     },
   );
 
@@ -373,6 +487,7 @@ export async function gatewayStatusCommand(
   const multipleGateways = reachable.length > 1;
   const primary =
     reachable.find((p) => p.target.kind === "explicit") ??
+    reachable.find((p) => p.target.kind === "sshTunnel") ??
     reachable.find((p) => p.target.kind === "configRemote") ??
     reachable.find((p) => p.target.kind === "localLoopback") ??
     null;
@@ -382,6 +497,14 @@ export async function gatewayStatusCommand(
     message: string;
     targetIds?: string[];
   }> = [];
+  if (sshTarget && !sshTunnelStarted) {
+    warnings.push({
+      code: "ssh_tunnel_failed",
+      message: sshTunnelError
+        ? `SSH tunnel failed: ${String(sshTunnelError)}`
+        : "SSH tunnel failed to start; falling back to direct probes.",
+    });
+  }
   if (multipleGateways) {
     warnings.push({
       code: "multiple_gateways",
@@ -427,6 +550,7 @@ export async function gatewayStatusCommand(
             kind: p.target.kind,
             url: p.target.url,
             active: p.target.active,
+            tunnel: p.target.tunnel ?? null,
             connect: {
               ok: p.probe.ok,
               latencyMs: p.probe.connectLatencyMs,
@@ -486,6 +610,11 @@ export async function gatewayStatusCommand(
   for (const p of probed) {
     runtime.log(renderTargetHeader(p.target, rich));
     runtime.log(`  ${renderProbeSummaryLine(p.probe, rich)}`);
+    if (p.target.tunnel?.kind === "ssh") {
+      runtime.log(
+        `  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, p.target.tunnel.target)}`,
+      );
+    }
     if (p.probe.ok && p.self) {
       const host = p.self.host ?? "unknown";
       const ip = p.self.ip ? ` (${p.self.ip})` : "";

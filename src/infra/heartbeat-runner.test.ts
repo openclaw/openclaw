@@ -24,22 +24,32 @@ describe("resolveHeartbeatIntervalMs", () => {
 
   it("returns null when invalid or zero", () => {
     expect(
-      resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "0m" } } }),
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "0m" } } },
+      }),
     ).toBeNull();
     expect(
-      resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "oops" } } }),
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "oops" } } },
+      }),
     ).toBeNull();
   });
 
   it("parses duration strings with minute defaults", () => {
     expect(
-      resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "5m" } } }),
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "5m" } } },
+      }),
     ).toBe(5 * 60_000);
     expect(
-      resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "5" } } }),
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "5" } } },
+      }),
     ).toBe(5 * 60_000);
     expect(
-      resolveHeartbeatIntervalMs({ agent: { heartbeat: { every: "2h" } } }),
+      resolveHeartbeatIntervalMs({
+        agents: { defaults: { heartbeat: { every: "2h" } } },
+      }),
     ).toBe(2 * 60 * 60_000);
   });
 });
@@ -51,7 +61,7 @@ describe("resolveHeartbeatPrompt", () => {
 
   it("uses a trimmed override when configured", () => {
     const cfg: ClawdbotConfig = {
-      agent: { heartbeat: { prompt: "  ping  " } },
+      agents: { defaults: { heartbeat: { prompt: "  ping  " } } },
     };
     expect(resolveHeartbeatPrompt(cfg)).toBe("ping");
   });
@@ -65,7 +75,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
   it("respects target none", () => {
     const cfg: ClawdbotConfig = {
-      agent: { heartbeat: { target: "none" } },
+      agents: { defaults: { heartbeat: { target: "none" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       provider: "none",
@@ -101,7 +111,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
   it("applies allowFrom fallback for WhatsApp targets", () => {
     const cfg: ClawdbotConfig = {
-      agent: { heartbeat: { target: "whatsapp", to: "+1999" } },
+      agents: { defaults: { heartbeat: { target: "whatsapp", to: "+1999" } } },
       whatsapp: { allowFrom: ["+1555", "+1666"] },
     };
     const entry = {
@@ -118,7 +128,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
 
   it("keeps explicit telegram targets", () => {
     const cfg: ClawdbotConfig = {
-      agent: { heartbeat: { target: "telegram", to: "123" } },
+      agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },
     };
     expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
       provider: "telegram",
@@ -150,8 +160,10 @@ describe("runHeartbeatOnce", () => {
       );
 
       const cfg: ClawdbotConfig = {
-        agent: {
-          heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+          },
         },
         whatsapp: { allowFrom: ["*"] },
         session: { store: storePath },
@@ -200,8 +212,10 @@ describe("runHeartbeatOnce", () => {
     const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
     try {
       const cfg: ClawdbotConfig = {
-        routing: { defaultAgentId: "work" },
-        agent: { heartbeat: { every: "5m" } },
+        agents: {
+          defaults: { heartbeat: { every: "5m" } },
+          list: [{ id: "work", default: true }],
+        },
         whatsapp: { allowFrom: ["*"] },
         session: { store: storeTemplate },
       };
@@ -277,12 +291,14 @@ describe("runHeartbeatOnce", () => {
       );
 
       const cfg: ClawdbotConfig = {
-        agent: {
-          heartbeat: {
-            every: "5m",
-            target: "whatsapp",
-            to: "+1555",
-            ackMaxChars: 0,
+        agents: {
+          defaults: {
+            heartbeat: {
+              every: "5m",
+              target: "whatsapp",
+              to: "+1555",
+              ackMaxChars: 0,
+            },
           },
         },
         whatsapp: { allowFrom: ["*"] },
@@ -335,8 +351,10 @@ describe("runHeartbeatOnce", () => {
       );
 
       const cfg: ClawdbotConfig = {
-        agent: {
-          heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "whatsapp", to: "+1555" },
+          },
         },
         whatsapp: { allowFrom: ["*"] },
         session: { store: storePath },
@@ -392,8 +410,10 @@ describe("runHeartbeatOnce", () => {
       );
 
       const cfg: ClawdbotConfig = {
-        agent: {
-          heartbeat: { every: "5m", target: "telegram", to: "123456" },
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "telegram", to: "123456" },
+          },
         },
         telegram: { botToken: "test-bot-token-123" },
         session: { store: storePath },
@@ -455,8 +475,10 @@ describe("runHeartbeatOnce", () => {
       );
 
       const cfg: ClawdbotConfig = {
-        agent: {
-          heartbeat: { every: "5m", target: "telegram", to: "123456" },
+        agents: {
+          defaults: {
+            heartbeat: { every: "5m", target: "telegram", to: "123456" },
+          },
         },
         telegram: {
           accounts: {

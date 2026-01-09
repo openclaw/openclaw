@@ -1,27 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
-import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  modelKey,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
   resolveEmbeddedSessionLane,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
-import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
-import {
-  normalizeReasoningLevel,
-  normalizeThinkLevel,
-  normalizeUsageDisplay,
-  normalizeVerboseLevel,
-} from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
 import {
   loadSessionStore,
@@ -30,8 +15,6 @@ import {
   saveSessionStore,
 } from "../../config/sessions.js";
 import { clearCommandLane } from "../../process/command-queue.js";
-import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { normalizeSendPolicy } from "../../sessions/send-policy.js";
 import {
   ErrorCodes,
   errorShape,
@@ -41,6 +24,7 @@ import {
   validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsResetParams,
+  validateSessionsResolveParams,
 } from "../protocol/index.js";
 import {
   archiveFileOnDisk,
@@ -50,6 +34,7 @@ import {
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
 } from "../session-utils.js";
+import { applySessionsPatchToStore } from "../sessions-patch.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const sessionsHandlers: GatewayRequestHandlers = {
@@ -75,6 +60,122 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       opts: p,
     });
     respond(true, result, undefined);
+  },
+  "sessions.resolve": ({ params, respond }) => {
+    if (!validateSessionsResolveParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid sessions.resolve params: ${formatValidationErrors(validateSessionsResolveParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as import("../protocol/index.js").SessionsResolveParams;
+    const cfg = loadConfig();
+
+    const key = typeof p.key === "string" ? p.key.trim() : "";
+    const label = typeof p.label === "string" ? p.label.trim() : "";
+    const hasKey = key.length > 0;
+    const hasLabel = label.length > 0;
+    if (hasKey && hasLabel) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Provide either key or label (not both)",
+        ),
+      );
+      return;
+    }
+    if (!hasKey && !hasLabel) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "Either key or label is required",
+        ),
+      );
+      return;
+    }
+
+    if (hasKey) {
+      if (!key) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "key required"),
+        );
+        return;
+      }
+      const target = resolveGatewaySessionStoreTarget({ cfg, key });
+      const store = loadSessionStore(target.storePath);
+      const existingKey = target.storeKeys.find(
+        (candidate) => store[candidate],
+      );
+      if (!existingKey) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `No session found: ${key}`),
+        );
+        return;
+      }
+      respond(true, { ok: true, key: target.canonicalKey }, undefined);
+      return;
+    }
+
+    if (!label) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "label required"),
+      );
+      return;
+    }
+
+    const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+    const list = listSessionsFromStore({
+      cfg,
+      storePath,
+      store,
+      opts: {
+        includeGlobal: p.includeGlobal === true,
+        includeUnknown: p.includeUnknown === true,
+        label,
+        agentId: p.agentId,
+        spawnedBy: p.spawnedBy,
+        limit: 2,
+      },
+    });
+    if (list.sessions.length === 0) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `No session found with label: ${label}`,
+        ),
+      );
+      return;
+    }
+    if (list.sessions.length > 1) {
+      const keys = list.sessions.map((s) => s.key).join(", ");
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Multiple sessions found with label: ${label} (${keys})`,
+        ),
+      );
+      return;
+    }
+    respond(true, { ok: true, key: list.sessions[0]?.key }, undefined);
   },
   "sessions.patch": async ({ params, respond, context }) => {
     if (!validateSessionsPatchParams(params)) {
@@ -103,7 +204,6 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const target = resolveGatewaySessionStoreTarget({ cfg, key });
     const storePath = target.storePath;
     const store = loadSessionStore(storePath);
-    const now = Date.now();
 
     const primaryKey = target.storeKeys[0] ?? key;
     const existingKey = target.storeKeys.find((candidate) => store[candidate]);
@@ -111,267 +211,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       store[primaryKey] = store[existingKey];
       delete store[existingKey];
     }
-    const existing = store[primaryKey];
-    const next: SessionEntry = existing
-      ? {
-          ...existing,
-          updatedAt: Math.max(existing.updatedAt ?? 0, now),
-        }
-      : { sessionId: randomUUID(), updatedAt: now };
-
-    if ("spawnedBy" in p) {
-      const raw = p.spawnedBy;
-      if (raw === null) {
-        if (existing?.spawnedBy) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "spawnedBy cannot be cleared once set",
-            ),
-          );
-          return;
-        }
-      } else if (raw !== undefined) {
-        const trimmed = String(raw).trim();
-        if (!trimmed) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid spawnedBy: empty"),
-          );
-          return;
-        }
-        if (!isSubagentSessionKey(primaryKey)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "spawnedBy is only supported for subagent:* sessions",
-            ),
-          );
-          return;
-        }
-        if (existing?.spawnedBy && existing.spawnedBy !== trimmed) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "spawnedBy cannot be changed once set",
-            ),
-          );
-          return;
-        }
-        next.spawnedBy = trimmed;
-      }
+    const applied = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: primaryKey,
+      patch: p,
+      loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+    });
+    if (!applied.ok) {
+      respond(false, undefined, applied.error);
+      return;
     }
-
-    if ("thinkingLevel" in p) {
-      const raw = p.thinkingLevel;
-      if (raw === null) {
-        delete next.thinkingLevel;
-      } else if (raw !== undefined) {
-        const normalized = normalizeThinkLevel(String(raw));
-        if (!normalized) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              "invalid thinkingLevel (use off|minimal|low|medium|high)",
-            ),
-          );
-          return;
-        }
-        if (normalized === "off") delete next.thinkingLevel;
-        else next.thinkingLevel = normalized;
-      }
-    }
-
-    if ("verboseLevel" in p) {
-      const raw = p.verboseLevel;
-      if (raw === null) {
-        delete next.verboseLevel;
-      } else if (raw !== undefined) {
-        const normalized = normalizeVerboseLevel(String(raw));
-        if (!normalized) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid verboseLevel (use "on"|"off")',
-            ),
-          );
-          return;
-        }
-        if (normalized === "off") delete next.verboseLevel;
-        else next.verboseLevel = normalized;
-      }
-    }
-
-    if ("reasoningLevel" in p) {
-      const raw = p.reasoningLevel;
-      if (raw === null) {
-        delete next.reasoningLevel;
-      } else if (raw !== undefined) {
-        const normalized = normalizeReasoningLevel(String(raw));
-        if (!normalized) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid reasoningLevel (use "on"|"off"|"stream")',
-            ),
-          );
-          return;
-        }
-        if (normalized === "off") delete next.reasoningLevel;
-        else next.reasoningLevel = normalized;
-      }
-    }
-
-    if ("responseUsage" in p) {
-      const raw = p.responseUsage;
-      if (raw === null) {
-        delete next.responseUsage;
-      } else if (raw !== undefined) {
-        const normalized = normalizeUsageDisplay(String(raw));
-        if (!normalized) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid responseUsage (use "on"|"off")',
-            ),
-          );
-          return;
-        }
-        if (normalized === "off") delete next.responseUsage;
-        else next.responseUsage = normalized;
-      }
-    }
-
-    if ("model" in p) {
-      const raw = p.model;
-      if (raw === null) {
-        delete next.providerOverride;
-        delete next.modelOverride;
-      } else if (raw !== undefined) {
-        const trimmed = String(raw).trim();
-        if (!trimmed) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "invalid model: empty"),
-          );
-          return;
-        }
-        const resolvedDefault = resolveConfiguredModelRef({
-          cfg,
-          defaultProvider: DEFAULT_PROVIDER,
-          defaultModel: DEFAULT_MODEL,
-        });
-        const aliasIndex = buildModelAliasIndex({
-          cfg,
-          defaultProvider: resolvedDefault.provider,
-        });
-        const resolved = resolveModelRefFromString({
-          raw: trimmed,
-          defaultProvider: resolvedDefault.provider,
-          aliasIndex,
-        });
-        if (!resolved) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `invalid model: ${trimmed}`),
-          );
-          return;
-        }
-        const catalog = await context.loadGatewayModelCatalog();
-        const allowed = buildAllowedModelSet({
-          cfg,
-          catalog,
-          defaultProvider: resolvedDefault.provider,
-          defaultModel: resolvedDefault.model,
-        });
-        const key = modelKey(resolved.ref.provider, resolved.ref.model);
-        if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, `model not allowed: ${key}`),
-          );
-          return;
-        }
-        if (
-          resolved.ref.provider === resolvedDefault.provider &&
-          resolved.ref.model === resolvedDefault.model
-        ) {
-          delete next.providerOverride;
-          delete next.modelOverride;
-        } else {
-          next.providerOverride = resolved.ref.provider;
-          next.modelOverride = resolved.ref.model;
-        }
-      }
-    }
-
-    if ("sendPolicy" in p) {
-      const raw = p.sendPolicy;
-      if (raw === null) {
-        delete next.sendPolicy;
-      } else if (raw !== undefined) {
-        const normalized = normalizeSendPolicy(String(raw));
-        if (!normalized) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid sendPolicy (use "allow"|"deny")',
-            ),
-          );
-          return;
-        }
-        next.sendPolicy = normalized;
-      }
-    }
-
-    if ("groupActivation" in p) {
-      const raw = p.groupActivation;
-      if (raw === null) {
-        delete next.groupActivation;
-      } else if (raw !== undefined) {
-        const normalized = normalizeGroupActivation(String(raw));
-        if (!normalized) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              'invalid groupActivation (use "mention"|"always")',
-            ),
-          );
-          return;
-        }
-        next.groupActivation = normalized;
-      }
-    }
-
-    store[primaryKey] = next;
     await saveSessionStore(storePath, store);
     const result: SessionsPatchResult = {
       ok: true,
       path: storePath,
       key: target.canonicalKey,
-      entry: next,
+      entry: applied.entry,
     };
     respond(true, result, undefined);
   },
@@ -422,6 +278,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       model: entry?.model,
       contextTokens: entry?.contextTokens,
       sendPolicy: entry?.sendPolicy,
+      label: entry?.label,
       lastProvider: entry?.lastProvider,
       lastTo: entry?.lastTo,
       skillsSnapshot: entry?.skillsSnapshot,

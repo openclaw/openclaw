@@ -27,7 +27,8 @@ export type PairingProvider =
   | "imessage"
   | "discord"
   | "slack"
-  | "whatsapp";
+  | "whatsapp"
+  | "msteams";
 
 export type PairingRequest = {
   id: string;
@@ -189,6 +190,7 @@ function normalizeAllowEntry(provider: PairingProvider, entry: string): string {
   if (provider === "signal") return trimmed.replace(/^signal:/i, "");
   if (provider === "discord") return trimmed.replace(/^(discord|user):/i, "");
   if (provider === "slack") return trimmed.replace(/^(slack|user):/i, "");
+  if (provider === "msteams") return trimmed.replace(/^(msteams|user):/i, "");
   return trimmed;
 }
 

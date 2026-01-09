@@ -3,61 +3,75 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import {
-  DEFAULT_AGENT_ID,
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
+import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace.js";
 
-export function resolveAgentIdFromSessionKey(
-  sessionKey?: string | null,
-): string {
-  const parsed = parseAgentSessionKey(sessionKey);
-  return normalizeAgentId(parsed?.agentId ?? DEFAULT_AGENT_ID);
+export { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+
+type AgentEntry = NonNullable<
+  NonNullable<ClawdbotConfig["agents"]>["list"]
+>[number];
+
+type ResolvedAgentConfig = {
+  name?: string;
+  workspace?: string;
+  agentDir?: string;
+  model?: string;
+  identity?: AgentEntry["identity"];
+  groupChat?: AgentEntry["groupChat"];
+  subagents?: AgentEntry["subagents"];
+  sandbox?: AgentEntry["sandbox"];
+  tools?: AgentEntry["tools"];
+};
+
+let defaultAgentWarned = false;
+
+function listAgents(cfg: ClawdbotConfig): AgentEntry[] {
+  const list = cfg.agents?.list;
+  if (!Array.isArray(list)) return [];
+  return list.filter((entry): entry is AgentEntry =>
+    Boolean(entry && typeof entry === "object"),
+  );
+}
+
+export function resolveDefaultAgentId(cfg: ClawdbotConfig): string {
+  const agents = listAgents(cfg);
+  if (agents.length === 0) return DEFAULT_AGENT_ID;
+  const defaults = agents.filter((agent) => agent?.default);
+  if (defaults.length > 1 && !defaultAgentWarned) {
+    defaultAgentWarned = true;
+    console.warn(
+      "Multiple agents marked default=true; using the first entry as default.",
+    );
+  }
+  const chosen = (defaults[0] ?? agents[0])?.id?.trim();
+  return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+}
+
+function resolveAgentEntry(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): AgentEntry | undefined {
+  const id = normalizeAgentId(agentId);
+  return listAgents(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
 export function resolveAgentConfig(
   cfg: ClawdbotConfig,
   agentId: string,
-):
-  | {
-      name?: string;
-      workspace?: string;
-      agentDir?: string;
-      model?: string;
-      subagents?: {
-        allowAgents?: string[];
-      };
-      sandbox?: {
-        mode?: "off" | "non-main" | "all";
-        workspaceAccess?: "none" | "ro" | "rw";
-        scope?: "session" | "agent" | "shared";
-        perSession?: boolean;
-        workspaceRoot?: string;
-        tools?: {
-          allow?: string[];
-          deny?: string[];
-        };
-      };
-      tools?: {
-        allow?: string[];
-        deny?: string[];
-      };
-    }
-  | undefined {
+): ResolvedAgentConfig | undefined {
   const id = normalizeAgentId(agentId);
-  const agents = cfg.routing?.agents;
-  if (!agents || typeof agents !== "object") return undefined;
-  const entry = agents[id];
-  if (!entry || typeof entry !== "object") return undefined;
+  const entry = resolveAgentEntry(cfg, id);
+  if (!entry) return undefined;
   return {
     name: typeof entry.name === "string" ? entry.name : undefined,
     workspace:
       typeof entry.workspace === "string" ? entry.workspace : undefined,
     agentDir: typeof entry.agentDir === "string" ? entry.agentDir : undefined,
     model: typeof entry.model === "string" ? entry.model : undefined,
+    identity: entry.identity,
+    groupChat: entry.groupChat,
     subagents:
       typeof entry.subagents === "object" && entry.subagents
         ? entry.subagents
@@ -71,9 +85,10 @@ export function resolveAgentWorkspaceDir(cfg: ClawdbotConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) return resolveUserPath(configured);
-  if (id === DEFAULT_AGENT_ID) {
-    const legacy = cfg.agent?.workspace?.trim();
-    if (legacy) return resolveUserPath(legacy);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  if (id === defaultAgentId) {
+    const fallback = cfg.agents?.defaults?.workspace?.trim();
+    if (fallback) return resolveUserPath(fallback);
     return DEFAULT_AGENT_WORKSPACE_DIR;
   }
   return path.join(os.homedir(), `clawd-${id}`);

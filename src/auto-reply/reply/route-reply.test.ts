@@ -1,8 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { ClawdbotConfig } from "../../config/config.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
+
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageIMessage: vi.fn(async () => ({ messageId: "ok" })),
+  sendMessageMSTeams: vi.fn(async () => ({
+    messageId: "m1",
+    conversationId: "c1",
+  })),
   sendMessageSignal: vi.fn(async () => ({ messageId: "t1" })),
   sendMessageSlack: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
   sendMessageTelegram: vi.fn(async () => ({ messageId: "m1", chatId: "c1" })),
@@ -14,6 +21,9 @@ vi.mock("../../discord/send.js", () => ({
 }));
 vi.mock("../../imessage/send.js", () => ({
   sendMessageIMessage: mocks.sendMessageIMessage,
+}));
+vi.mock("../../msteams/send.js", () => ({
+  sendMessageMSTeams: mocks.sendMessageMSTeams,
 }));
 vi.mock("../../signal/send.js", () => ({
   sendMessageSignal: mocks.sendMessageSignal,
@@ -57,6 +67,63 @@ describe("routeReply", () => {
     });
     expect(res.ok).toBe(true);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
+  it("drops silent token payloads", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: { text: SILENT_REPLY_TOKEN },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
+  it("applies responsePrefix when routing", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      messages: { responsePrefix: "[clawdbot]" },
+    } as unknown as ClawdbotConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "[clawdbot] hi",
+      expect.any(Object),
+    );
+  });
+
+  it("derives responsePrefix from agent identity when routing", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "rich",
+            identity: { name: "Richbot", theme: "lion bot", emoji: "🦁" },
+          },
+        ],
+      },
+      messages: {},
+    } as unknown as ClawdbotConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      sessionKey: "agent:rich:main",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "[Richbot] hi",
+      expect.any(Object),
+    );
   });
 
   it("passes thread id to Telegram sends", async () => {
@@ -142,5 +209,26 @@ describe("routeReply", () => {
       "hi",
       expect.objectContaining({ accountId: "acc-1", verbose: false }),
     );
+  });
+
+  it("routes MS Teams via proactive sender", async () => {
+    mocks.sendMessageMSTeams.mockClear();
+    const cfg = {
+      msteams: {
+        enabled: true,
+      },
+    } as unknown as ClawdbotConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "msteams",
+      to: "conversation:19:abc@thread.tacv2",
+      cfg,
+    });
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:19:abc@thread.tacv2",
+      text: "hi",
+      mediaUrl: undefined,
+    });
   });
 });

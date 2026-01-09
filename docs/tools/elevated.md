@@ -12,7 +12,7 @@ read_when:
 - Only `on|off` are accepted; anything else returns a hint and does not change state.
 
 ## What it controls (and what it doesn’t)
-- **Global availability gate**: `agent.elevated` is global (not per-agent). If disabled or sender not allowlisted, elevated is unavailable everywhere.
+- **Global availability gate**: `tools.elevated` is global (not per-agent). If disabled or sender not allowlisted, elevated is unavailable everywhere.
 - **Per-session state**: `/elevated on|off` sets the elevated level for the current session key.
 - **Inline directive**: `/elevated on` inside a message applies to that message only.
 - **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
@@ -31,7 +31,7 @@ Note:
 ## Resolution order
 1. Inline directive on the message (applies only to that message).
 2. Session override (set by sending a directive-only message).
-3. Global default (`agent.elevatedDefault` in config).
+3. Global default (`agents.defaults.elevatedDefault` in config).
 
 ## Setting a session default
 - Send a message that is **only** the directive (whitespace allowed), e.g. `/elevated on`.
@@ -40,10 +40,10 @@ Note:
 - Send `/elevated` (or `/elevated:`) with no argument to see the current elevated level.
 
 ## Availability + allowlists
-- Feature gate: `agent.elevated.enabled` (default can be off via config even if the code supports it).
-- Sender allowlist: `agent.elevated.allowFrom` with per-provider allowlists (e.g. `discord`, `whatsapp`).
+- Feature gate: `tools.elevated.enabled` (default can be off via config even if the code supports it).
+- Sender allowlist: `tools.elevated.allowFrom` with per-provider allowlists (e.g. `discord`, `whatsapp`).
 - Both must pass; otherwise elevated is treated as unavailable.
-- Discord fallback: if `agent.elevated.allowFrom.discord` is omitted, the `discord.dm.allowFrom` list is used as a fallback. Set `agent.elevated.allowFrom.discord` (even `[]`) to override.
+- Discord fallback: if `tools.elevated.allowFrom.discord` is omitted, the `discord.dm.allowFrom` list is used as a fallback. Set `tools.elevated.allowFrom.discord` (even `[]`) to override.
 
 ## Logging + status
 - Elevated bash calls are logged at info level.

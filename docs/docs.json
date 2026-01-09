@@ -553,7 +553,8 @@
         "group": "CLI",
         "pages": [
           "cli/index",
-          "cli/gateway"
+          "cli/gateway",
+          "cli/sandbox"
         ]
       },
       {

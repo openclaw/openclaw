@@ -24,56 +24,13 @@ export type SessionDefaultsOptions = {
   warnState?: WarnState;
 };
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-export function applyIdentityDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
-  const identity = cfg.identity;
-  if (!identity) return cfg;
-
-  const name = identity.name?.trim();
-
-  const routing = cfg.routing ?? {};
-  const groupChat = routing.groupChat ?? {};
-
-  let mutated = false;
-  const next: ClawdbotConfig = { ...cfg };
-
-  if (name && !groupChat.mentionPatterns) {
-    const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
-    const re = parts.length ? parts.join("\\s+") : escapeRegExp(name);
-    const pattern = `\\b@?${re}\\b`;
-    next.routing = {
-      ...(next.routing ?? routing),
-      groupChat: { ...groupChat, mentionPatterns: [pattern] },
-    };
-    mutated = true;
-  }
-
-  return mutated ? next : cfg;
-}
-
 export function applyMessageDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   const messages = cfg.messages;
-  const hasAckReaction = messages?.ackReaction !== undefined;
   const hasAckScope = messages?.ackReactionScope !== undefined;
-  if (hasAckReaction && hasAckScope) return cfg;
+  if (hasAckScope) return cfg;
 
-  const fallbackEmoji = cfg.identity?.emoji?.trim() || "👀";
   const nextMessages = messages ? { ...messages } : {};
-  let mutated = false;
-
-  if (!hasAckReaction) {
-    nextMessages.ackReaction = fallbackEmoji;
-    mutated = true;
-  }
-  if (!hasAckScope) {
-    nextMessages.ackReactionScope = "group-mentions";
-    mutated = true;
-  }
-
-  if (!mutated) return cfg;
+  nextMessages.ackReactionScope = "group-mentions";
   return {
     ...cfg,
     messages: nextMessages,
@@ -119,7 +76,7 @@ export function applyTalkApiKey(config: ClawdbotConfig): ClawdbotConfig {
 }
 
 export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
-  const existingAgent = cfg.agent;
+  const existingAgent = cfg.agents?.defaults;
   if (!existingAgent) return cfg;
   const existingModels = existingAgent.models ?? {};
   if (Object.keys(existingModels).length === 0) return cfg;
@@ -141,9 +98,9 @@ export function applyModelDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
 
   return {
     ...cfg,
-    agent: {
-      ...existingAgent,
-      models: nextModels,
+    agents: {
+      ...cfg.agents,
+      defaults: { ...existingAgent, models: nextModels },
     },
   };
 }
@@ -164,18 +121,21 @@ export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
 export function applyContextPruningDefaults(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
-  const agent = cfg.agent;
-  if (!agent) return cfg;
-  const contextPruning = agent?.contextPruning;
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) return cfg;
+  const contextPruning = defaults?.contextPruning;
   if (contextPruning?.mode) return cfg;
 
   return {
     ...cfg,
-    agent: {
-      ...agent,
-      contextPruning: {
-        ...contextPruning,
-        mode: "adaptive",
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        contextPruning: {
+          ...contextPruning,
+          mode: "adaptive",
+        },
       },
     },
   };

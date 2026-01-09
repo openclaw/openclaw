@@ -553,7 +553,7 @@ export function resolveQueueSettings(params: {
   inlineOptions?: Partial<QueueSettings>;
 }): QueueSettings {
   const providerKey = params.provider?.trim().toLowerCase();
-  const queueCfg = params.cfg.routing?.queue;
+  const queueCfg = params.cfg.messages?.queue;
   const providerModeRaw =
     providerKey && queueCfg?.byProvider
       ? (queueCfg.byProvider as Record<string, string | undefined>)[providerKey]

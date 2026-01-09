@@ -1,15 +1,15 @@
 ---
 summary: "How Clawdbot sandboxing works: modes, scopes, workspace access, and images"
 title: Sandboxing
-read_when: "You want a dedicated explanation of sandboxing or need to tune agent.sandbox."
+read_when: "You want a dedicated explanation of sandboxing or need to tune agents.defaults.sandbox."
 status: active
 ---
 
 # Sandboxing
 
 Clawdbot can run **tools inside Docker containers** to reduce blast radius.
-This is **optional** and controlled by configuration (`agent.sandbox` or
-`routing.agents[id].sandbox`). If sandboxing is off, tools run on the host.
+This is **optional** and controlled by configuration (`agents.defaults.sandbox` or
+`agents.list[].sandbox`). If sandboxing is off, tools run on the host.
 The Gateway stays on the host; tool execution runs in an isolated sandbox
 when enabled.
 
@@ -18,16 +18,16 @@ and process access when the model does something dumb.
 
 ## What gets sandboxed
 - Tool execution (`bash`, `read`, `write`, `edit`, `process`, etc.).
-- Optional sandboxed browser (`agent.sandbox.browser`).
+- Optional sandboxed browser (`agents.defaults.sandbox.browser`).
 
 Not sandboxed:
 - The Gateway process itself.
-- Any tool explicitly allowed to run on the host (e.g. `agent.elevated`).
+- Any tool explicitly allowed to run on the host (e.g. `tools.elevated`).
   - **Elevated bash runs on the host and bypasses sandboxing.**
-  - If sandboxing is off, `agent.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
+  - If sandboxing is off, `tools.elevated` does not change execution (already on host). See [Elevated Mode](/tools/elevated).
 
 ## Modes
-`agent.sandbox.mode` controls **when** sandboxing is used:
+`agents.defaults.sandbox.mode` controls **when** sandboxing is used:
 - `"off"`: no sandboxing.
 - `"non-main"`: sandbox only **non-main** sessions (default if you want normal chats on host).
 - `"all"`: every session runs in a sandbox.
@@ -35,13 +35,13 @@ Note: `"non-main"` is based on `session.mainKey` (default `"main"`), not agent i
 Group/channel sessions use their own keys, so they count as non-main and will be sandboxed.
 
 ## Scope
-`agent.sandbox.scope` controls **how many containers** are created:
+`agents.defaults.sandbox.scope` controls **how many containers** are created:
 - `"session"` (default): one container per session.
 - `"agent"`: one container per agent.
 - `"shared"`: one container shared by all sandboxed sessions.
 
 ## Workspace access
-`agent.sandbox.workspaceAccess` controls **what the sandbox can see**:
+`agents.defaults.sandbox.workspaceAccess` controls **what the sandbox can see**:
 - `"none"` (default): tools see a sandbox workspace under `~/.clawdbot/sandboxes`.
 - `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`).
 - `"rw"`: mounts the agent workspace read/write at `/workspace`.
@@ -66,7 +66,7 @@ scripts/sandbox-browser-setup.sh
 ```
 
 By default, sandbox containers run with **no network**.
-Override with `agent.sandbox.docker.network`.
+Override with `agents.defaults.sandbox.docker.network`.
 
 Docker installs and the containerized gateway live here:
 [Docker](/install/docker)
@@ -75,28 +75,30 @@ Docker installs and the containerized gateway live here:
 Tool allow/deny policies still apply before sandbox rules. If a tool is denied
 globally or per-agent, sandboxing doesn’t bring it back.
 
-`agent.elevated` is an explicit escape hatch that runs `bash` on the host.
+`tools.elevated` is an explicit escape hatch that runs `bash` on the host.
 Keep it locked down.
 
 ## Multi-agent overrides
 Each agent can override sandbox + tools:
-`routing.agents[id].sandbox` and `routing.agents[id].tools`.
+`agents.list[].sandbox` and `agents.list[].tools` (plus `agents.list[].tools.sandbox.tools` for sandbox tool policy).
 See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for precedence.
 
 ## Minimal enable example
 ```json5
 {
-  agent: {
-    sandbox: {
-      mode: "non-main",
-      scope: "session",
-      workspaceAccess: "none"
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "non-main",
+        scope: "session",
+        workspaceAccess: "none"
+      }
     }
   }
 }
 ```
 
 ## Related docs
-- [Sandbox Configuration](/gateway/configuration#agent-sandbox)
+- [Sandbox Configuration](/gateway/configuration#agentsdefaults-sandbox)
 - [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools)
 - [Security](/gateway/security)

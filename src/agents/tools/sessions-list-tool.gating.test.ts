@@ -13,7 +13,7 @@ vi.mock("../../config/config.js", async (importOriginal) => {
     loadConfig: () =>
       ({
         session: { scope: "per-sender", mainKey: "main" },
-        routing: { agentToAgent: { enabled: false } },
+        tools: { agentToAgent: { enabled: false } },
       }) as never,
   };
 });
@@ -32,7 +32,7 @@ describe("sessions_list gating", () => {
     });
   });
 
-  it("filters out other agents when routing.agentToAgent.enabled is false", async () => {
+  it("filters out other agents when tools.agentToAgent.enabled is false", async () => {
     const tool = createSessionsListTool({ agentSessionKey: "agent:main:main" });
     const result = await tool.execute("call1", {});
     expect(result.details).toMatchObject({

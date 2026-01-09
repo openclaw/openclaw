@@ -8,7 +8,7 @@ read_when:
 # `clawdbot message`
 
 Single outbound command for sending messages and provider actions
-(Discord/Slack/Telegram/WhatsApp/Signal/iMessage).
+(Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams).
 
 ## Usage
 
@@ -19,7 +19,7 @@ clawdbot message <subcommand> [flags]
 Provider selection:
 - `--provider` required if more than one provider is configured.
 - If exactly one provider is configured, it becomes the default.
-- Values: `whatsapp|telegram|discord|slack|signal|imessage`
+- Values: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
 
 Target formats (`--to`):
 - WhatsApp: E.164 or group JID
@@ -27,6 +27,7 @@ Target formats (`--to`):
 - Discord/Slack: `channel:<id>` or `user:<id>` (raw id ok)
 - Signal: E.164, `group:<id>`, or `signal:+E.164`
 - iMessage: handle or `chat_id:<id>`
+- MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
 ## Common flags
 
@@ -152,6 +153,20 @@ clawdbot message poll --provider discord \
   --poll-question "Snack?" \
   --poll-option Pizza --poll-option Sushi \
   --poll-multi --poll-duration-hours 48
+```
+
+Send a Teams proactive message:
+```
+clawdbot message send --provider msteams \
+  --to conversation:19:abc@thread.tacv2 --message "hi"
+```
+
+Create a Teams poll:
+```
+clawdbot message poll --provider msteams \
+  --to conversation:19:abc@thread.tacv2 \
+  --poll-question "Lunch?" \
+  --poll-option Pizza --poll-option Sushi
 ```
 
 React in Slack:

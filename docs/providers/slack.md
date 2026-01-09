@@ -248,8 +248,8 @@ Slack tool actions can be gated with `slack.actions.*`:
 | emojiList | enabled | Custom emoji list |
 
 ## Notes
-- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `routing.groupChat.mentionPatterns` also count as mentions.
-- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
+- Mention gating is controlled via `slack.channels` (set `requireMention` to `true`); `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`) also count as mentions.
+- Multi-agent override: set per-agent patterns on `agents.list[].groupChat.mentionPatterns`.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
 - Bot-authored messages are ignored by default; enable via `slack.allowBots` or `slack.channels.<id>.allowBots`.
 - For the Slack tool, reaction removal semantics are in [/tools/reactions](/tools/reactions).

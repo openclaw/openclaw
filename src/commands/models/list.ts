@@ -290,10 +290,10 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
 
   addEntry(resolvedDefault, "default");
 
-  const modelConfig = cfg.agent?.model as
+  const modelConfig = cfg.agents?.defaults?.model as
     | { primary?: string; fallbacks?: string[] }
     | undefined;
-  const imageModelConfig = cfg.agent?.imageModel as
+  const imageModelConfig = cfg.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | undefined;
   const modelFallbacks =
@@ -333,7 +333,7 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
     addEntry(resolved.ref, `img-fallback#${idx + 1}`);
   });
 
-  for (const key of Object.keys(cfg.agent?.models ?? {})) {
+  for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
     const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
     if (!parsed) continue;
     addEntry(parsed, "configured");
@@ -623,11 +623,11 @@ export async function modelsStatusCommand(
     defaultModel: DEFAULT_MODEL,
   });
 
-  const modelConfig = cfg.agent?.model as
+  const modelConfig = cfg.agents?.defaults?.model as
     | { primary?: string; fallbacks?: string[] }
     | string
     | undefined;
-  const imageConfig = cfg.agent?.imageModel as
+  const imageConfig = cfg.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | string
     | undefined;
@@ -645,14 +645,14 @@ export async function modelsStatusCommand(
       : (imageConfig?.primary?.trim() ?? "");
   const imageFallbacks =
     typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
-  const aliases = Object.entries(cfg.agent?.models ?? {}).reduce<
+  const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
     Record<string, string>
   >((acc, [key, entry]) => {
     const alias = entry?.alias?.trim();
     if (alias) acc[alias] = key;
     return acc;
   }, {});
-  const allowed = Object.keys(cfg.agent?.models ?? {});
+  const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
   const agentDir = resolveClawdbotAgentDir();
   const store = ensureAuthProfileStore();

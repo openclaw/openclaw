@@ -63,9 +63,11 @@ const mocks = vi.hoisted(() => {
       .mockReturnValue(["OPENAI_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]),
     shouldEnableShellEnvFallback: vi.fn().mockReturnValue(true),
     loadConfig: vi.fn().mockReturnValue({
-      agent: {
-        model: { primary: "anthropic/claude-opus-4-5", fallbacks: [] },
-        models: { "anthropic/claude-opus-4-5": { alias: "Opus" } },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5", fallbacks: [] },
+          models: { "anthropic/claude-opus-4-5": { alias: "Opus" } },
+        },
       },
       models: { providers: {} },
       env: { shellEnv: { enabled: true } },

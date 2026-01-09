@@ -14,11 +14,18 @@ import {
   resolveProfile,
 } from "../browser/config.js";
 import { DEFAULT_CLAWD_BROWSER_COLOR } from "../browser/constants.js";
-import type { ClawdbotConfig } from "../config/config.js";
-import { STATE_DIR_CLAWDBOT } from "../config/config.js";
+import {
+  type ClawdbotConfig,
+  loadConfig,
+  STATE_DIR_CLAWDBOT,
+} from "../config/config.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import {
+  resolveAgentConfig,
+  resolveAgentIdFromSessionKey,
+} from "./agent-scope.js";
 import { syncSkillsToWorkspace } from "./skills.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
@@ -329,19 +336,26 @@ function resolveSandboxScopeKey(scope: SandboxScope, sessionKey: string) {
   return `agent:${agentId}`;
 }
 
+function resolveSandboxAgentId(scopeKey: string): string | undefined {
+  const trimmed = scopeKey.trim();
+  if (!trimmed || trimmed === "shared") return undefined;
+  const parts = trimmed.split(":").filter(Boolean);
+  if (parts[0] === "agent" && parts[1]) return normalizeAgentId(parts[1]);
+  return resolveAgentIdFromSessionKey(trimmed);
+}
+
 export function resolveSandboxConfigForAgent(
   cfg?: ClawdbotConfig,
   agentId?: string,
 ): SandboxConfig {
-  const agent = cfg?.agent?.sandbox;
+  const agent = cfg?.agents?.defaults?.sandbox;
 
   // Agent-specific sandbox config overrides global
   let agentSandbox: typeof agent | undefined;
-  if (agentId && cfg?.routing?.agents) {
-    const agentConfig = cfg.routing.agents[agentId];
-    if (agentConfig && typeof agentConfig === "object") {
-      agentSandbox = agentConfig.sandbox;
-    }
+  const agentConfig =
+    cfg && agentId ? resolveAgentConfig(cfg, agentId) : undefined;
+  if (agentConfig?.sandbox) {
+    agentSandbox = agentConfig.sandbox;
   }
 
   const scope = resolveSandboxScope({
@@ -370,9 +384,13 @@ export function resolveSandboxConfigForAgent(
     }),
     tools: {
       allow:
-        agentSandbox?.tools?.allow ?? agent?.tools?.allow ?? DEFAULT_TOOL_ALLOW,
+        agentConfig?.tools?.sandbox?.tools?.allow ??
+        cfg?.tools?.sandbox?.tools?.allow ??
+        DEFAULT_TOOL_ALLOW,
       deny:
-        agentSandbox?.tools?.deny ?? agent?.tools?.deny ?? DEFAULT_TOOL_DENY,
+        agentConfig?.tools?.sandbox?.tools?.deny ??
+        cfg?.tools?.sandbox?.tools?.deny ??
+        DEFAULT_TOOL_DENY,
     },
     prune: resolveSandboxPruneConfig({
       scope,
@@ -1047,7 +1065,7 @@ export async function resolveSandboxContext(params: {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
-      params.config?.agent?.skipBootstrap,
+      params.config?.agents?.defaults?.skipBootstrap,
     );
     if (cfg.workspaceAccess === "none") {
       try {
@@ -1121,7 +1139,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
     await ensureSandboxWorkspace(
       sandboxWorkspaceDir,
       agentWorkspaceDir,
-      params.config?.agent?.skipBootstrap,
+      params.config?.agents?.defaults?.skipBootstrap,
     );
     if (cfg.workspaceAccess === "none") {
       try {
@@ -1144,4 +1162,119 @@ export async function ensureSandboxWorkspaceForSession(params: {
     workspaceDir,
     containerWorkdir: cfg.docker.workdir,
   };
+}
+
+// --- Public API for sandbox management ---
+
+export type SandboxContainerInfo = SandboxRegistryEntry & {
+  running: boolean;
+  imageMatch: boolean;
+};
+
+export type SandboxBrowserInfo = SandboxBrowserRegistryEntry & {
+  running: boolean;
+  imageMatch: boolean;
+};
+
+export async function listSandboxContainers(): Promise<SandboxContainerInfo[]> {
+  const config = loadConfig();
+  const registry = await readRegistry();
+  const results: SandboxContainerInfo[] = [];
+
+  for (const entry of registry.entries) {
+    const state = await dockerContainerState(entry.containerName);
+    // Get actual image from container
+    let actualImage = entry.image;
+    if (state.exists) {
+      try {
+        const result = await execDocker(
+          ["inspect", "-f", "{{.Config.Image}}", entry.containerName],
+          { allowFailure: true },
+        );
+        if (result.code === 0) {
+          actualImage = result.stdout.trim();
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const agentId = resolveSandboxAgentId(entry.sessionKey);
+    const configuredImage = resolveSandboxConfigForAgent(config, agentId).docker
+      .image;
+    results.push({
+      ...entry,
+      image: actualImage,
+      running: state.running,
+      imageMatch: actualImage === configuredImage,
+    });
+  }
+
+  return results;
+}
+
+export async function listSandboxBrowsers(): Promise<SandboxBrowserInfo[]> {
+  const config = loadConfig();
+  const registry = await readBrowserRegistry();
+  const results: SandboxBrowserInfo[] = [];
+
+  for (const entry of registry.entries) {
+    const state = await dockerContainerState(entry.containerName);
+    let actualImage = entry.image;
+    if (state.exists) {
+      try {
+        const result = await execDocker(
+          ["inspect", "-f", "{{.Config.Image}}", entry.containerName],
+          { allowFailure: true },
+        );
+        if (result.code === 0) {
+          actualImage = result.stdout.trim();
+        }
+      } catch {
+        // ignore
+      }
+    }
+    const agentId = resolveSandboxAgentId(entry.sessionKey);
+    const configuredImage = resolveSandboxConfigForAgent(config, agentId)
+      .browser.image;
+    results.push({
+      ...entry,
+      image: actualImage,
+      running: state.running,
+      imageMatch: actualImage === configuredImage,
+    });
+  }
+
+  return results;
+}
+
+export async function removeSandboxContainer(
+  containerName: string,
+): Promise<void> {
+  try {
+    await execDocker(["rm", "-f", containerName], { allowFailure: true });
+  } catch {
+    // ignore removal failures
+  }
+  await removeRegistryEntry(containerName);
+}
+
+export async function removeSandboxBrowserContainer(
+  containerName: string,
+): Promise<void> {
+  try {
+    await execDocker(["rm", "-f", containerName], { allowFailure: true });
+  } catch {
+    // ignore removal failures
+  }
+  await removeBrowserRegistryEntry(containerName);
+
+  // Stop browser bridge if active
+  for (const [sessionKey, bridge] of BROWSER_BRIDGES.entries()) {
+    if (bridge.containerName === containerName) {
+      await stopBrowserBridgeServer(bridge.bridge.server).catch(
+        () => undefined,
+      );
+      BROWSER_BRIDGES.delete(sessionKey);
+    }
+  }
 }

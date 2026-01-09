@@ -63,7 +63,7 @@ If you want a fixed channel, set `provider` + `to`. Otherwise `provider: "last"`
 uses the last delivery route (falls back to WhatsApp).
 
 To force a cheaper model for Gmail runs, set `model` in the mapping
-(`provider/model` or alias). If you enforce `agent.models`, include it there.
+(`provider/model` or alias). If you enforce `agents.defaults.models`, include it there.
 
 To customize payload handling further, add `hooks.mappings` or a JS/TS transform module
 under `hooks.transformsDir` (see [`docs/webhook.md`](https://docs.clawd.bot/automation/webhook)).
