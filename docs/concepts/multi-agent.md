@@ -17,6 +17,9 @@ An **agent** is a fully scoped brain with its own:
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
 - **Session store** (chat history + routing state) under `~/.clawdbot/agents/<agentId>/sessions`.
 
+Skills are per-agent via each workspace’s `skills/` folder, with shared skills
+available from `~/.clawdbot/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 
 ## Paths (quick map)
