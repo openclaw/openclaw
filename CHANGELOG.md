@@ -120,6 +120,7 @@
 - Gateway/CLI: allow dev profile (`clawdbot --dev`) to auto-create the dev config + workspace. — thanks @steipete
 - Dev templates: ship C-3PO dev workspace defaults as docs templates and use them for dev bootstrap. — thanks @steipete
 - Config: fix Minimax hosted onboarding to write `agents.defaults` and allow `msteams` as a heartbeat target. — thanks @steipete
+- Discord: add channel/category management actions (create/edit/move/delete + category removal). (#487) - thanks @NicholasSpisak
 
 ## 2026.1.8
 
