@@ -70,6 +70,7 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
+    discover
   models
     list
     status
