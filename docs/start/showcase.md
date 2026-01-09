@@ -12,6 +12,32 @@ Real projects from the community. See what people are building with Clawdbot.
 **Want to be featured?** Share your project in [#showcase on Discord](https://discord.gg/clawdbot) or [tag @clawdbot on X](https://x.com/clawdbot).
 </Info>
 
+## 🎥 Clawdbot in Action
+
+Full setup walkthrough (28m) by VelvetShark.
+
+<div
+  style={{
+    position: "relative",
+    paddingBottom: "56.25%",
+    height: 0,
+    overflow: "hidden",
+    borderRadius: 16,
+  }}
+>
+  <iframe
+    src="https://www.youtube-nocookie.com/embed/SaWSPZoPX34"
+    title="ClawdBot: The self-hosted AI that Siri should have been (Full setup)"
+    style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%" }}
+    frameBorder="0"
+    loading="lazy"
+    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+    allowFullScreen
+  />
+</div>
+
+[Watch on YouTube](https://www.youtube.com/watch?v=SaWSPZoPX34)
+
 ## 🤖 Automation & Workflows
 
 <CardGroup cols={2}>
