@@ -555,7 +555,6 @@ export async function handleCommands(params: {
     const reply = await buildStatusReply({
       cfg,
       command,
-      provider: command.provider,
       sessionEntry,
       sessionKey,
       sessionScope,
