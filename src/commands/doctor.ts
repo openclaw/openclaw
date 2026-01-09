@@ -1,5 +1,5 @@
 import path from "node:path";
-import { intro, note, outro } from "@clack/prompts";
+import { intro as clackIntro, note as clackNote, outro as clackOutro } from "@clack/prompts";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -20,6 +20,7 @@ import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -70,6 +71,13 @@ import {
   printWizardHeader,
 } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
+
+const intro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+const outro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";

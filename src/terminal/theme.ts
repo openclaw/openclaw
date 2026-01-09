@@ -1,16 +1,6 @@
 import chalk from "chalk";
 
-// Semantic palette for CLI output. Keep in sync with docs/cli/index.md.
-export const LOBSTER_PALETTE = {
-  accent: "#FF5A2D",
-  accentBright: "#FF7A3D",
-  accentDim: "#D14A22",
-  info: "#FF8A5B",
-  success: "#2FBF71",
-  warn: "#FFB020",
-  error: "#E23D2D",
-  muted: "#8B7F77",
-} as const;
+import { LOBSTER_PALETTE } from "./palette.js";
 
 const hex = (value: string) => chalk.hex(value);
 
