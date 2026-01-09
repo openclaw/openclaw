@@ -504,6 +504,27 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     emitter: gatewayEmitter,
     runtime,
   });
+  // Timeout to detect zombie connections where HELLO is never received.
+  const HELLO_TIMEOUT_MS = 30000;
+  let helloTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const onGatewayDebug = (msg: unknown) => {
+    const message = String(msg);
+    if (!message.includes("WebSocket connection opened")) return;
+    if (helloTimeoutId) clearTimeout(helloTimeoutId);
+    helloTimeoutId = setTimeout(() => {
+      if (!gateway?.isConnected) {
+        runtime.log?.(
+          danger(
+            `[discord] connection stalled: no HELLO received within ${HELLO_TIMEOUT_MS}ms, forcing reconnect`,
+          ),
+        );
+        gateway?.disconnect();
+        gateway?.connect(false);
+      }
+      helloTimeoutId = undefined;
+    }, HELLO_TIMEOUT_MS);
+  };
+  gatewayEmitter?.on("debug", onGatewayDebug);
   try {
     await waitForDiscordGatewayStop({
       gateway: gateway
@@ -526,6 +547,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     });
   } finally {
     stopGatewayLogging();
+    stopGatewayLogging();
+    if (helloTimeoutId) clearTimeout(helloTimeoutId);
+    gatewayEmitter?.removeListener("debug", onGatewayDebug);
   }
 }
 
