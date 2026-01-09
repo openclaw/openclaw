@@ -672,7 +672,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     service.runtime?.status === "running"
   ) {
     defaultRuntime.log(
-      warnText("Warm-up: launch agents can take a few seconds. Try again shortly."),
+      warnText(
+        "Warm-up: launch agents can take a few seconds. Try again shortly.",
+      ),
     );
   }
   if (rpc) {
@@ -680,8 +682,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       defaultRuntime.log(`${label("RPC probe:")} ${okText("ok")}`);
     } else {
       defaultRuntime.error(`${label("RPC probe:")} ${errorText("failed")}`);
-      if (rpc.url)
-        defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
+      if (rpc.url) defaultRuntime.error(`${label("RPC target:")} ${rpc.url}`);
       const lines = String(rpc.error ?? "unknown")
         .split(/\r?\n/)
         .filter(Boolean);
@@ -698,7 +699,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     }
   } else if (service.loaded && service.runtime?.status === "stopped") {
     defaultRuntime.error(
-      errorText("Service is loaded but not running (likely exited immediately)."),
+      errorText(
+        "Service is loaded but not running (likely exited immediately).",
+      ),
     );
     for (const hint of renderRuntimeHints(
       service.runtime,
@@ -736,7 +739,9 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       ),
     );
     if (addrs.length > 0) {
-      defaultRuntime.log(`${label("Listening:")} ${infoText(addrs.join(", "))}`);
+      defaultRuntime.log(
+        `${label("Listening:")} ${infoText(addrs.join(", "))}`,
+      );
     }
   }
   if (status.portCli && status.portCli.port !== status.port?.port) {

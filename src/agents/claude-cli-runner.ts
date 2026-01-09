@@ -5,10 +5,10 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
-import { shouldLogVerbose } from "../globals.js";
 import {
   buildBootstrapContextFiles,
   type EmbeddedContextFile,
@@ -21,7 +21,10 @@ const log = createSubsystemLogger("agent/claude-cli");
 const CLAUDE_CLI_QUEUE_KEY = "global";
 const CLAUDE_CLI_RUN_QUEUE = new Map<string, Promise<unknown>>();
 
-function enqueueClaudeCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
+function enqueueClaudeCliRun<T>(
+  key: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const prior = CLAUDE_CLI_RUN_QUEUE.get(key) ?? Promise.resolve();
   const chained = prior.catch(() => undefined).then(task);
   const tracked = chained.finally(() => {

@@ -24,7 +24,10 @@ import {
 import { setVerbose } from "../globals.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
-import { createSubsystemLogger, setConsoleSubsystemFilter } from "../logging.js";
+import {
+  createSubsystemLogger,
+  setConsoleSubsystemFilter,
+} from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
 import { forceFreePortAndWait } from "./ports.js";
 import { withProgress } from "./progress.js";
