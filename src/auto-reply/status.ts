@@ -20,14 +20,12 @@ import {
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
-import { resolveCommitHash } from "../infra/git-commit.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
-import { VERSION } from "../version.js";
 import { listChatCommands } from "./commands-registry.js";
 import type {
   ElevatedLevel,
@@ -350,7 +348,7 @@ export function buildHelpMessage(): string {
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink",
     "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off",
-    "More: /commands for all slash commands"
+    "More: /commands for all slash commands",
   ].join("\n");
 }
 
