@@ -56,6 +56,7 @@
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
 - TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
+- Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
 
 ## 2026.1.8
 
