@@ -261,6 +261,17 @@ export function isRateLimitErrorMessage(raw: string): boolean {
   );
 }
 
+export function isTimeoutErrorMessage(raw: string): boolean {
+  const value = raw.toLowerCase();
+  if (!value) return false;
+  return (
+    value.includes("timeout") ||
+    value.includes("timed out") ||
+    value.includes("deadline exceeded") ||
+    value.includes("context deadline exceeded")
+  );
+}
+
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) return false;
@@ -306,6 +317,32 @@ export function isAuthAssistantError(
 ): boolean {
   if (!msg || msg.stopReason !== "error") return false;
   return isAuthErrorMessage(msg.errorMessage ?? "");
+}
+
+export type FailoverReason =
+  | "auth"
+  | "rate_limit"
+  | "billing"
+  | "timeout"
+  | "unknown";
+
+export function classifyFailoverReason(raw: string): FailoverReason | null {
+  if (isAuthErrorMessage(raw)) return "auth";
+  if (isRateLimitErrorMessage(raw)) return "rate_limit";
+  if (isBillingErrorMessage(raw)) return "billing";
+  if (isTimeoutErrorMessage(raw)) return "timeout";
+  return null;
+}
+
+export function isFailoverErrorMessage(raw: string): boolean {
+  return classifyFailoverReason(raw) !== null;
+}
+
+export function isFailoverAssistantError(
+  msg: AssistantMessage | undefined,
+): boolean {
+  if (!msg || msg.stopReason !== "error") return false;
+  return isFailoverErrorMessage(msg.errorMessage ?? "");
 }
 
 function extractSupportedValues(raw: string): string[] {

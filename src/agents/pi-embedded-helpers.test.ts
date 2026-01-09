@@ -3,9 +3,11 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   buildBootstrapContextFiles,
+  classifyFailoverReason,
   formatAssistantErrorText,
   isBillingErrorMessage,
   isContextOverflowError,
+  isFailoverErrorMessage,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
   sanitizeGoogleTurnOrdering,
@@ -235,6 +237,30 @@ describe("isBillingErrorMessage", () => {
     expect(isBillingErrorMessage("rate limit exceeded")).toBe(false);
     expect(isBillingErrorMessage("invalid api key")).toBe(false);
     expect(isBillingErrorMessage("context length exceeded")).toBe(false);
+  });
+});
+
+describe("isFailoverErrorMessage", () => {
+  it("matches auth/rate/billing/timeout", () => {
+    const samples = [
+      "invalid api key",
+      "429 rate limit exceeded",
+      "Your credit balance is too low",
+      "request timed out",
+    ];
+    for (const sample of samples) {
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
+});
+
+describe("classifyFailoverReason", () => {
+  it("returns a stable reason", () => {
+    expect(classifyFailoverReason("invalid api key")).toBe("auth");
+    expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
+    expect(classifyFailoverReason("credit balance too low")).toBe("billing");
+    expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
+    expect(classifyFailoverReason("bad request")).toBeNull();
   });
 });
 
