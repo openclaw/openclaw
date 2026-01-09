@@ -853,8 +853,7 @@ export async function handleDirectiveOnly(params: {
       else sessionEntry.thinkingLevel = directives.thinkLevel;
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
-      if (directives.verboseLevel === "off") delete sessionEntry.verboseLevel;
-      else sessionEntry.verboseLevel = directives.verboseLevel;
+      sessionEntry.verboseLevel = directives.verboseLevel;
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
       if (directives.reasoningLevel === "off")

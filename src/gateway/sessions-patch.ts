@@ -108,8 +108,7 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeVerboseLevel(String(raw));
       if (!normalized) return invalid('invalid verboseLevel (use "on"|"off")');
-      if (normalized === "off") delete next.verboseLevel;
-      else next.verboseLevel = normalized;
+      next.verboseLevel = normalized;
     }
   }
 
