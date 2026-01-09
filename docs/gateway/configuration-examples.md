@@ -216,7 +216,7 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
         breakPreference: "paragraph"
       },
       blockStreamingCoalesce: {
-        idleMs: 400
+        idleMs: 1000
       },
       timeoutSeconds: 600,
       mediaMaxMb: 5,

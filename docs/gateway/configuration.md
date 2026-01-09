@@ -1155,7 +1155,7 @@ Block streaming:
   }
   ```
 - `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
-  Defaults to `{ idleMs: 400 }` and inherits `minChars` from `blockStreamingChunk`
+  Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
   with `maxChars` capped to the provider text limit.
   Provider overrides: `whatsapp.blockStreamingCoalesce`, `telegram.blockStreamingCoalesce`,
   `discord.blockStreamingCoalesce`, `slack.blockStreamingCoalesce`, `signal.blockStreamingCoalesce`,
