@@ -1010,6 +1010,10 @@ export async function persistInlineDirectives(params: {
     agentCfg,
   } = params;
   let { provider, model } = params;
+  const activeAgentId = sessionKey
+    ? resolveAgentIdFromSessionKey(sessionKey)
+    : resolveDefaultAgentId(cfg);
+  const agentDir = resolveAgentDir(cfg, activeAgentId);
 
   if (sessionEntry && sessionStore && sessionKey) {
     let updated = false;

@@ -45,6 +45,7 @@
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
+- Sessions: support session `label` in store/list/UI and allow `sessions_send` lookup by label. (#570) — thanks @azade-c
 - Control UI: show/patch per-session reasoning level and render extracted reasoning in chat.
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Control UI: drop explicit `ui:install` step; `ui:build` now auto-installs UI deps (docs + update flow).

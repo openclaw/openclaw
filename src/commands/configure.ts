@@ -80,6 +80,7 @@ import {
   DEFAULT_WORKSPACE,
   ensureWorkspaceAndSessions,
   guardCancel,
+  openUrl,
   printWizardHeader,
   probeGatewayReachable,
   randomToken,

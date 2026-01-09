@@ -113,6 +113,7 @@ export type SessionEntry = {
   contextTokens?: number;
   compactionCount?: number;
   claudeCliSessionId?: string;
+  label?: string;
   displayName?: string;
   provider?: string;
   subject?: string;
