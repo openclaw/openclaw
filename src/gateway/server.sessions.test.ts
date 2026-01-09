@@ -87,6 +87,14 @@ describe("gateway server sessions", () => {
       ]),
     );
 
+    const resolvedByKey = await rpcReq<{ ok: true; key: string }>(
+      ws,
+      "sessions.resolve",
+      { key: "main" },
+    );
+    expect(resolvedByKey.ok).toBe(true);
+    expect(resolvedByKey.payload?.key).toBe("agent:main:main");
+
     const list1 = await rpcReq<{
       path: string;
       sessions: Array<{
@@ -196,6 +204,14 @@ describe("gateway server sessions", () => {
     expect(listByLabel.payload?.sessions.map((s) => s.key)).toEqual([
       "agent:main:subagent:one",
     ]);
+
+    const resolvedByLabel = await rpcReq<{ ok: true; key: string }>(
+      ws,
+      "sessions.resolve",
+      { label: "Briefing", agentId: "main" },
+    );
+    expect(resolvedByLabel.ok).toBe(true);
+    expect(resolvedByLabel.payload?.key).toBe("agent:main:subagent:one");
 
     const spawnedOnly = await rpcReq<{
       sessions: Array<{ key: string }>;

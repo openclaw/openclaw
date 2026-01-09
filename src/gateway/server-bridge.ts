@@ -24,7 +24,6 @@ import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
   resolveMainSessionKey,
-  resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
@@ -45,6 +44,7 @@ import {
   type SessionsListParams,
   type SessionsPatchParams,
   type SessionsResetParams,
+  type SessionsResolveParams,
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatSendParams,
@@ -57,6 +57,7 @@ import {
   validateSessionsListParams,
   validateSessionsPatchParams,
   validateSessionsResetParams,
+  validateSessionsResolveParams,
   validateTalkModeParams,
 } from "./protocol/index.js";
 import type { ChatRunEntry } from "./server-chat.js";
@@ -70,8 +71,10 @@ import {
   archiveFileOnDisk,
   capArrayByJsonBytes,
   listSessionsFromStore,
+  loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   readSessionMessages,
+  resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
@@ -288,8 +291,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           }
           const p = params as SessionsListParams;
           const cfg = loadConfig();
-          const storePath = resolveStorePath(cfg.session?.store);
-          const store = loadSessionStore(storePath);
+          const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
           const result = listSessionsFromStore({
             cfg,
             storePath,
@@ -297,6 +299,109 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             opts: p,
           });
           return { ok: true, payloadJSON: JSON.stringify(result) };
+        }
+        case "sessions.resolve": {
+          const params = parseParams();
+          if (!validateSessionsResolveParams(params)) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `invalid sessions.resolve params: ${formatValidationErrors(validateSessionsResolveParams.errors)}`,
+              },
+            };
+          }
+
+          const p = params as SessionsResolveParams;
+          const cfg = loadConfig();
+
+          const key = typeof p.key === "string" ? p.key.trim() : "";
+          const label = typeof p.label === "string" ? p.label.trim() : "";
+          const hasKey = key.length > 0;
+          const hasLabel = label.length > 0;
+          if (hasKey && hasLabel) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "Provide either key or label (not both)",
+              },
+            };
+          }
+          if (!hasKey && !hasLabel) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: "Either key or label is required",
+              },
+            };
+          }
+
+          if (hasKey) {
+            const target = resolveGatewaySessionStoreTarget({ cfg, key });
+            const store = loadSessionStore(target.storePath);
+            const existingKey = target.storeKeys.find(
+              (candidate) => store[candidate],
+            );
+            if (!existingKey) {
+              return {
+                ok: false,
+                error: {
+                  code: ErrorCodes.INVALID_REQUEST,
+                  message: `No session found: ${key}`,
+                },
+              };
+            }
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                key: target.canonicalKey,
+              }),
+            };
+          }
+
+          const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
+          const list = listSessionsFromStore({
+            cfg,
+            storePath,
+            store,
+            opts: {
+              includeGlobal: p.includeGlobal === true,
+              includeUnknown: p.includeUnknown === true,
+              label,
+              agentId: p.agentId,
+              spawnedBy: p.spawnedBy,
+              limit: 2,
+            },
+          });
+          if (list.sessions.length === 0) {
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `No session found with label: ${label}`,
+              },
+            };
+          }
+          if (list.sessions.length > 1) {
+            const keys = list.sessions.map((s) => s.key).join(", ");
+            return {
+              ok: false,
+              error: {
+                code: ErrorCodes.INVALID_REQUEST,
+                message: `Multiple sessions found with label: ${label} (${keys})`,
+              },
+            };
+          }
+          return {
+            ok: true,
+            payloadJSON: JSON.stringify({
+              ok: true,
+              key: list.sessions[0]?.key,
+            }),
+          };
         }
         case "sessions.patch": {
           const params = parseParams();
@@ -323,12 +428,21 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           }
 
           const cfg = loadConfig();
-          const storePath = resolveStorePath(cfg.session?.store);
+          const target = resolveGatewaySessionStoreTarget({ cfg, key });
+          const storePath = target.storePath;
           const store = loadSessionStore(storePath);
+          const primaryKey = target.storeKeys[0] ?? key;
+          const existingKey = target.storeKeys.find(
+            (candidate) => store[candidate],
+          );
+          if (existingKey && existingKey !== primaryKey && !store[primaryKey]) {
+            store[primaryKey] = store[existingKey];
+            delete store[existingKey];
+          }
           const applied = await applySessionsPatchToStore({
             cfg,
             store,
-            storeKey: key,
+            storeKey: primaryKey,
             patch: p,
             loadGatewayModelCatalog: ctx.loadGatewayModelCatalog,
           });
@@ -346,7 +460,7 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           const payload: SessionsPatchResult = {
             ok: true,
             path: storePath,
-            key,
+            key: target.canonicalKey,
             entry: applied.entry,
           };
           return { ok: true, payloadJSON: JSON.stringify(payload) };

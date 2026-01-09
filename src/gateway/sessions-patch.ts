@@ -21,6 +21,7 @@ import type { ClawdbotConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
+import { parseSessionLabel } from "../sessions/session-label.js";
 import {
   ErrorCodes,
   type ErrorShape,
@@ -28,26 +29,8 @@ import {
   type SessionsPatchParams,
 } from "./protocol/index.js";
 
-export const SESSION_LABEL_MAX_LENGTH = 64;
-
 function invalid(message: string): { ok: false; error: ErrorShape } {
   return { ok: false, error: errorShape(ErrorCodes.INVALID_REQUEST, message) };
-}
-
-function normalizeLabel(
-  raw: unknown,
-): { ok: true; label: string } | ReturnType<typeof invalid> {
-  const trimmed =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "boolean"
-        ? String(raw).trim()
-        : "";
-  if (!trimmed) return invalid("invalid label: empty");
-  if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
-    return invalid(`invalid label: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
-  }
-  return { ok: true, label: trimmed };
 }
 
 export async function applySessionsPatchToStore(params: {
@@ -93,15 +76,15 @@ export async function applySessionsPatchToStore(params: {
     if (raw === null) {
       delete next.label;
     } else if (raw !== undefined) {
-      const normalized = normalizeLabel(raw);
-      if (!normalized.ok) return normalized;
+      const parsed = parseSessionLabel(raw);
+      if (!parsed.ok) return invalid(parsed.error);
       for (const [key, entry] of Object.entries(store)) {
         if (key === storeKey) continue;
-        if (entry?.label === normalized.label) {
-          return invalid(`label already in use: ${normalized.label}`);
+        if (entry?.label === parsed.label) {
+          return invalid(`label already in use: ${parsed.label}`);
         }
       }
-      next.label = normalized.label;
+      next.label = parsed.label;
     }
   }
 
