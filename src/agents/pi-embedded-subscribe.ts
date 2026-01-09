@@ -179,28 +179,22 @@ function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
 
 function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   if (!Array.isArray(message.content)) return;
-  const hasThinkingBlock = message.content.some((block) => {
-    if (!block || typeof block !== "object") return false;
-    return (block as Record<string, unknown>).type === "thinking";
-  });
+  const hasThinkingBlock = message.content.some(
+    (block) => block.type === "thinking",
+  );
   if (hasThinkingBlock) return;
 
-  const next: Array<Record<string, unknown>> = [];
+  const next: AssistantMessage["content"] = [];
   let changed = false;
 
   for (const block of message.content) {
-    if (!block || typeof block !== "object") {
-      next.push(block as Record<string, unknown>);
+    if (block.type !== "text") {
+      next.push(block);
       continue;
     }
-    const record = block as Record<string, unknown>;
-    if (record.type !== "text" || typeof record.text !== "string") {
-      next.push(record);
-      continue;
-    }
-    const split = splitThinkingTaggedText(record.text);
+    const split = splitThinkingTaggedText(block.text);
     if (!split) {
-      next.push(record);
+      next.push(block);
       continue;
     }
     changed = true;
@@ -215,7 +209,7 @@ function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
   }
 
   if (!changed) return;
-  (message as unknown as { content: unknown }).content = next;
+  message.content = next;
 }
 
 function normalizeSlackTarget(raw: string): string | undefined {
