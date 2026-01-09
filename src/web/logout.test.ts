@@ -47,7 +47,17 @@ describe("web logout", () => {
     async () => {
       const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
 
-      expect(WA_WEB_AUTH_DIR.startsWith(tmpDir)).toBe(true);
+      const normalizedAuthDir = path.resolve(WA_WEB_AUTH_DIR);
+      const normalizedHome = path.resolve(tmpDir);
+      if (process.platform === "win32") {
+        expect(
+          normalizedAuthDir
+            .toLowerCase()
+            .startsWith(normalizedHome.toLowerCase()),
+        ).toBe(true);
+      } else {
+        expect(normalizedAuthDir.startsWith(normalizedHome)).toBe(true);
+      }
       fs.mkdirSync(WA_WEB_AUTH_DIR, { recursive: true });
       fs.writeFileSync(path.join(WA_WEB_AUTH_DIR, "creds.json"), "{}");
       const result = await logoutWeb({ runtime: runtime as never });

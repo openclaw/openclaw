@@ -26,7 +26,10 @@ describe("media store", () => {
 
   it("creates and returns media directory", async () => {
     const dir = await store.ensureMediaDir();
-    expect(dir).toContain("clawdbot-home-test");
+    const normalized = path.normalize(dir);
+    expect(normalized).toContain(
+      `${path.sep}.clawdbot${path.sep}media`,
+    );
     const stat = await fs.stat(dir);
     expect(stat.isDirectory()).toBe(true);
   });
