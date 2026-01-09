@@ -274,26 +274,24 @@ function renderBeaconLines(
   const title = colorize(rich, theme.accentBright, nameRaw);
   const domain = colorize(rich, theme.muted, domainRaw);
 
-  const parts: string[] = [];
-  if (beacon.tailnetDns)
-    parts.push(
-      `${colorize(rich, theme.info, "tailnet")}: ${beacon.tailnetDns}`,
-    );
-  if (beacon.lanHost)
-    parts.push(`${colorize(rich, theme.info, "lan")}: ${beacon.lanHost}`);
-  if (beacon.host)
-    parts.push(`${colorize(rich, theme.info, "host")}: ${beacon.host}`);
-
   const host = pickBeaconHost(beacon);
   const gatewayPort = pickGatewayPort(beacon);
   const wsUrl = host ? `ws://${host}:${gatewayPort}` : null;
 
-  const firstLine =
-    parts.length > 0
-      ? `${title} ${domain} · ${parts.join(" · ")}`
-      : `${title} ${domain}`;
+  const lines = [`- ${title} ${domain}`];
 
-  const lines = [`- ${firstLine}`];
+  if (beacon.tailnetDns) {
+    lines.push(
+      `  ${colorize(rich, theme.info, "tailnet")}: ${beacon.tailnetDns}`,
+    );
+  }
+  if (beacon.lanHost) {
+    lines.push(`  ${colorize(rich, theme.info, "lan")}: ${beacon.lanHost}`);
+  }
+  if (beacon.host) {
+    lines.push(`  ${colorize(rich, theme.info, "host")}: ${beacon.host}`);
+  }
+
   if (wsUrl) {
     lines.push(
       `  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, wsUrl)}`,
