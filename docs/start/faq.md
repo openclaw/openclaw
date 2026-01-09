@@ -34,9 +34,13 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 5) **Tail the latest log**
    ```bash
+   clawdbot logs --follow
+   ```
+   If RPC is down, fall back to:
+   ```bash
    tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)"
    ```
-   File logs are separate from service logs; see [Logging](/gateway/logging) and [Troubleshooting](/gateway/troubleshooting).
+   File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
 
 ## What is Clawdbot?
 
