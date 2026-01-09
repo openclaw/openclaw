@@ -1604,23 +1604,21 @@ export async function runEmbeddedPiAgent(params: {
             }
           }
 
-          const fallbackText = lastAssistant
-            ? (() => {
-                const base = extractAssistantText(lastAssistant);
-                if (params.reasoningLevel !== "on") return base;
-                const thinking = extractAssistantThinking(lastAssistant);
-                const formatted = thinking
-                  ? formatReasoningMarkdown(thinking)
-                  : "";
-                if (!formatted) return base;
-                return base ? `${formatted}\n\n${base}` : formatted;
-              })()
+          const reasoningText =
+            lastAssistant && params.reasoningLevel === "on"
+              ? formatReasoningMarkdown(extractAssistantThinking(lastAssistant))
+              : "";
+          if (reasoningText) replyItems.push({ text: reasoningText });
+
+          const fallbackAnswerText = lastAssistant
+            ? extractAssistantText(lastAssistant)
             : "";
-          for (const text of assistantTexts.length
+          const answerTexts = assistantTexts.length
             ? assistantTexts
-            : fallbackText
-              ? [fallbackText]
-              : []) {
+            : fallbackAnswerText
+              ? [fallbackAnswerText]
+              : [];
+          for (const text of answerTexts) {
             const { text: cleanedText, mediaUrls } = splitMediaFromOutput(text);
             if (!cleanedText && (!mediaUrls || mediaUrls.length === 0))
               continue;

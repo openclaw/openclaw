@@ -38,8 +38,8 @@ read_when:
 
 ## Reasoning visibility (/reasoning)
 - Levels: `on|off|stream`.
-- Directive-only message toggles whether thinking blocks are shown as italic text in replies.
-- When enabled, any model-provided reasoning content is appended as a separate italic block.
+- Directive-only message toggles whether thinking blocks are shown in replies.
+- When enabled, reasoning is sent as a **separate message** prefixed with `Reasoning:`.
 - `stream` (Telegram only): streams reasoning into the Telegram draft bubble while the reply is generating, then sends the final answer without reasoning.
 - Alias: `/reason`.
 - Send `/reasoning` (or `/reasoning:`) with no argument to see the current reasoning level.
