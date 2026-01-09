@@ -18,6 +18,14 @@ describe("msteams messenger", () => {
       expect(messages).toEqual([]);
     });
 
+    it("filters silent reply prefixes", () => {
+      const messages = renderReplyPayloadsToMessages(
+        [{ text: `${SILENT_REPLY_TOKEN} -- ignored` }],
+        { textChunkLimit: 4000 },
+      );
+      expect(messages).toEqual([]);
+    });
+
     it("splits media into separate messages by default", () => {
       const messages = renderReplyPayloadsToMessages(
         [{ text: "hi", mediaUrl: "https://example.com/a.png" }],

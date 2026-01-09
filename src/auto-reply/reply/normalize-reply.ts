@@ -1,5 +1,9 @@
 import { stripHeartbeatToken } from "../heartbeat.js";
-import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../tokens.js";
+import {
+  HEARTBEAT_TOKEN,
+  isSilentReplyText,
+  SILENT_REPLY_TOKEN,
+} from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 
 export type NormalizeReplyOptions = {
@@ -20,9 +24,11 @@ export function normalizeReplyPayload(
   if (!trimmed && !hasMedia) return null;
 
   const silentToken = opts.silentToken ?? SILENT_REPLY_TOKEN;
-  if (trimmed === silentToken && !hasMedia) return null;
-
   let text = payload.text ?? undefined;
+  if (text && isSilentReplyText(text, silentToken)) {
+    if (!hasMedia) return null;
+    text = "";
+  }
   if (text && !trimmed) {
     // Keep empty text when media exists so media-only replies still send.
     text = "";

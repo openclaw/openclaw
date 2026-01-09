@@ -11,7 +11,7 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
 import {
@@ -80,7 +80,7 @@ export function createFollowupRunner(params: {
         continue;
       }
       if (
-        payload.text?.trim() === SILENT_REPLY_TOKEN &&
+        isSilentReplyText(payload.text, SILENT_REPLY_TOKEN) &&
         !payload.mediaUrl &&
         !payload.mediaUrls?.length
       ) {
