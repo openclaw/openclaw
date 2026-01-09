@@ -4,7 +4,7 @@ import path from "node:path";
 
 import lockfile from "proper-lockfile";
 
-import { resolveStateDir } from "../config/paths.js";
+import { resolveMSTeamsStorePath } from "./storage.js";
 
 export type MSTeamsPollVote = {
   pollId: string;
@@ -239,19 +239,6 @@ export type MSTeamsPollStoreFsOptions = {
   storePath?: string;
 };
 
-function resolveStorePath(params?: MSTeamsPollStoreFsOptions): string {
-  if (params?.storePath) {
-    return params.storePath;
-  }
-  if (params?.stateDir) {
-    return path.join(params.stateDir, STORE_FILENAME);
-  }
-  const stateDir = params?.homedir
-    ? resolveStateDir(params.env ?? process.env, params.homedir)
-    : resolveStateDir(params?.env ?? process.env);
-  return path.join(stateDir, STORE_FILENAME);
-}
-
 function safeParseJson<T>(raw: string): T | null {
   try {
     return JSON.parse(raw) as T;
@@ -364,7 +351,13 @@ export function normalizeMSTeamsPollSelections(
 export function createMSTeamsPollStoreFs(
   params?: MSTeamsPollStoreFsOptions,
 ): MSTeamsPollStore {
-  const filePath = resolveStorePath(params);
+  const filePath = resolveMSTeamsStorePath({
+    filename: STORE_FILENAME,
+    env: params?.env,
+    homedir: params?.homedir,
+    stateDir: params?.stateDir,
+    storePath: params?.storePath,
+  });
   const empty: PollStoreData = { version: 1, polls: {} };
 
   const readStore = async (): Promise<PollStoreData> => {

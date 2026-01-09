@@ -1,16 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import lockfile from "proper-lockfile";
 
-import { resolveStateDir } from "../config/paths.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
   StoredConversationReference,
 } from "./conversation-store.js";
+import { resolveMSTeamsStorePath } from "./storage.js";
 
 type ConversationStoreData = {
   version: 1;
@@ -33,16 +32,6 @@ const STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
-
-function resolveStorePath(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir?: () => string,
-): string {
-  const stateDir = homedir
-    ? resolveStateDir(env, homedir)
-    : resolveStateDir(env);
-  return path.join(stateDir, STORE_FILENAME);
-}
 
 function safeParseJson<T>(raw: string): T | null {
   try {
@@ -167,11 +156,17 @@ export function createMSTeamsConversationStoreFs(params?: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   ttlMs?: number;
+  stateDir?: string;
+  storePath?: string;
 }): MSTeamsConversationStore {
-  const env = params?.env ?? process.env;
-  const homedir = params?.homedir ?? os.homedir;
   const ttlMs = params?.ttlMs ?? CONVERSATION_TTL_MS;
-  const filePath = resolveStorePath(env, homedir);
+  const filePath = resolveMSTeamsStorePath({
+    filename: STORE_FILENAME,
+    env: params?.env,
+    homedir: params?.homedir,
+    stateDir: params?.stateDir,
+    storePath: params?.storePath,
+  });
 
   const empty: ConversationStoreData = { version: 1, conversations: {} };
 

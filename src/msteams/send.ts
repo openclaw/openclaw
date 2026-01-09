@@ -16,6 +16,7 @@ import {
   sendMSTeamsMessages,
 } from "./messenger.js";
 import { buildMSTeamsPollCard } from "./polls.js";
+import { createMSTeamsAdapter, loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 let _log: ReturnType<typeof getChildLoggerFn> | undefined;
@@ -156,17 +157,8 @@ async function resolveMSTeamsSendContext(params: {
   const { conversationId, ref } = found;
   const log = await getLog();
 
-  // Dynamic import to avoid loading SDK when not needed
-  const agentsHosting = await import("@microsoft/agents-hosting");
-  const { CloudAdapter, getAuthConfigWithDefaults } = agentsHosting;
-
-  const authConfig = getAuthConfigWithDefaults({
-    clientId: creds.appId,
-    clientSecret: creds.appPassword,
-    tenantId: creds.tenantId,
-  });
-
-  const adapter = new CloudAdapter(authConfig);
+  const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
+  const adapter = createMSTeamsAdapter(authConfig, sdk);
 
   return {
     appId: creds.appId,
