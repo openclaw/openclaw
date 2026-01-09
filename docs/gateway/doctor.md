@@ -61,7 +61,7 @@ cat ~/.clawdbot/clawdbot.json
 - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
 - State integrity and permissions checks (sessions, transcripts, state dir).
 - Config file permission checks (chmod 600) when running locally.
-- Model auth health: checks OAuth expiry and can refresh expiring tokens.
+- Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
 - Legacy workspace dir detection (`~/clawdis`, `~/clawdbot`).
 - Sandbox image repair when sandboxing is enabled.
 - Legacy service migration and extra gateway detection.
@@ -152,6 +152,10 @@ expiring/expired, and can refresh them when safe. If the Anthropic Claude Code
 profile is stale, it suggests `claude setup-token` on the gateway host.
 Refresh prompts only appear when running interactively (TTY); `--non-interactive`
 skips refresh attempts.
+
+Doctor also reports auth profiles that are temporarily unusable due to:
+- short cooldowns (rate limits/timeouts/auth failures)
+- longer disables (billing/credit failures)
 
 ### 6) Sandbox image repair
 When sandboxing is enabled, doctor checks Docker images and offers to build or

@@ -13,6 +13,7 @@ const resolveAuthProfileDisplayLabel = vi.fn(
 const resolveAuthStorePathForDisplay = vi
   .fn()
   .mockReturnValue("/tmp/clawdbot-agent/auth-profiles.json");
+const resolveProfileUnusableUntilForDisplay = vi.fn().mockReturnValue(null);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
 const getCustomProviderApiKey = vi.fn().mockReturnValue(undefined);
 const discoverAuthStorage = vi.fn().mockReturnValue({});
@@ -36,6 +37,7 @@ vi.mock("../agents/auth-profiles.js", () => ({
   listProfilesForProvider,
   resolveAuthProfileDisplayLabel,
   resolveAuthStorePathForDisplay,
+  resolveProfileUnusableUntilForDisplay,
 }));
 
 vi.mock("../agents/model-auth.js", () => ({

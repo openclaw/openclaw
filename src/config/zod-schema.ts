@@ -1198,6 +1198,16 @@ export const ClawdbotSchema = z
           )
           .optional(),
         order: z.record(z.string(), z.array(z.string())).optional(),
+        cooldowns: z
+          .object({
+            billingBackoffHours: z.number().positive().optional(),
+            billingBackoffHoursByProvider: z
+              .record(z.string(), z.number().positive())
+              .optional(),
+            billingMaxHours: z.number().positive().optional(),
+            failureWindowHours: z.number().positive().optional(),
+          })
+          .optional(),
       })
       .optional(),
     models: ModelsConfigSchema,

@@ -47,6 +47,7 @@ import {
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
 } from "./defaults.js";
+import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
   ensureAuthProfileStore,
   getApiKeyForModel,
@@ -1448,6 +1449,7 @@ export async function runEmbeddedPiAgent(params: {
                 store: authStore,
                 profileId: lastProfileId,
                 reason: promptFailoverReason,
+                cfg: params.config,
                 agentDir: params.agentDir,
               });
             }
@@ -1515,6 +1517,7 @@ export async function runEmbeddedPiAgent(params: {
                 store: authStore,
                 profileId: lastProfileId,
                 reason,
+                cfg: params.config,
                 agentDir: params.agentDir,
               });
               if (timedOut) {
@@ -1540,22 +1543,16 @@ export async function runEmbeddedPiAgent(params: {
                     : authFailure
                       ? "LLM request unauthorized."
                       : "LLM request failed.");
-              const err = new Error(message);
-              (err as { failoverReason?: string }).failoverReason =
-                assistantFailoverReason ?? undefined;
-              if (assistantFailoverReason === "billing") {
-                (err as { status?: number }).status = 402;
-              } else if (assistantFailoverReason === "rate_limit") {
-                (err as { status?: number }).status = 429;
-              } else if (assistantFailoverReason === "auth") {
-                (err as { status?: number }).status = 401;
-              } else if (
-                assistantFailoverReason === "timeout" ||
-                isTimeoutErrorMessage(message)
-              ) {
-                (err as { status?: number }).status = 408;
-              }
-              throw err;
+              const status =
+                resolveFailoverStatus(assistantFailoverReason ?? "unknown") ??
+                (isTimeoutErrorMessage(message) ? 408 : undefined);
+              throw new FailoverError(message, {
+                reason: assistantFailoverReason ?? "unknown",
+                provider,
+                model: modelId,
+                profileId: lastProfileId,
+                status,
+              });
             }
           }
 

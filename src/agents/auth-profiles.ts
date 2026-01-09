@@ -87,6 +87,7 @@ export type ProfileUsageStats = {
   disabledReason?: AuthProfileFailureReason;
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
+  lastFailureAt?: number;
 };
 
 export type AuthProfileStore = {
@@ -841,15 +842,17 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   );
 }
 
-function calculateAuthProfileBillingDisableMs(errorCount: number): number {
-  const normalized = Math.max(1, errorCount);
-  const steps = [
-    30 * 60 * 1000, // 30 min
-    2 * 60 * 60 * 1000, // 2 hours
-    8 * 60 * 60 * 1000, // 8 hours
-    24 * 60 * 60 * 1000, // 24 hours
-  ];
-  return steps[Math.min(normalized - 1, steps.length - 1)] as number;
+function calculateAuthProfileBillingDisableMsWithConfig(params: {
+  errorCount: number;
+  baseMs: number;
+  maxMs: number;
+}): number {
+  const normalized = Math.max(1, params.errorCount);
+  const baseMs = Math.max(60_000, params.baseMs);
+  const maxMs = Math.max(baseMs, params.maxMs);
+  const exponent = Math.min(normalized - 1, 10);
+  const raw = baseMs * 2 ** exponent;
+  return Math.min(maxMs, raw);
 }
 
 function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
@@ -877,30 +880,85 @@ export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
   profileId: string;
   reason: AuthProfileFailureReason;
+  cfg?: ClawdbotConfig;
   agentDir?: string;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir } = params;
+  const { store, profileId, reason, agentDir, cfg } = params;
+  const defaults = {
+    billingBackoffHours: 5,
+    billingMaxHours: 24,
+    failureWindowHours: 24,
+  } as const;
+  const resolveHours = (value: unknown, fallback: number) =>
+    typeof value === "number" && Number.isFinite(value) && value > 0
+      ? value
+      : fallback;
+  const resolveCooldownConfig = (providerId: string) => {
+    const cooldowns = cfg?.auth?.cooldowns;
+    const billingOverride = (() => {
+      const map = cooldowns?.billingBackoffHoursByProvider;
+      if (!map) return undefined;
+      for (const [key, value] of Object.entries(map)) {
+        if (normalizeProviderId(key) === providerId) return value;
+      }
+      return undefined;
+    })();
+    const billingBackoffHours = resolveHours(
+      billingOverride ?? cooldowns?.billingBackoffHours,
+      defaults.billingBackoffHours,
+    );
+    const billingMaxHours = resolveHours(
+      cooldowns?.billingMaxHours,
+      defaults.billingMaxHours,
+    );
+    const failureWindowHours = resolveHours(
+      cooldowns?.failureWindowHours,
+      defaults.failureWindowHours,
+    );
+    return {
+      billingBackoffMs: billingBackoffHours * 60 * 60 * 1000,
+      billingMaxMs: billingMaxHours * 60 * 60 * 1000,
+      failureWindowMs: failureWindowHours * 60 * 60 * 1000,
+    };
+  };
+
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
-      if (!freshStore.profiles[profileId]) return false;
+      const profile = freshStore.profiles[profileId];
+      if (!profile) return false;
       freshStore.usageStats = freshStore.usageStats ?? {};
       const existing = freshStore.usageStats[profileId] ?? {};
 
-      const nextErrorCount = (existing.errorCount ?? 0) + 1;
-      const failureCounts = { ...existing.failureCounts };
+      const now = Date.now();
+      const providerKey = normalizeProviderId(profile.provider);
+      const cfgResolved = resolveCooldownConfig(providerKey);
+
+      const windowMs = cfgResolved.failureWindowMs;
+      const windowExpired =
+        typeof existing.lastFailureAt === "number" &&
+        existing.lastFailureAt > 0 &&
+        now - existing.lastFailureAt > windowMs;
+
+      const baseErrorCount = windowExpired ? 0 : (existing.errorCount ?? 0);
+      const nextErrorCount = baseErrorCount + 1;
+      const failureCounts = windowExpired ? {} : { ...existing.failureCounts };
       failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
 
-      const now = Date.now();
       const updatedStats: ProfileUsageStats = {
         ...existing,
         errorCount: nextErrorCount,
         failureCounts,
+        lastFailureAt: now,
       };
 
       if (reason === "billing") {
         const billingCount = failureCounts.billing ?? 1;
-        const backoffMs = calculateAuthProfileBillingDisableMs(billingCount);
+        const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
+          errorCount: billingCount,
+          baseMs: cfgResolved.billingBackoffMs,
+          maxMs: cfgResolved.billingMaxMs,
+        });
         updatedStats.disabledUntil = now + backoffMs;
         updatedStats.disabledReason = "billing";
       } else {
@@ -920,19 +978,34 @@ export async function markAuthProfileFailure(params: {
 
   store.usageStats = store.usageStats ?? {};
   const existing = store.usageStats[profileId] ?? {};
-  const nextErrorCount = (existing.errorCount ?? 0) + 1;
-  const failureCounts = { ...existing.failureCounts };
+  const now = Date.now();
+  const providerKey = normalizeProviderId(
+    store.profiles[profileId]?.provider ?? "",
+  );
+  const cfgResolved = resolveCooldownConfig(providerKey);
+  const windowMs = cfgResolved.failureWindowMs;
+  const windowExpired =
+    typeof existing.lastFailureAt === "number" &&
+    existing.lastFailureAt > 0 &&
+    now - existing.lastFailureAt > windowMs;
+  const baseErrorCount = windowExpired ? 0 : (existing.errorCount ?? 0);
+  const nextErrorCount = baseErrorCount + 1;
+  const failureCounts = windowExpired ? {} : { ...existing.failureCounts };
   failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
 
-  const now = Date.now();
   const updatedStats: ProfileUsageStats = {
     ...existing,
     errorCount: nextErrorCount,
     failureCounts,
+    lastFailureAt: now,
   };
   if (reason === "billing") {
     const billingCount = failureCounts.billing ?? 1;
-    const backoffMs = calculateAuthProfileBillingDisableMs(billingCount);
+    const backoffMs = calculateAuthProfileBillingDisableMsWithConfig({
+      errorCount: billingCount,
+      baseMs: cfgResolved.billingBackoffMs,
+      maxMs: cfgResolved.billingMaxMs,
+    });
     updatedStats.disabledUntil = now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {

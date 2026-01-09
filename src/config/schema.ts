@@ -95,6 +95,10 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.workspace": "Workspace",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
+  "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
+  "auth.cooldowns.billingBackoffHoursByProvider": "Billing Backoff Overrides",
+  "auth.cooldowns.billingMaxHours": "Billing Backoff Cap (hours)",
+  "auth.cooldowns.failureWindowHours": "Failover Window (hours)",
   "agents.defaults.models": "Models",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",
@@ -156,6 +160,14 @@ const FIELD_HELP: Record<string, string> = {
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order":
     "Ordered auth profile IDs per provider (used for automatic failover).",
+  "auth.cooldowns.billingBackoffHours":
+    "Base backoff (hours) when a profile fails due to billing/insufficient credits (default: 5).",
+  "auth.cooldowns.billingBackoffHoursByProvider":
+    "Optional per-provider overrides for billing backoff (hours).",
+  "auth.cooldowns.billingMaxHours":
+    "Cap (hours) for billing backoff (default: 24).",
+  "auth.cooldowns.failureWindowHours":
+    "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.models":
     "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.model.primary": "Primary model (provider/model).",

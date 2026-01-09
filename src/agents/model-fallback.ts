@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../config/config.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
+import { type FailoverError, isFailoverError } from "./failover-error.js";
 import {
   buildModelAliasIndex,
   modelKey,
@@ -7,6 +8,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
+import type { FailoverReason } from "./pi-embedded-helpers.js";
 import { isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
@@ -18,6 +20,9 @@ type FallbackAttempt = {
   provider: string;
   model: string;
   error: string;
+  reason?: FailoverReason;
+  status?: number;
+  code?: string;
 };
 
 function isAbortError(err: unknown): boolean {
@@ -67,9 +72,32 @@ function getErrorMessage(err: unknown): string {
   return "";
 }
 
+function describeFallbackError(err: unknown): {
+  message: string;
+  reason?: FailoverReason;
+  status?: number;
+  code?: string;
+} {
+  if (isFailoverError(err)) {
+    const fe = err as FailoverError;
+    return {
+      message: fe.message,
+      reason: fe.reason,
+      status: fe.status,
+      code: fe.code,
+    };
+  }
+  return {
+    message: getErrorMessage(err) || String(err),
+    status: getStatusCode(err) ?? undefined,
+    code: getErrorCode(err) || undefined,
+  };
+}
+
 function shouldFallbackForError(err: unknown): boolean {
+  if (isFailoverError(err)) return true;
   const statusCode = getStatusCode(err);
-  if (statusCode && [401, 402, 403, 429].includes(statusCode)) return true;
+  if (statusCode && [401, 402, 403, 408, 429].includes(statusCode)) return true;
   const code = getErrorCode(err).toUpperCase();
   if (
     ["ETIMEDOUT", "ESOCKETTIMEDOUT", "ECONNRESET", "ECONNABORTED"].includes(
@@ -265,10 +293,14 @@ export async function runWithModelFallback<T>(params: {
       const shouldFallback = shouldFallbackForError(err);
       if (!shouldFallback) throw err;
       lastError = err;
+      const described = describeFallbackError(err);
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
-        error: err instanceof Error ? err.message : String(err),
+        error: described.message,
+        reason: described.reason,
+        status: described.status,
+        code: described.code,
       });
       await params.onError?.({
         provider: candidate.provider,
@@ -286,7 +318,9 @@ export async function runWithModelFallback<T>(params: {
       ? attempts
           .map(
             (attempt) =>
-              `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+              `${attempt.provider}/${attempt.model}: ${attempt.error}${
+                attempt.reason ? ` (${attempt.reason})` : ""
+              }`,
           )
           .join(" | ")
       : "unknown";

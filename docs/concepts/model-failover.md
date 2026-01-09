@@ -46,7 +46,7 @@ When a provider has multiple profiles, Clawdbot chooses an order like this:
 If no explicit order is configured, Clawdbot uses a round‑robin order:
 - **Primary key:** profile type (**OAuth before API keys**).
 - **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
-- **Cooldown profiles** are moved to the end, ordered by soonest cooldown expiry.
+- **Cooldown/disabled profiles** are moved to the end, ordered by soonest expiry.
 
 ### Why OAuth can “look lost”
 
@@ -79,6 +79,27 @@ State is stored in `auth-profiles.json` under `usageStats`:
 }
 ```
 
+## Billing disables
+
+Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Instead of a short cooldown, Clawdbot marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
+
+State is stored in `auth-profiles.json`:
+
+```json
+{
+  "usageStats": {
+    "provider:profile": {
+      "disabledUntil": 1736178000000,
+      "disabledReason": "billing"
+    }
+  }
+}
+```
+
+Defaults:
+- Billing backoff starts at **5 hours**, doubles per billing failure, and caps at **24 hours**.
+- Backoff counters reset if the profile hasn’t failed for **24 hours** (configurable).
+
 ## Model fallback
 
 If all profiles for a provider fail, Clawdbot moves to the next model in
@@ -92,6 +113,8 @@ When a run starts with a model override (hooks or CLI), fallbacks still end at
 
 See [`docs/configuration.md`](/gateway/configuration) for:
 - `auth.profiles` / `auth.order`
+- `auth.cooldowns.billingBackoffHours` / `auth.cooldowns.billingBackoffHoursByProvider`
+- `auth.cooldowns.billingMaxHours` / `auth.cooldowns.failureWindowHours`
 - `agents.defaults.model.primary` / `agents.defaults.model.fallbacks`
 - `agents.defaults.imageModel` routing
 

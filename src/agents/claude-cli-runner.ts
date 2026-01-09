@@ -9,9 +9,12 @@ import { shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
+import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
   buildBootstrapContextFiles,
+  classifyFailoverReason,
   type EmbeddedContextFile,
+  isFailoverErrorMessage,
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -310,6 +313,16 @@ async function runClaudeCliOnce(params: {
   }
   if (result.code !== 0) {
     const err = result.stderr.trim() || stdout || "Claude CLI failed.";
+    if (isFailoverErrorMessage(err)) {
+      const reason = classifyFailoverReason(err) ?? "unknown";
+      const status = resolveFailoverStatus(reason);
+      throw new FailoverError(err, {
+        reason,
+        provider: "claude-cli",
+        model: params.modelId,
+        status,
+      });
+    }
     throw new Error(err);
   }
   const parsed = parseClaudeCliJson(stdout);
