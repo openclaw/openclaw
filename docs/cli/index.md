@@ -479,6 +479,9 @@ Options:
 Options:
 - `--json`
 - `--plain`
+- `--check` (exit 1=expired/missing, 2=expiring)
+
+Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 
 ### `models set <model>`
 Set `agent.model.primary`.

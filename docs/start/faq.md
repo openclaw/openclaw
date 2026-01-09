@@ -346,7 +346,7 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 - **Make sure you’re editing the correct agent**
   - Multi‑agent setups mean there can be multiple `auth-profiles.json` files.
 - **Sanity‑check model/auth status**
-  - Use `/model status` to see configured models and whether providers are authenticated.
+  - Use `clawdbot models status` to see configured models and whether providers are authenticated.
 
 ### Why did it also try Google Gemini and fail?
 

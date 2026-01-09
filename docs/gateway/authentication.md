@@ -1,79 +1,82 @@
+---
+summary: "Model authentication: OAuth, API keys, and Claude Code token reuse"
+read_when:
+  - Debugging model auth or OAuth expiry
+  - Documenting authentication or credential storage
+---
 # Authentication
 
-Clawdbot uses Claude Code's authentication system for API access. By default, OAuth tokens expire every ~24 hours, requiring frequent re-authentication. For a better experience, you can set up a long-lived token that lasts **1 year**.
+Clawdbot supports OAuth and API keys for model providers. For Anthropic
+subscription accounts, the most stable path is to **reuse Claude Code OAuth
+credentials**, including the 1‑year token created by `claude setup-token`.
 
-## Long-Lived Token Setup (Recommended)
+See [/concepts/oauth](/concepts/oauth) for the full OAuth flow and storage
+layout.
 
-Instead of daily re-auth, set up a 1-year token:
+## Recommended: long‑lived Claude Code token
+
+Run this on the **gateway host** (the machine running the Gateway):
 
 ```bash
 claude setup-token
 ```
 
-This command will:
-1. Prompt you to visit the Anthropic console
-2. Create or copy an API key
-3. Store it for Claude Code (and Clawdbot)
-
-After running `setup-token`, sync the credentials to Clawdbot:
+This issues a long‑lived **OAuth token** (not an API key) and stores it for
+Claude Code. Then sync and verify:
 
 ```bash
-clawdbot doctor --yes
+clawdbot models status
+clawdbot doctor
 ```
 
-## Checking Auth Status
-
-To check your current authentication status:
+Automation-friendly check (exit `1` when expired/missing, `2` when expiring):
 
 ```bash
-# If you have the auth scripts installed
-~/clawdbot/scripts/claude-auth-status.sh
-
-# Or check manually
-cat ~/.claude/.credentials.json | jq '.claudeAiOauth.expiresAt'
+clawdbot models status --check
 ```
 
-## How It Works
+Optional ops scripts (systemd/Termux) are documented here:
+[/automation/auth-monitoring](/automation/auth-monitoring)
 
-1. **Claude Code** stores credentials in `~/.claude/.credentials.json`
-2. **Clawdbot** syncs from Claude Code to `~/.clawdbot/agents/main/agent/auth-profiles.json`
-3. The `clawdbot doctor --yes` command triggers this sync automatically
+`clawdbot models status` loads Claude Code credentials into Clawdbot’s
+`auth-profiles.json` and shows expiry (warns within 24h by default).
+`clawdbot doctor` also performs the sync when it runs.
 
-## Token Types
+> `claude setup-token` requires an interactive TTY.
 
-| Type | Duration | Setup |
-|------|----------|-------|
-| OAuth (default) | ~24 hours | Automatic on first run |
-| Long-lived token | 1 year | `claude setup-token` |
+## Checking model auth status
+
+```bash
+clawdbot models status
+clawdbot doctor
+```
+
+## How sync works
+
+1. **Claude Code** stores credentials in `~/.claude/.credentials.json` (or
+   Keychain on macOS).
+2. **Clawdbot** syncs those into
+   `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` when the auth store is
+   loaded.
+3. OAuth refresh happens automatically on use if a token is expired.
 
 ## Troubleshooting
 
-### "No credentials found" error
+### “No credentials found”
 
-Run the doctor to sync credentials:
-
-```bash
-clawdbot doctor --yes
-```
-
-Then restart the service:
+If the Anthropic OAuth profile is missing, run `claude setup-token` on the
+**gateway host**, then re-check:
 
 ```bash
-systemctl --user restart clawdbot
+clawdbot models status
 ```
 
-### Token expired
+### Token expiring/expired
 
-If your token has expired, run `claude setup-token` again in a terminal (not from within Claude Code, as it requires an interactive TTY).
-
-### Checking token expiry
-
-```bash
-# Check both Claude Code and Clawdbot auth
-cat ~/.claude/.credentials.json | jq '.claudeAiOauth.expiresAt' | xargs -I{} date -d @$(({}/1000))
-```
+Run `clawdbot models status` to confirm which profile is expiring. If the profile
+is `anthropic:claude-cli`, rerun `claude setup-token`.
 
 ## Requirements
 
-- Claude Max or Pro subscription (for `setup-token`)
+- Claude Max or Pro subscription (for `claude setup-token`)
 - Claude Code CLI installed (`claude` command available)

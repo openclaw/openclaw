@@ -98,6 +98,14 @@
       "destination": "/install/bun"
     },
     {
+      "source": "/auth-monitoring",
+      "destination": "/automation/auth-monitoring"
+    },
+    {
+      "source": "/scripts",
+      "destination": "/scripts"
+    },
+    {
       "source": "/camera",
       "destination": "/nodes/camera"
     },
@@ -617,6 +625,7 @@
       {
         "group": "Automation & Hooks",
         "pages": [
+          "automation/auth-monitoring",
           "automation/webhook",
           "automation/gmail-pubsub",
           "automation/cron-jobs",
@@ -690,6 +699,7 @@
       {
         "group": "Reference & Templates",
         "pages": [
+          "scripts",
           "reference/rpc",
           "reference/device-models",
           "reference/test",

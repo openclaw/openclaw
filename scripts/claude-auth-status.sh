@@ -16,20 +16,30 @@ NC='\033[0m' # No Color
 # Output mode: "full" (default), "json", or "simple"
 OUTPUT_MODE="${1:-full}"
 
-check_claude_code_auth() {
-    if [ ! -f "$CLAUDE_CREDS" ]; then
-        echo "MISSING"
-        return 1
-    fi
+fetch_models_status_json() {
+    clawdbot models status --json 2>/dev/null || true
+}
 
-    local expires_at
-    expires_at=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS")
-    local now_ms=$(($(date +%s) * 1000))
+STATUS_JSON="$(fetch_models_status_json)"
+USE_JSON=0
+if [ -n "$STATUS_JSON" ]; then
+    USE_JSON=1
+fi
+
+calc_status_from_expires() {
+    local expires_at="$1"
+    if ! [[ "$expires_at" =~ ^-?[0-9]+$ ]]; then
+        expires_at=0
+    fi
+    local now_ms=$(( $(date +%s) * 1000 ))
     local diff_ms=$((expires_at - now_ms))
     local hours=$((diff_ms / 3600000))
     local mins=$(((diff_ms % 3600000) / 60000))
 
-    if [ "$diff_ms" -lt 0 ]; then
+    if [ "$expires_at" -le 0 ]; then
+        echo "MISSING"
+        return 1
+    elif [ "$diff_ms" -lt 0 ]; then
         echo "EXPIRED"
         return 1
     elif [ "$diff_ms" -lt 3600000 ]; then
@@ -41,34 +51,89 @@ check_claude_code_auth() {
     fi
 }
 
+json_expires_for_claude_cli() {
+    echo "$STATUS_JSON" | jq -r '
+        [.auth.oauth.profiles[]
+          | select(.provider == "anthropic" and .type == "oauth" and .source == "claude-cli")
+          | .expiresAt // 0]
+        | max // 0
+    ' 2>/dev/null || echo "0"
+}
+
+json_expires_for_anthropic_any() {
+    echo "$STATUS_JSON" | jq -r '
+        [.auth.oauth.profiles[]
+          | select(.provider == "anthropic" and .type == "oauth")
+          | .expiresAt // 0]
+        | max // 0
+    ' 2>/dev/null || echo "0"
+}
+
+json_best_anthropic_profile() {
+    echo "$STATUS_JSON" | jq -r '
+        [.auth.oauth.profiles[]
+          | select(.provider == "anthropic" and .type == "oauth")
+          | {id: .profileId, exp: (.expiresAt // 0)}]
+        | sort_by(.exp) | reverse | .[0].id // "none"
+    ' 2>/dev/null || echo "none"
+}
+
+json_anthropic_api_key_count() {
+    echo "$STATUS_JSON" | jq -r '
+        [.auth.providers[] | select(.provider == "anthropic") | .profiles.apiKey]
+        | max // 0
+    ' 2>/dev/null || echo "0"
+}
+
+check_claude_code_auth() {
+    if [ "$USE_JSON" -eq 1 ]; then
+        local expires_at
+        expires_at=$(json_expires_for_claude_cli)
+        calc_status_from_expires "$expires_at"
+        return $?
+    fi
+
+    if [ ! -f "$CLAUDE_CREDS" ]; then
+        echo "MISSING"
+        return 1
+    fi
+
+    local expires_at
+    expires_at=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
+    calc_status_from_expires "$expires_at"
+}
+
 check_clawdbot_auth() {
+    if [ "$USE_JSON" -eq 1 ]; then
+        local api_keys
+        api_keys=$(json_anthropic_api_key_count)
+        if ! [[ "$api_keys" =~ ^[0-9]+$ ]]; then
+            api_keys=0
+        fi
+        local expires_at
+        expires_at=$(json_expires_for_anthropic_any)
+
+        if [ "$expires_at" -le 0 ] && [ "$api_keys" -gt 0 ]; then
+            echo "OK:static"
+            return 0
+        fi
+
+        calc_status_from_expires "$expires_at"
+        return $?
+    fi
+
     if [ ! -f "$CLAWDBOT_AUTH" ]; then
         echo "MISSING"
         return 1
     fi
 
-    # Find the best Anthropic profile (prefer claude-cli, then any with latest expiry)
     local expires
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' "$CLAWDBOT_AUTH")
+    ' "$CLAWDBOT_AUTH" 2>/dev/null || echo "0")
 
-    local now_ms=$(($(date +%s) * 1000))
-    local diff_ms=$((expires - now_ms))
-    local hours=$((diff_ms / 3600000))
-    local mins=$(((diff_ms % 3600000) / 60000))
-
-    if [ "$diff_ms" -lt 0 ]; then
-        echo "EXPIRED"
-        return 1
-    elif [ "$diff_ms" -lt 3600000 ]; then
-        echo "EXPIRING:${mins}m"
-        return 2
-    else
-        echo "OK:${hours}h${mins}m"
-        return 0
-    fi
+    calc_status_from_expires "$expires"
 }
 
 # JSON output mode
@@ -76,8 +141,15 @@ if [ "$OUTPUT_MODE" = "json" ]; then
     claude_status=$(check_claude_code_auth 2>/dev/null || true)
     clawdbot_status=$(check_clawdbot_auth 2>/dev/null || true)
 
-    claude_expires=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
-    clawdbot_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$CLAWDBOT_AUTH" 2>/dev/null || echo "0")
+    claude_expires=0
+    clawdbot_expires=0
+    if [ "$USE_JSON" -eq 1 ]; then
+        claude_expires=$(json_expires_for_claude_cli)
+        clawdbot_expires=$(json_expires_for_anthropic_any)
+    else
+        claude_expires=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
+        clawdbot_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$CLAWDBOT_AUTH" 2>/dev/null || echo "0")
+    fi
 
     jq -n \
         --arg cs "$claude_status" \
@@ -121,18 +193,27 @@ echo ""
 
 # Claude Code credentials
 echo "Claude Code (~/.claude/.credentials.json):"
-if [ -f "$CLAUDE_CREDS" ]; then
-    expires_at=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS")
-    sub_type=$(jq -r '.claudeAiOauth.subscriptionType // "unknown"' "$CLAUDE_CREDS")
-    rate_tier=$(jq -r '.claudeAiOauth.rateLimitTier // "unknown"' "$CLAUDE_CREDS")
+if [ "$USE_JSON" -eq 1 ]; then
+    expires_at=$(json_expires_for_claude_cli)
+else
+    expires_at=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
+fi
 
-    now_ms=$(($(date +%s) * 1000))
+if [ -f "$CLAUDE_CREDS" ]; then
+    sub_type=$(jq -r '.claudeAiOauth.subscriptionType // "unknown"' "$CLAUDE_CREDS" 2>/dev/null || echo "unknown")
+    rate_tier=$(jq -r '.claudeAiOauth.rateLimitTier // "unknown"' "$CLAUDE_CREDS" 2>/dev/null || echo "unknown")
+    echo "  Subscription: $sub_type"
+    echo "  Rate tier: $rate_tier"
+fi
+
+if [ "$expires_at" -le 0 ]; then
+    echo -e "  Status: ${RED}NOT FOUND${NC}"
+    echo "  Action needed: Run 'claude setup-token'"
+else
+    now_ms=$(( $(date +%s) * 1000 ))
     diff_ms=$((expires_at - now_ms))
     hours=$((diff_ms / 3600000))
     mins=$(((diff_ms % 3600000) / 60000))
-
-    echo "  Subscription: $sub_type"
-    echo "  Rate tier: $rate_tier"
 
     if [ "$diff_ms" -lt 0 ]; then
         echo -e "  Status: ${RED}EXPIRED${NC}"
@@ -144,33 +225,40 @@ if [ -f "$CLAUDE_CREDS" ]; then
         echo -e "  Status: ${GREEN}OK${NC}"
         echo "  Expires: $(date -d @$((expires_at/1000))) (${hours}h ${mins}m)"
     fi
-else
-    echo -e "  Status: ${RED}NOT FOUND${NC}"
-    echo "  Action needed: Run 'claude setup-token'"
 fi
 
 echo ""
 echo "Clawdbot Auth (~/.clawdbot/agents/main/agent/auth-profiles.json):"
-if [ -f "$CLAWDBOT_AUTH" ]; then
-    # Find best Anthropic profile
+if [ "$USE_JSON" -eq 1 ]; then
+    best_profile=$(json_best_anthropic_profile)
+    expires=$(json_expires_for_anthropic_any)
+    api_keys=$(json_anthropic_api_key_count)
+else
     best_profile=$(jq -r '
         .profiles | to_entries
         | map(select(.value.provider == "anthropic"))
         | sort_by(.value.expires) | reverse
         | .[0].key // "none"
-    ' "$CLAWDBOT_AUTH")
-
+    ' "$CLAWDBOT_AUTH" 2>/dev/null || echo "none")
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' "$CLAWDBOT_AUTH")
+    ' "$CLAWDBOT_AUTH" 2>/dev/null || echo "0")
+    api_keys=0
+fi
 
-    now_ms=$(($(date +%s) * 1000))
+echo "  Profile: $best_profile"
+
+if [ "$expires" -le 0 ] && [ "$api_keys" -gt 0 ]; then
+    echo -e "  Status: ${GREEN}OK${NC} (API key)"
+elif [ "$expires" -le 0 ]; then
+    echo -e "  Status: ${RED}NOT FOUND${NC}"
+    echo "  Note: Run 'clawdbot doctor --yes' to sync from Claude Code"
+else
+    now_ms=$(( $(date +%s) * 1000 ))
     diff_ms=$((expires - now_ms))
     hours=$((diff_ms / 3600000))
     mins=$(((diff_ms % 3600000) / 60000))
-
-    echo "  Profile: $best_profile"
 
     if [ "$diff_ms" -lt 0 ]; then
         echo -e "  Status: ${RED}EXPIRED${NC}"
@@ -181,8 +269,6 @@ if [ -f "$CLAWDBOT_AUTH" ]; then
         echo -e "  Status: ${GREEN}OK${NC}"
         echo "  Expires: $(date -d @$((expires/1000))) (${hours}h ${mins}m)"
     fi
-else
-    echo -e "  Status: ${RED}NOT FOUND${NC}"
 fi
 
 echo ""

@@ -8,6 +8,11 @@ import {
 
 import { resolveClawdbotAgentDir } from "../../agents/agent-paths.js";
 import {
+  buildAuthHealthSummary,
+  DEFAULT_OAUTH_WARN_MS,
+  formatRemainingShort,
+} from "../../agents/auth-health.js";
+import {
   type AuthProfileStore,
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -599,7 +604,7 @@ export async function modelsListCommand(
 }
 
 export async function modelsStatusCommand(
-  opts: { json?: boolean; plain?: boolean },
+  opts: { json?: boolean; plain?: boolean; check?: boolean },
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
@@ -656,6 +661,7 @@ export async function modelsStatusCommand(
       .filter(Boolean),
   );
   const providersFromModels = new Set<string>();
+  const providersInUse = new Set<string>();
   for (const raw of [
     defaultLabel,
     ...fallbacks,
@@ -665,6 +671,15 @@ export async function modelsStatusCommand(
   ]) {
     const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
     if (parsed?.provider) providersFromModels.add(parsed.provider);
+  }
+  for (const raw of [
+    defaultLabel,
+    ...fallbacks,
+    imageModel,
+    ...imageFallbacks,
+  ]) {
+    const parsed = parseModelRef(String(raw ?? ""), DEFAULT_PROVIDER);
+    if (parsed?.provider) providersInUse.add(parsed.provider);
   }
 
   const providersFromEnv = new Set<string>();
@@ -715,6 +730,12 @@ export async function modelsStatusCommand(
         Boolean(entry.modelsJson);
       return hasAny;
     });
+  const providerAuthMap = new Map(
+    providerAuth.map((entry) => [entry.provider, entry]),
+  );
+  const missingProvidersInUse = Array.from(providersInUse)
+    .filter((provider) => !providerAuthMap.has(provider))
+    .sort((a, b) => a.localeCompare(b));
 
   const providersWithOauth = providerAuth
     .filter(
@@ -725,6 +746,29 @@ export async function modelsStatusCommand(
         entry.profiles.oauth || (entry.env?.value === "OAuth (env)" ? 1 : 0);
       return `${entry.provider} (${count})`;
     });
+
+  const authHealth = buildAuthHealthSummary({
+    store,
+    cfg,
+    warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    providers,
+  });
+  const oauthProfiles = authHealth.profiles.filter(
+    (profile) => profile.type === "oauth",
+  );
+
+  const checkStatus = (() => {
+    const hasExpiredOrMissing =
+      oauthProfiles.some((profile) =>
+        ["expired", "missing"].includes(profile.status),
+      ) || missingProvidersInUse.length > 0;
+    const hasExpiring = oauthProfiles.some(
+      (profile) => profile.status === "expiring",
+    );
+    if (hasExpiredOrMissing) return 1;
+    if (hasExpiring) return 2;
+    return 0;
+  })();
 
   if (opts.json) {
     runtime.log(
@@ -746,18 +790,30 @@ export async function modelsStatusCommand(
               appliedKeys: applied,
             },
             providersWithOAuth: providersWithOauth,
+            missingProvidersInUse,
             providers: providerAuth,
+            oauth: {
+              warnAfterMs: authHealth.warnAfterMs,
+              profiles: authHealth.profiles,
+              providers: authHealth.providers,
+            },
           },
         },
         null,
         2,
       ),
     );
+    if (opts.check) {
+      runtime.exit(checkStatus);
+    }
     return;
   }
 
   if (opts.plain) {
     runtime.log(resolvedLabel);
+    if (opts.check) {
+      runtime.exit(checkStatus);
+    }
     return;
   }
 
@@ -932,5 +988,49 @@ export async function modelsStatusCommand(
       );
     }
     runtime.log(`- ${theme.heading(entry.provider)} ${bits.join(separator)}`);
+  }
+
+  if (missingProvidersInUse.length > 0) {
+    runtime.log("");
+    runtime.log(colorize(rich, theme.heading, "Missing auth"));
+    for (const provider of missingProvidersInUse) {
+      const hint =
+        provider === "anthropic"
+          ? "Run `claude setup-token` or `clawdbot configure`."
+          : "Run `clawdbot configure` or set an API key env var.";
+      runtime.log(`- ${theme.heading(provider)} ${hint}`);
+    }
+  }
+
+  runtime.log("");
+  runtime.log(colorize(rich, theme.heading, "OAuth status"));
+  if (oauthProfiles.length === 0) {
+    runtime.log(colorize(rich, theme.muted, "- none"));
+    return;
+  }
+
+  const formatStatus = (status: string) => {
+    if (status === "ok") return colorize(rich, theme.success, "ok");
+    if (status === "expiring") return colorize(rich, theme.warn, "expiring");
+    if (status === "missing") return colorize(rich, theme.warn, "unknown");
+    return colorize(rich, theme.error, "expired");
+  };
+
+  for (const profile of oauthProfiles) {
+    const labelText = profile.label || profile.profileId;
+    const label = colorize(rich, theme.accent, labelText);
+    const status = formatStatus(profile.status);
+    const expiry = profile.expiresAt
+      ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+      : " expires unknown";
+    const source =
+      profile.source !== "store"
+        ? colorize(rich, theme.muted, ` (${profile.source})`)
+        : "";
+    runtime.log(`- ${label} ${status}${expiry}${source}`);
+  }
+
+  if (opts.check) {
+    runtime.exit(checkStatus);
   }
 }

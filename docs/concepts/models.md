@@ -71,7 +71,14 @@ Shows configured models by default. Useful flags:
 ### `models status`
 
 Shows the resolved primary model, fallbacks, image model, and an auth overview
-of configured providers. `--plain` prints only the resolved primary model.
+of configured providers. It also surfaces OAuth expiry status for profiles found
+in the auth store (warns within 24h by default). `--plain` prints only the
+resolved primary model.
+OAuth status is always shown (and included in `--json` output). If a configured
+provider has no credentials, `models status` prints a **Missing auth** section.
+JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
+(effective auth per provider).
+Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
 ## Scanning (OpenRouter free models)
 
