@@ -70,6 +70,26 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const message = request.message.trim();
+    const rawProvider =
+      typeof request.provider === "string" ? request.provider.trim() : "";
+    if (rawProvider) {
+      const normalized = normalizeMessageProvider(rawProvider);
+      if (
+        normalized &&
+        normalized !== "last" &&
+        !isGatewayMessageProvider(normalized)
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent params: unknown provider: ${normalized}`,
+          ),
+        );
+        return;
+      }
+    }
 
     const requestedSessionKey =
       typeof request.sessionKey === "string" && request.sessionKey.trim()
