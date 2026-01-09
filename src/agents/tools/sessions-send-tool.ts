@@ -30,25 +30,13 @@ import {
   resolvePingPongTurns,
 } from "./sessions-send-helpers.js";
 
-const SessionsSendToolSchema = Type.Union([
-  Type.Object(
-    {
-      sessionKey: Type.String(),
-      message: Type.String(),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-    },
-    { additionalProperties: false },
-  ),
-  Type.Object(
-    {
-      label: Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH }),
-      agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
-      message: Type.String(),
-      timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
-    },
-    { additionalProperties: false },
-  ),
-]);
+const SessionsSendToolSchema = Type.Object({
+  sessionKey: Type.Optional(Type.String()),
+  label: Type.Optional(Type.String()),
+  agentId: Type.Optional(Type.String()),
+  message: Type.String(),
+  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
+});
 
 export function createSessionsSendTool(opts?: {
   agentSessionKey?: string;

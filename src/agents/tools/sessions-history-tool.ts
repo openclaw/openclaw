@@ -18,7 +18,7 @@ import {
 
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
-  limit: Type.Optional(Type.Integer({ minimum: 1 })),
+  limit: Type.Optional(Type.Number({ minimum: 1 })),
   includeTools: Type.Optional(Type.Boolean()),
 });
 

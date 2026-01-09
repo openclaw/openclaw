@@ -46,9 +46,9 @@ type SessionListRow = {
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(Type.String())),
-  limit: Type.Optional(Type.Integer({ minimum: 1 })),
-  activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
-  messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
+  limit: Type.Optional(Type.Number({ minimum: 1 })),
+  activeMinutes: Type.Optional(Type.Number({ minimum: 1 })),
+  messageLimit: Type.Optional(Type.Number({ minimum: 0 })),
 });
 
 function resolveSandboxSessionToolsVisibility(
