@@ -1962,7 +1962,28 @@ describe("web auto-reply", () => {
 
   it("uses identity.name for messagePrefix when set", async () => {
     setLoadConfigMock(() => ({
-      identity: { name: "Richbot", emoji: "🦁" },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
+          },
+          {
+            id: "rich",
+            identity: { name: "Richbot", emoji: "🦁", theme: "lion bot" },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "rich",
+          match: {
+            provider: "whatsapp",
+            peer: { kind: "dm", id: "+1555" },
+          },
+        },
+      ],
     }));
 
     let capturedOnMessage:
@@ -2003,8 +2024,28 @@ describe("web auto-reply", () => {
 
   it("uses identity.name for responsePrefix when set", async () => {
     setLoadConfigMock(() => ({
-      identity: { name: "Richbot", emoji: "🦁" },
-      whatsapp: { allowFrom: ["*"] },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            identity: { name: "Mainbot", emoji: "🦞", theme: "space lobster" },
+          },
+          {
+            id: "rich",
+            identity: { name: "Richbot", emoji: "🦁", theme: "lion bot" },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "rich",
+          match: {
+            provider: "whatsapp",
+            peer: { kind: "dm", id: "+1555" },
+          },
+        },
+      ],
     }));
 
     let capturedOnMessage:

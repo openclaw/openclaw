@@ -4,7 +4,10 @@ import {
   type SlackEventMiddlewareArgs,
 } from "@slack/bolt";
 import type { WebClient as SlackWebClient } from "@slack/web-api";
-import { resolveAckReaction } from "../agents/identity.js";
+import {
+  resolveAckReaction,
+  resolveResponsePrefix,
+} from "../agents/identity.js";
 import {
   chunkMarkdownText,
   resolveTextChunkLimit,
@@ -1110,7 +1113,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     };
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
-        responsePrefix: cfg.messages?.responsePrefix,
+        responsePrefix: resolveResponsePrefix(cfg, route.agentId),
         deliver: async (payload) => {
           await deliverReplies({
             replies: [payload],
