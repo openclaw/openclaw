@@ -42,10 +42,12 @@ import {
   applyMinimaxHostedConfig,
   applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
+  applyOpencodeZenConfig,
   MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
+  setOpencodeZenApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
@@ -54,11 +56,12 @@ import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
+import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 
 export async function warnIfModelConfigLooksOff(
   config: ClawdbotConfig,
   prompter: WizardPrompter,
-  options?: { agentId?: string; agentDir?: string },
+  options?: { agentId?: string; agentDir?: string }
 ) {
   const agentModelOverride = options?.agentId
     ? resolveAgentConfig(config, options.agentId)?.model?.trim()
@@ -93,11 +96,11 @@ export async function warnIfModelConfigLooksOff(
   });
   if (catalog.length > 0) {
     const known = catalog.some(
-      (entry) => entry.provider === ref.provider && entry.id === ref.model,
+      (entry) => entry.provider === ref.provider && entry.id === ref.model
     );
     if (!known) {
       warnings.push(
-        `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
+        `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`
       );
     }
   }
@@ -108,7 +111,7 @@ export async function warnIfModelConfigLooksOff(
   const customKey = getCustomProviderApiKey(config, ref.provider);
   if (!hasProfile && !envKey && !customKey) {
     warnings.push(
-      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`,
+      `No auth configured for provider "${ref.provider}". The agent may fail until credentials are added.`
     );
   }
 
@@ -116,7 +119,7 @@ export async function warnIfModelConfigLooksOff(
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
+        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`
       );
     }
   }
@@ -142,7 +145,7 @@ export async function applyAuthChoice(params: {
     if (!params.agentId) return;
     await params.prompter.note(
       `Default model set to ${model} for agent "${params.agentId}".`,
-      "Model configured",
+      "Model configured"
     );
   };
 
@@ -158,7 +161,7 @@ export async function applyAuthChoice(params: {
           'Choose "Always Allow" so the launchd gateway can start without prompts.',
           'If you choose "Allow" or "Deny", each restart will block on a Keychain alert.',
         ].join("\n"),
-        "Claude CLI Keychain",
+        "Claude CLI Keychain"
       );
       const proceed = await params.prompter.confirm({
         message: "Check Keychain for Claude CLI credentials now?",
@@ -189,14 +192,14 @@ export async function applyAuthChoice(params: {
           if (res.error) {
             await params.prompter.note(
               `Failed to run claude: ${String(res.error)}`,
-              "Claude setup-token",
+              "Claude setup-token"
             );
           }
         }
       } else {
         await params.prompter.note(
           "`claude setup-token` requires an interactive TTY.",
-          "Claude setup-token",
+          "Claude setup-token"
         );
       }
 
@@ -208,7 +211,7 @@ export async function applyAuthChoice(params: {
           process.platform === "darwin"
             ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
             : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
-          "Claude CLI OAuth",
+          "Claude CLI OAuth"
         );
         return { config: nextConfig, agentModelOverride };
       }
@@ -227,13 +230,13 @@ export async function applyAuthChoice(params: {
         "This will run `claude setup-token` to create a long-lived Anthropic token.",
         "Requires an interactive TTY and a Claude Pro/Max subscription.",
       ].join("\n"),
-      "Anthropic setup-token",
+      "Anthropic setup-token"
     );
 
     if (!process.stdin.isTTY) {
       await params.prompter.note(
         "`claude setup-token` requires an interactive TTY.",
-        "Anthropic setup-token",
+        "Anthropic setup-token"
       );
       return { config: nextConfig, agentModelOverride };
     }
@@ -251,14 +254,14 @@ export async function applyAuthChoice(params: {
     if (res.error) {
       await params.prompter.note(
         `Failed to run claude: ${String(res.error)}`,
-        "Anthropic setup-token",
+        "Anthropic setup-token"
       );
       return { config: nextConfig, agentModelOverride };
     }
     if (typeof res.status === "number" && res.status !== 0) {
       await params.prompter.note(
         `claude setup-token failed (exit ${res.status})`,
-        "Anthropic setup-token",
+        "Anthropic setup-token"
       );
       return { config: nextConfig, agentModelOverride };
     }
@@ -269,7 +272,7 @@ export async function applyAuthChoice(params: {
     if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
       await params.prompter.note(
         `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
-        "Anthropic setup-token",
+        "Anthropic setup-token"
       );
       return { config: nextConfig, agentModelOverride };
     }
@@ -289,7 +292,7 @@ export async function applyAuthChoice(params: {
         "Run `claude setup-token` in your terminal.",
         "Then paste the generated token below.",
       ].join("\n"),
-      "Anthropic token",
+      "Anthropic token"
     );
 
     const tokenRaw = await params.prompter.text({
@@ -339,7 +342,7 @@ export async function applyAuthChoice(params: {
         }
         await params.prompter.note(
           `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
-          "OpenAI API key",
+          "OpenAI API key"
         );
         return { config: nextConfig, agentModelOverride };
       }
@@ -357,7 +360,7 @@ export async function applyAuthChoice(params: {
     process.env.OPENAI_API_KEY = trimmed;
     await params.prompter.note(
       `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
-      "OpenAI API key",
+      "OpenAI API key"
     );
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
@@ -373,7 +376,7 @@ export async function applyAuthChoice(params: {
             "If the callback doesn't auto-complete, paste the redirect URL.",
             "OpenAI OAuth uses localhost:1455 for the callback.",
           ].join("\n"),
-      "OpenAI Codex OAuth",
+      "OpenAI Codex OAuth"
     );
     const spin = params.prompter.progress("Starting OAuth flow…");
     let manualCodePromise: Promise<string> | undefined;
@@ -383,7 +386,7 @@ export async function applyAuthChoice(params: {
           if (isRemote) {
             spin.stop("OAuth URL ready");
             params.runtime.log(
-              `\nOpen this URL in your LOCAL browser:\n\n${url}\n`,
+              `\nOpen this URL in your LOCAL browser:\n\n${url}\n`
             );
             manualCodePromise = params.prompter
               .text({
@@ -415,7 +418,7 @@ export async function applyAuthChoice(params: {
         await writeOAuthCredentials(
           "openai-codex" as unknown as OAuthProvider,
           creds,
-          params.agentDir,
+          params.agentDir
         );
         nextConfig = applyAuthProfileConfig(nextConfig, {
           profileId: "openai-codex:default",
@@ -428,7 +431,7 @@ export async function applyAuthChoice(params: {
           if (applied.changed) {
             await params.prompter.note(
               `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-              "Model configured",
+              "Model configured"
             );
           }
         } else {
@@ -441,7 +444,7 @@ export async function applyAuthChoice(params: {
       params.runtime.error(String(err));
       await params.prompter.note(
         "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
+        "OAuth help"
       );
     }
   } else if (params.authChoice === "codex-cli") {
@@ -449,7 +452,7 @@ export async function applyAuthChoice(params: {
     if (!store.profiles[CODEX_CLI_PROFILE_ID]) {
       await params.prompter.note(
         "No Codex CLI credentials found at ~/.codex/auth.json.",
-        "Codex CLI OAuth",
+        "Codex CLI OAuth"
       );
       return { config: nextConfig, agentModelOverride };
     }
@@ -464,7 +467,7 @@ export async function applyAuthChoice(params: {
       if (applied.changed) {
         await params.prompter.note(
           `Default model set to ${OPENAI_CODEX_DEFAULT_MODEL}`,
-          "Model configured",
+          "Model configured"
         );
       }
     } else {
@@ -485,7 +488,7 @@ export async function applyAuthChoice(params: {
             "Sign in with your Google account that has Antigravity access.",
             "The callback will be captured automatically on localhost:51121.",
           ].join("\n"),
-      "Google Antigravity OAuth",
+      "Google Antigravity OAuth"
     );
     const spin = params.prompter.progress("Starting OAuth flow…");
     let oauthCreds: OAuthCredentials | null = null;
@@ -495,7 +498,7 @@ export async function applyAuthChoice(params: {
           if (isRemote) {
             spin.stop("OAuth URL ready");
             params.runtime.log(
-              `\nOpen this URL in your LOCAL browser:\n\n${url}\n`,
+              `\nOpen this URL in your LOCAL browser:\n\n${url}\n`
             );
           } else {
             spin.update("Complete sign-in in browser…");
@@ -503,14 +506,14 @@ export async function applyAuthChoice(params: {
             params.runtime.log(`Open: ${url}`);
           }
         },
-        (msg) => spin.update(msg),
+        (msg) => spin.update(msg)
       );
       spin.stop("Antigravity OAuth complete");
       if (oauthCreds) {
         await writeOAuthCredentials(
           "google-antigravity",
           oauthCreds,
-          params.agentDir,
+          params.agentDir
         );
         nextConfig = applyAuthProfileConfig(nextConfig, {
           profileId: `google-antigravity:${oauthCreds.email ?? "default"}`,
@@ -555,7 +558,7 @@ export async function applyAuthChoice(params: {
           };
           await params.prompter.note(
             `Default model set to ${modelKey}`,
-            "Model configured",
+            "Model configured"
           );
         } else {
           agentModelOverride = modelKey;
@@ -567,7 +570,7 @@ export async function applyAuthChoice(params: {
       params.runtime.error(String(err));
       await params.prompter.note(
         "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
+        "OAuth help"
       );
     }
   } else if (params.authChoice === "gemini-api-key") {
@@ -587,7 +590,7 @@ export async function applyAuthChoice(params: {
       if (applied.changed) {
         await params.prompter.note(
           `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
-          "Model configured",
+          "Model configured"
         );
       }
     } else {
@@ -648,6 +651,36 @@ export async function applyAuthChoice(params: {
       nextConfig = applyMinimaxApiProviderConfig(nextConfig);
       agentModelOverride = "minimax/MiniMax-M2.1";
       await noteAgentModel("minimax/MiniMax-M2.1");
+    }
+  } else if (params.authChoice === "opencode-zen") {
+    await params.prompter.note(
+      [
+        "OpenCode Zen provides access to Claude, GPT, Gemini, and more models.",
+        "Get your API key at: https://opencode.ai/auth",
+        "Requires an active OpenCode Zen subscription.",
+      ].join("\n"),
+      "OpenCode Zen"
+    );
+    const key = await params.prompter.text({
+      message: "Enter OpenCode Zen API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setOpencodeZenApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "opencode-zen:default",
+      provider: "opencode-zen",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyOpencodeZenConfig(nextConfig);
+      await params.prompter.note(
+        `Default model set to ${OPENCODE_ZEN_DEFAULT_MODEL}`,
+        "Model configured"
+      );
+    } else {
+      nextConfig = applyOpencodeZenConfig(nextConfig);
+      agentModelOverride = OPENCODE_ZEN_DEFAULT_MODEL;
+      await noteAgentModel(OPENCODE_ZEN_DEFAULT_MODEL);
     }
   }
 
