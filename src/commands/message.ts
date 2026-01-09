@@ -8,8 +8,8 @@ import {
   formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import {
-  type OutboundDeliveryResult,
   type MessagePollResult,
   type MessageSendResult,
   sendMessage,
