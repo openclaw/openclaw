@@ -33,6 +33,37 @@ Related:
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
+## “Model is not allowed” (and why replies stop)
+
+If `agent.models` is set, it becomes the **allowlist** for `/model` and for
+session overrides. When a user selects a model that isn’t in that allowlist,
+Clawdbot returns:
+
+```
+Model "provider/model" is not allowed. Use /model to list available models.
+```
+
+This happens **before** a normal reply is generated, so the message can feel
+like it “didn’t respond.” The fix is to either:
+
+- Add the model to `agent.models`, or
+- Clear the allowlist (remove `agent.models`), or
+- Pick a model from `/model list`.
+
+Example allowlist config:
+
+```json5
+{
+  agent: {
+    model: { primary: "anthropic/claude-sonnet-4-5" },
+    models: {
+      "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
+      "anthropic/claude-opus-4-5": { alias: "Opus" }
+    }
+  }
+}
+```
+
 ## CLI commands
 
 ```bash
