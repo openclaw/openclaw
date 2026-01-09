@@ -37,7 +37,12 @@ function invalid(message: string): { ok: false; error: ErrorShape } {
 function normalizeLabel(
   raw: unknown,
 ): { ok: true; label: string } | ReturnType<typeof invalid> {
-  const trimmed = String(raw ?? "").trim();
+  const trimmed =
+    typeof raw === "string"
+      ? raw.trim()
+      : typeof raw === "number" || typeof raw === "boolean"
+        ? String(raw).trim()
+        : "";
   if (!trimmed) return invalid("invalid label: empty");
   if (trimmed.length > SESSION_LABEL_MAX_LENGTH) {
     return invalid(`invalid label: too long (max ${SESSION_LABEL_MAX_LENGTH})`);
