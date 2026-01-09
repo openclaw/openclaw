@@ -32,8 +32,10 @@ import {
 
 const SessionsSendToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
-  label: Type.Optional(Type.String()),
-  agentId: Type.Optional(Type.String()),
+  label: Type.Optional(
+    Type.String({ minLength: 1, maxLength: SESSION_LABEL_MAX_LENGTH }),
+  ),
+  agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   message: Type.String(),
   timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
 });
