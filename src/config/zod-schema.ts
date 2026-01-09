@@ -97,6 +97,12 @@ const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
 
+const BlockStreamingCoalesceSchema = z.object({
+  minChars: z.number().int().positive().optional(),
+  maxChars: z.number().int().positive().optional(),
+  idleMs: z.number().int().nonnegative().optional(),
+});
+
 const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   (values ?? []).map((v) => String(v).trim()).filter(Boolean);
 
@@ -192,6 +198,7 @@ const TelegramAccountSchemaBase = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
+  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
   mediaMaxMb: z.number().positive().optional(),
   retry: RetryConfigSchema,
@@ -277,6 +284,7 @@ const DiscordAccountSchema = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
+  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   maxLinesPerMessage: z.number().int().positive().optional(),
   mediaMaxMb: z.number().positive().optional(),
   historyLimit: z.number().int().min(0).optional(),
@@ -347,6 +355,7 @@ const SlackAccountSchema = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
+  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   mediaMaxMb: z.number().positive().optional(),
   reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
   reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -398,6 +407,7 @@ const SignalAccountSchemaBase = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
+  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   mediaMaxMb: z.number().int().positive().optional(),
 });
 
@@ -443,6 +453,7 @@ const IMessageAccountSchemaBase = z.object({
   mediaMaxMb: z.number().int().positive().optional(),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
+  blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   groups: z
     .record(
       z.string(),
@@ -507,6 +518,7 @@ const MSTeamsConfigSchema = z
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.string()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     mediaAllowHosts: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
@@ -994,6 +1006,7 @@ const AgentDefaultsSchema = z
           .optional(),
       })
       .optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
@@ -1215,6 +1228,7 @@ export const ClawdbotSchema = z.object({
               groupPolicy: GroupPolicySchema.optional().default("open"),
               textChunkLimit: z.number().int().positive().optional(),
               blockStreaming: z.boolean().optional(),
+              blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
               groups: z
                 .record(
                   z.string(),
@@ -1249,6 +1263,7 @@ export const ClawdbotSchema = z.object({
       groupPolicy: GroupPolicySchema.optional().default("open"),
       textChunkLimit: z.number().int().positive().optional(),
       blockStreaming: z.boolean().optional(),
+      blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
       actions: z
         .object({
           reactions: z.boolean().optional(),

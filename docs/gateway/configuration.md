@@ -1142,6 +1142,7 @@ See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 
 Block streaming:
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default on).
+- Provider overrides: `*.blockStreaming` (and per-account variants) to force block streaming on/off.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"` (default: text_end).
 - `agents.defaults.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
   800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
@@ -1151,6 +1152,12 @@ Block streaming:
     agents: { defaults: { blockStreamingChunk: { minChars: 800, maxChars: 1200 } } }
   }
   ```
+- `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
+  Defaults to `{ idleMs: 400 }` and inherits `minChars` from `blockStreamingChunk`
+  with `maxChars` capped to the provider text limit.
+  Provider overrides: `whatsapp.blockStreamingCoalesce`, `telegram.blockStreamingCoalesce`,
+  `discord.blockStreamingCoalesce`, `slack.blockStreamingCoalesce`, `signal.blockStreamingCoalesce`,
+  `imessage.blockStreamingCoalesce`, `msteams.blockStreamingCoalesce` (and per-account variants).
 See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 
 Typing indicators:

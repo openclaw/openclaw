@@ -33,8 +33,10 @@ Legend:
 
 **Controls:**
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default on).
+- Provider overrides: `*.blockStreaming` (and per-account variants) to force `"on"`/`"off"` per provider.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"`.
 - `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
+- `agents.defaults.blockStreamingCoalesce`: `{ minChars?, maxChars?, idleMs? }` (merge streamed blocks before send).
 - Provider hard cap: `*.textChunkLimit` (e.g., `whatsapp.textChunkLimit`).
 - Discord soft cap: `discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 
@@ -53,6 +55,20 @@ Block chunking is implemented by `EmbeddedBlockChunker`:
 - **Code fences:** never split inside fences; when forced at `maxChars`, close + reopen the fence to keep Markdown valid.
 
 `maxChars` is clamped to the provider `textChunkLimit`, so you can’t exceed per-provider caps.
+
+## Coalescing (merge streamed blocks)
+
+When block streaming is enabled, Clawdbot can **merge consecutive block chunks**
+before sending them out. This reduces “single-line spam” while still providing
+progressive output.
+
+- Coalescing waits for **idle gaps** (`idleMs`) before flushing.
+- Buffers are capped by `maxChars` and will flush if they exceed it.
+- `minChars` prevents tiny fragments from sending until enough text accumulates
+  (final flush always sends remaining text).
+- Joiner is derived from `blockStreamingChunk.breakPreference`
+  (`paragraph` → `\n\n`, `newline` → `\n`, `sentence` → space).
+- Provider overrides are available via `*.blockStreamingCoalesce` (including per-account configs).
 
 ## “Stream chunks or everything”
 

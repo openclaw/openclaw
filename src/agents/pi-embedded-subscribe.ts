@@ -1045,6 +1045,15 @@ export function subscribeEmbeddedPiSession(params: {
           stream: "lifecycle",
           data: { phase: "end" },
         });
+        if (params.onBlockReply) {
+          if (blockChunker?.hasBuffered()) {
+            blockChunker.drain({ force: true, emit: emitBlockChunk });
+            blockChunker.reset();
+          } else if (blockBuffer.length > 0) {
+            emitBlockChunk(blockBuffer);
+            blockBuffer = "";
+          }
+        }
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {
