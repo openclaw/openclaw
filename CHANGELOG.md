@@ -12,6 +12,7 @@
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
 - Discord: avoid category parent overrides for channel allowlists and refactor thread context helpers. (#588) — thanks @steipete
 - Discord: fix forum thread starters and cache channel lookups for thread context. (#585) — thanks @thewilloftheshadow
+- Discord: log gateway disconnect/reconnect events at info and add verbose gateway metrics. (#595) — thanks @steipete
 - Commands: accept /models as an alias for /model.
 - Commands: add `/usage` as an alias for `/status`. (#492) — thanks @lc0rp
 - Models/Auth: add MiniMax Anthropic-compatible API onboarding (minimax-api). (#590) — thanks @mneves75

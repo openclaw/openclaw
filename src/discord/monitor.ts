@@ -68,6 +68,7 @@ import { truncateUtf16Safe } from "../utils.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
+import { attachDiscordGatewayLogging } from "./gateway-logging.js";
 import {
   getDiscordGatewayEmitter,
   waitForDiscordGatewayStop,
@@ -499,12 +500,10 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const gateway = client.getPlugin<GatewayPlugin>("gateway");
   const gatewayEmitter = getDiscordGatewayEmitter(gateway);
-  const onGatewayWarning = (warning: unknown) => {
-    logVerbose(`discord gateway warning: ${String(warning)}`);
-  };
-  if (shouldLogVerbose()) {
-    gatewayEmitter?.on("warning", onGatewayWarning);
-  }
+  const stopGatewayLogging = attachDiscordGatewayLogging({
+    emitter: gatewayEmitter,
+    runtime,
+  });
   try {
     await waitForDiscordGatewayStop({
       gateway: gateway
@@ -526,7 +525,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       },
     });
   } finally {
-    gatewayEmitter?.removeListener("warning", onGatewayWarning);
+    stopGatewayLogging();
   }
 }
 
