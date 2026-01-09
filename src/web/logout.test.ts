@@ -28,13 +28,26 @@ describe("web logout", () => {
         vi.resetModules();
         const { logoutWeb, WA_WEB_AUTH_DIR } = await import("./session.js");
 
-        const rel = path.relative(
-          path.resolve(home),
-          path.resolve(WA_WEB_AUTH_DIR),
-        );
-        expect(rel && !rel.startsWith("..") && !path.isAbsolute(rel)).toBe(
-          true,
-        );
+        if (process.platform === "win32") {
+          const normalizedHome = path.win32.normalize(home).toLowerCase();
+          const normalizedAuthDir = path.win32
+            .normalize(WA_WEB_AUTH_DIR)
+            .toLowerCase();
+          const rel = path.win32.relative(normalizedHome, normalizedAuthDir);
+          const isWithinHome =
+            rel.length > 0 &&
+            !rel.startsWith("..") &&
+            !path.win32.isAbsolute(rel);
+          expect(isWithinHome).toBe(true);
+        } else {
+          const rel = path.relative(
+            path.resolve(home),
+            path.resolve(WA_WEB_AUTH_DIR),
+          );
+          expect(rel && !rel.startsWith("..") && !path.isAbsolute(rel)).toBe(
+            true,
+          );
+        }
 
         fs.mkdirSync(WA_WEB_AUTH_DIR, { recursive: true });
         fs.writeFileSync(path.join(WA_WEB_AUTH_DIR, "creds.json"), "{}");
