@@ -9,6 +9,7 @@ import {
   jidToE164,
   normalizeE164,
   normalizePath,
+  resolveJidToE164,
   resolveUserPath,
   sleep,
   toWhatsappJid,
@@ -96,6 +97,60 @@ describe("jidToE164", () => {
       });
     expect(jidToE164("123@lid")).toBe("+5551234");
     spy.mockRestore();
+  });
+
+  it("maps @lid from authDir mapping files", () => {
+    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
+    const mappingPath = path.join(authDir, "lid-mapping-456_reverse.json");
+    fs.writeFileSync(mappingPath, JSON.stringify("5559876"));
+    expect(jidToE164("456@lid", { authDir })).toBe("+5559876");
+    fs.rmSync(authDir, { recursive: true, force: true });
+  });
+
+  it("maps @hosted.lid from authDir mapping files", () => {
+    const authDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
+    const mappingPath = path.join(authDir, "lid-mapping-789_reverse.json");
+    fs.writeFileSync(mappingPath, JSON.stringify(4440001));
+    expect(jidToE164("789@hosted.lid", { authDir })).toBe("+4440001");
+    fs.rmSync(authDir, { recursive: true, force: true });
+  });
+
+  it("accepts hosted PN JIDs", () => {
+    expect(jidToE164("1555000:2@hosted")).toBe("+1555000");
+  });
+
+  it("falls back through lidMappingDirs in order", () => {
+    const first = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-lid-a-"));
+    const second = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-lid-b-"));
+    const mappingPath = path.join(second, "lid-mapping-321_reverse.json");
+    fs.writeFileSync(mappingPath, JSON.stringify("123321"));
+    expect(jidToE164("321@lid", { lidMappingDirs: [first, second] })).toBe(
+      "+123321",
+    );
+    fs.rmSync(first, { recursive: true, force: true });
+    fs.rmSync(second, { recursive: true, force: true });
+  });
+});
+
+describe("resolveJidToE164", () => {
+  it("resolves @lid via lidLookup when mapping file is missing", async () => {
+    const lidLookup = {
+      getPNForLID: vi.fn().mockResolvedValue("777:0@s.whatsapp.net"),
+    };
+    await expect(resolveJidToE164("777@lid", { lidLookup })).resolves.toBe(
+      "+777",
+    );
+    expect(lidLookup.getPNForLID).toHaveBeenCalledWith("777@lid");
+  });
+
+  it("skips lidLookup for non-lid JIDs", async () => {
+    const lidLookup = {
+      getPNForLID: vi.fn().mockResolvedValue("888:0@s.whatsapp.net"),
+    };
+    await expect(
+      resolveJidToE164("888@s.whatsapp.net", { lidLookup }),
+    ).resolves.toBe("+888");
+    expect(lidLookup.getPNForLID).not.toHaveBeenCalled();
   });
 });
 

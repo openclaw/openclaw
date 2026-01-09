@@ -30,6 +30,7 @@ import {
   isSelfChatMode,
   jidToE164,
   normalizeE164,
+  resolveJidToE164,
   toWhatsappJid,
 } from "../utils.js";
 import { resolveWhatsAppAccount } from "./accounts.js";
@@ -123,23 +124,10 @@ export async function monitorWebInbox(options: {
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
   const lidLookup = sock.signalRepository?.lidMapping;
 
-  const resolveJidToE164 = async (
+  const resolveInboundJid = async (
     jid: string | null | undefined,
-  ): Promise<string | null> => {
-    if (!jid) return null;
-    const direct = jidToE164(jid);
-    if (direct) return direct;
-    if (!/(@lid|@hosted\.lid)$/.test(jid)) return null;
-    if (!lidLookup?.getPNForLID) return null;
-    try {
-      const pnJid = await lidLookup.getPNForLID(jid);
-      if (!pnJid) return null;
-      return jidToE164(pnJid);
-    } catch (err) {
-      logVerbose(`LID mapping lookup failed for ${jid}: ${String(err)}`);
-      return null;
-    }
-  };
+  ): Promise<string | null> =>
+    resolveJidToE164(jid, { authDir: options.authDir, lidLookup });
 
   const getGroupMeta = async (jid: string) => {
     const cached = groupMetaCache.get(jid);
@@ -150,7 +138,7 @@ export async function monitorWebInbox(options: {
         (
           await Promise.all(
             meta.participants?.map(async (p) => {
-              const mapped = await resolveJidToE164(p.id);
+              const mapped = await resolveInboundJid(p.id);
               return mapped ?? p.id;
             }) ?? [],
           )
@@ -191,12 +179,12 @@ export async function monitorWebInbox(options: {
         continue;
       const group = isJidGroup(remoteJid);
       const participantJid = msg.key?.participant ?? undefined;
-      const from = group ? remoteJid : await resolveJidToE164(remoteJid);
+      const from = group ? remoteJid : await resolveInboundJid(remoteJid);
       // Skip if we still can't resolve an id to key conversation
       if (!from) continue;
       const senderE164 = group
         ? participantJid
-          ? await resolveJidToE164(participantJid)
+          ? await resolveInboundJid(participantJid)
           : null
         : from;
       let groupSubject: string | undefined;
