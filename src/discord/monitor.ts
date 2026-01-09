@@ -46,7 +46,7 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
-import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
+import { danger, info, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatDurationSeconds } from "../infra/format-duration.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
