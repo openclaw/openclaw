@@ -30,6 +30,7 @@
 - Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
+- Agent: drop empty error assistant messages when sanitizing session history. (#591) — thanks @steipete
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Doctor: repair gateway service entrypoint when switching between npm and git installs; add Docker e2e coverage. — thanks @steipete
