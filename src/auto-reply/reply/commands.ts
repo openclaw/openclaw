@@ -111,7 +111,7 @@ export async function buildStatusReply(params: {
   cfg: ClawdbotConfig;
   command: CommandContext;
   sessionEntry?: SessionEntry;
-  sessionKey?: string;
+  sessionKey: string;
   sessionScope?: SessionScope;
   provider: string;
   model: string;
@@ -390,7 +390,7 @@ export async function handleCommands(params: {
   directives: InlineDirectives;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
+  sessionKey: string;
   storePath?: string;
   sessionScope?: SessionScope;
   workspaceDir: string;
@@ -815,7 +815,7 @@ export async function handleCommands(params: {
     const line = reason
       ? `${compactLabel}: ${reason} • ${contextSummary}`
       : `${compactLabel} • ${contextSummary}`;
-    enqueueSystemEvent(line);
+    enqueueSystemEvent(line, { sessionKey });
     return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
   }
 

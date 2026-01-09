@@ -8,6 +8,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
+  waitForSystemEvent,
 } from "./test-helpers.js";
 
 installGatewayTestHooks();
@@ -53,6 +54,48 @@ describe("gateway server cron", () => {
     await server.close();
     await fs.rm(dir, { recursive: true, force: true });
     testState.cronStorePath = undefined;
+  });
+
+  test("enqueues main cron system events to the resolved main session key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-cron-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    testState.sessionConfig = { mainKey: "primary" };
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(
+      testState.cronStorePath,
+      JSON.stringify({ version: 1, jobs: [] }),
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const atMs = Date.now() - 1;
+    const addRes = await rpcReq(ws, "cron.add", {
+      name: "route test",
+      enabled: true,
+      schedule: { kind: "at", atMs },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "systemEvent", text: "cron route check" },
+    });
+    expect(addRes.ok).toBe(true);
+    const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+    const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+    expect(jobId.length > 0).toBe(true);
+
+    const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" });
+    expect(runRes.ok).toBe(true);
+
+    const events = await waitForSystemEvent();
+    expect(events.some((event) => event.includes("cron route check"))).toBe(
+      true,
+    );
+
+    ws.close();
+    await server.close();
+    await fs.rm(dir, { recursive: true, force: true });
+    testState.cronStorePath = undefined;
+    testState.sessionConfig = undefined;
   });
 
   test("normalizes wrapped cron.add payloads", async () => {

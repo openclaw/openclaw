@@ -14,6 +14,8 @@ import {
 import { drainSystemEvents } from "../infra/system-events.js";
 import { getReplyFromConfig } from "./reply.js";
 
+const MAIN_SESSION_KEY = "agent:main:main";
+
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   runEmbeddedPiAgent: vi.fn(),
@@ -1390,7 +1392,7 @@ describe("directive behavior", () => {
 
   it("queues a system event when switching models", async () => {
     await withTempHome(async (home) => {
-      drainSystemEvents();
+      drainSystemEvents(MAIN_SESSION_KEY);
       vi.mocked(runEmbeddedPiAgent).mockReset();
       const storePath = path.join(home, "sessions.json");
 
@@ -1412,7 +1414,7 @@ describe("directive behavior", () => {
         },
       );
 
-      const events = drainSystemEvents();
+      const events = drainSystemEvents(MAIN_SESSION_KEY);
       expect(events).toContain(
         "Model switched to Opus (anthropic/claude-opus-4-5).",
       );

@@ -1,3 +1,5 @@
+import { loadConfig } from "../../config/config.js";
+import { resolveMainSessionKey } from "../../config/sessions.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
 import {
@@ -45,6 +47,7 @@ export const systemHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const sessionKey = resolveMainSessionKey(loadConfig());
     const instanceId =
       typeof params.instanceId === "string" ? params.instanceId : undefined;
     const host = typeof params.host === "string" ? params.host : undefined;
@@ -107,7 +110,10 @@ export const systemHandlers: GatewayRequestHandlers = {
         modeChanged ||
         reasonChanged;
       if (hasChanges) {
-        const contextChanged = isSystemEventContextChanged(presenceUpdate.key);
+        const contextChanged = isSystemEventContextChanged(
+          sessionKey,
+          presenceUpdate.key,
+        );
         const parts: string[] = [];
         if (contextChanged || hostChanged || ipChanged) {
           const hostLabel = next.host?.trim() || "Unknown";
@@ -126,12 +132,13 @@ export const systemHandlers: GatewayRequestHandlers = {
         const deltaText = parts.join(" · ");
         if (deltaText) {
           enqueueSystemEvent(deltaText, {
+            sessionKey,
             contextKey: presenceUpdate.key,
           });
         }
       }
     } else {
-      enqueueSystemEvent(text);
+      enqueueSystemEvent(text, { sessionKey });
     }
     const nextPresenceVersion = context.incrementPresenceVersion();
     context.broadcast(

@@ -1,11 +1,9 @@
 // Lightweight in-memory queue for human-readable system events that should be
 // prefixed to the next prompt. We intentionally avoid persistence to keep
-// events ephemeral. Events are session-scoped; callers that don't specify a
-// session key default to "main".
+// events ephemeral. Events are session-scoped and require an explicit key.
 
 type SystemEvent = { text: string; ts: number };
 
-const DEFAULT_SESSION_KEY = "main";
 const MAX_EVENTS = 20;
 
 type SessionQueue = {
@@ -17,13 +15,16 @@ type SessionQueue = {
 const queues = new Map<string, SessionQueue>();
 
 type SystemEventOptions = {
+  sessionKey: string;
   contextKey?: string | null;
-  sessionKey?: string | null;
 };
 
-function normalizeSessionKey(key?: string | null): string {
+function requireSessionKey(key?: string | null): string {
   const trimmed = typeof key === "string" ? key.trim() : "";
-  return trimmed || DEFAULT_SESSION_KEY;
+  if (!trimmed) {
+    throw new Error("system events require a sessionKey");
+  }
+  return trimmed;
 }
 
 function normalizeContextKey(key?: string | null): string | null {
@@ -34,17 +35,17 @@ function normalizeContextKey(key?: string | null): string | null {
 }
 
 export function isSystemEventContextChanged(
+  sessionKey: string,
   contextKey?: string | null,
-  sessionKey?: string | null,
 ): boolean {
-  const key = normalizeSessionKey(sessionKey);
+  const key = requireSessionKey(sessionKey);
   const existing = queues.get(key);
   const normalized = normalizeContextKey(contextKey);
   return normalized !== (existing?.lastContextKey ?? null);
 }
 
-export function enqueueSystemEvent(text: string, options?: SystemEventOptions) {
-  const key = normalizeSessionKey(options?.sessionKey);
+export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+  const key = requireSessionKey(options?.sessionKey);
   const entry =
     queues.get(key) ??
     (() => {
@@ -65,8 +66,8 @@ export function enqueueSystemEvent(text: string, options?: SystemEventOptions) {
   if (entry.queue.length > MAX_EVENTS) entry.queue.shift();
 }
 
-export function drainSystemEvents(sessionKey?: string | null): string[] {
-  const key = normalizeSessionKey(sessionKey);
+export function drainSystemEvents(sessionKey: string): string[] {
+  const key = requireSessionKey(sessionKey);
   const entry = queues.get(key);
   if (!entry || entry.queue.length === 0) return [];
   const out = entry.queue.map((e) => e.text);
@@ -77,13 +78,13 @@ export function drainSystemEvents(sessionKey?: string | null): string[] {
   return out;
 }
 
-export function peekSystemEvents(sessionKey?: string | null): string[] {
-  const key = normalizeSessionKey(sessionKey);
+export function peekSystemEvents(sessionKey: string): string[] {
+  const key = requireSessionKey(sessionKey);
   return queues.get(key)?.queue.map((e) => e.text) ?? [];
 }
 
-export function hasSystemEvents(sessionKey?: string | null) {
-  const key = normalizeSessionKey(sessionKey);
+export function hasSystemEvents(sessionKey: string) {
+  const key = requireSessionKey(sessionKey);
   return (queues.get(key)?.queue.length ?? 0) > 0;
 }
 

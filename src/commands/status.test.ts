@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
       systemSent: true,
     },
   }),
+  resolveMainSessionKey: vi.fn().mockReturnValue("agent:main:main"),
   resolveStorePath: vi.fn().mockReturnValue("/tmp/sessions.json"),
   webAuthExists: vi.fn().mockResolvedValue(true),
   getWebAuthAgeMs: vi.fn().mockReturnValue(5000),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("../config/sessions.js", () => ({
   loadSessionStore: mocks.loadSessionStore,
+  resolveMainSessionKey: mocks.resolveMainSessionKey,
   resolveStorePath: mocks.resolveStorePath,
 }));
 vi.mock("../web/session.js", () => ({

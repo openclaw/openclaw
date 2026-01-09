@@ -447,7 +447,7 @@ export async function handleDirectiveOnly(params: {
   directives: InlineDirectives;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
-  sessionKey?: string;
+  sessionKey: string;
   storePath?: string;
   elevatedEnabled: boolean;
   elevatedAllowed: boolean;
@@ -836,6 +836,7 @@ export async function handleDirectiveOnly(params: {
         enqueueSystemEvent(
           formatModelSwitchEvent(nextLabel, modelSelection.alias),
           {
+            sessionKey,
             contextKey: `model:${nextLabel}`,
           },
         );
@@ -1103,6 +1104,7 @@ export async function persistInlineDirectives(params: {
             enqueueSystemEvent(
               formatModelSwitchEvent(nextLabel, resolved.alias),
               {
+                sessionKey,
                 contextKey: `model:${nextLabel}`,
               },
             );

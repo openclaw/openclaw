@@ -1781,6 +1781,7 @@ export async function monitorWebProvider(
 
     enqueueSystemEvent(
       `WhatsApp gateway disconnected (status ${statusCode ?? "unknown"})`,
+      { sessionKey: connectRoute.sessionKey },
     );
 
     if (loggedOut) {

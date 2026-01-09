@@ -488,7 +488,8 @@ export async function startGatewayServer(
     text: string;
     mode: "now" | "next-heartbeat";
   }) => {
-    enqueueSystemEvent(value.text);
+    const sessionKey = resolveMainSessionKey(loadConfig());
+    enqueueSystemEvent(value.text, { sessionKey });
     if (value.mode === "now") {
       requestHeartbeatNow({ reason: "hook:wake" });
     }
@@ -509,6 +510,7 @@ export async function startGatewayServer(
     const sessionKey = value.sessionKey.trim()
       ? value.sessionKey.trim()
       : `hook:${randomUUID()}`;
+    const mainSessionKey = resolveMainSessionKey(loadConfig());
     const jobId = randomUUID();
     const now = Date.now();
     const job: CronJob = {
@@ -551,13 +553,17 @@ export async function startGatewayServer(
           result.status === "ok"
             ? `Hook ${value.name}`
             : `Hook ${value.name} (${result.status})`;
-        enqueueSystemEvent(`${prefix}: ${summary}`.trim());
+        enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
+          sessionKey: mainSessionKey,
+        });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}` });
         }
       } catch (err) {
         logHooks.warn(`hook agent failed: ${String(err)}`);
-        enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`);
+        enqueueSystemEvent(`Hook ${value.name} (error): ${String(err)}`, {
+          sessionKey: mainSessionKey,
+        });
         if (value.wakeMode === "now") {
           requestHeartbeatNow({ reason: `hook:${jobId}:error` });
         }
@@ -1822,7 +1828,8 @@ export async function startGatewayServer(
     const summary = summarizeRestartSentinel(payload);
 
     if (!sessionKey) {
-      enqueueSystemEvent(message);
+      const mainSessionKey = resolveMainSessionKey(loadConfig());
+      enqueueSystemEvent(message, { sessionKey: mainSessionKey });
       return;
     }
 
@@ -1836,7 +1843,7 @@ export async function startGatewayServer(
     const provider = lastProvider ?? parsedTarget?.provider;
     const to = lastTo || parsedTarget?.to;
     if (!provider || !to) {
-      enqueueSystemEvent(message);
+      enqueueSystemEvent(message, { sessionKey });
       return;
     }
 
@@ -1853,7 +1860,7 @@ export async function startGatewayServer(
       allowFrom: cfg.whatsapp?.allowFrom ?? [],
     });
     if (!resolved.ok) {
-      enqueueSystemEvent(message);
+      enqueueSystemEvent(message, { sessionKey });
       return;
     }
 
@@ -1872,7 +1879,7 @@ export async function startGatewayServer(
         deps,
       );
     } catch (err) {
-      enqueueSystemEvent(`${summary}\n${String(err)}`);
+      enqueueSystemEvent(`${summary}\n${String(err)}`, { sessionKey });
     }
   };
 

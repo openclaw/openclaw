@@ -9,6 +9,7 @@ import { withProgress } from "../cli/progress.js";
 import { loadConfig, resolveGatewayPort } from "../config/config.js";
 import {
   loadSessionStore,
+  resolveMainSessionKey,
   resolveStorePath,
   type SessionEntry,
 } from "../config/sessions.js";
@@ -77,7 +78,8 @@ export async function getStatusSummary(): Promise<StatusSummary> {
     colorize: true,
     includeAllowFrom: true,
   });
-  const queuedSystemEvents = peekSystemEvents();
+  const mainSessionKey = resolveMainSessionKey(cfg);
+  const queuedSystemEvents = peekSystemEvents(mainSessionKey);
 
   const resolved = resolveConfiguredModelRef({
     cfg,
