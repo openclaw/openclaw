@@ -129,11 +129,13 @@ export class EmbeddedBlockChunker {
     if (preference === "paragraph") {
       let paragraphIdx = buffer.indexOf("\n\n");
       while (paragraphIdx !== -1) {
-        if (
-          paragraphIdx >= minChars &&
-          isSafeFenceBreak(fenceSpans, paragraphIdx)
-        ) {
-          return { index: paragraphIdx };
+        const candidates = [paragraphIdx, paragraphIdx + 1];
+        for (const candidate of candidates) {
+          if (candidate < minChars) continue;
+          if (candidate < 0 || candidate >= buffer.length) continue;
+          if (isSafeFenceBreak(fenceSpans, candidate)) {
+            return { index: candidate };
+          }
         }
         paragraphIdx = buffer.indexOf("\n\n", paragraphIdx + 2);
       }
@@ -183,8 +185,13 @@ export class EmbeddedBlockChunker {
     if (preference === "paragraph") {
       let paragraphIdx = window.lastIndexOf("\n\n");
       while (paragraphIdx >= minChars) {
-        if (isSafeFenceBreak(fenceSpans, paragraphIdx)) {
-          return { index: paragraphIdx };
+        const candidates = [paragraphIdx, paragraphIdx + 1];
+        for (const candidate of candidates) {
+          if (candidate < minChars) continue;
+          if (candidate < 0 || candidate >= buffer.length) continue;
+          if (isSafeFenceBreak(fenceSpans, candidate)) {
+            return { index: candidate };
+          }
         }
         paragraphIdx = window.lastIndexOf("\n\n", paragraphIdx - 1);
       }
