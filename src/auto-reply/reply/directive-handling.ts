@@ -1010,7 +1010,6 @@ export async function persistInlineDirectives(params: {
     formatModelSwitchEvent,
     agentCfg,
   } = params;
-  const { agentDir } = params;
   let { provider, model } = params;
   const activeAgentId = sessionKey
     ? resolveAgentIdFromSessionKey(sessionKey)
