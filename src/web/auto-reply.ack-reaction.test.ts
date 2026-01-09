@@ -191,9 +191,9 @@ describe("WhatsApp ack reaction logic", () => {
         },
       };
 
-      expect(
-        shouldSendReaction(cfg, { id: "m1", chatType: "direct" }),
-      ).toBe(false);
+      expect(shouldSendReaction(cfg, { id: "m1", chatType: "direct" })).toBe(
+        false,
+      );
 
       expect(
         shouldSendReaction(cfg, {
@@ -211,9 +211,9 @@ describe("WhatsApp ack reaction logic", () => {
         },
       };
 
-      expect(
-        shouldSendReaction(cfg, { id: "m1", chatType: "direct" }),
-      ).toBe(true);
+      expect(shouldSendReaction(cfg, { id: "m1", chatType: "direct" })).toBe(
+        true,
+      );
 
       expect(
         shouldSendReaction(cfg, {
@@ -230,9 +230,9 @@ describe("WhatsApp ack reaction logic", () => {
       const cfg: ClawdbotConfig = {
         whatsapp: { ackReaction: { emoji: "👀" } },
       };
-      expect(
-        shouldSendReaction(cfg, { id: "m1", chatType: "direct" }),
-      ).toBe(true);
+      expect(shouldSendReaction(cfg, { id: "m1", chatType: "direct" })).toBe(
+        true,
+      );
     });
 
     it("should default group=mentions", () => {
