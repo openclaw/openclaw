@@ -71,29 +71,30 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
   deps: MSTeamsMessageHandlerDeps,
 ): T {
   const handleTeamsMessage = createMSTeamsMessageHandler(deps);
+  handler.onMessage(async (context, next) => {
+    try {
+      await handleTeamsMessage(context as MSTeamsTurnContext);
+    } catch (err) {
+      deps.runtime.error?.(danger(`msteams handler failed: ${String(err)}`));
+    }
+    await next();
+  });
 
-  return handler
-    .onMessage(async (context, next) => {
-      try {
-        await handleTeamsMessage(context as MSTeamsTurnContext);
-      } catch (err) {
-        deps.runtime.error?.(danger(`msteams handler failed: ${String(err)}`));
+  handler.onMembersAdded(async (context, next) => {
+    const membersAdded =
+      (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
+    for (const member of membersAdded) {
+      if (
+        member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id
+      ) {
+        deps.log.debug("member added", { member: member.id });
+        // Don't send welcome message - let the user initiate conversation.
       }
-      await next();
-    })
-    .onMembersAdded(async (context, next) => {
-      const membersAdded =
-        (context as MSTeamsTurnContext).activity?.membersAdded ?? [];
-      for (const member of membersAdded) {
-        if (
-          member.id !== (context as MSTeamsTurnContext).activity?.recipient?.id
-        ) {
-          deps.log.debug("member added", { member: member.id });
-          // Don't send welcome message - let the user initiate conversation.
-        }
-      }
-      await next();
-    });
+    }
+    await next();
+  });
+
+  return handler;
 }
 
 function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
@@ -192,8 +193,8 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           if (dmPolicy === "pairing") {
             const request = await upsertProviderPairingRequest({
               provider: "msteams",
-              sender: senderId,
-              label: senderName,
+              id: senderId,
+              meta: { name: senderName },
             });
             if (request) {
               log.info("msteams pairing request created", {

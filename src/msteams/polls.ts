@@ -1,10 +1,7 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-
-import lockfile from "proper-lockfile";
 
 import { resolveMSTeamsStorePath } from "./storage.js";
+import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
 export type MSTeamsPollVote = {
   pollId: string;
@@ -50,17 +47,6 @@ type PollStoreData = {
 const STORE_FILENAME = "msteams-polls.json";
 const MAX_POLLS = 1000;
 const POLL_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const STORE_LOCK_OPTIONS = {
-  retries: {
-    retries: 10,
-    factor: 2,
-    minTimeout: 100,
-    maxTimeout: 10_000,
-    randomize: true,
-  },
-  stale: 30_000,
-} as const;
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
@@ -238,73 +224,6 @@ export type MSTeamsPollStoreFsOptions = {
   stateDir?: string;
   storePath?: string;
 };
-
-function safeParseJson<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function readJsonFile<T>(
-  filePath: string,
-  fallback: T,
-): Promise<{ value: T; exists: boolean }> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf-8");
-    const parsed = safeParseJson<T>(raw);
-    if (parsed == null) return { value: fallback, exists: true };
-    return { value: parsed, exists: true };
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return { value: fallback, exists: false };
-    return { value: fallback, exists: false };
-  }
-}
-
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
-}
-
-async function ensureJsonFile(filePath: string, fallback: unknown) {
-  try {
-    await fs.promises.access(filePath);
-  } catch {
-    await writeJsonFile(filePath, fallback);
-  }
-}
-
-async function withFileLock<T>(
-  filePath: string,
-  fallback: unknown,
-  fn: () => Promise<T>,
-): Promise<T> {
-  await ensureJsonFile(filePath, fallback);
-  let release: (() => Promise<void>) | undefined;
-  try {
-    release = await lockfile.lock(filePath, STORE_LOCK_OPTIONS);
-    return await fn();
-  } finally {
-    if (release) {
-      try {
-        await release();
-      } catch {
-        // ignore unlock errors
-      }
-    }
-  }
-}
 
 function parseTimestamp(value?: string): number | null {
   if (!value) return null;

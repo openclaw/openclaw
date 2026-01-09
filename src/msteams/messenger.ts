@@ -25,6 +25,11 @@ export type MSTeamsAdapter = {
     reference: MSTeamsConversationReference,
     logic: (context: SendContext) => Promise<void>,
   ) => Promise<void>;
+  process: (
+    req: unknown,
+    res: unknown,
+    logic: (context: unknown) => Promise<void>,
+  ) => Promise<void>;
 };
 
 export type MSTeamsReplyRenderOptions = {

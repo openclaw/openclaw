@@ -1,8 +1,9 @@
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsCredentials } from "./token.js";
 
-export type MSTeamsSdk = Awaited<
-  ReturnType<typeof import("@microsoft/agents-hosting")>
+export type MSTeamsSdk = typeof import("@microsoft/agents-hosting");
+export type MSTeamsAuthConfig = ReturnType<
+  MSTeamsSdk["getAuthConfigWithDefaults"]
 >;
 
 export async function loadMSTeamsSdk(): Promise<MSTeamsSdk> {
@@ -12,7 +13,7 @@ export async function loadMSTeamsSdk(): Promise<MSTeamsSdk> {
 export function buildMSTeamsAuthConfig(
   creds: MSTeamsCredentials,
   sdk: MSTeamsSdk,
-) {
+): MSTeamsAuthConfig {
   return sdk.getAuthConfigWithDefaults({
     clientId: creds.appId,
     clientSecret: creds.appPassword,
@@ -21,7 +22,7 @@ export function buildMSTeamsAuthConfig(
 }
 
 export function createMSTeamsAdapter(
-  authConfig: unknown,
+  authConfig: MSTeamsAuthConfig,
   sdk: MSTeamsSdk,
 ): MSTeamsAdapter {
   return new sdk.CloudAdapter(authConfig) as unknown as MSTeamsAdapter;
