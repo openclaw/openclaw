@@ -16,10 +16,12 @@ import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../../infra/provider-usage.js";
+import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import {
   type ChatProviderId,
   listChatProviders,
 } from "../../providers/registry.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
   listSignalAccountIds,
@@ -104,6 +106,7 @@ export async function providersListCommand(
     slack: listSlackAccountIds(cfg),
     signal: listSignalAccountIds(cfg),
     imessage: listIMessageAccountIds(cfg),
+    msteams: [DEFAULT_ACCOUNT_ID],
   };
 
   const lineBuilders: Record<
@@ -194,6 +197,19 @@ export async function providersListCommand(
       });
       return `- ${label}: ${formatEnabled(account.enabled)}`;
     },
+    msteams: async (accountId) => {
+      const label = formatProviderAccountLabel({
+        provider: "msteams",
+        accountId,
+        providerStyle: theme.accent,
+        accountStyle: theme.heading,
+      });
+      const configured = Boolean(resolveMSTeamsCredentials(cfg.msteams));
+      const enabled = cfg.msteams?.enabled !== false;
+      return `- ${label}: ${formatConfigured(configured)}, ${formatEnabled(
+        enabled,
+      )}`;
+    },
   };
 
   const authStore = loadAuthProfileStore();
@@ -217,6 +233,7 @@ export async function providersListCommand(
         slack: accountIdsByProvider.slack,
         signal: accountIdsByProvider.signal,
         imessage: accountIdsByProvider.imessage,
+        msteams: accountIdsByProvider.msteams,
       },
       auth: authProfiles,
       ...(usage ? { usage } : {}),

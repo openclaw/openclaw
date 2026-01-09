@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 
 import { callGateway } from "../../gateway/call.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../../utils/message-provider.js";
+import { AGENT_LANE_NESTED } from "../lanes.js";
 import { extractAssistantText, stripToolMessages } from "./sessions-helpers.js";
 
 export async function readLatestAssistantReply(params: {
@@ -34,8 +36,8 @@ export async function runAgentStep(params: {
       sessionKey: params.sessionKey,
       idempotencyKey: stepIdem,
       deliver: false,
-      provider: params.provider ?? "webchat",
-      lane: params.lane ?? "nested",
+      provider: params.provider ?? INTERNAL_MESSAGE_PROVIDER,
+      lane: params.lane ?? AGENT_LANE_NESTED,
       extraSystemPrompt: params.extraSystemPrompt,
     },
     timeoutMs: 10_000,

@@ -12,7 +12,12 @@ import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
-import { normalizeMessageProvider } from "../../utils/message-provider.js";
+import {
+  INTERNAL_MESSAGE_PROVIDER,
+  isDeliverableMessageProvider,
+  isGatewayMessageProvider,
+  normalizeMessageProvider,
+} from "../../utils/message-provider.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   type AgentWaitParams,
@@ -161,21 +166,18 @@ export const agentHandlers: GatewayRequestHandlers = {
       if (requestedProvider === "last") {
         // WebChat is not a deliverable surface. Treat it as "unset" for routing,
         // so VoiceWake and CLI callers don't get stuck with deliver=false.
-        if (lastProvider && lastProvider !== "webchat") return lastProvider;
-        return wantsDelivery ? "whatsapp" : "webchat";
+        if (lastProvider && lastProvider !== INTERNAL_MESSAGE_PROVIDER) {
+          return lastProvider;
+        }
+        return wantsDelivery ? "whatsapp" : INTERNAL_MESSAGE_PROVIDER;
       }
-      if (
-        requestedProvider === "whatsapp" ||
-        requestedProvider === "telegram" ||
-        requestedProvider === "discord" ||
-        requestedProvider === "signal" ||
-        requestedProvider === "imessage" ||
-        requestedProvider === "webchat"
-      ) {
-        return requestedProvider;
+
+      if (isGatewayMessageProvider(requestedProvider)) return requestedProvider;
+
+      if (lastProvider && lastProvider !== INTERNAL_MESSAGE_PROVIDER) {
+        return lastProvider;
       }
-      if (lastProvider && lastProvider !== "webchat") return lastProvider;
-      return wantsDelivery ? "whatsapp" : "webchat";
+      return wantsDelivery ? "whatsapp" : INTERNAL_MESSAGE_PROVIDER;
     })();
 
     const resolvedTo = (() => {
@@ -184,13 +186,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           ? request.to.trim()
           : undefined;
       if (explicit) return explicit;
-      if (
-        resolvedProvider === "whatsapp" ||
-        resolvedProvider === "telegram" ||
-        resolvedProvider === "discord" ||
-        resolvedProvider === "signal" ||
-        resolvedProvider === "imessage"
-      ) {
+      if (isDeliverableMessageProvider(resolvedProvider)) {
         return lastTo || undefined;
       }
       return undefined;
@@ -225,7 +221,9 @@ export const agentHandlers: GatewayRequestHandlers = {
       return allowFrom[0];
     })();
 
-    const deliver = request.deliver === true && resolvedProvider !== "webchat";
+    const deliver =
+      request.deliver === true &&
+      resolvedProvider !== INTERNAL_MESSAGE_PROVIDER;
 
     const accepted = {
       runId,

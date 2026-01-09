@@ -24,6 +24,7 @@ import {
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
 } from "../imessage/accounts.js";
+import { resolveMSTeamsCredentials } from "../msteams/token.js";
 import {
   type ChatProviderId,
   getChatProviderMeta,
@@ -564,6 +565,20 @@ async function buildProviderStatusIndex(
     });
   }
 
+  {
+    const accountId = DEFAULT_ACCOUNT_ID;
+    const hasCreds = Boolean(resolveMSTeamsCredentials(cfg.msteams));
+    const hasConfig = Boolean(cfg.msteams);
+    const enabled = cfg.msteams?.enabled !== false;
+    map.set(providerAccountKey("msteams", accountId), {
+      provider: "msteams",
+      accountId,
+      state: hasCreds ? "configured" : "not configured",
+      enabled,
+      configured: hasCreds || hasConfig,
+    });
+  }
+
   return map;
 }
 
@@ -584,6 +599,8 @@ function resolveDefaultAccountId(
       return resolveDefaultSignalAccountId(cfg) || DEFAULT_ACCOUNT_ID;
     case "imessage":
       return resolveDefaultIMessageAccountId(cfg) || DEFAULT_ACCOUNT_ID;
+    case "msteams":
+      return DEFAULT_ACCOUNT_ID;
   }
 }
 

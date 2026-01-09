@@ -11,6 +11,7 @@ import {
 } from "../../routing/session-key.js";
 import type { GatewayMessageProvider } from "../../utils/message-provider.js";
 import { resolveAgentConfig } from "../agent-scope.js";
+import { AGENT_LANE_SUBAGENT } from "../lanes.js";
 import { buildSubagentSystemPrompt } from "../subagent-announce.js";
 import { registerSubagentRun } from "../subagent-registry.js";
 import type { AnyAgentTool } from "./common.js";
@@ -174,7 +175,7 @@ export function createSessionsSpawnTool(opts?: {
             provider: opts?.agentProvider,
             idempotencyKey: childIdem,
             deliver: false,
-            lane: "subagent",
+            lane: AGENT_LANE_SUBAGENT,
             extraSystemPrompt: childSystemPrompt,
             timeout: runTimeoutSeconds > 0 ? runTimeoutSeconds : undefined,
             label: label || undefined,

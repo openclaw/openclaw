@@ -1,3 +1,5 @@
+import { normalizeMessageProvider } from "../utils/message-provider.js";
+
 export const CHAT_PROVIDER_ORDER = [
   "telegram",
   "whatsapp",
@@ -5,6 +7,7 @@ export const CHAT_PROVIDER_ORDER = [
   "slack",
   "signal",
   "imessage",
+  "msteams",
 ] as const;
 
 export type ChatProviderId = (typeof CHAT_PROVIDER_ORDER)[number];
@@ -69,10 +72,14 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
     docsLabel: "imessage",
     blurb: "this is still a work in progress.",
   },
-};
-
-const CHAT_PROVIDER_ALIASES: Record<string, ChatProviderId> = {
-  imsg: "imessage",
+  msteams: {
+    id: "msteams",
+    label: "MS Teams",
+    selectionLabel: "Microsoft Teams (Bot Framework)",
+    docsPath: "/msteams",
+    docsLabel: "msteams",
+    blurb: "supported (Bot Framework).",
+  },
 };
 
 const WEBSITE_URL = "https://clawd.bot";
@@ -88,9 +95,8 @@ export function getChatProviderMeta(id: ChatProviderId): ChatProviderMeta {
 export function normalizeChatProviderId(
   raw?: string | null,
 ): ChatProviderId | null {
-  const trimmed = (raw ?? "").trim().toLowerCase();
-  if (!trimmed) return null;
-  const normalized = CHAT_PROVIDER_ALIASES[trimmed] ?? trimmed;
+  const normalized = normalizeMessageProvider(raw);
+  if (!normalized) return null;
   return CHAT_PROVIDER_ORDER.includes(normalized as ChatProviderId)
     ? (normalized as ChatProviderId)
     : null;

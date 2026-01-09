@@ -10,7 +10,11 @@ import {
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
-import type { GatewayMessageProvider } from "../../utils/message-provider.js";
+import {
+  type GatewayMessageProvider,
+  INTERNAL_MESSAGE_PROVIDER,
+} from "../../utils/message-provider.js";
+import { AGENT_LANE_NESTED } from "../lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./agent-step.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
@@ -297,8 +301,8 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         idempotencyKey,
         deliver: false,
-        provider: "webchat",
-        lane: "nested",
+        provider: INTERNAL_MESSAGE_PROVIDER,
+        lane: AGENT_LANE_NESTED,
         extraSystemPrompt: agentMessageContext,
       };
       const requesterSessionKey = opts?.agentSessionKey;
@@ -362,7 +366,7 @@ export function createSessionsSendTool(opts?: {
                 message: incomingMessage,
                 extraSystemPrompt: replyPrompt,
                 timeoutMs: announceTimeoutMs,
-                lane: "nested",
+                lane: AGENT_LANE_NESTED,
               });
               if (!replyText || isReplySkip(replyText)) {
                 break;
@@ -388,7 +392,7 @@ export function createSessionsSendTool(opts?: {
             message: "Agent-to-agent announce step.",
             extraSystemPrompt: announcePrompt,
             timeoutMs: announceTimeoutMs,
-            lane: "nested",
+            lane: AGENT_LANE_NESTED,
           });
           if (
             announceTarget &&

@@ -42,6 +42,8 @@ function listAccountIds(cfg: ClawdbotConfig, provider: ChatProvider): string[] {
       return listSignalAccountIds(cfg);
     case "imessage":
       return listIMessageAccountIds(cfg);
+    case "msteams":
+      return [DEFAULT_ACCOUNT_ID];
   }
 }
 

@@ -1,16 +1,12 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type {
+  DeliverableMessageProvider,
+  GatewayMessageProvider,
+} from "../../utils/message-provider.js";
 import { normalizeE164 } from "../../utils.js";
 
-export type OutboundProvider =
-  | "whatsapp"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "signal"
-  | "imessage"
-  | "msteams"
-  | "none";
+export type OutboundProvider = DeliverableMessageProvider | "none";
 
 export type HeartbeatTarget = OutboundProvider | "last";
 
@@ -25,15 +21,7 @@ export type OutboundTargetResolution =
   | { ok: false; error: Error };
 
 export function resolveOutboundTarget(params: {
-  provider:
-    | "whatsapp"
-    | "telegram"
-    | "discord"
-    | "slack"
-    | "signal"
-    | "imessage"
-    | "msteams"
-    | "webchat";
+  provider: GatewayMessageProvider;
   to?: string;
   allowFrom?: string[];
 }): OutboundTargetResolution {

@@ -14,7 +14,9 @@ import {
 } from "../../imessage/accounts.js";
 import { formatAge } from "../../infra/provider-summary.js";
 import { collectProvidersStatusIssues } from "../../infra/providers-status-issues.js";
+import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { listChatProviders } from "../../providers/registry.js";
+import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
   listSignalAccountIds,
@@ -340,6 +342,18 @@ async function formatConfigProvidersStatusLines(
         configured: imsgConfigured,
       };
     }),
+    msteams: [
+      {
+        accountId: DEFAULT_ACCOUNT_ID,
+        enabled: cfg.msteams?.enabled !== false,
+        configured: Boolean(resolveMSTeamsCredentials(cfg.msteams)),
+        dmPolicy: cfg.msteams?.dmPolicy ?? "pairing",
+        allowFrom: (cfg.msteams?.allowFrom ?? [])
+          .map((value) => String(value ?? "").trim())
+          .filter(Boolean)
+          .slice(0, 2),
+      },
+    ],
   } satisfies Partial<Record<ChatProvider, Array<Record<string, unknown>>>>;
 
   // WhatsApp linked info (config-only best-effort).

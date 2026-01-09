@@ -8,6 +8,8 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { AGENT_LANE_NESTED } from "./lanes.js";
 import { readLatestAssistantReply, runAgentStep } from "./tools/agent-step.js";
 import { resolveAnnounceTarget } from "./tools/sessions-announce-target.js";
 import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
@@ -241,7 +243,8 @@ export async function runSubagentAnnounceFlow(params: {
       message: "Sub-agent announce step.",
       extraSystemPrompt: announcePrompt,
       timeoutMs: params.timeoutMs,
-      lane: "nested",
+      provider: INTERNAL_MESSAGE_PROVIDER,
+      lane: AGENT_LANE_NESTED,
     });
 
     if (

@@ -5,34 +5,23 @@ import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { listEnabledSignalAccounts } from "../../signal/accounts.js";
 import { listEnabledSlackAccounts } from "../../slack/accounts.js";
 import { listEnabledTelegramAccounts } from "../../telegram/accounts.js";
-import { normalizeMessageProvider } from "../../utils/message-provider.js";
+import {
+  DELIVERABLE_MESSAGE_PROVIDERS,
+  type DeliverableMessageProvider,
+  normalizeMessageProvider,
+} from "../../utils/message-provider.js";
 import {
   listEnabledWhatsAppAccounts,
   resolveWhatsAppAccount,
 } from "../../web/accounts.js";
 import { webAuthExists } from "../../web/session.js";
 
-export type MessageProviderId =
-  | "whatsapp"
-  | "telegram"
-  | "discord"
-  | "slack"
-  | "signal"
-  | "imessage"
-  | "msteams";
+export type MessageProviderId = DeliverableMessageProvider;
 
-const MESSAGE_PROVIDERS: MessageProviderId[] = [
-  "whatsapp",
-  "telegram",
-  "discord",
-  "slack",
-  "signal",
-  "imessage",
-  "msteams",
-];
+const MESSAGE_PROVIDERS = [...DELIVERABLE_MESSAGE_PROVIDERS];
 
 function isKnownProvider(value: string): value is MessageProviderId {
-  return (MESSAGE_PROVIDERS as string[]).includes(value);
+  return (MESSAGE_PROVIDERS as readonly string[]).includes(value);
 }
 
 async function isWhatsAppConfigured(cfg: ClawdbotConfig): Promise<boolean> {

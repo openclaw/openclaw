@@ -286,6 +286,50 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
+  test("agent routes main last-channel slack", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-slack",
+            updatedAt: Date.now(),
+            lastProvider: "slack",
+            lastTo: "channel:slack-123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      provider: "last",
+      deliver: true,
+      idempotencyKey: "idem-agent-last-slack",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectProviders(call, "slack");
+    expect(call.to).toBe("channel:slack-123");
+    expect(call.deliver).toBe(true);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-slack");
+
+    ws.close();
+    await server.close();
+  });
+
   test("agent routes main last-channel signal", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
@@ -325,6 +369,125 @@ describe("gateway server agent", () => {
     expect(call.deliver).toBe(true);
     expect(call.bestEffortDeliver).toBe(true);
     expect(call.sessionId).toBe("sess-signal");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent routes main last-channel msteams", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-teams",
+            updatedAt: Date.now(),
+            lastProvider: "msteams",
+            lastTo: "conversation:teams-123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      provider: "last",
+      deliver: true,
+      idempotencyKey: "idem-agent-last-msteams",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectProviders(call, "msteams");
+    expect(call.to).toBe("conversation:teams-123");
+    expect(call.deliver).toBe(true);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-teams");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent accepts provider aliases (imsg/teams)", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-alias",
+            updatedAt: Date.now(),
+            lastProvider: "imessage",
+            lastTo: "chat_id:123",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const resIMessage = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      provider: "imsg",
+      deliver: true,
+      idempotencyKey: "idem-agent-imsg",
+    });
+    expect(resIMessage.ok).toBe(true);
+
+    const resTeams = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      provider: "teams",
+      to: "conversation:teams-abc",
+      deliver: false,
+      idempotencyKey: "idem-agent-teams",
+    });
+    expect(resTeams.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const lastIMessageCall = spy.mock.calls.at(-2)?.[0] as Record<
+      string,
+      unknown
+    >;
+    expectProviders(lastIMessageCall, "imessage");
+    expect(lastIMessageCall.to).toBe("chat_id:123");
+
+    const lastTeamsCall = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectProviders(lastTeamsCall, "msteams");
+    expect(lastTeamsCall.to).toBe("conversation:teams-abc");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("agent rejects unknown provider", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      provider: "sms",
+      idempotencyKey: "idem-agent-bad-provider",
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.code).toBe("INVALID_REQUEST");
 
     ws.close();
     await server.close();

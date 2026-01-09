@@ -23,6 +23,7 @@
 - Models: centralize model override validation + hooks Gmail warnings in doctor. (#602) — thanks @steipete
 - Agents: avoid base-to-string error stringification in model fallback. (#604) — thanks @steipete
 - Agents: `sessions_spawn` inherits the requester's provider for child runs (avoid WhatsApp fallback). (#528) — thanks @rlmestre
+- Gateway/CLI: harden agent provider routing + validation (Slack/MS Teams + aliases). (follow-up #528) — thanks @steipete
 - Agents: treat billing/insufficient-credits errors as failover-worthy so model fallbacks kick in. (#486) — thanks @steipete
 - Auth: default billing disable backoff to 5h (doubling, 24h cap) and surface disabled/cooldown profiles in `models list` + doctor. (#486) — thanks @steipete
 - Commands: harden slash command registry and list text-only commands in `/commands`.
