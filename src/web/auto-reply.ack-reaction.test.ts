@@ -2,12 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/types.js";
 
 describe("WhatsApp ack reaction", () => {
-  const mockSendReaction = vi.fn(async () => {});
-  const mockGetReply = vi.fn(async () => ({
-    payloads: [{ text: "test reply" }],
-    meta: {},
-  }));
-
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -265,7 +259,6 @@ describe("WhatsApp ack reaction", () => {
     };
 
     const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
     const didSendReply = false; // No reply sent
 
     const shouldAckReaction = () => {
@@ -296,7 +289,6 @@ describe("WhatsApp ack reaction", () => {
     };
 
     const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
     const didSendReply = true;
 
     const shouldAckReaction = () => {
