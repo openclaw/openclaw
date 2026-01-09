@@ -1,3 +1,4 @@
+import { resolveResponsePrefix } from "../agents/identity.js";
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
@@ -421,7 +422,7 @@ export async function monitorIMessageProvider(
     }
 
     const dispatcher = createReplyDispatcher({
-      responsePrefix: cfg.messages?.responsePrefix,
+      responsePrefix: resolveResponsePrefix(cfg, route.agentId),
       deliver: async (payload) => {
         await deliverReplies({
           replies: [payload],

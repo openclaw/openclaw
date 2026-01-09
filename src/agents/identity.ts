@@ -19,3 +19,21 @@ export function resolveAckReaction(
   const emoji = resolveAgentIdentity(cfg, agentId)?.emoji?.trim();
   return emoji || DEFAULT_ACK_REACTION;
 }
+
+export function resolveIdentityNamePrefix(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): string | undefined {
+  const name = resolveAgentIdentity(cfg, agentId)?.name?.trim();
+  if (!name) return undefined;
+  return `[${name}]`;
+}
+
+export function resolveResponsePrefix(
+  cfg: ClawdbotConfig,
+  agentId: string,
+): string | undefined {
+  const configured = cfg.messages?.responsePrefix;
+  if (configured !== undefined) return configured;
+  return resolveIdentityNamePrefix(cfg, agentId);
+}

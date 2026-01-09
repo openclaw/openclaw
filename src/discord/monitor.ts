@@ -17,7 +17,10 @@ import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIAttachment } from "discord-api-types/v10";
 import { ApplicationCommandOptionType, Routes } from "discord-api-types/v10";
 
-import { resolveAckReaction } from "../agents/identity.js";
+import {
+  resolveAckReaction,
+  resolveResponsePrefix,
+} from "../agents/identity.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -1030,7 +1033,7 @@ export function createDiscordMessageHandler(params: {
       let didSendReply = false;
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
-          responsePrefix: cfg.messages?.responsePrefix,
+          responsePrefix: resolveResponsePrefix(cfg, route.agentId),
           deliver: async (payload) => {
             await deliverDiscordReply({
               replies: [payload],
@@ -1510,7 +1513,7 @@ function createDiscordNativeCommand(params: {
 
       let didReply = false;
       const dispatcher = createReplyDispatcher({
-        responsePrefix: cfg.messages?.responsePrefix,
+        responsePrefix: resolveResponsePrefix(cfg, route.agentId),
         deliver: async (payload, _info) => {
           await deliverDiscordInteractionReply({
             interaction,
