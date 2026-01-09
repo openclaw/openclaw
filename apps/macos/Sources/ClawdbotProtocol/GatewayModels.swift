@@ -671,6 +671,7 @@ public struct SessionsListParams: Codable, Sendable {
     public let activeminutes: Int?
     public let includeglobal: Bool?
     public let includeunknown: Bool?
+    public let label: String?
     public let spawnedby: String?
     public let agentid: String?
 
@@ -679,6 +680,7 @@ public struct SessionsListParams: Codable, Sendable {
         activeminutes: Int?,
         includeglobal: Bool?,
         includeunknown: Bool?,
+        label: String?,
         spawnedby: String?,
         agentid: String?
     ) {
@@ -686,6 +688,7 @@ public struct SessionsListParams: Codable, Sendable {
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
+        self.label = label
         self.spawnedby = spawnedby
         self.agentid = agentid
     }
@@ -694,6 +697,7 @@ public struct SessionsListParams: Codable, Sendable {
         case activeminutes = "activeMinutes"
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
+        case label
         case spawnedby = "spawnedBy"
         case agentid = "agentId"
     }

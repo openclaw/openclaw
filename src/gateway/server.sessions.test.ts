@@ -158,6 +158,12 @@ describe("gateway server sessions", () => {
     expect(labelPatched.ok).toBe(true);
     expect(labelPatched.payload?.entry.label).toBe("Briefing");
 
+    const labelPatchedDuplicate = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:discord:group:dev",
+      label: "Briefing",
+    });
+    expect(labelPatchedDuplicate.ok).toBe(false);
+
     const list2 = await rpcReq<{
       sessions: Array<{
         key: string;
@@ -178,6 +184,18 @@ describe("gateway server sessions", () => {
       (s) => s.key === "agent:main:subagent:one",
     );
     expect(subagent?.label).toBe("Briefing");
+
+    const listByLabel = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      label: "Briefing",
+    });
+    expect(listByLabel.ok).toBe(true);
+    expect(listByLabel.payload?.sessions.map((s) => s.key)).toEqual([
+      "agent:main:subagent:one",
+    ]);
 
     const spawnedOnly = await rpcReq<{
       sessions: Array<{ key: string }>;

@@ -40,7 +40,7 @@ const SessionsSendToolSchema = Type.Union([
   ),
   Type.Object(
     {
-      label: Type.String(),
+      label: Type.String({ minLength: 1, maxLength: 64 }),
       message: Type.String(),
       timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
     },
@@ -81,7 +81,7 @@ export function createSessionsSendTool(opts?: {
         !isSubagentSessionKey(requesterInternalKey);
 
       const sessionKeyParam = readStringParam(params, "sessionKey");
-      const labelParam = readStringParam(params, "label");
+      const labelParam = readStringParam(params, "label")?.trim() || undefined;
       if (sessionKeyParam && labelParam) {
         return jsonResult({
           runId: crypto.randomUUID(),
@@ -99,32 +99,21 @@ export function createSessionsSendTool(opts?: {
         return Array.isArray(result?.sessions) ? result.sessions : [];
       };
 
-      const activeMinutes = 24 * 60;
-      const visibleSessions = restrictToSpawned
-        ? await listSessions({
-            activeMinutes,
-            includeGlobal: false,
-            includeUnknown: false,
-            limit: 500,
-            spawnedBy: requesterInternalKey,
-          })
-        : undefined;
-
       let sessionKey = sessionKeyParam;
       if (!sessionKey && labelParam) {
-        const sessions =
-          visibleSessions ??
-          (await listSessions({
-            activeMinutes,
-            includeGlobal: false,
-            includeUnknown: false,
-            limit: 500,
-          }));
-        const matches = sessions.filter((entry) => {
-          const label =
-            typeof entry?.label === "string" ? entry.label : undefined;
-          return label === labelParam;
-        });
+        const agentIdForLookup = requesterInternalKey
+          ? normalizeAgentId(
+              parseAgentSessionKey(requesterInternalKey)?.agentId,
+            )
+          : undefined;
+        const listParams: Record<string, unknown> = {
+          includeGlobal: false,
+          includeUnknown: false,
+          label: labelParam,
+        };
+        if (restrictToSpawned) listParams.spawnedBy = requesterInternalKey;
+        if (agentIdForLookup) listParams.agentId = agentIdForLookup;
+        const matches = await listSessions(listParams);
         if (matches.length === 0) {
           if (restrictToSpawned) {
             return jsonResult({
@@ -176,7 +165,18 @@ export function createSessionsSendTool(opts?: {
       });
 
       if (restrictToSpawned) {
-        const sessions = visibleSessions ?? [];
+        const agentIdForLookup = requesterInternalKey
+          ? normalizeAgentId(
+              parseAgentSessionKey(requesterInternalKey)?.agentId,
+            )
+          : undefined;
+        const sessions = await listSessions({
+          includeGlobal: false,
+          includeUnknown: false,
+          limit: 500,
+          spawnedBy: requesterInternalKey,
+          ...(agentIdForLookup ? { agentId: agentIdForLookup } : {}),
+        });
         const ok = sessions.some((entry) => entry?.key === resolvedKey);
         if (!ok) {
           return jsonResult({
