@@ -8,14 +8,14 @@ ClawdBot can run agents in isolated Docker containers for security. The `sandbox
 
 ## Commands
 
-### `clawd sandbox list`
+### `clawdbot sandbox list`
 
 List all sandbox containers with their status and configuration.
 
 ```bash
-clawd sandbox list
-clawd sandbox list --browser  # List only browser containers
-clawd sandbox list --json     # JSON output
+clawdbot sandbox list
+clawdbot sandbox list --browser  # List only browser containers
+clawdbot sandbox list --json     # JSON output
 ```
 
 **Output includes:**
@@ -25,16 +25,16 @@ clawd sandbox list --json     # JSON output
 - Idle time (time since last use)
 - Associated session/agent
 
-### `clawd sandbox recreate`
+### `clawdbot sandbox recreate`
 
 Remove sandbox containers to force recreation with updated images/config.
 
 ```bash
-clawd sandbox recreate --all                # Recreate all containers
-clawd sandbox recreate --session main       # Specific session
-clawd sandbox recreate --agent mybot        # Specific agent
-clawd sandbox recreate --browser            # Only browser containers
-clawd sandbox recreate --all --force        # Skip confirmation
+clawdbot sandbox recreate --all                # Recreate all containers
+clawdbot sandbox recreate --session main       # Specific session
+clawdbot sandbox recreate --agent mybot        # Specific agent
+clawdbot sandbox recreate --browser            # Only browser containers
+clawdbot sandbox recreate --all --force        # Skip confirmation
 ```
 
 **Options:**
@@ -59,7 +59,7 @@ docker tag clawdbot-sandbox:latest clawdbot-sandbox:bookworm-slim
 # Edit clawdbot.config.json: agent.sandbox.docker.image
 
 # Recreate containers
-clawd sandbox recreate --all
+clawdbot sandbox recreate --all
 ```
 
 ### After changing sandbox configuration
@@ -68,14 +68,14 @@ clawd sandbox recreate --all
 # Edit clawdbot.config.json: agent.sandbox.*
 
 # Recreate to apply new config
-clawd sandbox recreate --all
+clawdbot sandbox recreate --all
 ```
 
 ### For a specific agent only
 
 ```bash
 # Update only one agent's containers
-clawd sandbox recreate --agent alfred
+clawdbot sandbox recreate --agent alfred
 ```
 
 ## Why is this needed?
@@ -85,7 +85,7 @@ clawd sandbox recreate --agent alfred
 - Containers are only pruned after 24h of inactivity
 - Regularly-used agents keep old containers running indefinitely
 
-**Solution:** Use `clawd sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
+**Solution:** Use `clawdbot sandbox recreate` to force removal of old containers. They'll be recreated automatically with current settings when next needed.
 
 ## Configuration
 
