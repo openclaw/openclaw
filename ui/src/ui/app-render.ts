@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import {
   TAB_GROUPS,
+  iconForTab,
   pathForTab,
   subtitleForTab,
   titleForTab,
@@ -215,11 +216,25 @@ export function renderApp(state: AppViewState) {
   const chatFocus = isChat && state.settings.chatFocusMode;
 
   return html`
-    <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""}">
+    <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""}">
       <header class="topbar">
-        <div class="brand">
-          <div class="brand-title">Clawdbot Control</div>
-          <div class="brand-sub">Gateway dashboard</div>
+        <div class="topbar-left">
+          <button
+            class="nav-collapse-toggle"
+            @click=${() =>
+              state.applySettings({
+                ...state.settings,
+                navCollapsed: !state.settings.navCollapsed,
+              })}
+            title="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
+            aria-label="${state.settings.navCollapsed ? "Expand sidebar" : "Collapse sidebar"}"
+          >
+            <span class="nav-collapse-toggle__icon">☰</span>
+          </button>
+          <div class="brand">
+            <div class="brand-title">CLAWDBOT</div>
+            <div class="brand-sub">Gateway Dashboard</div>
+          </div>
         </div>
         <div class="topbar-status">
           <div class="pill">
@@ -227,28 +242,36 @@ export function renderApp(state: AppViewState) {
             <span>Health</span>
             <span class="mono">${state.connected ? "OK" : "Offline"}</span>
           </div>
-          ${isChat
-            ? renderChatFocusToggle(
-                state.settings.chatFocusMode,
-                () =>
-                  state.applySettings({
-                    ...state.settings,
-                    chatFocusMode: !state.settings.chatFocusMode,
-                  }),
-              )
-            : nothing}
           ${renderThemeToggle(state)}
         </div>
       </header>
-      <aside class="nav">
-        ${TAB_GROUPS.map(
-          (group) => html`
-            <div class="nav-group">
-              <div class="nav-label">${group.label}</div>
-              ${group.tabs.map((tab) => renderTab(state, tab))}
+      <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
+        ${TAB_GROUPS.map((group) => {
+          const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
+          const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+          return html`
+            <div class="nav-group ${isGroupCollapsed && !hasActiveTab ? "nav-group--collapsed" : ""}">
+              <button
+                class="nav-label"
+                @click=${() => {
+                  const next = { ...state.settings.navGroupsCollapsed };
+                  next[group.label] = !isGroupCollapsed;
+                  state.applySettings({
+                    ...state.settings,
+                    navGroupsCollapsed: next,
+                  });
+                }}
+                aria-expanded=${!isGroupCollapsed}
+              >
+                <span class="nav-label__text">${group.label}</span>
+                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
+              </button>
+              <div class="nav-group__items">
+                ${group.tabs.map((tab) => renderTab(state, tab))}
+              </div>
             </div>
-          `,
-        )}
+          `;
+        })}
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
         <section class="content-header">
@@ -260,6 +283,7 @@ export function renderApp(state: AppViewState) {
             ${state.lastError
               ? html`<div class="pill danger">${state.lastError}</div>`
               : nothing}
+            ${isChat ? renderChatControls(state) : nothing}
           </div>
         </section>
 
@@ -453,15 +477,35 @@ export function renderApp(state: AppViewState) {
               isToolOutputExpanded: (id) => state.toolOutputExpanded.has(id),
               onToolOutputToggle: (id, expanded) =>
                 state.toggleToolOutput(id, expanded),
+              focusMode: state.settings.chatFocusMode,
+              useNewChatLayout: state.settings.useNewChatLayout,
               onRefresh: () => {
                 state.resetToolStream();
                 return loadChatHistory(state);
               },
+              onToggleFocusMode: () =>
+                state.applySettings({
+                  ...state.settings,
+                  chatFocusMode: !state.settings.chatFocusMode,
+                }),
+              onToggleLayout: () =>
+                state.applySettings({
+                  ...state.settings,
+                  useNewChatLayout: !state.settings.useNewChatLayout,
+                }),
               onDraftChange: (next) => (state.chatMessage = next),
               onSend: () => state.handleSendChat(),
               onQueueRemove: (id) => state.removeQueuedMessage(id),
               onNewSession: () =>
                 state.handleSendChat("/new", { restoreDraft: true }),
+              // Sidebar props for tool output viewing
+              sidebarOpen: state.sidebarOpen,
+              sidebarContent: state.sidebarContent,
+              sidebarError: state.sidebarError,
+              splitRatio: state.splitRatio,
+              onOpenSidebar: (content: string) => state.handleOpenSidebar(content),
+              onCloseSidebar: () => state.handleCloseSidebar(),
+              onSplitRatioChange: (ratio: number) => state.handleSplitRatioChange(ratio),
             })
           : nothing}
 
@@ -562,10 +606,113 @@ function renderTab(state: AppViewState, tab: Tab) {
         event.preventDefault();
         state.setTab(tab);
       }}
+      title=${titleForTab(tab)}
     >
-      <span>${titleForTab(tab)}</span>
+      <span class="nav-item__icon" aria-hidden="true">${iconForTab(tab)}</span>
+      <span class="nav-item__text">${titleForTab(tab)}</span>
     </a>
   `;
+}
+
+function renderChatControls(state: AppViewState) {
+  const sessionOptions = resolveSessionOptions(state.sessionKey, state.sessionsResult);
+  // Icon for list view (legacy)
+  const listIcon = html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>`;
+  // Icon for grouped view
+  const groupIcon = html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`;
+  // Refresh icon
+  const refreshIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>`;
+  const focusIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h3"></path><path d="M20 7V4h-3"></path><path d="M4 17v3h3"></path><path d="M20 17v3h-3"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
+  return html`
+    <div class="chat-controls">
+      <label class="field chat-controls__session">
+        <select
+          .value=${state.sessionKey}
+          ?disabled=${!state.connected}
+          @change=${(e: Event) => {
+            const next = (e.target as HTMLSelectElement).value;
+            state.sessionKey = next;
+            state.chatMessage = "";
+            state.chatStream = null;
+            state.chatStreamStartedAt = null;
+            state.chatRunId = null;
+            state.resetToolStream();
+            state.resetChatScroll();
+            state.applySettings({
+              ...state.settings,
+              sessionKey: next,
+              lastActiveSessionKey: next,
+            });
+            void loadChatHistory(state);
+          }}
+        >
+          ${sessionOptions.map(
+            (entry) =>
+              html`<option value=${entry.key}>
+                ${entry.displayName ?? entry.key}
+              </option>`,
+          )}
+        </select>
+      </label>
+      <button
+        class="btn btn--sm btn--icon"
+        ?disabled=${state.chatLoading || !state.connected}
+        @click=${() => {
+          state.resetToolStream();
+          void loadChatHistory(state);
+        }}
+        title="Refresh chat history"
+      >
+        ${refreshIcon}
+      </button>
+      <span class="chat-controls__separator">|</span>
+      <button
+        class="btn btn--sm btn--icon ${state.settings.chatFocusMode ? "active" : ""}"
+        @click=${() =>
+          state.applySettings({
+            ...state.settings,
+            chatFocusMode: !state.settings.chatFocusMode,
+          })}
+        aria-pressed=${state.settings.chatFocusMode}
+        title="Toggle focus mode (hide sidebar + page header)"
+      >
+        ${focusIcon}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${state.settings.useNewChatLayout ? "active" : ""}"
+        @click=${() =>
+          state.applySettings({
+            ...state.settings,
+            useNewChatLayout: !state.settings.useNewChatLayout,
+          })}
+        aria-pressed=${state.settings.useNewChatLayout}
+        title="${state.settings.useNewChatLayout ? "Switch to list view" : "Switch to grouped view"}"
+      >
+        ${state.settings.useNewChatLayout ? groupIcon : listIcon}
+      </button>
+    </div>
+  `;
+}
+
+function resolveSessionOptions(sessionKey: string, sessions: SessionsListResult | null) {
+  const seen = new Set<string>();
+  const options: Array<{ key: string; displayName?: string }> = [];
+
+  // Add current session key first
+  seen.add(sessionKey);
+  options.push({ key: sessionKey });
+
+  // Add sessions from the result
+  if (sessions?.sessions) {
+    for (const s of sessions.sessions) {
+      if (!seen.has(s.key)) {
+        seen.add(s.key);
+        options.push({ key: s.key, displayName: s.displayName });
+      }
+    }
+  }
+
+  return options;
 }
 
 const THEME_ORDER: ThemeMode[] = ["system", "light", "dark"];
@@ -615,19 +762,6 @@ function renderThemeToggle(state: AppViewState) {
         </button>
       </div>
     </div>
-  `;
-}
-
-function renderChatFocusToggle(focusMode: boolean, onToggle: () => void) {
-  return html`
-    <button
-      class="btn ${focusMode ? "active" : ""}"
-      @click=${onToggle}
-      aria-pressed=${focusMode}
-      title="Toggle focus mode (hide sidebar + page header)"
-    >
-      Focus
-    </button>
   `;
 }
 

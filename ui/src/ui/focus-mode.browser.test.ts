@@ -65,4 +65,3 @@ describe("chat focus mode", () => {
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
   });
 });
-
