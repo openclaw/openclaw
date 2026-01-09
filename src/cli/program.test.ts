@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const messageCommand = vi.fn();
 const statusCommand = vi.fn();
 const configureCommand = vi.fn();
+const configureCommandWithSections = vi.fn();
 const setupCommand = vi.fn();
 const onboardCommand = vi.fn();
 const callGateway = vi.fn();
@@ -23,7 +24,19 @@ vi.mock("../commands/message.js", () => ({
   messageCommand,
 }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
-vi.mock("../commands/configure.js", () => ({ configureCommand }));
+vi.mock("../commands/configure.js", () => ({
+  CONFIGURE_WIZARD_SECTIONS: [
+    "workspace",
+    "model",
+    "gateway",
+    "daemon",
+    "providers",
+    "skills",
+    "health",
+  ],
+  configureCommand,
+  configureCommandWithSections,
+}));
 vi.mock("../commands/setup.js", () => ({ setupCommand }));
 vi.mock("../commands/onboard.js", () => ({ onboardCommand }));
 vi.mock("../runtime.js", () => ({ defaultRuntime: runtime }));
