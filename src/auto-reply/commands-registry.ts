@@ -54,6 +54,12 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/help",
     }),
     defineChatCommand({
+      key: "commands",
+      nativeName: "commands",
+      description: "List all slash commands.",
+      textAlias: "/commands",
+    }),
+    defineChatCommand({
       key: "status",
       nativeName: "status",
       description: "Show current status.",
