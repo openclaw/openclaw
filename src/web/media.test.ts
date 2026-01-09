@@ -76,6 +76,26 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
+  it("includes URL + status in fetch errors", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
+      ok: false,
+      body: true,
+      text: async () => "Not Found",
+      headers: { get: () => null },
+      status: 404,
+      statusText: "Not Found",
+      url: "https://example.com/missing.jpg",
+    } as Response);
+
+    await expect(
+      loadWebMedia("https://example.com/missing.jpg", 1024 * 1024),
+    ).rejects.toThrow(
+      /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
+    );
+
+    fetchMock.mockRestore();
+  });
+
   it("uses content-disposition filename when available", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
       ok: true,
