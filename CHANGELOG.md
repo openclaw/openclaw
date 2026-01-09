@@ -7,7 +7,6 @@
 - Commands: accept /models as an alias for /model.
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Agent: add claude-cli/opus-4.5 runner via Claude CLI with resume support (tools disabled).
-- Auth: respect cooldown tracking even with explicit `auth.order` (avoid repeatedly trying known-bad keys). — thanks @steipete
 - CLI: move `clawdbot message` to subcommands (`message send|poll|…`), fold Discord/Slack/Telegram/WhatsApp tools into `message`, and require `--provider` unless only one provider is configured.
 - CLI: improve `logs` output (pretty/plain/JSONL), add gateway unreachable hint, and document logging.
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
@@ -15,7 +14,6 @@
 - Deps: bump Pi to 0.40.0 and drop pi-ai patch (upstream 429 fix). (#543) — thanks @mcinteerj
 - Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
 - Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
-- Config: migrate routing/agent config into agents.list/agents.defaults and messages/tools/audio with default agent selection and per-agent identity config.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
@@ -58,7 +56,7 @@
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Onboarding: clarify WhatsApp owner number prompt and label pairing phone number.
-- Onboarding: add hosted MiniMax M2.1 API key flow + config. (#495) — thanks @tobiasbischoff
+- Auto-reply: normalize routed replies to drop NO_REPLY and apply response prefixes.
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
 - Onboarding/Configure: add OpenAI API key flow that stores in shared `~/.clawdbot/.env` for launchd; simplify Anthropic token prompt order.
@@ -111,8 +109,8 @@
   - New default: DM pairing (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`).
   - To keep old “open to everyone” behavior: set `dmPolicy="open"` and include `"*"` in the relevant `allowFrom` (Discord/Slack: `discord.dm.allowFrom` / `slack.dm.allowFrom`).
   - Approve requests via `clawdbot pairing list --provider <provider>` + `clawdbot pairing approve --provider <provider> <code>`.
-- Sandbox: default `agents.defaults.sandbox.scope` to `"agent"` (one container/workspace per agent). Use `"session"` for per-session isolation; `"shared"` disables cross-session isolation.
-- Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agents.defaults.userTimezone` to tell the model the user’s local time (system prompt only).
+- Sandbox: default `agent.sandbox.scope` to `"agent"` (one container/workspace per agent). Use `"session"` for per-session isolation; `"shared"` disables cross-session isolation.
+- Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
 - Model config schema changes (auth profiles + model lists); doctor auto-migrates and the gateway rewrites legacy configs on startup.
 - Commands: gate all slash commands to authorized senders; add `/compact` to manually compact session context.
 - Groups: `whatsapp.groups`, `telegram.groups`, and `imessage.groups` now act as allowlists when set. Add `"*"` to keep allow-all behavior.
@@ -138,7 +136,7 @@
 ## 2026.1.5
 
 ### Highlights
-- Models: add image-specific model config (`agents.defaults.imageModel` + fallbacks) and scan support.
+- Models: add image-specific model config (`agent.imageModel` + fallbacks) and scan support.
 - Agent tools: new `image` tool routed to the image model (when configured).
 - Config: default model shorthands (`opus`, `sonnet`, `gpt`, `gpt-mini`, `gemini`, `gemini-flash`).
 - Docs: document built-in model shorthands + precedence (user config wins).
@@ -163,7 +161,7 @@
 - Agent tools: OpenAI-compatible tool JSON Schemas (fix `browser`, normalize union schemas).
 - Onboarding: when running from source, auto-build missing Control UI assets (`bun run ui:build`).
 - Discord/Slack: route reaction + system notifications to the correct session (no main-session bleed).
-- Agent tools: honor `tools.allow` / `tools.deny` policy even when sandbox is off.
+- Agent tools: honor `agent.tools` allow/deny policy even when sandbox is off.
 - Discord: avoid duplicate replies when OpenAI emits repeated `message_end` events.
 - Commands: unify /status (inline) and command auth across providers; group bypass for authorized control commands; remove Discord /clawd slash handler.
 - CLI: run `clawdbot agent` via the Gateway by default; use `--local` to force embedded mode.

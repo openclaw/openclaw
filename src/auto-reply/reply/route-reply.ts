@@ -17,6 +17,7 @@ import { sendMessageTelegram } from "../../telegram/send.js";
 import { sendMessageWhatsApp } from "../../web/outbound.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 
 export type RouteReplyParams = {
   /** The reply payload to send. */
@@ -59,13 +60,18 @@ export async function routeReply(
     params;
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
-  const text = payload.text ?? "";
-  const mediaUrls = (payload.mediaUrls?.filter(Boolean) ?? []).length
-    ? (payload.mediaUrls?.filter(Boolean) as string[])
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
+  const normalized = normalizeReplyPayload(payload, {
+    responsePrefix: cfg.messages?.responsePrefix,
+  });
+  if (!normalized) return { ok: true };
+
+  const text = normalized.text ?? "";
+  const mediaUrls = (normalized.mediaUrls?.filter(Boolean) ?? []).length
+    ? (normalized.mediaUrls?.filter(Boolean) as string[])
+    : normalized.mediaUrl
+      ? [normalized.mediaUrl]
       : [];
-  const replyToId = payload.replyToId;
+  const replyToId = normalized.replyToId;
 
   // Skip empty replies.
   if (!text.trim() && mediaUrls.length === 0) {

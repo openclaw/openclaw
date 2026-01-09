@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
 const mocks = vi.hoisted(() => ({
   sendMessageDiscord: vi.fn(async () => ({ messageId: "m1", channelId: "c1" })),
@@ -66,6 +67,36 @@ describe("routeReply", () => {
     });
     expect(res.ok).toBe(true);
     expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
+  it("drops silent token payloads", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const res = await routeReply({
+      payload: { text: SILENT_REPLY_TOKEN },
+      channel: "slack",
+      to: "channel:C123",
+      cfg: {} as never,
+    });
+    expect(res.ok).toBe(true);
+    expect(mocks.sendMessageSlack).not.toHaveBeenCalled();
+  });
+
+  it("applies responsePrefix when routing", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      messages: { responsePrefix: "[clawdbot]" },
+    } as unknown as ClawdbotConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith(
+      "channel:C123",
+      "[clawdbot] hi",
+      expect.any(Object),
+    );
   });
 
   it("passes thread id to Telegram sends", async () => {
