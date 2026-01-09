@@ -762,11 +762,11 @@ function extractContactPlaceholder(
   if (!message) return undefined;
   const contact = message.contactMessage ?? undefined;
   if (contact) {
-    const { name, phone } = describeContact({
+    const { name, phones } = describeContact({
       displayName: contact.displayName,
       vcard: contact.vcard,
     });
-    return formatContactPlaceholder(name, phone);
+    return formatContactPlaceholder(name, phones);
   }
   const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
   if (!contactsArray || contactsArray.length === 0) return undefined;
@@ -774,7 +774,7 @@ function extractContactPlaceholder(
     .map((entry) =>
       describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
     )
-    .map((entry) => entry.name ?? entry.phone)
+    .map((entry) => formatContactLabel(entry.name, entry.phones))
     .filter((value): value is string => Boolean(value));
   return formatContactsPlaceholder(labels, contactsArray.length);
 }
@@ -782,20 +782,17 @@ function extractContactPlaceholder(
 function describeContact(input: {
   displayName?: string | null;
   vcard?: string | null;
-}): { name?: string; phone?: string } {
+}): { name?: string; phones: string[] } {
   const displayName = (input.displayName ?? "").trim();
   const parsed = parseVcard(input.vcard ?? undefined);
   const name = displayName || parsed.name;
-  const phone = parsed.phones[0];
-  return { name, phone };
+  return { name, phones: parsed.phones };
 }
 
-function formatContactPlaceholder(name?: string, phone?: string): string {
-  const parts = [name, phone].filter((value): value is string =>
-    Boolean(value),
-  );
-  if (parts.length === 0) return "<contact>";
-  return `<contact: ${parts.join(", ")}>`;
+function formatContactPlaceholder(name?: string, phones?: string[]): string {
+  const label = formatContactLabel(name, phones);
+  if (!label) return "<contact>";
+  return `<contact: ${label}>`;
 }
 
 function formatContactsPlaceholder(labels: string[], total: number): string {
@@ -808,6 +805,28 @@ function formatContactsPlaceholder(labels: string[], total: number): string {
   const remaining = Math.max(total - shown.length, 0);
   const suffix = remaining > 0 ? ` +${remaining} more` : "";
   return `<contacts: ${shown.join(", ")}${suffix}>`;
+}
+
+function formatContactLabel(
+  name?: string,
+  phones?: string[],
+): string | undefined {
+  const phoneLabel = formatPhoneList(phones);
+  const parts = [name, phoneLabel].filter((value): value is string =>
+    Boolean(value),
+  );
+  if (parts.length === 0) return undefined;
+  return parts.join(", ");
+}
+
+function formatPhoneList(phones?: string[]): string | undefined {
+  const cleaned =
+    phones?.map((phone) => phone.trim()).filter(Boolean) ?? [];
+  if (cleaned.length === 0) return undefined;
+  const [primary, ...rest] = cleaned;
+  if (!primary) return undefined;
+  if (rest.length === 0) return primary;
+  return `${primary} (+${rest.length} more)`;
 }
 
 export function extractLocationData(
