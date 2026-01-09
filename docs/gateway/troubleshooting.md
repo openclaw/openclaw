@@ -169,6 +169,24 @@ clawdbot logs --follow
 tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)" | grep "blocked\\|skip\\|unauthorized"
 ```
 
+### Pairing Code Not Arriving
+
+If `dmPolicy` is `pairing`, unknown senders should receive a code and their message is ignored until approved.
+
+**Check 1:** Is a pending request already waiting?
+```bash
+clawdbot pairing list --provider <provider>
+```
+
+Pending DM pairing requests are capped at **3 per provider** by default. If the list is full, new requests won’t generate a code until one is approved or expires.
+
+**Check 2:** Did the request get created but no reply was sent?
+```bash
+clawdbot logs --follow | grep "pairing request"
+```
+
+**Check 3:** Confirm `dmPolicy` isn’t `open`/`allowlist` for that provider.
+
 ### Image + Mention Not Working
 
 Known issue: When you send an image with ONLY a mention (no other text), WhatsApp sometimes doesn't include the mention metadata.

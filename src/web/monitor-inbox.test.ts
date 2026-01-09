@@ -1312,7 +1312,7 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
-  it("still pairs outbound DMs when same-phone mode is disabled", async () => {
+  it("skips pairing replies for outbound DMs when same-phone mode is disabled", async () => {
     mockLoadConfig.mockReturnValue({
       whatsapp: {
         dmPolicy: "pairing",
@@ -1347,13 +1347,8 @@ describe("web monitor inbox", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(onMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp phone number: +999"),
-    });
-    expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Pairing code: PAIRCODE"),
-    });
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+    expect(sock.sendMessage).not.toHaveBeenCalled();
 
     mockLoadConfig.mockReturnValue({
       whatsapp: {

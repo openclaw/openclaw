@@ -223,8 +223,6 @@ export async function monitorWebInbox(options: {
       const isSamePhone = from === selfE164;
       const isSelfChat = isSelfChatMode(selfE164, configuredAllowFrom);
       const isFromMe = Boolean(msg.key?.fromMe);
-      const selfChatMode = account.selfChatMode ?? false;
-      const selfPhoneMode = selfChatMode || isSelfChat;
 
       // Pre-compute normalized allowlists for filtering
       const dmHasWildcard = allowFrom?.includes("*") ?? false;
@@ -269,10 +267,8 @@ export async function monitorWebInbox(options: {
 
       // DM access control (secure defaults): "pairing" (default) / "allowlist" / "open" / "disabled"
       if (!group) {
-        if (isFromMe && !isSamePhone && selfPhoneMode) {
-          logVerbose(
-            "Skipping outbound self-phone DM (fromMe); no pairing reply needed.",
-          );
+        if (isFromMe && !isSamePhone) {
+          logVerbose("Skipping outbound DM (fromMe); no pairing reply needed.");
           continue;
         }
         if (dmPolicy === "disabled") {

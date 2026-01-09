@@ -25,6 +25,7 @@ Default DM policies are documented in: [Security](/gateway/security)
 Pairing codes:
 - 8 characters, uppercase, no ambiguous chars (`0O1I`).
 - **Expire after 1 hour**. The bot only sends the pairing message when a new request is created (roughly once per hour per sender).
+- Pending DM pairing requests are capped at **3 per provider** by default; additional requests are ignored until one expires or is approved.
 
 ### Approve a sender
 

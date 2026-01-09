@@ -248,7 +248,7 @@ Controls how WhatsApp direct chats (DMs) are handled:
 - `"open"`: allow all inbound DMs (**requires** `whatsapp.allowFrom` to include `"*"`)
 - `"disabled"`: ignore all inbound DMs
 
-Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created.
+Pairing codes expire after 1 hour; the bot only sends a pairing code when a new request is created. Pending DM pairing requests are capped at **3 per provider** by default.
 
 Pairing approvals:
 - `clawdbot pairing list --provider whatsapp`

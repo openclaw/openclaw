@@ -10,6 +10,7 @@ import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
+const PAIRING_PENDING_MAX = 3;
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -160,6 +161,22 @@ function pruneExpiredRequests(reqs: PairingRequest[], nowMs: number) {
   return { requests: kept, removed };
 }
 
+function resolveLastSeenAt(entry: PairingRequest): number {
+  return (
+    parseTimestamp(entry.lastSeenAt) ?? parseTimestamp(entry.createdAt) ?? 0
+  );
+}
+
+function pruneExcessRequests(reqs: PairingRequest[], maxPending: number) {
+  if (maxPending <= 0 || reqs.length <= maxPending) {
+    return { requests: reqs, removed: false };
+  }
+  const sorted = reqs
+    .slice()
+    .sort((a, b) => resolveLastSeenAt(a) - resolveLastSeenAt(b));
+  return { requests: sorted.slice(-maxPending), removed: true };
+}
+
 function randomCode(): string {
   // Human-friendly: 8 chars, upper, no ambiguous chars (0O1I).
   let out = "";
@@ -259,8 +276,13 @@ export async function listProviderPairingRequests(
       });
       const reqs = Array.isArray(value.requests) ? value.requests : [];
       const nowMs = Date.now();
-      const { requests: pruned, removed } = pruneExpiredRequests(reqs, nowMs);
-      if (removed) {
+      const { requests: prunedExpired, removed: expiredRemoved } =
+        pruneExpiredRequests(reqs, nowMs);
+      const { requests: pruned, removed: cappedRemoved } = pruneExcessRequests(
+        prunedExpired,
+        PAIRING_PENDING_MAX,
+      );
+      if (expiredRemoved || cappedRemoved) {
         await writeJsonFile(filePath, {
           version: 1,
           requests: pruned,
@@ -309,8 +331,9 @@ export async function upsertProviderPairingRequest(params: {
           : undefined;
 
       let reqs = Array.isArray(value.requests) ? value.requests : [];
-      const { requests: pruned } = pruneExpiredRequests(reqs, nowMs);
-      reqs = pruned;
+      const { requests: prunedExpired, removed: expiredRemoved } =
+        pruneExpiredRequests(reqs, nowMs);
+      reqs = prunedExpired;
       const existingIdx = reqs.findIndex((r) => r.id === id);
       const existingCodes = new Set(
         reqs.map((req) =>
@@ -335,13 +358,31 @@ export async function upsertProviderPairingRequest(params: {
           meta: meta ?? existing?.meta,
         };
         reqs[existingIdx] = next;
+        const { requests: capped } = pruneExcessRequests(
+          reqs,
+          PAIRING_PENDING_MAX,
+        );
         await writeJsonFile(filePath, {
           version: 1,
-          requests: reqs,
+          requests: capped,
         } satisfies PairingStore);
         return { code, created: false };
       }
 
+      const { requests: capped, removed: cappedRemoved } = pruneExcessRequests(
+        reqs,
+        PAIRING_PENDING_MAX,
+      );
+      reqs = capped;
+      if (PAIRING_PENDING_MAX > 0 && reqs.length >= PAIRING_PENDING_MAX) {
+        if (expiredRemoved || cappedRemoved) {
+          await writeJsonFile(filePath, {
+            version: 1,
+            requests: reqs,
+          } satisfies PairingStore);
+        }
+        return { code: "", created: false };
+      }
       const code = generateUniqueCode(existingCodes);
       const next: PairingRequest = {
         id,
