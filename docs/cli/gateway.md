@@ -121,6 +121,12 @@ clawdbot gateway call logs.tail --params '{"sinceMs": 60000}'
 
 Only gateways with the **bridge enabled** will advertise the discovery beacon.
 
+Wide-Area discovery records include (TXT):
+- `gatewayPort` (WebSocket port, usually `18789`)
+- `sshPort` (SSH port; defaults to `22` if not present)
+- `tailnetDns` (MagicDNS hostname, when available)
+- `cliPath` (optional hint for remote installs)
+
 ### `gateway discover`
 
 ```bash

@@ -1135,10 +1135,13 @@ export async function startGatewayServer(
         const tailnetIPv6 = pickPrimaryTailnetIPv6();
         const result = await writeWideAreaBridgeZone({
           bridgePort: bridge.port,
+          gatewayPort: port,
           displayName: formatBonjourInstanceName(machineDisplayName),
           tailnetIPv4,
           tailnetIPv6: tailnetIPv6 ?? undefined,
           tailnetDns,
+          sshPort,
+          cliPath: resolveBonjourCliPath(),
         });
         logDiscovery.info(
           `wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${WIDE_AREA_DISCOVERY_DOMAIN} → ${result.zonePath})`,

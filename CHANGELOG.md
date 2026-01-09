@@ -90,6 +90,7 @@
 - Gateway/CLI: add `clawdbot gateway discover` (Bonjour scan on `local.` + `clawdbot.internal.`) with `--timeout` and `--json`. — thanks @steipete
 - Gateway/CLI: make `clawdbot gateway status` human-readable by default, add `--json`, and probe localhost + configured remote (warn on multiple gateways). — thanks @steipete
 - Gateway/CLI: support remote loopback gateways via SSH tunnel in `clawdbot gateway status` (`--ssh` / `--ssh-auto`). — thanks @steipete
+- Gateway/Discovery: include `gatewayPort`/`sshPort`/`cliPath` in wide-area Bonjour records, and add a tailnet DNS fallback for `gateway discover` when split DNS isn’t configured. — thanks @steipete
 - CLI: add global `--no-color` (and respect `NO_COLOR=1`) to disable ANSI output. — thanks @steipete
 - CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
 - Gateway/CLI: add `clawdbot gateway --dev/--reset` to auto-create a dev config/workspace with a robot identity (no BOOTSTRAP.md). — thanks @steipete
