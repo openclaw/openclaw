@@ -599,7 +599,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
-      expect(text).toContain("status agent:main:main");
+      expect(text).toContain("Session: agent:main:main");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

@@ -296,7 +296,10 @@ export function buildStatusMessage(args: StatusArgs): string {
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
   const authMode = resolveModelAuthMode(provider, args.config);
-  const showCost = authMode === "api-key";
+  const authLabelValue =
+    args.modelAuth ??
+    (authMode && authMode !== "unknown" ? authMode : undefined);
+  const showCost = authLabelValue === "api-key" || authLabelValue === "mixed";
   const costConfig = showCost
     ? resolveModelCostConfig({
         provider,
@@ -319,9 +322,6 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
-  const authLabelValue =
-    args.modelAuth ??
-    (authMode && authMode !== "unknown" ? authMode : undefined);
   const authLabel = authLabelValue ? ` · 🔑 ${authLabelValue}` : "";
   const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
   const commit = resolveCommitHash();

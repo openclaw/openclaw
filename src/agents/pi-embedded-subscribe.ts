@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -23,6 +26,31 @@ const THINKING_OPEN_GLOBAL_RE = /<\s*think(?:ing)?\s*>/gi;
 const THINKING_CLOSE_GLOBAL_RE = /<\s*\/\s*think(?:ing)?\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
+const RAW_STREAM_ENABLED = process.env.CLAWDBOT_RAW_STREAM === "1";
+const RAW_STREAM_PATH =
+  process.env.CLAWDBOT_RAW_STREAM_PATH?.trim() ||
+  path.join(resolveStateDir(), "logs", "raw-stream.jsonl");
+let rawStreamReady = false;
+
+const appendRawStream = (payload: Record<string, unknown>) => {
+  if (!RAW_STREAM_ENABLED) return;
+  if (!rawStreamReady) {
+    rawStreamReady = true;
+    try {
+      fs.mkdirSync(path.dirname(RAW_STREAM_PATH), { recursive: true });
+    } catch {
+      // ignore raw stream mkdir failures
+    }
+  }
+  try {
+    void fs.promises.appendFile(
+      RAW_STREAM_PATH,
+      `${JSON.stringify(payload)}\n`,
+    );
+  } catch {
+    // ignore raw stream write failures
+  }
+};
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
@@ -664,6 +692,15 @@ export function subscribeEmbeddedPiSession(params: {
               typeof assistantRecord?.content === "string"
                 ? assistantRecord.content
                 : "";
+            appendRawStream({
+              ts: Date.now(),
+              event: "assistant_text_stream",
+              runId: params.runId,
+              sessionId: (params.session as { id?: string }).id,
+              evtType,
+              delta,
+              content,
+            });
             let chunk = "";
             if (evtType === "text_delta") {
               chunk = delta;
@@ -756,6 +793,14 @@ export function subscribeEmbeddedPiSession(params: {
         if (msg?.role === "assistant") {
           const assistantMessage = msg as AssistantMessage;
           const rawText = extractAssistantText(assistantMessage);
+          appendRawStream({
+            ts: Date.now(),
+            event: "assistant_message_end",
+            runId: params.runId,
+            sessionId: (params.session as { id?: string }).id,
+            rawText,
+            rawThinking: extractAssistantThinking(assistantMessage),
+          });
           const cleaned = params.enforceFinalTag
             ? stripThinkingSegments(stripUnpairedThinkingTags(rawText))
             : stripThinkingSegments(rawText);
