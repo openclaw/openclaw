@@ -117,6 +117,66 @@ function extractMessageId(response: unknown): string | null {
   return id;
 }
 
+type MSTeamsProactiveContext = {
+  appId: string;
+  conversationId: string;
+  ref: StoredConversationReference;
+  adapter: MSTeamsAdapter;
+  log: Awaited<ReturnType<typeof getLog>>;
+};
+
+async function resolveMSTeamsSendContext(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+}): Promise<MSTeamsProactiveContext> {
+  const msteamsCfg = params.cfg.msteams;
+
+  if (!msteamsCfg?.enabled) {
+    throw new Error("msteams provider is not enabled");
+  }
+
+  const creds = resolveMSTeamsCredentials(msteamsCfg);
+  if (!creds) {
+    throw new Error("msteams credentials not configured");
+  }
+
+  const store = createMSTeamsConversationStoreFs();
+
+  // Parse recipient and find conversation reference
+  const recipient = parseRecipient(params.to);
+  const found = await findConversationReference({ ...recipient, store });
+
+  if (!found) {
+    throw new Error(
+      `No conversation reference found for ${recipient.type}:${recipient.id}. ` +
+        `The bot must receive a message from this conversation before it can send proactively.`,
+    );
+  }
+
+  const { conversationId, ref } = found;
+  const log = await getLog();
+
+  // Dynamic import to avoid loading SDK when not needed
+  const agentsHosting = await import("@microsoft/agents-hosting");
+  const { CloudAdapter, getAuthConfigWithDefaults } = agentsHosting;
+
+  const authConfig = getAuthConfigWithDefaults({
+    clientId: creds.appId,
+    clientSecret: creds.appPassword,
+    tenantId: creds.tenantId,
+  });
+
+  const adapter = new CloudAdapter(authConfig);
+
+  return {
+    appId: creds.appId,
+    conversationId,
+    ref,
+    adapter: adapter as unknown as MSTeamsAdapter,
+    log,
+  };
+}
+
 async function sendMSTeamsActivity(params: {
   adapter: MSTeamsAdapter;
   appId: string;
@@ -151,51 +211,17 @@ export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
   const { cfg, to, text, mediaUrl } = params;
-  const msteamsCfg = cfg.msteams;
-
-  if (!msteamsCfg?.enabled) {
-    throw new Error("msteams provider is not enabled");
-  }
-
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
-  if (!creds) {
-    throw new Error("msteams credentials not configured");
-  }
-
-  const store = createMSTeamsConversationStoreFs();
-
-  // Parse recipient and find conversation reference
-  const recipient = parseRecipient(to);
-  const found = await findConversationReference({ ...recipient, store });
-
-  if (!found) {
-    throw new Error(
-      `No conversation reference found for ${recipient.type}:${recipient.id}. ` +
-        `The bot must receive a message from this conversation before it can send proactively.`,
-    );
-  }
-
-  const { conversationId, ref } = found;
-
-  const log = await getLog();
+  const { adapter, appId, conversationId, ref, log } =
+    await resolveMSTeamsSendContext({
+      cfg,
+      to,
+    });
 
   log.debug("sending proactive message", {
     conversationId,
     textLength: text.length,
     hasMedia: Boolean(mediaUrl),
   });
-
-  // Dynamic import to avoid loading SDK when not needed
-  const agentsHosting = await import("@microsoft/agents-hosting");
-  const { CloudAdapter, getAuthConfigWithDefaults } = agentsHosting;
-
-  const authConfig = getAuthConfigWithDefaults({
-    clientId: creds.appId,
-    clientSecret: creds.appPassword,
-    tenantId: creds.tenantId,
-  });
-
-  const adapter = new CloudAdapter(authConfig);
 
   const message = mediaUrl
     ? text
@@ -206,8 +232,8 @@ export async function sendMessageMSTeams(
   try {
     messageIds = await sendMSTeamsMessages({
       replyStyle: "top-level",
-      adapter: adapter as unknown as MSTeamsAdapter,
-      appId: creds.appId,
+      adapter,
+      appId,
       conversationRef: ref,
       messages: [message],
       // Enable default retry/backoff for throttling/transient failures.
@@ -243,30 +269,11 @@ export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
   const { cfg, to, question, options, maxSelections } = params;
-  const msteamsCfg = cfg.msteams;
-
-  if (!msteamsCfg?.enabled) {
-    throw new Error("msteams provider is not enabled");
-  }
-
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
-  if (!creds) {
-    throw new Error("msteams credentials not configured");
-  }
-
-  const store = createMSTeamsConversationStoreFs();
-  const recipient = parseRecipient(to);
-  const found = await findConversationReference({ ...recipient, store });
-
-  if (!found) {
-    throw new Error(
-      `No conversation reference found for ${recipient.type}:${recipient.id}. ` +
-        `The bot must receive a message from this conversation before it can send proactively.`,
-    );
-  }
-
-  const { conversationId, ref } = found;
-  const log = await getLog();
+  const { adapter, appId, conversationId, ref, log } =
+    await resolveMSTeamsSendContext({
+      cfg,
+      to,
+    });
 
   const pollCard = buildMSTeamsPollCard({
     question,
@@ -280,16 +287,6 @@ export async function sendPollMSTeams(
     optionCount: pollCard.options.length,
   });
 
-  const agentsHosting = await import("@microsoft/agents-hosting");
-  const { CloudAdapter, getAuthConfigWithDefaults } = agentsHosting;
-
-  const authConfig = getAuthConfigWithDefaults({
-    clientId: creds.appId,
-    clientSecret: creds.appPassword,
-    tenantId: creds.tenantId,
-  });
-
-  const adapter = new CloudAdapter(authConfig);
   const activity = {
     type: "message",
     text: pollCard.fallbackText,
@@ -304,8 +301,8 @@ export async function sendPollMSTeams(
   let messageId: string;
   try {
     messageId = await sendMSTeamsActivity({
-      adapter: adapter as unknown as MSTeamsAdapter,
-      appId: creds.appId,
+      adapter,
+      appId,
       conversationRef: ref,
       activity,
     });
