@@ -1,5 +1,12 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { resolveLaunchAgentPlistPath } from "./launchd.js";
+import {
+  isSystemNodePath,
+  isVersionManagedNodePath,
+  resolveSystemNodePath,
+} from "./runtime-paths.js";
+import { getMinimalServicePathParts } from "./service-env.js";
 import { resolveSystemdUserUnitPath } from "./systemd.js";
 
 export type GatewayServiceCommand = {
@@ -20,6 +27,31 @@ export type ServiceConfigAudit = {
   ok: boolean;
   issues: ServiceConfigIssue[];
 };
+
+export const SERVICE_AUDIT_CODES = {
+  gatewayCommandMissing: "gateway-command-missing",
+  gatewayPathMissing: "gateway-path-missing",
+  gatewayPathMissingDirs: "gateway-path-missing-dirs",
+  gatewayPathNonMinimal: "gateway-path-nonminimal",
+  gatewayRuntimeBun: "gateway-runtime-bun",
+  gatewayRuntimeNodeVersionManager: "gateway-runtime-node-version-manager",
+  gatewayRuntimeNodeSystemMissing: "gateway-runtime-node-system-missing",
+  launchdKeepAlive: "launchd-keep-alive",
+  launchdRunAtLoad: "launchd-run-at-load",
+  systemdAfterNetworkOnline: "systemd-after-network-online",
+  systemdRestartSec: "systemd-restart-sec",
+  systemdWantsNetworkOnline: "systemd-wants-network-online",
+} as const;
+
+export function needsNodeRuntimeMigration(
+  issues: ServiceConfigIssue[],
+): boolean {
+  return issues.some(
+    (issue) =>
+      issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeBun ||
+      issue.code === SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+  );
+}
 
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
   return Boolean(programArguments?.some((arg) => arg === "gateway"));
@@ -82,7 +114,7 @@ async function auditSystemdUnit(
   const parsed = parseSystemdUnit(content);
   if (!parsed.after.has("network-online.target")) {
     issues.push({
-      code: "systemd-after-network-online",
+      code: SERVICE_AUDIT_CODES.systemdAfterNetworkOnline,
       message: "Missing systemd After=network-online.target",
       detail: unitPath,
       level: "recommended",
@@ -90,7 +122,7 @@ async function auditSystemdUnit(
   }
   if (!parsed.wants.has("network-online.target")) {
     issues.push({
-      code: "systemd-wants-network-online",
+      code: SERVICE_AUDIT_CODES.systemdWantsNetworkOnline,
       message: "Missing systemd Wants=network-online.target",
       detail: unitPath,
       level: "recommended",
@@ -98,7 +130,7 @@ async function auditSystemdUnit(
   }
   if (!isRestartSecPreferred(parsed.restartSec)) {
     issues.push({
-      code: "systemd-restart-sec",
+      code: SERVICE_AUDIT_CODES.systemdRestartSec,
       message: "RestartSec does not match the recommended 5s",
       detail: unitPath,
       level: "recommended",
@@ -122,7 +154,7 @@ async function auditLaunchdPlist(
   const hasKeepAlive = /<key>KeepAlive<\/key>\s*<true\s*\/>/i.test(content);
   if (!hasRunAtLoad) {
     issues.push({
-      code: "launchd-run-at-load",
+      code: SERVICE_AUDIT_CODES.launchdRunAtLoad,
       message: "LaunchAgent is missing RunAtLoad=true",
       detail: plistPath,
       level: "recommended",
@@ -130,7 +162,7 @@ async function auditLaunchdPlist(
   }
   if (!hasKeepAlive) {
     issues.push({
-      code: "launchd-keep-alive",
+      code: SERVICE_AUDIT_CODES.launchdKeepAlive,
       message: "LaunchAgent is missing KeepAlive=true",
       detail: plistPath,
       level: "recommended",
@@ -145,10 +177,141 @@ function auditGatewayCommand(
   if (!programArguments || programArguments.length === 0) return;
   if (!hasGatewaySubcommand(programArguments)) {
     issues.push({
-      code: "gateway-command-missing",
+      code: SERVICE_AUDIT_CODES.gatewayCommandMissing,
       message: "Service command does not include the gateway subcommand",
       level: "aggressive",
     });
+  }
+}
+
+function isNodeRuntime(execPath: string): boolean {
+  const base = path.basename(execPath).toLowerCase();
+  return base === "node" || base === "node.exe";
+}
+
+function isBunRuntime(execPath: string): boolean {
+  const base = path.basename(execPath).toLowerCase();
+  return base === "bun" || base === "bun.exe";
+}
+
+function getPathModule(platform: NodeJS.Platform) {
+  return platform === "win32" ? path.win32 : path.posix;
+}
+
+function normalizePathEntry(entry: string, platform: NodeJS.Platform): string {
+  const pathModule = getPathModule(platform);
+  const normalized = pathModule.normalize(entry).replaceAll("\\", "/");
+  if (platform === "win32") {
+    return normalized.toLowerCase();
+  }
+  return normalized;
+}
+
+function auditGatewayServicePath(
+  command: GatewayServiceCommand,
+  issues: ServiceConfigIssue[],
+  platform: NodeJS.Platform,
+) {
+  if (platform === "win32") return;
+  const servicePath = command?.environment?.PATH;
+  if (!servicePath) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayPathMissing,
+      message:
+        "Gateway service PATH is not set; the daemon should use a minimal PATH.",
+      level: "recommended",
+    });
+    return;
+  }
+
+  const expected = getMinimalServicePathParts({ platform });
+  const parts = servicePath
+    .split(getPathModule(platform).delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const normalizedParts = parts.map((entry) =>
+    normalizePathEntry(entry, platform),
+  );
+  const missing = expected.filter((entry) => {
+    const normalized = normalizePathEntry(entry, platform);
+    return !normalizedParts.includes(normalized);
+  });
+  if (missing.length > 0) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayPathMissingDirs,
+      message: `Gateway service PATH missing required dirs: ${missing.join(", ")}`,
+      level: "recommended",
+    });
+  }
+
+  const nonMinimal = parts.filter((entry) => {
+    const normalized = normalizePathEntry(entry, platform);
+    return (
+      normalized.includes("/.nvm/") ||
+      normalized.includes("/.fnm/") ||
+      normalized.includes("/.volta/") ||
+      normalized.includes("/.asdf/") ||
+      normalized.includes("/.n/") ||
+      normalized.includes("/.nodenv/") ||
+      normalized.includes("/.nodebrew/") ||
+      normalized.includes("/nvs/") ||
+      normalized.includes("/.local/share/pnpm/") ||
+      normalized.includes("/pnpm/") ||
+      normalized.endsWith("/pnpm")
+    );
+  });
+  if (nonMinimal.length > 0) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayPathNonMinimal,
+      message:
+        "Gateway service PATH includes version managers or package managers; recommend a minimal PATH.",
+      detail: nonMinimal.join(", "),
+      level: "recommended",
+    });
+  }
+}
+
+async function auditGatewayRuntime(
+  env: Record<string, string | undefined>,
+  command: GatewayServiceCommand,
+  issues: ServiceConfigIssue[],
+  platform: NodeJS.Platform,
+) {
+  const execPath = command?.programArguments?.[0];
+  if (!execPath) return;
+
+  if (isBunRuntime(execPath)) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayRuntimeBun,
+      message:
+        "Gateway service uses Bun; Bun is incompatible with WhatsApp + Telegram providers.",
+      detail: execPath,
+      level: "recommended",
+    });
+    return;
+  }
+
+  if (!isNodeRuntime(execPath)) return;
+
+  if (isVersionManagedNodePath(execPath, platform)) {
+    issues.push({
+      code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeVersionManager,
+      message:
+        "Gateway service uses Node from a version manager; it can break after upgrades.",
+      detail: execPath,
+      level: "recommended",
+    });
+    if (!isSystemNodePath(execPath, env, platform)) {
+      const systemNode = await resolveSystemNodePath(env, platform);
+      if (!systemNode) {
+        issues.push({
+          code: SERVICE_AUDIT_CODES.gatewayRuntimeNodeSystemMissing,
+          message:
+            "System Node 22+ not found; install it before migrating away from version managers.",
+          level: "recommended",
+        });
+      }
+    }
   }
 }
 
@@ -161,6 +324,8 @@ export async function auditGatewayServiceConfig(params: {
   const platform = params.platform ?? process.platform;
 
   auditGatewayCommand(params.command?.programArguments, issues);
+  auditGatewayServicePath(params.command, issues, platform);
+  await auditGatewayRuntime(params.env, params.command, issues, platform);
 
   if (platform === "linux") {
     await auditSystemdUnit(params.env, issues);

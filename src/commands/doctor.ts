@@ -12,9 +12,12 @@ import {
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
-import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
+import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
+import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
@@ -237,6 +240,30 @@ export async function doctorCommand(
     }
   }
 
+  if (healthOk) {
+    try {
+      const status = await callGateway<Record<string, unknown>>({
+        method: "providers.status",
+        params: { probe: true, timeoutMs: 5000 },
+        timeoutMs: 6000,
+      });
+      const issues = collectProvidersStatusIssues(status);
+      if (issues.length > 0) {
+        note(
+          issues
+            .map(
+              (issue) =>
+                `- ${issue.provider} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+            )
+            .join("\n"),
+          "Provider warnings",
+        );
+      }
+    } catch {
+      // ignore: doctor already reported gateway health
+    }
+  }
+
   if (!healthOk) {
     const service = resolveGatewayService();
     const loaded = await service.isLoaded({ env: process.env });
@@ -280,25 +307,27 @@ export async function doctorCommand(
             process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
             process.argv[1]?.endsWith(".ts");
           const port = resolveGatewayPort(cfg, process.env);
+          const nodePath = await resolvePreferredNodePath({
+            env: process.env,
+            runtime: daemonRuntime,
+          });
           const { programArguments, workingDirectory } =
             await resolveGatewayProgramArguments({
               port,
               dev: devMode,
               runtime: daemonRuntime,
+              nodePath,
             });
-          const environment: Record<string, string | undefined> = {
-            PATH: process.env.PATH,
-            CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
-            CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
-            CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
-            CLAWDBOT_GATEWAY_PORT: String(port),
-            CLAWDBOT_GATEWAY_TOKEN:
+          const environment = buildServiceEnvironment({
+            env: process.env,
+            port,
+            token:
               cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-            CLAWDBOT_LAUNCHD_LABEL:
+            launchdLabel:
               process.platform === "darwin"
                 ? GATEWAY_LAUNCH_AGENT_LABEL
                 : undefined,
-          };
+          });
           await service.install({
             env: process.env,
             stdout: process.stdout,

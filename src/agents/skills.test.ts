@@ -10,6 +10,7 @@ import {
   buildWorkspaceSkillSnapshot,
   buildWorkspaceSkillsPrompt,
   loadWorkspaceSkillEntries,
+  syncSkillsToWorkspace,
 } from "./skills.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
 
@@ -128,6 +129,60 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).toContain("demo-skill");
     expect(prompt).toContain("Does demo things");
     expect(prompt).toContain(path.join(skillDir, "SKILL.md"));
+  });
+
+  it("syncs merged skills into a target workspace", async () => {
+    const sourceWorkspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-"),
+    );
+    const targetWorkspace = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-"),
+    );
+    const extraDir = path.join(sourceWorkspace, ".extra");
+    const bundledDir = path.join(sourceWorkspace, ".bundled");
+    const managedDir = path.join(sourceWorkspace, ".managed");
+
+    await writeSkill({
+      dir: path.join(extraDir, "demo-skill"),
+      name: "demo-skill",
+      description: "Extra version",
+    });
+    await writeSkill({
+      dir: path.join(bundledDir, "demo-skill"),
+      name: "demo-skill",
+      description: "Bundled version",
+    });
+    await writeSkill({
+      dir: path.join(managedDir, "demo-skill"),
+      name: "demo-skill",
+      description: "Managed version",
+    });
+    await writeSkill({
+      dir: path.join(sourceWorkspace, "skills", "demo-skill"),
+      name: "demo-skill",
+      description: "Workspace version",
+    });
+
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: sourceWorkspace,
+      targetWorkspaceDir: targetWorkspace,
+      config: { skills: { load: { extraDirs: [extraDir] } } },
+      bundledSkillsDir: bundledDir,
+      managedSkillsDir: managedDir,
+    });
+
+    const prompt = buildWorkspaceSkillsPrompt(targetWorkspace, {
+      bundledSkillsDir: path.join(targetWorkspace, ".bundled"),
+      managedSkillsDir: path.join(targetWorkspace, ".managed"),
+    });
+
+    expect(prompt).toContain("Workspace version");
+    expect(prompt).not.toContain("Managed version");
+    expect(prompt).not.toContain("Bundled version");
+    expect(prompt).not.toContain("Extra version");
+    expect(prompt).toContain(
+      path.join(targetWorkspace, "skills", "demo-skill", "SKILL.md"),
+    );
   });
 
   it("filters skills based on env/config gates", async () => {

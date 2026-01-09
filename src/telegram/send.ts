@@ -3,6 +3,7 @@ import type { ApiClientOptions } from "grammy";
 import { Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import { createTelegramRetryRunner } from "../infra/retry-policy.js";
 import { mediaKindFromMime } from "../media/constants.js";
@@ -227,6 +228,11 @@ export async function sendMessageTelegram(
       });
     }
     const messageId = String(result?.message_id ?? "unknown");
+    recordProviderActivity({
+      provider: "telegram",
+      accountId: account.accountId,
+      direction: "outbound",
+    });
     return { messageId, chatId: String(result?.chat?.id ?? chatId) };
   }
 
@@ -263,6 +269,11 @@ export async function sendMessageTelegram(
     throw wrapChatNotFound(err);
   });
   const messageId = String(res?.message_id ?? "unknown");
+  recordProviderActivity({
+    provider: "telegram",
+    accountId: account.accountId,
+    direction: "outbound",
+  });
   return { messageId, chatId: String(res?.chat?.id ?? chatId) };
 }
 

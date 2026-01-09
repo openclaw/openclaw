@@ -70,7 +70,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Full reset (also removes workspace)
 
 2) **Model/Auth**
-   - **Anthropic OAuth (Claude CLI)**: if `~/.claude/.credentials.json` exists, the wizard can reuse it.
+   - **Anthropic OAuth (Claude CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
    - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
    - **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
    - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.

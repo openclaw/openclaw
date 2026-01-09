@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isSignalGroupAllowed } from "./monitor.js";
+import { isSignalGroupAllowed } from "./identity.js";
 
 describe("signal groupPolicy gating", () => {
   it("allows when policy is open", () => {
@@ -8,7 +8,7 @@ describe("signal groupPolicy gating", () => {
       isSignalGroupAllowed({
         groupPolicy: "open",
         allowFrom: [],
-        sender: "+15550001111",
+        sender: { kind: "phone", raw: "+15550001111", e164: "+15550001111" },
       }),
     ).toBe(true);
   });
@@ -18,7 +18,7 @@ describe("signal groupPolicy gating", () => {
       isSignalGroupAllowed({
         groupPolicy: "disabled",
         allowFrom: ["+15550001111"],
-        sender: "+15550001111",
+        sender: { kind: "phone", raw: "+15550001111", e164: "+15550001111" },
       }),
     ).toBe(false);
   });
@@ -28,7 +28,7 @@ describe("signal groupPolicy gating", () => {
       isSignalGroupAllowed({
         groupPolicy: "allowlist",
         allowFrom: [],
-        sender: "+15550001111",
+        sender: { kind: "phone", raw: "+15550001111", e164: "+15550001111" },
       }),
     ).toBe(false);
   });
@@ -38,7 +38,7 @@ describe("signal groupPolicy gating", () => {
       isSignalGroupAllowed({
         groupPolicy: "allowlist",
         allowFrom: ["+15550001111"],
-        sender: "+15550001111",
+        sender: { kind: "phone", raw: "+15550001111", e164: "+15550001111" },
       }),
     ).toBe(true);
   });
@@ -48,7 +48,20 @@ describe("signal groupPolicy gating", () => {
       isSignalGroupAllowed({
         groupPolicy: "allowlist",
         allowFrom: ["*"],
-        sender: "+15550002222",
+        sender: { kind: "phone", raw: "+15550002222", e164: "+15550002222" },
+      }),
+    ).toBe(true);
+  });
+
+  it("allows allowlist when uuid sender matches", () => {
+    expect(
+      isSignalGroupAllowed({
+        groupPolicy: "allowlist",
+        allowFrom: ["uuid:123e4567-e89b-12d3-a456-426614174000"],
+        sender: {
+          kind: "uuid",
+          raw: "123e4567-e89b-12d3-a456-426614174000",
+        },
       }),
     ).toBe(true);
   });

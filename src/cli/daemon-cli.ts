@@ -32,9 +32,11 @@ import {
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { ServiceConfigAudit } from "../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../daemon/service-audit.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { callGateway } from "../gateway/call.js";
 import { resolveGatewayBindHost } from "../gateway/net.js";
 import {
@@ -807,25 +809,27 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const devMode =
     process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
     process.argv[1]?.endsWith(".ts");
+  const nodePath = await resolvePreferredNodePath({
+    env: process.env,
+    runtime: runtimeRaw,
+  });
   const { programArguments, workingDirectory } =
     await resolveGatewayProgramArguments({
       port,
       dev: devMode,
       runtime: runtimeRaw,
+      nodePath,
     });
-  const environment: Record<string, string | undefined> = {
-    PATH: process.env.PATH,
-    CLAWDBOT_PROFILE: process.env.CLAWDBOT_PROFILE,
-    CLAWDBOT_STATE_DIR: process.env.CLAWDBOT_STATE_DIR,
-    CLAWDBOT_CONFIG_PATH: process.env.CLAWDBOT_CONFIG_PATH,
-    CLAWDBOT_GATEWAY_PORT: String(port),
-    CLAWDBOT_GATEWAY_TOKEN:
+  const environment = buildServiceEnvironment({
+    env: process.env,
+    port,
+    token:
       opts.token ||
       cfg.gateway?.auth?.token ||
       process.env.CLAWDBOT_GATEWAY_TOKEN,
-    CLAWDBOT_LAUNCHD_LABEL:
+    launchdLabel:
       process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-  };
+  });
 
   try {
     await service.install({

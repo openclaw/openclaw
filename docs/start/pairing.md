@@ -43,10 +43,6 @@ Stored under `~/.clawdbot/credentials/`:
 
 Treat these as sensitive (they gate access to your assistant).
 
-### Source of truth (code)
-
-- DM pairing storage + code generation: [`src/pairing/pairing-store.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/pairing/pairing-store.ts)
-- CLI commands: [`src/cli/pairing-cli.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/pairing-cli.ts)
 
 ## 2) Node pairing (iOS/Android nodes joining the gateway)
 
@@ -70,11 +66,6 @@ Stored under `~/.clawdbot/nodes/`:
 
 Full protocol + design notes: [Gateway pairing](/gateway/pairing)
 
-### Source of truth (code)
-
-- Node pairing store (pending/paired + token issuance): [`src/infra/node-pairing.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/infra/node-pairing.ts)
-- Gateway methods/events (`node.pair.*`): [`src/gateway/server-methods/nodes.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/server-methods/nodes.ts)
-- CLI: [`src/cli/nodes-cli.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/cli/nodes-cli.ts)
 
 ## Related docs
 

@@ -329,8 +329,10 @@ export async function getReplyFromConfig(
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
+  const disableElevatedInGroup = isGroup && ctx.WasMentioned !== true;
   let parsedDirectives = parseInlineDirectives(rawBody, {
     modelAliases: configuredAliases,
+    disableElevated: disableElevatedInGroup,
   });
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
@@ -342,7 +344,9 @@ export async function getReplyFromConfig(
     parsedDirectives.hasQueueDirective;
   if (hasDirective) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
-    const noMentions = isGroup ? stripMentions(stripped, ctx, cfg) : stripped;
+    const noMentions = isGroup
+      ? stripMentions(stripped, ctx, cfg, agentId)
+      : stripped;
     if (noMentions.trim().length > 0) {
       parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
     }
@@ -467,6 +471,7 @@ export async function getReplyFromConfig(
       cleanedBody: directives.cleaned,
       ctx,
       cfg,
+      agentId,
       isGroup,
     })
   ) {
@@ -549,6 +554,7 @@ export async function getReplyFromConfig(
   const command = buildCommandContext({
     ctx,
     cfg,
+    agentId,
     sessionKey,
     isGroup,
     triggerBodyNormalized,
@@ -579,6 +585,7 @@ export async function getReplyFromConfig(
     ctx,
     cfg,
     command,
+    agentId,
     directives,
     sessionEntry,
     sessionStore,

@@ -126,11 +126,12 @@ function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: MsgContext;
   cfg: ClawdbotConfig;
+  agentId?: string;
   isGroup: boolean;
 }): string | undefined {
   const raw = stripStructuralPrefixes(params.rawBody ?? "");
   const stripped = params.isGroup
-    ? stripMentions(raw, params.ctx, params.cfg)
+    ? stripMentions(raw, params.ctx, params.cfg, params.agentId)
     : raw;
   const trimmed = stripped.trim();
   if (!trimmed) return undefined;
@@ -145,12 +146,14 @@ function extractCompactInstructions(params: {
 export function buildCommandContext(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
+  agentId?: string;
   sessionKey?: string;
   isGroup: boolean;
   triggerBodyNormalized: string;
   commandAuthorized: boolean;
 }): CommandContext {
-  const { ctx, cfg, sessionKey, isGroup, triggerBodyNormalized } = params;
+  const { ctx, cfg, agentId, sessionKey, isGroup, triggerBodyNormalized } =
+    params;
   const auth = resolveCommandAuthorization({
     ctx,
     cfg,
@@ -162,7 +165,9 @@ export function buildCommandContext(params: {
     sessionKey ?? (auth.from || undefined) ?? (auth.to || undefined);
   const rawBodyNormalized = triggerBodyNormalized;
   const commandBodyNormalized = normalizeCommandBody(
-    isGroup ? stripMentions(rawBodyNormalized, ctx, cfg) : rawBodyNormalized,
+    isGroup
+      ? stripMentions(rawBodyNormalized, ctx, cfg, agentId)
+      : rawBodyNormalized,
   );
 
   return {
@@ -207,6 +212,7 @@ export async function handleCommands(params: {
   ctx: MsgContext;
   cfg: ClawdbotConfig;
   command: CommandContext;
+  agentId?: string;
   directives: InlineDirectives;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -542,6 +548,7 @@ export async function handleCommands(params: {
       rawBody: ctx.Body,
       ctx,
       cfg,
+      agentId: params.agentId,
       isGroup,
     });
     const result = await compactEmbeddedPiSession({

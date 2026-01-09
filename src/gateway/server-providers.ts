@@ -5,6 +5,10 @@ import {
   resolveDiscordAccount,
 } from "../discord/accounts.js";
 import { monitorDiscordProvider } from "../discord/index.js";
+import type {
+  DiscordApplicationSummary,
+  DiscordProbe,
+} from "../discord/probe.js";
 import { probeDiscord } from "../discord/probe.js";
 import { shouldLogVerbose } from "../globals.js";
 import {
@@ -56,6 +60,8 @@ export type DiscordRuntimeStatus = {
   lastStartAt?: number | null;
   lastStopAt?: number | null;
   lastError?: string | null;
+  bot?: DiscordProbe["bot"];
+  application?: DiscordApplicationSummary;
 };
 
 export type SlackRuntimeStatus = {
@@ -194,6 +200,8 @@ export function createProviderManager(
     lastStartAt: null,
     lastStopAt: null,
     lastError: null,
+    bot: undefined,
+    application: undefined,
   });
   const defaultSlackStatus = (): SlackRuntimeStatus => ({
     running: false,
@@ -544,9 +552,24 @@ export function createProviderManager(
         }
         let discordBotLabel = "";
         try {
-          const probe = await probeDiscord(token, 2500);
+          const probe = await probeDiscord(token, 2500, {
+            includeApplication: true,
+          });
           const username = probe.ok ? probe.bot?.username?.trim() : null;
           if (username) discordBotLabel = ` (@${username})`;
+          const latest =
+            discordRuntimes.get(account.accountId) ?? defaultDiscordStatus();
+          discordRuntimes.set(account.accountId, {
+            ...latest,
+            bot: probe.bot,
+            application: probe.application,
+          });
+          const messageContent = probe.application?.intents?.messageContent;
+          if (messageContent && messageContent !== "enabled") {
+            logDiscord.warn(
+              `[${account.accountId}] Discord Message Content Intent is ${messageContent}; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
+            );
+          }
         } catch (err) {
           if (shouldLogVerbose()) {
             logDiscord.debug(

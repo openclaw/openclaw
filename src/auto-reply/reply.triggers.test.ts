@@ -340,6 +340,132 @@ describe("trigger handling", () => {
     });
   });
 
+  it("ignores elevated directive in groups when not mentioned", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+          groups: { "*": { requireMention: false } },
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "group:123@g.us",
+          To: "whatsapp:+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+          ChatType: "group",
+          WasMentioned: false,
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("ok");
+      expect(text).not.toContain("Elevated mode enabled");
+    });
+  });
+
+  it("allows elevated directive in groups when mentioned", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+          groups: { "*": { requireMention: true } },
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "group:123@g.us",
+          To: "whatsapp:+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+          ChatType: "group",
+          WasMentioned: true,
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode enabled");
+
+      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const store = JSON.parse(storeRaw) as Record<
+        string,
+        { elevatedLevel?: string }
+      >;
+      expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe(
+        "on",
+      );
+    });
+  });
+
+  it("allows elevated directive in direct chats without mentions", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1000",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode enabled");
+
+      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
+      const store = JSON.parse(storeRaw) as Record<
+        string,
+        { elevatedLevel?: string }
+      >;
+      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
+    });
+  });
+
   it("ignores inline elevated directive for unapproved sender", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({

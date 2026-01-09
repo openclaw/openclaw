@@ -186,4 +186,8 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
 - **Resource control**: Sandbox specific agents while keeping others on host
 - **Flexible policies**: Different permissions per agent
 
+Note: `agent.elevated` is **global** and sender-based; it is not configurable per agent.
+If you need per-agent boundaries, use `routing.agents[id].tools` to deny `bash`.
+For group targeting, you can set `routing.agents[id].mentionPatterns` so @mentions map cleanly to the intended agent.
+
 See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.

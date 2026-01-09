@@ -171,9 +171,9 @@ Notes:
 
 Recommended: `clawdbot hooks gmail run` wraps the same flow and auto-renews the watch.
 
-## Expose the handler (dev, unsupported hack)
+## Expose the handler (advanced, unsupported)
 
-If you insist on a non-Tailscale tunnel, wire it manually and use the public URL in the push
+If you need a non-Tailscale tunnel, wire it manually and use the public URL in the push
 subscription (unsupported, no guardrails):
 
 ```bash

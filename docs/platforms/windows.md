@@ -3,15 +3,16 @@ summary: "Windows (WSL2) support + companion app status"
 read_when:
   - Installing Clawdbot on Windows
   - Looking for Windows companion app status
-  - Planning platform coverage or contributions
 ---
 # Windows (WSL2)
 
-Clawdbot core is supported on Windows **via WSL2** (Ubuntu recommended). The
+Clawdbot on Windows is recommended **via WSL2** (Ubuntu recommended). The
 CLI + Gateway run inside Linux, which keeps the runtime consistent. Native
 Windows installs are untested and more problematic.
 
-## Install
+Native Windows companion apps are planned.
+
+## Install (WSL2)
 - [Getting Started](/start/getting-started) (use inside WSL)
 - [Install & updates](/install/updating)
 - Official WSL2 guide (Microsoft): https://learn.microsoft.com/windows/wsl/install
@@ -48,7 +49,7 @@ Repair/migrate:
 clawdbot doctor
 ```
 
-## How to install this correctly
+## Step-by-step WSL2 install
 
 ### 1) Install WSL2 + Ubuntu
 
@@ -104,5 +105,5 @@ Full guide: [Getting Started](/start/getting-started)
 
 ## Windows companion app
 
-We do not have a Windows companion app yet. It is planned, and we would love
+We do not have a Windows companion app yet. Contributions are welcome if you want
 contributions to make it happen.

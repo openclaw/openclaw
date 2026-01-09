@@ -18,6 +18,7 @@ import {
 } from "discord-api-types/v10";
 
 import { loadConfig } from "../config/config.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import type { RetryConfig } from "../infra/retry.js";
 import {
   createDiscordRetryRunner,
@@ -589,6 +590,11 @@ export async function sendMessageDiscord(
     });
   }
 
+  recordProviderActivity({
+    provider: "discord",
+    accountId: accountInfo.accountId,
+    direction: "outbound",
+  });
   return {
     messageId: result.id ? String(result.id) : "unknown",
     channelId: String(result.channel_id ?? channelId),

@@ -3,6 +3,12 @@ import {
   type AgentEvent,
   AgentEventSchema,
   AgentParamsSchema,
+  type AgentSummary,
+  AgentSummarySchema,
+  type AgentsListParams,
+  AgentsListParamsSchema,
+  type AgentsListResult,
+  AgentsListResultSchema,
   type AgentWaitParams,
   AgentWaitParamsSchema,
   type ChatAbortParams,
@@ -163,6 +169,9 @@ export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(
   AgentWaitParamsSchema,
 );
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
+export const validateAgentsListParams = ajv.compile<AgentsListParams>(
+  AgentsListParamsSchema,
+);
 export const validateNodePairRequestParams = ajv.compile<NodePairRequestParams>(
   NodePairRequestParamsSchema,
 );
@@ -332,6 +341,9 @@ export {
   ProvidersStatusParamsSchema,
   WebLoginStartParamsSchema,
   WebLoginWaitParamsSchema,
+  AgentSummarySchema,
+  AgentsListParamsSchema,
+  AgentsListResultSchema,
   ModelsListParamsSchema,
   SkillsStatusParamsSchema,
   SkillsInstallParamsSchema,
@@ -394,6 +406,9 @@ export type {
   ProvidersStatusParams,
   WebLoginStartParams,
   WebLoginWaitParams,
+  AgentSummary,
+  AgentsListParams,
+  AgentsListResult,
   SkillsStatusParams,
   SkillsInstallParams,
   SkillsUpdateParams,

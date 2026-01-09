@@ -9,6 +9,8 @@ When Clawdbot misbehaves, here's how to fix it.
 
 Start with the FAQ’s [First 60 seconds](/start/faq#first-60-seconds-if-somethings-broken) if you just want a quick triage recipe. This page goes deeper on runtime failures and diagnostics.
 
+Provider-specific shortcuts: [/providers/troubleshooting](/providers/troubleshooting)
+
 ## Common Issues
 
 ### Service Installed but Nothing is Running
@@ -30,6 +32,21 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 - macOS LaunchAgent (if installed): `$CLAWDBOT_STATE_DIR/logs/gateway.log` and `gateway.err.log`
 - Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
 - Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
+
+### Service Environment (PATH + runtime)
+
+The gateway daemon runs with a **minimal PATH** to avoid shell/manager cruft:
+- macOS: `/opt/homebrew/bin`, `/usr/local/bin`, `/usr/bin`, `/bin`
+- Linux: `/usr/local/bin`, `/usr/bin`, `/bin`
+
+This intentionally excludes version managers (nvm/fnm/volta/asdf) and package
+managers (pnpm/npm) because the daemon does not load your shell init. Runtime
+variables like `DISPLAY` should live in `~/.clawdbot/.env` (loaded early by the
+gateway).
+
+WhatsApp + Telegram providers require **Node**; Bun is unsupported. If your
+service was installed with Bun or a version-managed Node path, run `clawdbot doctor`
+to migrate to a system Node install.
 
 ### Service Running but Port Not Listening
 
@@ -114,6 +131,7 @@ Look for `AllowFrom: ...` in the output.
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
+# Multi-agent: `routing.agents.<agentId>.mentionPatterns` overrides global patterns.
 grep -n "routing\\|groupChat\\|mentionPatterns\\|whatsapp\\.groups\\|telegram\\.groups\\|imessage\\.groups\\|discord\\.guilds" \
   "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}"
 ```
@@ -280,7 +298,7 @@ clawdbot providers login --verbose
 | Log | Location |
 |-----|----------|
 | Gateway file logs (structured) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or `logging.file`) |
-| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br>Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br>Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
+| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br />Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br />Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
 | Session files | `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/` |
 | Media cache | `$CLAWDBOT_STATE_DIR/media/` |
 | Credentials | `$CLAWDBOT_STATE_DIR/credentials/` |

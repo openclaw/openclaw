@@ -185,6 +185,19 @@ Clawdbot reads env vars from the parent process (shell, launchd/systemd, CI, etc
 
 Neither `.env` file overrides existing env vars.
 
+You can also define inline env vars in config (applied only if missing from the process env):
+
+```json5
+{
+  env: {
+    OPENROUTER_API_KEY: "sk-or-...",
+    vars: { GROQ_API_KEY: "gsk-..." }
+  }
+}
+```
+
+See [/environment](/environment) for full precedence and sources.
+
 ### “I started the Gateway via a daemon and my env vars disappeared.” What now?
 
 Two common fixes:
@@ -507,7 +520,7 @@ Start the Gateway with `--verbose` to get more console detail. Then inspect the 
 
 ### My skill generated an image/PDF, but nothing was sent
 
-Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [Clawd setup](/start/clawd) and [Agent send](/tools/agent-send).
+Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [Clawdbot assistant setup](/start/clawd) and [Agent send](/tools/agent-send).
 
 CLI sending:
 

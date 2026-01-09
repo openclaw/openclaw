@@ -641,6 +641,7 @@ const RoutingSchema = z
             workspace: z.string().optional(),
             agentDir: z.string().optional(),
             model: z.string().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
             subagents: z
               .object({
                 allowAgents: z.array(z.string()).optional(),
@@ -793,7 +794,9 @@ export const ClawdbotSchema = z.object({
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
+      vars: z.record(z.string(), z.string()).optional(),
     })
+    .catchall(z.string())
     .optional(),
   identity: z
     .object({

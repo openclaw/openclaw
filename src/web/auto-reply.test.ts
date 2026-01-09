@@ -1132,6 +1132,84 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("[from: Bob (+222)]");
   });
 
+  it("uses per-agent mention patterns for group gating", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+
+    setLoadConfigMock(() => ({
+      whatsapp: {
+        allowFrom: ["*"],
+        groups: { "*": { requireMention: true } },
+      },
+      routing: {
+        groupChat: { mentionPatterns: ["@global"] },
+        agents: {
+          work: { mentionPatterns: ["@workbot"] },
+        },
+        bindings: [
+          {
+            agentId: "work",
+            match: {
+              provider: "whatsapp",
+              peer: { kind: "group", id: "123@g.us" },
+            },
+          },
+        ],
+      },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "@global ping",
+      from: "123@g.us",
+      conversationId: "123@g.us",
+      chatId: "123@g.us",
+      chatType: "group",
+      to: "+2",
+      id: "g1",
+      senderE164: "+111",
+      senderName: "Alice",
+      selfE164: "+999",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+    expect(resolver).not.toHaveBeenCalled();
+
+    await capturedOnMessage?.({
+      body: "@workbot ping",
+      from: "123@g.us",
+      conversationId: "123@g.us",
+      chatId: "123@g.us",
+      chatType: "group",
+      to: "+2",
+      id: "g2",
+      senderE164: "+222",
+      senderName: "Bob",
+      selfE164: "+999",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+    expect(resolver).toHaveBeenCalledTimes(1);
+  });
+
   it("allows group messages when whatsapp groups default disables mention gating", async () => {
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);

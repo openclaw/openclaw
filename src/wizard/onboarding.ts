@@ -46,7 +46,9 @@ import {
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -221,10 +223,16 @@ export async function runOnboardingWizard(
     },
   };
 
-  const authStore = ensureAuthProfileStore();
+  const authStore = ensureAuthProfileStore(undefined, {
+    allowKeychainPrompt: false,
+  });
   const authChoice = (await prompter.select({
     message: "Model/auth choice",
-    options: buildAuthChoiceOptions({ store: authStore, includeSkip: true }),
+    options: buildAuthChoiceOptions({
+      store: authStore,
+      includeSkip: true,
+      includeClaudeCliIfMissing: true,
+    }),
   })) as AuthChoice;
 
   const authResult = await applyAuthChoice({
@@ -480,20 +488,26 @@ export async function runOnboardingWizard(
       const devMode =
         process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
         process.argv[1]?.endsWith(".ts");
+      const nodePath = await resolvePreferredNodePath({
+        env: process.env,
+        runtime: daemonRuntime,
+      });
       const { programArguments, workingDirectory } =
         await resolveGatewayProgramArguments({
           port,
           dev: devMode,
           runtime: daemonRuntime,
+          nodePath,
         });
-      const environment: Record<string, string | undefined> = {
-        PATH: process.env.PATH,
-        CLAWDBOT_GATEWAY_TOKEN: gatewayToken,
-        CLAWDBOT_LAUNCHD_LABEL:
+      const environment = buildServiceEnvironment({
+        env: process.env,
+        port,
+        token: gatewayToken,
+        launchdLabel:
           process.platform === "darwin"
             ? GATEWAY_LAUNCH_AGENT_LABEL
             : undefined,
-      };
+      });
       await service.install({
         env: process.env,
         stdout: process.stdout,

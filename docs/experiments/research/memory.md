@@ -1,12 +1,12 @@
 ---
-summary: "Proposal + research notes: offline memory system for Clawd workspaces (Markdown source-of-truth + derived index)"
+summary: "Research notes: offline memory system for Clawd workspaces (Markdown source-of-truth + derived index)"
 read_when:
   - Designing workspace memory (~/clawd) beyond daily Markdown logs
   - Deciding: standalone CLI vs deep Clawdbot integration
   - Adding offline recall + reflection (retain/recall/reflect)
 ---
 
-# Workspace Memory v2 (offline): proposal + research
+# Workspace Memory v2 (offline): research notes
 
 Target: Clawd-style workspace (`agent.workspace`, default `~/clawd`) where “memory” is stored as one Markdown file per day (`memory/YYYY-MM-DD.md`) plus a small set of stable files (e.g. `memory.md`, `SOUL.md`).
 
@@ -171,8 +171,7 @@ Recommendation: **deep integration in Clawdbot**, but keep a separable core libr
 - reuse from other contexts (local scripts, future desktop app, etc.)
 
 Shape:
-- `src/memory/*` (library-ish core; pure functions + sqlite adapter)
-- [`src/commands/memory/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/commands/memory/*.ts) (CLI glue)
+The memory tooling is intended to be a small CLI + library layer, but this is exploratory only.
 
 ## “S-Collide” / SuCo: when to use it (research)
 
@@ -196,29 +195,13 @@ Open question:
 - what’s the **best** offline embedding model for “personal assistant memory” on your machines (MacBook + Castle)?
   - if you already have Ollama: embed with a local model; otherwise ship a small embedding model in the toolchain.
 
-## Implementation plan (phased, shippable)
+## Smallest useful pilot
 
-### Phase 0: workspace conventions (no code)
-- add `bank/` files + entity pages
-- add `## Retain` convention to daily logs
+If you want a minimal, still-useful version:
 
-### Phase 1: `clawdbot memory index|recall` (FTS-only)
-- parse Markdown (`memory/*.md`, `bank/*.md`) into chunks
-- write to SQLite: `facts`, `entities`, `fact_entities`, `opinions`
-- FTS5 table over `facts.content`
-- `recall` returns citations (path + line) + trimmed content budget
-
-### Phase 2: entity summaries + opinion tracking
-- `reflect` updates `bank/entities/*.md`
-- opinion confidence updates with evidence pointers (no embeddings required yet)
-
-### Phase 3: semantic recall (offline embeddings)
-- compute embeddings during indexing (incremental)
-- retrieval = `hybrid(FTS, vector)` with simple fusion
-
-### Phase 4: “graph-ish” traversal (still simple)
-- entity links enable multi-hop: “related to Peter via warelay”
-- optional: “topic” nodes, lightweight edges (not a full KG)
+- Add `bank/` entity pages and a `## Retain` section in daily logs.
+- Use SQLite FTS for recall with citations (path + line numbers).
+- Add embeddings only if recall quality or scale demands it.
 
 ## References
 

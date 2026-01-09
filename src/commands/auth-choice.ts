@@ -168,10 +168,39 @@ export async function applyAuthChoice(params: {
       );
     }
   } else if (params.authChoice === "claude-cli") {
-    const store = ensureAuthProfileStore(params.agentDir);
-    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const hasClaudeCli = Boolean(store.profiles[CLAUDE_CLI_PROFILE_ID]);
+    if (!hasClaudeCli && process.platform === "darwin") {
       await params.prompter.note(
-        "No Claude CLI credentials found at ~/.claude/.credentials.json.",
+        [
+          "macOS will show a Keychain prompt next.",
+          'Choose "Always Allow" so the launchd gateway can start without prompts.',
+          'If you choose "Allow" or "Deny", each restart will block on a Keychain alert.',
+        ].join("\n"),
+        "Claude CLI Keychain",
+      );
+      const proceed = await params.prompter.confirm({
+        message: "Check Keychain for Claude CLI credentials now?",
+        initialValue: true,
+      });
+      if (!proceed) {
+        return { config: nextConfig, agentModelOverride };
+      }
+    }
+
+    const storeWithKeychain = hasClaudeCli
+      ? store
+      : ensureAuthProfileStore(params.agentDir, {
+          allowKeychainPrompt: true,
+        });
+
+    if (!storeWithKeychain.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      await params.prompter.note(
+        process.platform === "darwin"
+          ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
+          : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
         "Claude CLI OAuth",
       );
       return { config: nextConfig, agentModelOverride };

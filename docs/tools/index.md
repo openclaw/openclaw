@@ -1,8 +1,8 @@
 ---
-summary: "Agent tool surface for Clawdbot (browser, canvas, nodes, cron) replacing clawdbot-* skills"
+summary: "Agent tool surface for Clawdbot (browser, canvas, nodes, cron) replacing legacy `clawdbot-*` skills"
 read_when:
   - Adding or modifying agent tools
-  - Retiring or changing clawdbot-* skills
+  - Retiring or changing `clawdbot-*` skills
 ---
 
 # Tools (Clawdbot)
@@ -36,13 +36,15 @@ Core parameters:
 - `yieldMs` (auto-background after timeout, default 10000)
 - `background` (immediate background)
 - `timeout` (seconds; kills the process if exceeded, default 1800)
-- `elevated` (bool; run on host if elevated mode is enabled/allowed)
+- `elevated` (bool; run on host if elevated mode is enabled/allowed; only changes behavior when the agent is sandboxed)
 - Need a real TTY? Use the tmux skill.
 
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
 - If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
+- `elevated` is gated by `agent.elevated` (global sender allowlist) and runs on the host.
+- `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
 
 ### `process`
 Manage background bash sessions.
@@ -233,7 +235,7 @@ Notes:
 - `reactions` returns per-emoji user lists (limited to 100 per reaction).
 - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
 - `discord.actions.*` gates Discord tool actions; `roles` + `moderation` default to `false`.
-- `searchMessages` follows the Discord preview spec (limit max 25, channel/author filters accept arrays).
+- `searchMessages` follows the Discord preview feature constraints (limit max 25, channel/author filters accept arrays).
 - The tool is only exposed when the current provider is Discord.
 
 ### `whatsapp`
@@ -293,25 +295,12 @@ Node targeting:
 - Respect user consent for camera/screen capture.
 - Use `status/describe` to ensure permissions before invoking media commands.
 
-## How the model sees tools (pi-mono internals)
+## How tools are presented to the agent
 
-Tools are exposed to the model in **two parallel channels**:
+Tools are exposed in two parallel channels:
 
-1) **System prompt text**: a human-readable list + guidelines.
-2) **Provider tool schema**: the actual function/tool declarations sent to the model API.
+1) **System prompt text**: a human-readable list + guidance.
+2) **Tool schema**: the structured function definitions sent to the model API.
 
-In pi-mono:
-- System prompt builder: [`packages/coding-agent/src/core/system-prompt.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/src/core/system-prompt.ts)
-  - Builds the `Available tools:` list from `toolDescriptions`.
-  - Appends skills and project context.
-- Tool schemas passed to providers:
-  - OpenAI: [`packages/ai/src/providers/openai-responses.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/openai-responses.ts) (`convertTools`)
-  - Anthropic: [`packages/ai/src/providers/anthropic.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/anthropic.ts) (`convertTools`)
-  - Gemini: [`packages/ai/src/providers/google-shared.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/providers/google-shared.ts) (`convertTools`)
-- Tool execution loop:
-  - Agent loop: [`packages/ai/src/agent/agent-loop.ts`](https://github.com/badlogic/pi-mono/blob/main/packages/ai/src/agent/agent-loop.ts)
-  - Validates tool arguments and executes tools, then appends `toolResult` messages.
-
-In Clawdbot:
-- System prompt append: [`src/agents/system-prompt.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/system-prompt.ts)
-- Tool list injected via `createClawdbotCodingTools()` in [`src/agents/pi-tools.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/agents/pi-tools.ts)
+That means the agent sees both “what tools exist” and “how to call them.” If a tool
+doesn’t appear in the system prompt or the schema, the model cannot call it.

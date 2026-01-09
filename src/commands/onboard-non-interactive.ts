@@ -13,7 +13,9 @@ import {
 } from "../config/config.js";
 import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
+import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
+import { buildServiceEnvironment } from "../daemon/service-env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
@@ -118,10 +120,14 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
   } else if (authChoice === "claude-cli") {
-    const store = ensureAuthProfileStore();
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
     if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
       runtime.error(
-        "No Claude CLI credentials found at ~/.claude/.credentials.json",
+        process.platform === "darwin"
+          ? 'No Claude CLI credentials found. Run interactive onboarding to approve Keychain access for "Claude Code-credentials".'
+          : "No Claude CLI credentials found at ~/.claude/.credentials.json",
       );
       runtime.exit(1);
       return;
@@ -272,18 +278,24 @@ export async function runNonInteractiveOnboarding(
     const devMode =
       process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
       process.argv[1]?.endsWith(".ts");
+    const nodePath = await resolvePreferredNodePath({
+      env: process.env,
+      runtime: daemonRuntimeRaw,
+    });
     const { programArguments, workingDirectory } =
       await resolveGatewayProgramArguments({
         port,
         dev: devMode,
         runtime: daemonRuntimeRaw,
+        nodePath,
       });
-    const environment: Record<string, string | undefined> = {
-      PATH: process.env.PATH,
-      CLAWDBOT_GATEWAY_TOKEN: gatewayToken,
-      CLAWDBOT_LAUNCHD_LABEL:
+    const environment = buildServiceEnvironment({
+      env: process.env,
+      port,
+      token: gatewayToken,
+      launchdLabel:
         process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-    };
+    });
     await service.install({
       env: process.env,
       stdout: process.stdout,

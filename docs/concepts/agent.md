@@ -5,7 +5,7 @@ read_when:
 ---
 # Agent Runtime 🤖
 
-CLAWDBOT runs a single embedded agent runtime derived from **p-mono** (internal name: **p**).
+CLAWDBOT runs a single embedded agent runtime derived from **p-mono**.
 
 ## Workspace (required)
 
@@ -43,9 +43,9 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 { agent: { skipBootstrap: true } }
 ```
 
-## Built-in tools (internal)
+## Built-in tools
 
-p’s embedded core tools (read/bash/edit/write and related internals) are defined in code and always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
+Core tools (read/bash/edit/write and related system tools) are always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
 
 ## Skills
 
@@ -62,18 +62,6 @@ Clawdbot reuses pieces of the p-mono codebase (models/tools), but **session mana
 
 - No p-coding agent runtime.
 - No `~/.pi/agent` or `<workspace>/.pi` settings are consulted.
-
-## Peter @ steipete (only)
-
-Apply these notes **only** when the user is Peter Steinberger at steipete.
-
-- Gateway runs on the **Mac Studio in London**.
-- Primary work computer: **MacBook Pro**.
-- Peter travels between **Vienna** and **London**; there are two networks bridged via **Tailscale**.
-- For debugging, connect to the Mac Studio (London) or MacBook Pro (primary).
-- There is also an **M1 MacBook Pro** on the Vienna tailnet you can use to access the Vienna network.
-- Nodes can be accessed via the `clawdbot` binary (`pnpm clawdbot` in `~/Projects/clawdbot`).
-- See also `skills/clawdbot*` for node/browser/canvas/cron usage.
 
 ## Sessions
 

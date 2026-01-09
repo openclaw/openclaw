@@ -320,4 +320,84 @@ describe("gateway server sessions", () => {
     ws.close();
     await server.close();
   });
+
+  test("filters sessions by agentId", async () => {
+    const dir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-sessions-agents-"),
+    );
+    testState.sessionConfig = {
+      store: path.join(dir, "{agentId}", "sessions.json"),
+    };
+    testState.routingConfig = {
+      defaultAgentId: "home",
+      agents: {
+        home: {},
+        work: {},
+      },
+    };
+    const homeDir = path.join(dir, "home");
+    const workDir = path.join(dir, "work");
+    await fs.mkdir(homeDir, { recursive: true });
+    await fs.mkdir(workDir, { recursive: true });
+    await fs.writeFile(
+      path.join(homeDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:home:main": {
+            sessionId: "sess-home-main",
+            updatedAt: Date.now(),
+          },
+          "agent:home:discord:group:dev": {
+            sessionId: "sess-home-group",
+            updatedAt: Date.now() - 1000,
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      path.join(workDir, "sessions.json"),
+      JSON.stringify(
+        {
+          "agent:work:main": {
+            sessionId: "sess-work-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const homeSessions = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "home",
+    });
+    expect(homeSessions.ok).toBe(true);
+    expect(homeSessions.payload?.sessions.map((s) => s.key).sort()).toEqual([
+      "agent:home:discord:group:dev",
+      "agent:home:main",
+    ]);
+
+    const workSessions = await rpcReq<{
+      sessions: Array<{ key: string }>;
+    }>(ws, "sessions.list", {
+      includeGlobal: false,
+      includeUnknown: false,
+      agentId: "work",
+    });
+    expect(workSessions.ok).toBe(true);
+    expect(workSessions.payload?.sessions.map((s) => s.key)).toEqual([
+      "agent:work:main",
+    ]);
+  });
 });

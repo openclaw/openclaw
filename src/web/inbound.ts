@@ -14,8 +14,10 @@ import {
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
@@ -171,6 +173,11 @@ export async function monitorWebInbox(options: {
   }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") return;
     for (const msg of upsert.messages ?? []) {
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
       const id = msg.key?.id ?? undefined;
       // De-dupe on message id; Baileys can emit retries.
       if (id && seen.has(id)) continue;
@@ -304,14 +311,11 @@ export async function monitorWebInbox(options: {
                 );
                 try {
                   await sock.sendMessage(remoteJid, {
-                    text: [
-                      "Clawdbot: access not configured.",
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve --provider whatsapp <code>",
-                    ].join("\n"),
+                    text: buildPairingReply({
+                      provider: "whatsapp",
+                      idLine: `Your WhatsApp sender id: ${candidate}`,
+                      code,
+                    }),
                   });
                 } catch (err) {
                   logVerbose(
@@ -536,7 +540,7 @@ export async function monitorWebInbox(options: {
       text: string,
       mediaBuffer?: Buffer,
       mediaType?: string,
-      options?: ActiveWebSendOptions,
+      sendOptions?: ActiveWebSendOptions,
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
@@ -554,7 +558,7 @@ export async function monitorWebInbox(options: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("video/")) {
-          const gifPlayback = options?.gifPlayback;
+          const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
             caption: text || undefined,
@@ -573,6 +577,11 @@ export async function monitorWebInbox(options: {
         payload = { text };
       }
       const result = await sock.sendMessage(jid, payload);
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "outbound",
+      });
       return { messageId: result?.key?.id ?? "unknown" };
     },
     /**
@@ -590,6 +599,11 @@ export async function monitorWebInbox(options: {
           values: poll.options,
           selectableCount: poll.maxSelections ?? 1,
         },
+      });
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "outbound",
       });
       return { messageId: result?.key?.id ?? "unknown" };
     },

@@ -5,7 +5,6 @@ read_when:
 ---
 # grammY Integration (Telegram Bot API)
 
-Updated: 2026-01-07
 
 # Why grammY
 - TS-first Bot API client with built-in long-poll + webhook helpers, middleware, error handling, rate limiter.

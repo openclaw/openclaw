@@ -1180,6 +1180,76 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
 
+  it("includes browser action metadata in tool summaries", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-browser-tool",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "browser",
+      toolCallId: "tool-browser-1",
+      args: { action: "snapshot", targetUrl: "https://example.com" },
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const payload = onToolResult.mock.calls[0][0];
+    expect(payload.text).toContain("🌐");
+    expect(payload.text).toContain("browser");
+    expect(payload.text).toContain("snapshot");
+    expect(payload.text).toContain("https://example.com");
+  });
+
+  it("includes canvas action metadata in tool summaries", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onToolResult = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-canvas-tool",
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "canvas",
+      toolCallId: "tool-canvas-1",
+      args: { action: "a2ui_push", jsonlPath: "/tmp/a2ui.jsonl" },
+    });
+
+    expect(onToolResult).toHaveBeenCalledTimes(1);
+    const payload = onToolResult.mock.calls[0][0];
+    expect(payload.text).toContain("🖼️");
+    expect(payload.text).toContain("canvas");
+    expect(payload.text).toContain("A2UI push");
+    expect(payload.text).toContain("/tmp/a2ui.jsonl");
+  });
+
   it("skips tool summaries when shouldEmitToolResult is false", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {

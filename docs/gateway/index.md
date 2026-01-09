@@ -127,7 +127,9 @@ See also: [`docs/presence.md`](/concepts/presence) for how presence is produced/
 ## Typing and validation
 - Server validates every inbound frame with AJV against JSON Schema emitted from the protocol definitions.
 - Clients (TS/Swift) consume generated types (TS directly; Swift via the repo’s generator).
-- Types live in [`src/gateway/protocol/*.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/gateway/protocol/*.ts); regenerate schemas/models with `pnpm protocol:gen` (writes [`dist/protocol.schema.json`](https://github.com/clawdbot/clawdbot/blob/main/dist/protocol.schema.json)) and `pnpm protocol:gen:swift` (writes [`apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift`](https://github.com/clawdbot/clawdbot/blob/main/apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift)).
+- Protocol definitions are the source of truth; regenerate schema/models with:
+  - `pnpm protocol:gen`
+  - `pnpm protocol:gen:swift`
 
 ## Connection snapshot
 - `hello-ok` includes a `snapshot` with `presence`, `health`, `stateVersion`, and `uptimeMs` plus `policy {maxPayload,maxBufferedBytes,tickIntervalMs}` so clients can render immediately without extra requests.

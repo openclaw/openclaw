@@ -2,10 +2,13 @@
 
 ## Unreleased
 
+- Security: per-agent mention patterns and group elevated directives now require explicit mention to avoid cross-agent toggles.
+- Config: support inline env vars in config (`env.*` / `env.vars`) and document env precedence.
 - Agent: enable adaptive context pruning by default for tool-result trimming.
 - Doctor: check config/state permissions and offer to tighten them. — thanks @steipete
 - Doctor/Daemon: audit supervisor configs, add --repair/--force flows, surface service config audits in daemon status, and document user vs system services. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
+- Doctor: run legacy state migrations in non-interactive mode without prompts.
 - Cron: parse Telegram topic targets for isolated delivery. (#478) — thanks @nachoiacovino
 - Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos
 - Cron: allow Telegram delivery targets with topic/thread IDs (e.g. `-100…:topic:123`). (#474) — thanks @mitschabaude-bot
@@ -15,15 +18,19 @@
 - Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
 - Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
+- Auto-reply: preserve spacing when stripping inline directives. (#539) — thanks @joshp123
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
 - macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
+- Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
+- Pairing: replies now include sender ids for Discord/Slack/Signal/iMessage/WhatsApp; pairing list labels them explicitly.
+- Signal: accept UUID-only senders for pairing/allowlists/routing when sourceNumber is missing. (#523) — thanks @neist
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
@@ -32,6 +39,15 @@
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
 - Control UI: show skill install progress + per-skill results, hide install once binaries present. (#445) — thanks @pkrmf
+- Providers/Doctor: surface Discord privileged intent (Message Content) misconfiguration with actionable warnings.
+- Providers/Doctor: warn when Telegram config expects unmentioned group messages but Bot API privacy mode is likely enabled; surface WhatsApp login/disconnect hints.
+- Providers/Doctor: add last inbound/outbound activity timestamps in `providers status` and extend `--probe` with Discord channel permission + Telegram group membership audits.
+- Docs: add provider troubleshooting index (`/providers/troubleshooting`) and link it from the main troubleshooting guide.
+- Telegram: include the user id in DM pairing messages and label it clearly in `clawdbot pairing list --provider telegram`.
+- Apps: refresh iOS/Android/macOS app icons for Clawdbot branding. (#521) — thanks @fishfisher
+- Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
+- Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
+- TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
 
 ## 2026.1.8
 

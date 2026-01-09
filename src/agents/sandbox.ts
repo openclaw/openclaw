@@ -19,6 +19,7 @@ import { STATE_DIR_CLAWDBOT } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveAgentIdFromSessionKey } from "./agent-scope.js";
+import { syncSkillsToWorkspace } from "./skills.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
   DEFAULT_AGENTS_FILENAME,
@@ -1048,6 +1049,19 @@ export async function resolveSandboxContext(params: {
       agentWorkspaceDir,
       params.config?.agent?.skipBootstrap,
     );
+    if (cfg.workspaceAccess === "none") {
+      try {
+        await syncSkillsToWorkspace({
+          sourceWorkspaceDir: agentWorkspaceDir,
+          targetWorkspaceDir: sandboxWorkspaceDir,
+          config: params.config,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : JSON.stringify(error);
+        defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
+      }
+    }
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
@@ -1109,6 +1123,19 @@ export async function ensureSandboxWorkspaceForSession(params: {
       agentWorkspaceDir,
       params.config?.agent?.skipBootstrap,
     );
+    if (cfg.workspaceAccess === "none") {
+      try {
+        await syncSkillsToWorkspace({
+          sourceWorkspaceDir: agentWorkspaceDir,
+          targetWorkspaceDir: sandboxWorkspaceDir,
+          config: params.config,
+        });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : JSON.stringify(error);
+        defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
+      }
+    }
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }

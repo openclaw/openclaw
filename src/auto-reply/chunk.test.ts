@@ -25,6 +25,45 @@ function expectFencesBalanced(chunks: string[]) {
   }
 }
 
+type ChunkCase = {
+  name: string;
+  text: string;
+  limit: number;
+  expected: string[];
+};
+
+function runChunkCases(
+  chunker: (text: string, limit: number) => string[],
+  cases: ChunkCase[],
+) {
+  for (const { name, text, limit, expected } of cases) {
+    it(name, () => {
+      expect(chunker(text, limit)).toEqual(expected);
+    });
+  }
+}
+
+const parentheticalCases: ChunkCase[] = [
+  {
+    name: "keeps parenthetical phrases together",
+    text: "Heads up now (Though now I'm curious)ok",
+    limit: 35,
+    expected: ["Heads up now", "(Though now I'm curious)ok"],
+  },
+  {
+    name: "handles nested parentheses",
+    text: "Hello (outer (inner) end) world",
+    limit: 26,
+    expected: ["Hello (outer (inner) end)", "world"],
+  },
+  {
+    name: "ignores unmatched closing parentheses",
+    text: "Hello) world (ok)",
+    limit: 12,
+    expected: ["Hello)", "world (ok)"],
+  },
+];
+
 describe("chunkText", () => {
   it("keeps multi-line text in one chunk when under limit", () => {
     const text = "Line one\n\nLine two\n\nLine three";
@@ -68,11 +107,7 @@ describe("chunkText", () => {
     expect(chunks).toEqual(["Supercalif", "ragilistic", "expialidoc", "ious"]);
   });
 
-  it("keeps parenthetical phrases together", () => {
-    const text = "Heads up now (Though now I'm curious)ok";
-    const chunks = chunkText(text, 35);
-    expect(chunks).toEqual(["Heads up now", "(Though now I'm curious)ok"]);
-  });
+  runChunkCases(chunkText, [parentheticalCases[0]]);
 });
 
 describe("resolveTextChunkLimit", () => {
@@ -191,28 +226,12 @@ describe("chunkMarkdownText", () => {
     }
   });
 
-  it("keeps parenthetical phrases together", () => {
-    const text = "Heads up now (Though now I'm curious)ok";
-    const chunks = chunkMarkdownText(text, 35);
-    expect(chunks).toEqual(["Heads up now", "(Though now I'm curious)ok"]);
-  });
-
-  it("handles nested parentheses", () => {
-    const text = "Hello (outer (inner) end) world";
-    const chunks = chunkMarkdownText(text, 26);
-    expect(chunks).toEqual(["Hello (outer (inner) end)", "world"]);
-  });
+  runChunkCases(chunkMarkdownText, parentheticalCases);
 
   it("hard-breaks when a parenthetical exceeds the limit", () => {
     const text = `(${"a".repeat(80)})`;
     const chunks = chunkMarkdownText(text, 20);
     expect(chunks[0]?.length).toBe(20);
     expect(chunks.join("")).toBe(text);
-  });
-
-  it("ignores unmatched closing parentheses", () => {
-    const text = "Hello) world (ok)";
-    const chunks = chunkMarkdownText(text, 12);
-    expect(chunks).toEqual(["Hello)", "world (ok)"]);
   });
 });
