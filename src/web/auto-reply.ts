@@ -54,6 +54,7 @@ import {
 } from "../routing/resolve-route.js";
 import {
   buildAgentMainSessionKey,
+  buildGroupHistoryKey,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
@@ -1001,14 +1002,27 @@ export async function monitorWebProvider(
   // Track recently sent messages to prevent echo loops
   const recentlySent = new Set<string>();
   const MAX_RECENT_MESSAGES = 100;
+  const buildCombinedEchoKey = (params: {
+    sessionKey: string;
+    combinedBody: string;
+  }) => `combined:${params.sessionKey}:${params.combinedBody}`;
   const rememberSentText = (
     text: string | undefined,
-    opts: { combinedBody: string; logVerboseMessage?: boolean },
+    opts: {
+      combinedBody?: string;
+      combinedBodySessionKey?: string;
+      logVerboseMessage?: boolean;
+    },
   ) => {
     if (!text) return;
     recentlySent.add(text);
-    if (opts.combinedBody) {
-      recentlySent.add(opts.combinedBody);
+    if (opts.combinedBody && opts.combinedBodySessionKey) {
+      recentlySent.add(
+        buildCombinedEchoKey({
+          sessionKey: opts.combinedBodySessionKey,
+          combinedBody: opts.combinedBody,
+        }),
+      );
     }
     if (opts.logVerboseMessage) {
       logVerbose(
@@ -1117,9 +1131,13 @@ export async function monitorWebProvider(
       }
 
       // Echo detection uses combined body so we don't respond twice.
-      if (recentlySent.has(combinedBody)) {
+      const combinedEchoKey = buildCombinedEchoKey({
+        sessionKey: route.sessionKey,
+        combinedBody,
+      });
+      if (recentlySent.has(combinedEchoKey)) {
         logVerbose(`Skipping auto-reply: detected echo for combined message`);
-        recentlySent.delete(combinedBody);
+        recentlySent.delete(combinedEchoKey);
         return;
       }
 
@@ -1213,13 +1231,14 @@ export async function monitorWebProvider(
             });
             didSendReply = true;
             if (info.kind === "tool") {
-              rememberSentText(payload.text, { combinedBody: "" });
+              rememberSentText(payload.text, {});
               return;
             }
             const shouldLog =
               info.kind === "final" && payload.text ? true : undefined;
             rememberSentText(payload.text, {
               combinedBody,
+              combinedBodySessionKey: route.sessionKey,
               logVerboseMessage: shouldLog,
             });
             if (info.kind === "final") {
@@ -1274,7 +1293,7 @@ export async function monitorWebProvider(
           GroupSubject: msg.groupSubject,
           GroupMembers: formatGroupMembers(
             msg.groupParticipants,
-            groupMemberNames.get(route.sessionKey),
+            groupMemberNames.get(groupHistoryKey),
             msg.senderE164,
           ),
           SenderName: msg.senderName,
@@ -1313,6 +1332,70 @@ export async function monitorWebProvider(
       }
     };
 
+    const maybeBroadcastMessage = async (params: {
+      msg: WebInboundMsg;
+      peerId: string;
+      route: ReturnType<typeof resolveAgentRoute>;
+      groupHistoryKey: string;
+    }): Promise<boolean> => {
+      const { msg, peerId, route, groupHistoryKey } = params;
+      const broadcastAgents = cfg.broadcast?.[peerId];
+      if (!broadcastAgents || !Array.isArray(broadcastAgents)) return false;
+      if (broadcastAgents.length === 0) return false;
+
+      const strategy = cfg.broadcast?.strategy || "parallel";
+      whatsappInboundLog.info(
+        `Broadcasting message to ${broadcastAgents.length} agents (${strategy})`,
+      );
+
+      const agentIds = cfg.agents?.list?.map((agent) =>
+        normalizeAgentId(agent.id),
+      );
+      const hasKnownAgents = (agentIds?.length ?? 0) > 0;
+
+      const processForAgent = (agentId: string) => {
+        const normalizedAgentId = normalizeAgentId(agentId);
+        if (hasKnownAgents && !agentIds?.includes(normalizedAgentId)) {
+          whatsappInboundLog.warn(
+            `Broadcast agent ${agentId} not found in agents.list; skipping`,
+          );
+          return Promise.resolve();
+        }
+        const agentRoute = {
+          ...route,
+          agentId: normalizedAgentId,
+          sessionKey: buildAgentSessionKey({
+            agentId: normalizedAgentId,
+            provider: "whatsapp",
+            peer: {
+              kind: msg.chatType === "group" ? "group" : "dm",
+              id: peerId,
+            },
+          }),
+          mainSessionKey: buildAgentMainSessionKey({
+            agentId: normalizedAgentId,
+            mainKey: DEFAULT_MAIN_KEY,
+          }),
+        };
+
+        return processMessage(msg, agentRoute, groupHistoryKey).catch((err) => {
+          whatsappInboundLog.error(
+            `Broadcast agent ${agentId} failed: ${formatError(err)}`,
+          );
+        });
+      };
+
+      if (strategy === "sequential") {
+        for (const agentId of broadcastAgents) {
+          await processForAgent(agentId);
+        }
+      } else {
+        await Promise.allSettled(broadcastAgents.map(processForAgent));
+      }
+
+      return true;
+    };
+
     const listener = await (listenerFactory ?? monitorWebInbox)({
       verbose,
       accountId: account.accountId,
@@ -1349,7 +1432,12 @@ export async function monitorWebProvider(
         });
         const groupHistoryKey =
           msg.chatType === "group"
-            ? `whatsapp:${route.accountId}:group:${peerId.trim() || "unknown"}`
+            ? buildGroupHistoryKey({
+                provider: "whatsapp",
+                accountId: route.accountId,
+                peerKind: "group",
+                peerId,
+              })
             : route.sessionKey;
 
         // Same-phone mode logging retained
@@ -1467,65 +1555,9 @@ export async function monitorWebProvider(
 
         // Broadcast groups: when we'd reply anyway, run multiple agents.
         // Does not bypass group mention/activation gating above (Option A).
-        const broadcastAgents = cfg.broadcast?.[peerId];
         if (
-          broadcastAgents &&
-          Array.isArray(broadcastAgents) &&
-          broadcastAgents.length > 0
+          await maybeBroadcastMessage({ msg, peerId, route, groupHistoryKey })
         ) {
-          const strategy = cfg.broadcast?.strategy || "parallel";
-          whatsappInboundLog.info(
-            `Broadcasting message to ${broadcastAgents.length} agents (${strategy})`,
-          );
-
-          const agentIds = cfg.agents?.list?.map((agent) =>
-            normalizeAgentId(agent.id),
-          );
-          const hasKnownAgents = (agentIds?.length ?? 0) > 0;
-
-          const processForAgent = (agentId: string) => {
-            const normalizedAgentId = normalizeAgentId(agentId);
-            if (hasKnownAgents && !agentIds?.includes(normalizedAgentId)) {
-              whatsappInboundLog.warn(
-                `Broadcast agent ${agentId} not found in agents.list; skipping`,
-              );
-              return Promise.resolve();
-            }
-            const agentRoute = {
-              ...route,
-              agentId: normalizedAgentId,
-              sessionKey: buildAgentSessionKey({
-                agentId: normalizedAgentId,
-                provider: "whatsapp",
-                peer: {
-                  kind: msg.chatType === "group" ? "group" : "dm",
-                  id: peerId,
-                },
-              }),
-              mainSessionKey: buildAgentMainSessionKey({
-                agentId: normalizedAgentId,
-                mainKey: DEFAULT_MAIN_KEY,
-              }),
-            };
-
-            return processMessage(msg, agentRoute, groupHistoryKey).catch(
-              (err) => {
-                whatsappInboundLog.error(
-                  `Broadcast agent ${agentId} failed: ${formatError(err)}`,
-                );
-              },
-            );
-          };
-
-          if (strategy === "sequential") {
-            for (const agentId of broadcastAgents) {
-              await processForAgent(agentId);
-            }
-          } else {
-            // Parallel processing (default)
-            await Promise.allSettled(broadcastAgents.map(processForAgent));
-          }
-
           return;
         }
 

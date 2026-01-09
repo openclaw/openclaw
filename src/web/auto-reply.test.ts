@@ -2081,3 +2081,183 @@ describe("web auto-reply", () => {
     resetLoadConfigMock();
   });
 });
+
+describe("broadcast groups", () => {
+  it("broadcasts sequentially in configured order", async () => {
+    setLoadConfigMock({
+      whatsapp: { allowFrom: ["*"] },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }, { id: "baerbel" }],
+      },
+      broadcast: {
+        strategy: "sequential",
+        "+1000": ["alfred", "baerbel"],
+      },
+    } satisfies ClawdbotConfig);
+
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const seen: string[] = [];
+    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
+      seen.push(String(ctx.SessionKey));
+      return { text: "ok" };
+    });
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      id: "m1",
+      from: "+1000",
+      conversationId: "+1000",
+      to: "+2000",
+      body: "hello",
+      timestamp: Date.now(),
+      chatType: "direct",
+      chatId: "direct:+1000",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    expect(seen[0]).toContain("agent:alfred:");
+    expect(seen[1]).toContain("agent:baerbel:");
+    resetLoadConfigMock();
+  });
+
+  it("broadcasts in parallel by default", async () => {
+    setLoadConfigMock({
+      whatsapp: { allowFrom: ["*"] },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }, { id: "baerbel" }],
+      },
+      broadcast: {
+        strategy: "parallel",
+        "+1000": ["alfred", "baerbel"],
+      },
+    } satisfies ClawdbotConfig);
+
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+
+    let started = 0;
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const resolver = vi.fn(async () => {
+      started += 1;
+      if (started < 2) {
+        await gate;
+      } else {
+        release?.();
+      }
+      return { text: "ok" };
+    });
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      id: "m1",
+      from: "+1000",
+      conversationId: "+1000",
+      to: "+2000",
+      body: "hello",
+      timestamp: Date.now(),
+      chatType: "direct",
+      chatId: "direct:+1000",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(2);
+    resetLoadConfigMock();
+  });
+
+  it("skips unknown broadcast agent ids when agents.list is present", async () => {
+    setLoadConfigMock({
+      whatsapp: { allowFrom: ["*"] },
+      agents: {
+        defaults: { maxConcurrent: 10 },
+        list: [{ id: "alfred" }],
+      },
+      broadcast: {
+        "+1000": ["alfred", "missing"],
+      },
+    } satisfies ClawdbotConfig);
+
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const seen: string[] = [];
+    const resolver = vi.fn(async (ctx: { SessionKey?: unknown }) => {
+      seen.push(String(ctx.SessionKey));
+      return { text: "ok" };
+    });
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      id: "m1",
+      from: "+1000",
+      conversationId: "+1000",
+      to: "+2000",
+      body: "hello",
+      timestamp: Date.now(),
+      chatType: "direct",
+      chatId: "direct:+1000",
+      sendComposing,
+      reply,
+      sendMedia,
+    });
+
+    expect(resolver).toHaveBeenCalledTimes(1);
+    expect(seen[0]).toContain("agent:alfred:");
+    resetLoadConfigMock();
+  });
+});
