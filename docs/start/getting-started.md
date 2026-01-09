@@ -48,7 +48,12 @@ Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native
 
 ```bash
 npm install -g clawdbot@latest
-# or: pnpm add -g clawdbot@latest
+```
+
+Or:
+
+```bash
+pnpm add -g clawdbot@latest
 ```
 
 ## 2) Run the onboarding wizard (and install the daemon)
