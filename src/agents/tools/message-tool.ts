@@ -1,10 +1,10 @@
 import { Type } from "@sinclair/typebox";
 
 import {
-  sendMessage,
-  sendPoll,
   type MessagePollResult,
   type MessageSendResult,
+  sendMessage,
+  sendPoll,
 } from "../../infra/outbound/message.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -64,7 +64,9 @@ export function createMessageTool(): AnyAgentTool {
         const gifPlayback =
           typeof params.gifPlayback === "boolean" ? params.gifPlayback : false;
         const bestEffort =
-          typeof params.bestEffort === "boolean" ? params.bestEffort : undefined;
+          typeof params.bestEffort === "boolean"
+            ? params.bestEffort
+            : undefined;
 
         const result: MessageSendResult = await sendMessage({
           to,
@@ -82,7 +84,9 @@ export function createMessageTool(): AnyAgentTool {
 
       if (action === "poll") {
         const to = readStringParam(params, "to", { required: true });
-        const question = readStringParam(params, "question", { required: true });
+        const question = readStringParam(params, "question", {
+          required: true,
+        });
         const options =
           readStringArrayParam(params, "options", { required: true }) ?? [];
         const maxSelections = readNumberParam(params, "maxSelections", {
