@@ -1257,6 +1257,7 @@ describe("trigger handling", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain("Give me the status");
       expect(prompt).not.toContain("/thinking high");
+      expect(prompt).not.toContain("/think high");
     });
   });
 

@@ -594,8 +594,7 @@ export async function handleCommands(params: {
 
   const statusRequested =
     directives.hasStatusDirective ||
-    command.commandBodyNormalized === "/status" ||
-    command.commandBodyNormalized === "/usage";
+    command.commandBodyNormalized === "/status";
   if (allowTextCommands && statusRequested) {
     const reply = await buildStatusReply({
       cfg,

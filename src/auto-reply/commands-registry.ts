@@ -167,6 +167,27 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
 
 const NATIVE_COMMAND_SURFACES = new Set(["discord", "slack", "telegram"]);
 
+type TextAliasSpec = {
+  canonical: string;
+  acceptsArgs: boolean;
+};
+
+const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {
+  const map = new Map<string, TextAliasSpec>();
+  for (const command of CHAT_COMMANDS) {
+    const canonical = `/${command.key}`;
+    const acceptsArgs = Boolean(command.acceptsArgs);
+    for (const alias of command.textAliases) {
+      const normalized = alias.trim().toLowerCase();
+      if (!normalized) continue;
+      if (!map.has(normalized)) {
+        map.set(normalized, { canonical, acceptsArgs });
+      }
+    }
+  }
+  return map;
+})();
+
 let cachedDetection:
   | {
       exact: Set<string>;
@@ -207,11 +228,31 @@ export function buildCommandText(commandName: string, args?: string): string {
 export function normalizeCommandBody(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed.startsWith("/")) return trimmed;
-  const match = trimmed.match(/^\/([^\s:]+)\s*:(.*)$/);
-  if (!match) return trimmed;
-  const [, command, rest] = match;
-  const normalizedRest = rest.trimStart();
-  return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+
+  const colonMatch = trimmed.match(/^\/([^\s:]+)\s*:(.*)$/);
+  const normalized = colonMatch
+    ? (() => {
+        const [, command, rest] = colonMatch;
+        const normalizedRest = rest.trimStart();
+        return normalizedRest ? `/${command} ${normalizedRest}` : `/${command}`;
+      })()
+    : trimmed;
+
+  const lowered = normalized.toLowerCase();
+  const exact = TEXT_ALIAS_MAP.get(lowered);
+  if (exact) return exact.canonical;
+
+  const tokenMatch = normalized.match(/^\/([^\s]+)(?:\s+([\s\S]+))?$/);
+  if (!tokenMatch) return normalized;
+  const [, token, rest] = tokenMatch;
+  const tokenKey = `/${token.toLowerCase()}`;
+  const tokenSpec = TEXT_ALIAS_MAP.get(tokenKey);
+  if (!tokenSpec) return normalized;
+  if (rest && !tokenSpec.acceptsArgs) return normalized;
+  const normalizedRest = rest?.trimStart();
+  return normalizedRest
+    ? `${tokenSpec.canonical} ${normalizedRest}`
+    : tokenSpec.canonical;
 }
 
 export function getCommandDetection(): { exact: Set<string>; regex: RegExp } {
