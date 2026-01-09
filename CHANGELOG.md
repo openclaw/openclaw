@@ -77,6 +77,7 @@
 - Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
 - Agent: bypass Anthropic OAuth tool-name blocks by capitalizing built-ins and keeping pruning tool matching case-insensitive. (#553) — thanks @andrewting19
 - Commands/Tools: disable /restart and gateway restart tool by default (enable with commands.restart=true).
+- Gateway/CLI: add `clawdbot gateway discover` (Bonjour scan on `local.` + `clawdbot.internal.`) with `--timeout` and `--json`. — thanks @steipete
 
 ## 2026.1.8
 
