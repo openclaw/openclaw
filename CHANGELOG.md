@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- macOS: replace relay smoke test with version check in packaging script. (#615) — thanks @YuriNachos
 - macOS: avoid clearing Launch at Login during app initialization. (#607) — thanks @wes-davis
 - Onboarding: skip systemd checks/daemon installs when systemd user services are unavailable; add onboarding flags to skip flow steps and stabilize Docker E2E. (#573) — thanks @steipete
 - macOS: add node bridge heartbeat pings to detect half-open sockets and reconnect cleanly. (#572) — thanks @ngutman
