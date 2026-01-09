@@ -44,7 +44,7 @@ export function parseFenceSpans(buffer: string): FenceSpan[] {
         open.markerChar === markerChar &&
         markerLen >= open.markerLen
       ) {
-        const end = nextNewline === -1 ? buffer.length : nextNewline + 1;
+        const end = lineEnd;
         spans.push({
           start: open.start,
           end,
