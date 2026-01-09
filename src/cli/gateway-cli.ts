@@ -22,13 +22,17 @@ import {
   setGatewayWsLogStyle,
 } from "../gateway/ws-logging.js";
 import { setVerbose } from "../globals.js";
+import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
+import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
+import { WIDE_AREA_DISCOVERY_DOMAIN } from "../infra/widearea-dns.js";
 import {
   createSubsystemLogger,
   setConsoleSubsystemFilter,
 } from "../logging.js";
 import { defaultRuntime } from "../runtime.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 import { forceFreePortAndWait } from "./ports.js";
 import { withProgress } from "./progress.js";
 
@@ -86,6 +90,103 @@ const toOptionString = (value: unknown): string | undefined => {
     return value.toString();
   return undefined;
 };
+
+type GatewayDiscoverOpts = {
+  timeout?: string;
+  json?: boolean;
+};
+
+function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
+  if (raw === undefined || raw === null) return fallbackMs;
+  const value = typeof raw === "string" ? raw.trim() : String(raw);
+  if (!value) return fallbackMs;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`invalid --timeout: ${value}`);
+  }
+  return parsed;
+}
+
+function pickBeaconHost(beacon: GatewayBonjourBeacon): string | null {
+  const host = beacon.tailnetDns || beacon.lanHost || beacon.host;
+  return host?.trim() ? host.trim() : null;
+}
+
+function pickGatewayPort(beacon: GatewayBonjourBeacon): number {
+  const port = beacon.gatewayPort ?? 18789;
+  return port > 0 ? port : 18789;
+}
+
+function dedupeBeacons(
+  beacons: GatewayBonjourBeacon[],
+): GatewayBonjourBeacon[] {
+  const out: GatewayBonjourBeacon[] = [];
+  const seen = new Set<string>();
+  for (const b of beacons) {
+    const host = pickBeaconHost(b) ?? "";
+    const key = [
+      b.domain ?? "",
+      b.instanceName ?? "",
+      b.displayName ?? "",
+      host,
+      String(b.port ?? ""),
+      String(b.bridgePort ?? ""),
+      String(b.gatewayPort ?? ""),
+    ].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(b);
+  }
+  return out;
+}
+
+function renderBeaconLines(
+  beacon: GatewayBonjourBeacon,
+  rich: boolean,
+): string[] {
+  const nameRaw = (
+    beacon.displayName ||
+    beacon.instanceName ||
+    "Gateway"
+  ).trim();
+  const domainRaw = (beacon.domain || "local.").trim();
+
+  const title = colorize(rich, theme.accentBright, nameRaw);
+  const domain = colorize(rich, theme.muted, domainRaw);
+
+  const parts: string[] = [];
+  if (beacon.tailnetDns)
+    parts.push(
+      `${colorize(rich, theme.info, "tailnet")}: ${beacon.tailnetDns}`,
+    );
+  if (beacon.lanHost)
+    parts.push(`${colorize(rich, theme.info, "lan")}: ${beacon.lanHost}`);
+  if (beacon.host)
+    parts.push(`${colorize(rich, theme.info, "host")}: ${beacon.host}`);
+
+  const host = pickBeaconHost(beacon);
+  const gatewayPort = pickGatewayPort(beacon);
+  const wsUrl = host ? `ws://${host}:${gatewayPort}` : null;
+
+  const firstLine =
+    parts.length > 0
+      ? `${title} ${domain} · ${parts.join(" · ")}`
+      : `${title} ${domain}`;
+
+  const lines = [`- ${firstLine}`];
+  if (wsUrl) {
+    lines.push(
+      `  ${colorize(rich, theme.muted, "ws")}: ${colorize(rich, theme.command, wsUrl)}`,
+    );
+  }
+  if (typeof beacon.sshPort === "number" && beacon.sshPort > 0 && host) {
+    const ssh = `ssh -N -L 18789:127.0.0.1:18789 <user>@${host} -p ${beacon.sshPort}`;
+    lines.push(
+      `  ${colorize(rich, theme.muted, "ssh")}: ${colorize(rich, theme.command, ssh)}`,
+    );
+  }
+  return lines;
+}
 
 function describeUnknownError(err: unknown): string {
   if (err instanceof Error) return err.message;
@@ -219,9 +320,18 @@ async function runGatewayLoop(params: {
     })();
   };
 
-  const onSigterm = () => request("stop", "SIGTERM");
-  const onSigint = () => request("stop", "SIGINT");
-  const onSigusr1 = () => request("restart", "SIGUSR1");
+  const onSigterm = () => {
+    gatewayLog.info("signal SIGTERM received");
+    request("stop", "SIGTERM");
+  };
+  const onSigint = () => {
+    gatewayLog.info("signal SIGINT received");
+    request("stop", "SIGINT");
+  };
+  const onSigusr1 = () => {
+    gatewayLog.info("signal SIGUSR1 received");
+    request("restart", "SIGUSR1");
+  };
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);
@@ -658,4 +768,75 @@ export function registerGatewayCli(program: Command) {
         }
       }),
   );
+
+  gateway
+    .command("discover")
+    .description(
+      `Discover gateways via Bonjour (multicast local. + unicast ${WIDE_AREA_DISCOVERY_DOMAIN})`,
+    )
+    .option("--timeout <ms>", "Per-command timeout in ms", "2000")
+    .option("--json", "Output JSON", false)
+    .action(async (opts: GatewayDiscoverOpts) => {
+      try {
+        const timeoutMs = parseDiscoverTimeoutMs(opts.timeout, 2000);
+        const beacons = await withProgress(
+          {
+            label: "Scanning for gateways…",
+            indeterminate: true,
+            enabled: opts.json !== true,
+          },
+          async () => await discoverGatewayBeacons({ timeoutMs }),
+        );
+
+        const deduped = dedupeBeacons(beacons).sort((a, b) =>
+          String(a.displayName || a.instanceName).localeCompare(
+            String(b.displayName || b.instanceName),
+          ),
+        );
+
+        if (opts.json) {
+          const enriched = deduped.map((b) => {
+            const host = pickBeaconHost(b);
+            const port = pickGatewayPort(b);
+            return {
+              ...b,
+              wsUrl: host ? `ws://${host}:${port}` : null,
+            };
+          });
+          defaultRuntime.log(
+            JSON.stringify(
+              {
+                timeoutMs,
+                domains: ["local.", WIDE_AREA_DISCOVERY_DOMAIN],
+                count: enriched.length,
+                beacons: enriched,
+              },
+              null,
+              2,
+            ),
+          );
+          return;
+        }
+
+        const rich = isRich();
+        defaultRuntime.log(colorize(rich, theme.heading, "Gateway Discovery"));
+        defaultRuntime.log(
+          colorize(
+            rich,
+            theme.muted,
+            `Found ${deduped.length} gateway(s) · domains: local., ${WIDE_AREA_DISCOVERY_DOMAIN}`,
+          ),
+        );
+        if (deduped.length === 0) return;
+
+        for (const beacon of deduped) {
+          for (const line of renderBeaconLines(beacon, rich)) {
+            defaultRuntime.log(line);
+          }
+        }
+      } catch (err) {
+        defaultRuntime.error(`gateway discover failed: ${String(err)}`);
+        defaultRuntime.exit(1);
+      }
+    });
 }
