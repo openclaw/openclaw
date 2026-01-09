@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import {
@@ -28,28 +28,30 @@ vi.mock("../agents/model-catalog.js", () => ({
 }));
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-reply-"));
-  const previousHome = process.env.HOME;
-  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  process.env.HOME = base;
-  process.env.CLAWDBOT_STATE_DIR = path.join(base, ".clawdbot");
-  process.env.CLAWDBOT_AGENT_DIR = path.join(base, ".clawdbot", "agent");
-  process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
-  try {
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
-    else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-    if (previousAgentDir === undefined) delete process.env.CLAWDBOT_AGENT_DIR;
-    else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
-    if (previousPiAgentDir === undefined)
-      delete process.env.PI_CODING_AGENT_DIR;
-    else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(
+    async (home) => {
+      const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+      const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+      const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+      process.env.CLAWDBOT_STATE_DIR = path.join(home, ".clawdbot");
+      process.env.CLAWDBOT_AGENT_DIR = path.join(home, ".clawdbot", "agent");
+      process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+      try {
+        return await fn(home);
+      } finally {
+        if (previousStateDir === undefined)
+          delete process.env.CLAWDBOT_STATE_DIR;
+        else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+        if (previousAgentDir === undefined)
+          delete process.env.CLAWDBOT_AGENT_DIR;
+        else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+        if (previousPiAgentDir === undefined)
+          delete process.env.PI_CODING_AGENT_DIR;
+        else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+      }
+    },
+    { prefix: "clawdbot-reply-" },
+  );
 }
 
 describe("directive behavior", () => {

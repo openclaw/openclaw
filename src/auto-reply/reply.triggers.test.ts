@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
+
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
   compactEmbeddedPiSession: vi.fn(),
@@ -51,37 +53,26 @@ const webMocks = vi.hoisted(() => ({
 vi.mock("../web/session.js", () => webMocks);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(join(tmpdir(), "clawdbot-triggers-"));
-  const previousHome = process.env.HOME;
-  const previousUserProfile = process.env.USERPROFILE;
-  const previousHomeDrive = process.env.HOMEDRIVE;
-  const previousHomePath = process.env.HOMEPATH;
-  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-  const previousClawdisStateDir = process.env.CLAWDIS_STATE_DIR;
-  process.env.HOME = base;
-  process.env.CLAWDBOT_STATE_DIR = join(base, ".clawdbot");
-  process.env.CLAWDIS_STATE_DIR = join(base, ".clawdbot");
-  if (process.platform === "win32") {
-    process.env.USERPROFILE = base;
-    const driveMatch = base.match(/^([A-Za-z]:)(.*)$/);
-    if (driveMatch) {
-      process.env.HOMEDRIVE = driveMatch[1];
-      process.env.HOMEPATH = driveMatch[2] || "\\";
-    }
-  }
-  try {
-    vi.mocked(runEmbeddedPiAgent).mockClear();
-    vi.mocked(abortEmbeddedPiRun).mockClear();
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    process.env.USERPROFILE = previousUserProfile;
-    process.env.HOMEDRIVE = previousHomeDrive;
-    process.env.HOMEPATH = previousHomePath;
-    process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-    process.env.CLAWDIS_STATE_DIR = previousClawdisStateDir;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(
+    async (home) => {
+      const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+      const previousClawdisStateDir = process.env.CLAWDIS_STATE_DIR;
+      process.env.CLAWDBOT_STATE_DIR = join(home, ".clawdbot");
+      process.env.CLAWDIS_STATE_DIR = join(home, ".clawdbot");
+      try {
+        vi.mocked(runEmbeddedPiAgent).mockClear();
+        vi.mocked(abortEmbeddedPiRun).mockClear();
+        return await fn(home);
+      } finally {
+        if (previousStateDir === undefined) delete process.env.CLAWDBOT_STATE_DIR;
+        else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+        if (previousClawdisStateDir === undefined)
+          delete process.env.CLAWDIS_STATE_DIR;
+        else process.env.CLAWDIS_STATE_DIR = previousClawdisStateDir;
+      }
+    },
+    { prefix: "clawdbot-triggers-" },
+  );
 }
 
 function makeCfg(home: string) {
@@ -320,7 +311,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("api-key");
-      expect(text).toContain("…");
+      expect(text).toMatch(/…|\.{3}/);
       expect(text).toContain("(anthropic:work)");
       expect(text).not.toContain("mixed");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();

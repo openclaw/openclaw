@@ -1,43 +1,9 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { buildStatusMessage } from "./status.js";
-
-const HOME_ENV_KEYS = ["HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"] as const;
-type HomeEnvSnapshot = Record<
-  (typeof HOME_ENV_KEYS)[number],
-  string | undefined
->;
-
-const snapshotHomeEnv = (): HomeEnvSnapshot => ({
-  HOME: process.env.HOME,
-  USERPROFILE: process.env.USERPROFILE,
-  HOMEDRIVE: process.env.HOMEDRIVE,
-  HOMEPATH: process.env.HOMEPATH,
-});
-
-const restoreHomeEnv = (snapshot: HomeEnvSnapshot) => {
-  for (const key of HOME_ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-};
-
-const setTempHome = (tempHome: string) => {
-  process.env.HOME = tempHome;
-  if (process.platform === "win32") {
-    process.env.USERPROFILE = tempHome;
-    const root = path.parse(tempHome).root;
-    process.env.HOMEDRIVE = root.replace(/\\$/, "");
-    process.env.HOMEPATH = tempHome.slice(root.length - 1);
-  }
-};
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -260,69 +226,66 @@ describe("buildStatusMessage", () => {
   });
 
   it("prefers cached prompt tokens from the session log", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-status-"));
-    const previousHome = snapshotHomeEnv();
-    setTempHome(dir);
-    try {
-      vi.resetModules();
-      const { buildStatusMessage: buildStatusMessageDynamic } = await import(
-        "./status.js"
-      );
+    await withTempHome(
+      async (dir) => {
+        vi.resetModules();
+        const { buildStatusMessage: buildStatusMessageDynamic } = await import(
+          "./status.js"
+        );
 
-      const sessionId = "sess-1";
-      const logPath = path.join(
-        dir,
-        ".clawdbot",
-        "agents",
-        "main",
-        "sessions",
-        `${sessionId}.jsonl`,
-      );
-      fs.mkdirSync(path.dirname(logPath), { recursive: true });
+        const sessionId = "sess-1";
+        const logPath = path.join(
+          dir,
+          ".clawdbot",
+          "agents",
+          "main",
+          "sessions",
+          `${sessionId}.jsonl`,
+        );
+        fs.mkdirSync(path.dirname(logPath), { recursive: true });
 
-      fs.writeFileSync(
-        logPath,
-        [
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              model: "claude-opus-4-5",
-              usage: {
-                input: 1,
-                output: 2,
-                cacheRead: 1000,
-                cacheWrite: 0,
-                totalTokens: 1003,
+        fs.writeFileSync(
+          logPath,
+          [
+            JSON.stringify({
+              type: "message",
+              message: {
+                role: "assistant",
+                model: "claude-opus-4-5",
+                usage: {
+                  input: 1,
+                  output: 2,
+                  cacheRead: 1000,
+                  cacheWrite: 0,
+                  totalTokens: 1003,
+                },
               },
-            },
-          }),
-        ].join("\n"),
-        "utf-8",
-      );
+            }),
+          ].join("\n"),
+          "utf-8",
+        );
 
-      const text = buildStatusMessageDynamic({
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          contextTokens: 32_000,
-        },
-        sessionEntry: {
-          sessionId,
-          updatedAt: 0,
-          totalTokens: 3, // would be wrong if cached prompt tokens exist
-          contextTokens: 32_000,
-        },
-        sessionKey: "agent:main:main",
-        sessionScope: "per-sender",
-        queue: { mode: "collect", depth: 0 },
-        includeTranscriptUsage: true,
-        modelAuth: "api-key",
-      });
+        const text = buildStatusMessageDynamic({
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            contextTokens: 32_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            totalTokens: 3, // would be wrong if cached prompt tokens exist
+            contextTokens: 32_000,
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+        });
 
-      expect(text).toContain("Context: 1.0k/32k");
-    } finally {
-      restoreHomeEnv(previousHome);
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+        expect(text).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "clawdbot-status-" },
+    );
   });
 });
