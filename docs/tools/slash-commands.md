@@ -36,6 +36,7 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 Text + native (when enabled):
 - `/help`
 - `/status`
+- `/debug show|set|unset|reset` (runtime overrides, owner-only)
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
 - `/restart`
@@ -58,6 +59,24 @@ Notes:
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+
+## Debug overrides
+
+`/debug` lets you set **runtime-only** config overrides (memory, not disk). Owner-only.
+
+Examples:
+
+```
+/debug show
+/debug set messages.responsePrefix="[clawdbot]"
+/debug set whatsapp.allowFrom=["+1555","+4477"]
+/debug unset messages.responsePrefix
+/debug reset
+```
+
+Notes:
+- Overrides apply immediately to new config reads, but do **not** write to `clawdbot.json`.
+- Use `/debug reset` to clear all overrides and return to the on-disk config.
 
 ## Surface notes
 

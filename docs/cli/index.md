@@ -147,6 +147,14 @@ clawdbot [--dev] [--profile <name>] <command>
   tui
 ```
 
+## Chat slash commands
+
+Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
+
+Highlights:
+- `/status` for quick diagnostics.
+- `/debug` for runtime-only config overrides (memory, not disk).
+
 ## Setup + onboarding
 
 ### `setup`

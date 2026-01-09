@@ -68,6 +68,7 @@
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Onboarding: clarify WhatsApp owner number prompt and label pairing phone number.
 - Auto-reply: normalize routed replies to drop NO_REPLY and apply response prefixes.
+- Commands: add /debug for runtime config overrides (memory-only).
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
 - Onboarding/Configure: add OpenAI API key flow that stores in shared `~/.clawdbot/.env` for launchd; simplify Anthropic token prompt order.

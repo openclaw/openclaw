@@ -11,6 +11,22 @@ read_when:
 This page covers debugging helpers for streaming output, especially when a
 provider mixes reasoning into normal text.
 
+## Runtime debug overrides
+
+Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
+This is handy when you need to toggle obscure settings without editing `clawdbot.json`.
+
+Examples:
+
+```
+/debug show
+/debug set messages.responsePrefix="[clawdbot]"
+/debug unset messages.responsePrefix
+/debug reset
+```
+
+`/debug reset` clears all overrides and returns to the on-disk config.
+
 ## Gateway watch mode
 
 For fast iteration, run the gateway under the file watcher:

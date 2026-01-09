@@ -28,6 +28,13 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     textAliases: ["/status"],
   },
   {
+    key: "debug",
+    nativeName: "debug",
+    description: "Set runtime debug overrides.",
+    textAliases: ["/debug"],
+    acceptsArgs: true,
+  },
+  {
     key: "cost",
     nativeName: "cost",
     description: "Toggle per-response usage line.",

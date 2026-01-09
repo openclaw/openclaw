@@ -40,6 +40,12 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeE164 } from "../../utils.js";
+import {
+  getConfigOverrides,
+  resetConfigOverrides,
+  setConfigOverride,
+  unsetConfigOverride,
+} from "../../config/runtime-overrides.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   normalizeCommandBody,
@@ -65,6 +71,7 @@ import type {
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
+import { parseDebugCommand } from "./debug-commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
@@ -607,6 +614,81 @@ export async function handleCommands(params: {
       defaultGroupActivation,
     });
     return { shouldContinue: false, reply };
+  }
+
+  const debugCommand = allowTextCommands
+    ? parseDebugCommand(command.commandBodyNormalized)
+    : null;
+  if (debugCommand) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /debug from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    if (debugCommand.action === "error") {
+      return { shouldContinue: false, reply: { text: `⚠️ ${debugCommand.message}` } };
+    }
+    if (debugCommand.action === "show") {
+      const overrides = getConfigOverrides();
+      const hasOverrides = Object.keys(overrides).length > 0;
+      if (!hasOverrides) {
+        return {
+          shouldContinue: false,
+          reply: { text: "⚙️ Debug overrides: (none)" },
+        };
+      }
+      const json = JSON.stringify(overrides, null, 2);
+      return {
+        shouldContinue: false,
+        reply: { text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\`` },
+      };
+    }
+    if (debugCommand.action === "reset") {
+      resetConfigOverrides();
+      return {
+        shouldContinue: false,
+        reply: { text: "⚙️ Debug overrides cleared; using config on disk." },
+      };
+    }
+    if (debugCommand.action === "unset") {
+      const result = unsetConfigOverride(debugCommand.path);
+      if (!result.ok) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚠️ ${result.error ?? "Invalid path."}` },
+        };
+      }
+      if (!result.removed) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚙️ No debug override found for ${debugCommand.path}.` },
+        };
+      }
+      return {
+        shouldContinue: false,
+        reply: { text: `⚙️ Debug override removed for ${debugCommand.path}.` },
+      };
+    }
+    if (debugCommand.action === "set") {
+      const result = setConfigOverride(debugCommand.path, debugCommand.value);
+      if (!result.ok) {
+        return {
+          shouldContinue: false,
+          reply: { text: `⚠️ ${result.error ?? "Invalid override."}` },
+        };
+      }
+      const valueLabel =
+        typeof debugCommand.value === "string"
+          ? `"${debugCommand.value}"`
+          : JSON.stringify(debugCommand.value);
+      return {
+        shouldContinue: false,
+        reply: {
+          text: `⚙️ Debug override set: ${debugCommand.path}=${valueLabel ?? "null"}`,
+        },
+      };
+    }
   }
 
   const stopRequested = command.commandBodyNormalized === "/stop";
