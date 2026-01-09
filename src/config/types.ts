@@ -891,7 +891,7 @@ export type AudioConfig = {
 };
 
 export type MessagesConfig = {
-  messagePrefix?: string; // Prefix added to all inbound messages (default: "[clawdbot]" if no allowFrom, else "")
+  messagePrefix?: string; // Prefix added to all inbound messages (default: "[{identity.name}]" or "[clawdbot]" if no allowFrom, else "")
   responsePrefix?: string; // Prefix auto-added to all outbound replies (e.g., "🦞")
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;

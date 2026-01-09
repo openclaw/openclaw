@@ -1959,4 +1959,45 @@ describe("web auto-reply", () => {
     expect(replies).toEqual(["🦞 🧩 tool1", "🦞 🧩 tool2", "🦞 final"]);
     resetLoadConfigMock();
   });
+
+  it("uses identity.name for messagePrefix when set", async () => {
+    setLoadConfigMock(() => ({
+      identity: { name: "Richbot", emoji: "🦁" },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const reply = vi.fn();
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const resolver = vi.fn().mockResolvedValue({ text: "hello" });
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hi",
+      from: "+1555",
+      to: "+2666",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply,
+      sendMedia: vi.fn(),
+    });
+
+    // Check that resolver received the message with identity-based prefix
+    expect(resolver).toHaveBeenCalled();
+    const resolverArg = resolver.mock.calls[0][0];
+    expect(resolverArg.Body).toContain("[Richbot]");
+    expect(resolverArg.Body).not.toContain("[clawdbot]");
+    resetLoadConfigMock();
+  });
 });
