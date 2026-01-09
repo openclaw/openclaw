@@ -275,8 +275,7 @@ export function shouldLogSubsystemToConsole(subsystem: string): boolean {
     return true;
   }
   return consoleSubsystemFilter.some(
-    (prefix) =>
-      subsystem === prefix || subsystem.startsWith(`${prefix}/`),
+    (prefix) => subsystem === prefix || subsystem.startsWith(`${prefix}/`),
   );
 }
 

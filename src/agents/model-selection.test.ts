@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
-import { buildAllowedModelSet, modelKey, parseModelRef } from "./model-selection.js";
+import {
+  buildAllowedModelSet,
+  modelKey,
+  parseModelRef,
+} from "./model-selection.js";
 
 const catalog = [
   {
@@ -30,9 +34,9 @@ describe("buildAllowedModelSet", () => {
 
     expect(allowed.allowAny).toBe(false);
     expect(allowed.allowedKeys.has(modelKey("openai", "gpt-4"))).toBe(true);
-    expect(
-      allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5")),
-    ).toBe(true);
+    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(
+      true,
+    );
   });
 
   it("includes the default model when no allowlist is set", () => {
@@ -49,9 +53,9 @@ describe("buildAllowedModelSet", () => {
 
     expect(allowed.allowAny).toBe(true);
     expect(allowed.allowedKeys.has(modelKey("openai", "gpt-4"))).toBe(true);
-    expect(
-      allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5")),
-    ).toBe(true);
+    expect(allowed.allowedKeys.has(modelKey("claude-cli", "opus-4.5"))).toBe(
+      true,
+    );
   });
 });
 
