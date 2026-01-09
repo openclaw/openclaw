@@ -1101,15 +1101,14 @@ export async function startGatewayServer(
   }
 
   const tailnetDns = await resolveTailnetDnsHint();
+  const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
+  const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
+  const sshPort =
+    Number.isFinite(sshPortParsed) && sshPortParsed > 0
+      ? sshPortParsed
+      : undefined;
 
   try {
-    const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
-    const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
-    const sshPort =
-      Number.isFinite(sshPortParsed) && sshPortParsed > 0
-        ? sshPortParsed
-        : undefined;
-
     const bonjour = await startGatewayBonjourAdvertiser({
       instanceName: formatBonjourInstanceName(machineDisplayName),
       gatewayPort: port,
