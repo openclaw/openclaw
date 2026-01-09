@@ -585,9 +585,10 @@ export async function monitorWebInbox(options: {
         payload = { text };
       }
       const result = await sock.sendMessage(jid, payload);
+      const accountId = sendOptions?.accountId ?? options.accountId;
       recordProviderActivity({
         provider: "whatsapp",
-        accountId: options?.accountId,
+        accountId,
         direction: "outbound",
       });
       return { messageId: result?.key?.id ?? "unknown" };
@@ -610,7 +611,7 @@ export async function monitorWebInbox(options: {
       });
       recordProviderActivity({
         provider: "whatsapp",
-        accountId: options?.accountId,
+        accountId: options.accountId,
         direction: "outbound",
       });
       return { messageId: result?.key?.id ?? "unknown" };
