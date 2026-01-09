@@ -14,7 +14,7 @@ export type AuthChoiceOption = {
 
 function formatOAuthHint(
   expires?: number,
-  opts?: { allowStale?: boolean }
+  opts?: { allowStale?: boolean },
 ): string {
   const rich = isRich();
   if (!expires) {
@@ -33,8 +33,8 @@ function formatOAuthHint(
     minutes >= 120
       ? `${Math.round(minutes / 60)}h`
       : minutes >= 60
-      ? "1h"
-      : `${Math.max(minutes, 1)}m`;
+        ? "1h"
+        : `${Math.max(minutes, 1)}m`;
   const label = `token ok · expires in ${duration}`;
   if (minutes <= 10) {
     return colorize(rich, theme.warn, label);
