@@ -25,13 +25,13 @@ import {
 } from "../daemon/service-audit.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 
 const note = (message: string, title?: string) =>
   clackNote(message, stylePromptTitle(title));

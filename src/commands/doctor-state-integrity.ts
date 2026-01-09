@@ -13,8 +13,8 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 
 const note = (message: string, title?: string) =>
   clackNote(message, stylePromptTitle(title));

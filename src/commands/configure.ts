@@ -7,8 +7,8 @@ import {
   note as clackNote,
   outro as clackOutro,
   select as clackSelect,
-  spinner,
   text as clackText,
+  spinner,
 } from "@clack/prompts";
 import {
   loginOpenAICodex,
@@ -38,12 +38,12 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import {
   stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../terminal/prompt-style.js";
+import { theme } from "../terminal/theme.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import {
