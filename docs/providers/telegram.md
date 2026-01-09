@@ -206,6 +206,10 @@ Config:
   - `block`: update the draft bubble in larger blocks (chunked).
   - `off`: disable draft streaming.
 
+Note: draft streaming is separate from **block streaming** (provider messages).
+Block streaming is off by default and requires `telegram.blockStreaming: true`
+if you want early Telegram messages instead of draft updates.
+
 Reasoning stream (Telegram only):
 - `/reasoning stream` streams reasoning into the draft bubble while the reply is
   generating, then sends the final answer without reasoning.

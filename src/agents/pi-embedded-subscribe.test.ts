@@ -784,7 +784,7 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "message_end",
       blockReplyChunking: {
         minChars: 5,
-        maxChars: 40,
+        maxChars: 25,
         breakPreference: "paragraph",
       },
     });
@@ -836,7 +836,7 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "message_end",
       blockReplyChunking: {
         minChars: 5,
-        maxChars: 50,
+        maxChars: 25,
         breakPreference: "paragraph",
       },
     });
@@ -939,7 +939,7 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "message_end",
       blockReplyChunking: {
         minChars: 5,
-        maxChars: 40,
+        maxChars: 25,
         breakPreference: "paragraph",
       },
     });
@@ -986,7 +986,7 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "message_end",
       blockReplyChunking: {
         minChars: 5,
-        maxChars: 45,
+        maxChars: 30,
         breakPreference: "paragraph",
       },
     });
@@ -1035,7 +1035,7 @@ describe("subscribeEmbeddedPiSession", () => {
       blockReplyBreak: "message_end",
       blockReplyChunking: {
         minChars: 10,
-        maxChars: 50,
+        maxChars: 30,
         breakPreference: "paragraph",
       },
     });

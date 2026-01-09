@@ -116,7 +116,7 @@ const FIELD_LABELS: Record<string, string> = {
   "talk.apiKey": "Talk API Key",
   "telegram.botToken": "Telegram Bot Token",
   "telegram.dmPolicy": "Telegram DM Policy",
-  "telegram.streamMode": "Telegram Stream Mode",
+  "telegram.streamMode": "Telegram Draft Stream Mode",
   "telegram.retry.attempts": "Telegram Retry Attempts",
   "telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
   "telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
@@ -193,7 +193,7 @@ const FIELD_HELP: Record<string, string> = {
   "telegram.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
   "telegram.streamMode":
-    "Draft streaming mode for Telegram replies (off | partial | block). Requires private topics + sendMessageDraft.",
+    "Draft streaming mode for Telegram replies (off | partial | block). Separate from block streaming; requires private topics + sendMessageDraft.",
   "telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
   "telegram.retry.minDelayMs":

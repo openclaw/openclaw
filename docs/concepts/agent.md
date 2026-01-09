@@ -83,13 +83,14 @@ When queue mode is `followup` or `collect`, inbound messages are held until the
 current turn ends, then a new agent turn starts with the queued payloads. See
 [`docs/queue.md`](/concepts/queue) for mode + debounce/cap behavior.
 
-Block streaming sends completed assistant blocks as soon as they finish; disable
-via `agents.defaults.blockStreamingDefault: "off"` if you only want the final response.
+Block streaming sends completed assistant blocks as soon as they finish; it is
+**off by default** (`agents.defaults.blockStreamingDefault: "off"`).
 Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
 Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults to
 800–1200 chars; prefers paragraph breaks, then newlines; sentences last).
 Coalesce streamed chunks with `agents.defaults.blockStreamingCoalesce` to reduce
-single-line spam (idle-based merging before send).
+single-line spam (idle-based merging before send). Non-Telegram providers require
+explicit `*.blockStreaming: true` to enable block replies.
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
 More details: [Streaming + chunking](/concepts/streaming).

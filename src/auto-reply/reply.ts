@@ -470,20 +470,26 @@ export async function getReplyFromConfig(
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       "on")
     : "off";
+  const providerKey = sessionCtx.Provider?.trim().toLowerCase();
+  const explicitBlockStreamingEnable = opts?.disableBlockStreaming === false;
   const resolvedBlockStreaming =
     opts?.disableBlockStreaming === true
       ? "off"
       : opts?.disableBlockStreaming === false
         ? "on"
-        : agentCfg?.blockStreamingDefault === "off"
-          ? "off"
-          : "on";
+        : agentCfg?.blockStreamingDefault === "on"
+          ? "on"
+          : "off";
   const resolvedBlockStreamingBreak: "text_end" | "message_end" =
     agentCfg?.blockStreamingBreak === "message_end"
       ? "message_end"
       : "text_end";
+  const allowBlockStreaming =
+    providerKey === "telegram" || explicitBlockStreamingEnable;
   const blockStreamingEnabled =
-    resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
+    resolvedBlockStreaming === "on" &&
+    opts?.disableBlockStreaming !== true &&
+    allowBlockStreaming;
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(
         cfg,

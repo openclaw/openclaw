@@ -18,7 +18,7 @@ read_when:
 - **Webhook support:** `webhook-set.ts` wraps `setWebhook/deleteWebhook`; `webhook.ts` hosts the callback with health + graceful shutdown. Gateway enables webhook mode when `telegram.webhookUrl` is set (otherwise it long-polls).
 - **Sessions:** direct chats collapse into the agent main session (`agent:<agentId>:<mainKey>`); groups use `agent:<agentId>:telegram:group:<chatId>`; replies route back to the same provider.
 - **Config knobs:** `telegram.botToken`, `telegram.dmPolicy`, `telegram.groups` (allowlist + mention defaults), `telegram.allowFrom`, `telegram.groupAllowFrom`, `telegram.groupPolicy`, `telegram.mediaMaxMb`, `telegram.proxy`, `telegram.webhookSecret`, `telegram.webhookUrl`.
-- **Draft streaming:** optional `telegram.streamMode` uses `sendMessageDraft` in private topic chats (Bot API 9.3+).
+- **Draft streaming:** optional `telegram.streamMode` uses `sendMessageDraft` in private topic chats (Bot API 9.3+). This is separate from provider block streaming.
 - **Tests:** grammy mocks cover DM + group mention gating and outbound send; more media/webhook fixtures still welcome.
 
 Open questions

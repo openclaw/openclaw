@@ -57,11 +57,11 @@ Block streaming sends partial replies as the model produces text blocks.
 Chunking respects provider text limits and avoids splitting fenced code.
 
 Key settings:
-- `agents.defaults.blockStreamingDefault` (`on|off`)
+- `agents.defaults.blockStreamingDefault` (`on|off`, default off)
 - `agents.defaults.blockStreamingBreak` (`text_end|message_end`)
 - `agents.defaults.blockStreamingChunk` (`minChars|maxChars|breakPreference`)
 - `agents.defaults.blockStreamingCoalesce` (idle-based batching)
-- Provider overrides: `*.blockStreaming` and `*.blockStreamingCoalesce`
+- Provider overrides: `*.blockStreaming` and `*.blockStreamingCoalesce` (non-Telegram providers require explicit `*.blockStreaming: true`)
 
 Details: [Streaming + chunking](/concepts/streaming).
 

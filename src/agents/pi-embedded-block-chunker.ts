@@ -53,6 +53,14 @@ export class EmbeddedBlockChunker {
     const maxChars = Math.max(minChars, Math.floor(this.#chunking.maxChars));
     if (this.#buffer.length < minChars && !force) return;
 
+    if (force && this.#buffer.length <= maxChars) {
+      if (this.#buffer.trim().length > 0) {
+        emit(this.#buffer);
+      }
+      this.#buffer = "";
+      return;
+    }
+
     while (
       this.#buffer.length >= minChars ||
       (force && this.#buffer.length > 0)

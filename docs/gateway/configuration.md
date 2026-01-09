@@ -675,7 +675,7 @@ Multi-account support lives under `telegram.accounts` (see the multi-account sec
       }
     },
     replyToMode: "first",                 // off | first | all
-    streamMode: "partial",               // off | partial | block (draft streaming)
+    streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
     actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
     mediaMaxMb: 5,
     retry: {                             // outbound retry policy
@@ -1143,8 +1143,9 @@ Example (adaptive tuned):
 See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 
 Block streaming:
-- `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default on).
+- `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default off).
 - Provider overrides: `*.blockStreaming` (and per-account variants) to force block streaming on/off.
+  Non-Telegram providers require an explicit `*.blockStreaming: true` to enable block replies.
 - `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"` (default: text_end).
 - `agents.defaults.blockStreamingChunk`: soft chunking for streamed blocks. Defaults to
   800–1200 chars, prefers paragraph breaks (`\n\n`), then newlines, then sentences.
@@ -1156,7 +1157,8 @@ Block streaming:
   ```
 - `agents.defaults.blockStreamingCoalesce`: merge streamed blocks before sending.
   Defaults to `{ idleMs: 1000 }` and inherits `minChars` from `blockStreamingChunk`
-  with `maxChars` capped to the provider text limit.
+  with `maxChars` capped to the provider text limit. Signal/Slack/Discord default
+  to `minChars: 1500` unless overridden.
   Provider overrides: `whatsapp.blockStreamingCoalesce`, `telegram.blockStreamingCoalesce`,
   `discord.blockStreamingCoalesce`, `slack.blockStreamingCoalesce`, `signal.blockStreamingCoalesce`,
   `imessage.blockStreamingCoalesce`, `msteams.blockStreamingCoalesce` (and per-account variants).

@@ -71,6 +71,8 @@
 - Auto-reply: preserve spacing when stripping inline directives. (#539) — thanks @joshp123
 - Auto-reply: relax reply tag parsing to allow whitespace. (#560) — thanks @mcinteerj
 - Auto-reply: add per-provider block streaming toggles and coalesce streamed blocks to reduce line spam. (#536) — thanks @mcinteerj
+- Auto-reply: default block streaming off for non-Telegram providers unless explicitly enabled, and avoid splitting on forced flushes below max.
+- Auto-reply: raise default coalesce minChars for Signal/Slack/Discord and clarify streaming vs draft streaming in docs.
 - Auto-reply: default block streaming coalesce idle to 1s to reduce tiny chunks. — thanks @steipete
 - Auto-reply: fix /status usage summary filtering for the active provider.
 - Auto-reply: deduplicate followup queue entries using message id/routing to avoid duplicate replies. (#600) — thanks @samratjha96
