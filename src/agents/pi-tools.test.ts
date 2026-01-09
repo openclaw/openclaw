@@ -331,4 +331,52 @@ describe("createClawdbotCodingTools", () => {
     expect(tools.some((tool) => tool.name === "Bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
   });
+
+  it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {
+    const tools = createClawdbotCodingTools();
+
+    // Helper to recursively check schema for unsupported keywords
+    const unsupportedKeywords = new Set([
+      "patternProperties",
+      "additionalProperties",
+      "$schema",
+      "$id",
+      "$ref",
+      "$defs",
+      "definitions",
+    ]);
+
+    const findUnsupportedKeywords = (
+      schema: unknown,
+      path: string,
+    ): string[] => {
+      const found: string[] = [];
+      if (!schema || typeof schema !== "object") return found;
+      if (Array.isArray(schema)) {
+        schema.forEach((item, i) => {
+          found.push(...findUnsupportedKeywords(item, `${path}[${i}]`));
+        });
+        return found;
+      }
+      for (const [key, value] of Object.entries(
+        schema as Record<string, unknown>,
+      )) {
+        if (unsupportedKeywords.has(key)) {
+          found.push(`${path}.${key}`);
+        }
+        if (value && typeof value === "object") {
+          found.push(...findUnsupportedKeywords(value, `${path}.${key}`));
+        }
+      }
+      return found;
+    };
+
+    for (const tool of tools) {
+      const violations = findUnsupportedKeywords(
+        tool.parameters,
+        `${tool.name}.parameters`,
+      );
+      expect(violations).toEqual([]);
+    }
+  });
 });

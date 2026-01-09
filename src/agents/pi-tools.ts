@@ -195,12 +195,24 @@ function tryFlattenLiteralAnyOf(
   return null;
 }
 
+// Keywords that Cloud Code Assist API rejects (not compliant with their JSON Schema subset)
+const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "patternProperties",
+  "additionalProperties",
+  "$schema",
+  "$id",
+  "$ref",
+  "$defs",
+  "definitions",
+]);
+
 function cleanSchemaForGemini(schema: unknown): unknown {
   if (!schema || typeof schema !== "object") return schema;
   if (Array.isArray(schema)) return schema.map(cleanSchemaForGemini);
 
   const obj = schema as Record<string, unknown>;
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
+  const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
 
   // Try to flatten anyOf of literals to a single enum BEFORE processing
   // This handles Type.Union([Type.Literal("a"), Type.Literal("b")]) patterns
@@ -221,14 +233,28 @@ function cleanSchemaForGemini(schema: unknown): unknown {
     }
   }
 
+  // Try to flatten oneOf of literals similarly
+  if (hasOneOf) {
+    const flattened = tryFlattenLiteralAnyOf(obj.oneOf as unknown[]);
+    if (flattened) {
+      const result: Record<string, unknown> = {
+        type: flattened.type,
+        enum: flattened.enum,
+      };
+      for (const key of ["description", "title", "default", "examples"]) {
+        if (key in obj && obj[key] !== undefined) {
+          result[key] = obj[key];
+        }
+      }
+      return result;
+    }
+  }
+
   const cleaned: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(obj)) {
-    // Skip unsupported schema features for Gemini:
-    // - patternProperties: not in OpenAPI 3.0 subset
-    // - const: convert to enum with single value instead
-    if (key === "patternProperties") {
-      // Gemini doesn't support patternProperties - skip it
+    // Skip keywords that Cloud Code Assist API doesn't support
+    if (UNSUPPORTED_SCHEMA_KEYWORDS.has(key)) {
       continue;
     }
 
@@ -238,8 +264,8 @@ function cleanSchemaForGemini(schema: unknown): unknown {
       continue;
     }
 
-    // Skip 'type' if we have 'anyOf' — Gemini doesn't allow both
-    if (key === "type" && hasAnyOf) {
+    // Skip 'type' if we have 'anyOf' or 'oneOf' — Gemini doesn't allow both
+    if (key === "type" && (hasAnyOf || hasOneOf)) {
       continue;
     }
 
@@ -261,13 +287,6 @@ function cleanSchemaForGemini(schema: unknown): unknown {
     } else if (key === "allOf" && Array.isArray(value)) {
       // Clean each allOf variant
       cleaned[key] = value.map((variant) => cleanSchemaForGemini(variant));
-    } else if (
-      key === "additionalProperties" &&
-      value &&
-      typeof value === "object"
-    ) {
-      // Recursively clean additionalProperties schema
-      cleaned[key] = cleanSchemaForGemini(value);
     } else {
       cleaned[key] = value;
     }
