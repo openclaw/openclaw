@@ -98,7 +98,15 @@ type GatewayDiscoverOpts = {
 
 function parseDiscoverTimeoutMs(raw: unknown, fallbackMs: number): number {
   if (raw === undefined || raw === null) return fallbackMs;
-  const value = typeof raw === "string" ? raw.trim() : String(raw);
+  const value =
+    typeof raw === "string"
+      ? raw.trim()
+      : typeof raw === "number" || typeof raw === "bigint"
+        ? String(raw)
+        : null;
+  if (value === null) {
+    throw new Error("invalid --timeout");
+  }
   if (!value) return fallbackMs;
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
