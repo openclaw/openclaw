@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { withTempHome } from "../../test/helpers/temp-home.js";
 import {
   ensureAuthProfileStore,
   listProfilesForProvider,
@@ -73,45 +73,6 @@ describe("provider usage formatting", () => {
 });
 
 describe("provider usage loading", () => {
-  const HOME_ENV_KEYS = [
-    "HOME",
-    "USERPROFILE",
-    "HOMEDRIVE",
-    "HOMEPATH",
-  ] as const;
-  type HomeEnvSnapshot = Record<
-    (typeof HOME_ENV_KEYS)[number],
-    string | undefined
-  >;
-
-  const snapshotHomeEnv = (): HomeEnvSnapshot => ({
-    HOME: process.env.HOME,
-    USERPROFILE: process.env.USERPROFILE,
-    HOMEDRIVE: process.env.HOMEDRIVE,
-    HOMEPATH: process.env.HOMEPATH,
-  });
-
-  const restoreHomeEnv = (snapshot: HomeEnvSnapshot) => {
-    for (const key of HOME_ENV_KEYS) {
-      const value = snapshot[key];
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
-
-  const setTempHome = (tempHome: string) => {
-    process.env.HOME = tempHome;
-    if (process.platform === "win32") {
-      process.env.USERPROFILE = tempHome;
-      const root = path.parse(tempHome).root;
-      process.env.HOMEDRIVE = root.replace(/\\$/, "");
-      process.env.HOMEPATH = tempHome.slice(root.length - 1);
-    }
-  };
-
   it("loads usage snapshots with injected auth", async () => {
     const makeResponse = (status: number, body: unknown): Response => {
       const payload = typeof body === "string" ? body : JSON.stringify(body);
@@ -175,94 +136,98 @@ describe("provider usage loading", () => {
   });
 
   it("discovers Claude usage from token auth profiles", async () => {
-    const homeSnapshot = snapshotHomeEnv();
-    const stateSnapshot = process.env.CLAWDBOT_STATE_DIR;
-    const tempHome = fs.mkdtempSync(
-      path.join(os.tmpdir(), "clawdbot-provider-usage-"),
-    );
-    try {
-      setTempHome(tempHome);
-      process.env.CLAWDBOT_STATE_DIR = path.join(tempHome, ".clawdbot");
-      const agentDir = path.join(
-        process.env.CLAWDBOT_STATE_DIR,
-        "agents",
-        "main",
-        "agent",
-      );
-      fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
-      fs.writeFileSync(
-        path.join(agentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            order: { anthropic: ["anthropic:default"] },
-            profiles: {
-              "anthropic:default": {
-                type: "token",
-                provider: "anthropic",
-                token: "token-1",
-                expires: Date.UTC(2100, 0, 1, 0, 0, 0),
+    await withTempHome(
+      async (tempHome) => {
+        const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+        process.env.CLAWDBOT_STATE_DIR = path.join(tempHome, ".clawdbot");
+        const agentDir = path.join(
+          process.env.CLAWDBOT_STATE_DIR,
+          "agents",
+          "main",
+          "agent",
+        );
+        try {
+          fs.mkdirSync(agentDir, { recursive: true, mode: 0o700 });
+          fs.writeFileSync(
+            path.join(agentDir, "auth-profiles.json"),
+            `${JSON.stringify(
+              {
+                version: 1,
+                order: { anthropic: ["anthropic:default"] },
+                profiles: {
+                  "anthropic:default": {
+                    type: "token",
+                    provider: "anthropic",
+                    token: "token-1",
+                    expires: Date.UTC(2100, 0, 1, 0, 0, 0),
+                  },
+                },
               },
-            },
-          },
-          null,
-          2,
-        )}\n`,
-        "utf8",
-      );
-      const store = ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-      });
-      expect(listProfilesForProvider(store, "anthropic")).toContain(
-        "anthropic:default",
-      );
-
-      const makeResponse = (status: number, body: unknown): Response => {
-        const payload = typeof body === "string" ? body : JSON.stringify(body);
-        const headers =
-          typeof body === "string"
-            ? undefined
-            : { "Content-Type": "application/json" };
-        return new Response(payload, { status, headers });
-      };
-
-      const mockFetch = vi.fn<
-        Parameters<typeof fetch>,
-        ReturnType<typeof fetch>
-      >(async (input, init) => {
-        const url =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.toString()
-              : input.url;
-        if (url.includes("api.anthropic.com/api/oauth/usage")) {
-          const headers = (init?.headers ?? {}) as Record<string, string>;
-          expect(headers.Authorization).toBe("Bearer token-1");
-          return makeResponse(200, {
-            five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
+              null,
+              2,
+            )}\n`,
+            "utf8",
+          );
+          const store = ensureAuthProfileStore(agentDir, {
+            allowKeychainPrompt: false,
           });
+          expect(listProfilesForProvider(store, "anthropic")).toContain(
+            "anthropic:default",
+          );
+
+          const makeResponse = (status: number, body: unknown): Response => {
+            const payload =
+              typeof body === "string" ? body : JSON.stringify(body);
+            const headers =
+              typeof body === "string"
+                ? undefined
+                : { "Content-Type": "application/json" };
+            return new Response(payload, { status, headers });
+          };
+
+          const mockFetch = vi.fn<
+            Parameters<typeof fetch>,
+            ReturnType<typeof fetch>
+          >(async (input, init) => {
+            const url =
+              typeof input === "string"
+                ? input
+                : input instanceof URL
+                  ? input.toString()
+                  : input.url;
+            if (url.includes("api.anthropic.com/api/oauth/usage")) {
+              const headers = (init?.headers ?? {}) as Record<string, string>;
+              expect(headers.Authorization).toBe("Bearer token-1");
+              return makeResponse(200, {
+                five_hour: {
+                  utilization: 20,
+                  resets_at: "2026-01-07T01:00:00Z",
+                },
+              });
+            }
+            return makeResponse(404, "not found");
+          });
+
+          const summary = await loadProviderUsageSummary({
+            now: Date.UTC(2026, 0, 7, 0, 0, 0),
+            providers: ["anthropic"],
+            agentDir,
+            fetch: mockFetch,
+          });
+
+          expect(summary.providers).toHaveLength(1);
+          const claude = summary.providers[0];
+          expect(claude?.provider).toBe("anthropic");
+          expect(claude?.windows[0]?.label).toBe("5h");
+          expect(mockFetch).toHaveBeenCalled();
+        } finally {
+          if (previousStateDir === undefined)
+            delete process.env.CLAWDBOT_STATE_DIR;
+          else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
         }
-        return makeResponse(404, "not found");
-      });
-
-      const summary = await loadProviderUsageSummary({
-        now: Date.UTC(2026, 0, 7, 0, 0, 0),
-        providers: ["anthropic"],
-        agentDir,
-        fetch: mockFetch,
-      });
-
-      expect(summary.providers).toHaveLength(1);
-      const claude = summary.providers[0];
-      expect(claude?.provider).toBe("anthropic");
-      expect(claude?.windows[0]?.label).toBe("5h");
-      expect(mockFetch).toHaveBeenCalled();
-    } finally {
-      restoreHomeEnv(homeSnapshot);
-      if (stateSnapshot === undefined) delete process.env.CLAWDBOT_STATE_DIR;
-      else process.env.CLAWDBOT_STATE_DIR = stateSnapshot;
-    }
+      },
+      { prefix: "clawdbot-provider-usage-" },
+    );
   });
 
   it("falls back to claude.ai web usage when OAuth scope is missing", async () => {
