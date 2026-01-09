@@ -1,5 +1,4 @@
 import {
-  loginAnthropic,
   loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
@@ -10,6 +9,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -17,7 +17,11 @@ import {
   resolveEnvApiKey,
 } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  normalizeProviderId,
+  resolveConfiguredModelRef,
+} from "../agents/model-selection.js";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -134,44 +138,62 @@ export async function applyAuthChoice(params: {
 
   if (params.authChoice === "oauth") {
     await params.prompter.note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
+      [
+        "This will run `claude setup-token` to create a long-lived Anthropic token.",
+        "Requires an interactive TTY and a Claude Pro/Max subscription.",
+      ].join("\n"),
+      "Anthropic token",
     );
-    const spin = params.prompter.progress("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          params.runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = await params.prompter.text({
-            message: "Paste authorization code (code#state)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
-      );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds, params.agentDir);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
-      }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      params.runtime.error(String(err));
+
+    if (!process.stdin.isTTY) {
       await params.prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
+        "`claude setup-token` requires an interactive TTY.",
+        "Anthropic token",
       );
+      return { config: nextConfig, agentModelOverride };
     }
+
+    const proceed = await params.prompter.confirm({
+      message: "Run `claude setup-token` now?",
+      initialValue: true,
+    });
+    if (!proceed) return { config: nextConfig, agentModelOverride };
+
+    const res = await (async () => {
+      const { spawnSync } = await import("node:child_process");
+      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+    })();
+    if (res.error) {
+      await params.prompter.note(
+        `Failed to run claude: ${String(res.error)}`,
+        "Anthropic token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+    if (typeof res.status === "number" && res.status !== 0) {
+      await params.prompter.note(
+        `claude setup-token failed (exit ${res.status})`,
+        "Anthropic token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: true,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      await params.prompter.note(
+        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
+        "Anthropic token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "token",
+    });
   } else if (params.authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
@@ -202,18 +224,108 @@ export async function applyAuthChoice(params: {
         });
 
     if (!storeWithKeychain.profiles[CLAUDE_CLI_PROFILE_ID]) {
-      await params.prompter.note(
-        process.platform === "darwin"
-          ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
-          : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
-        "Claude CLI OAuth",
-      );
-      return { config: nextConfig, agentModelOverride };
+      if (process.stdin.isTTY) {
+        const runNow = await params.prompter.confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        });
+        if (runNow) {
+          const res = await (async () => {
+            const { spawnSync } = await import("node:child_process");
+            return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+          })();
+          if (res.error) {
+            await params.prompter.note(
+              `Failed to run claude: ${String(res.error)}`,
+              "Claude setup-token",
+            );
+          }
+        }
+      } else {
+        await params.prompter.note(
+          "`claude setup-token` requires an interactive TTY.",
+          "Claude setup-token",
+        );
+      }
+
+      const refreshed = ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: true,
+      });
+      if (!refreshed.profiles[CLAUDE_CLI_PROFILE_ID]) {
+        await params.prompter.note(
+          process.platform === "darwin"
+            ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
+            : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
+          "Claude CLI OAuth",
+        );
+        return { config: nextConfig, agentModelOverride };
+      }
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
+    });
+  } else if (params.authChoice === "token") {
+    const providerRaw = await params.prompter.text({
+      message: "Token provider id (e.g. anthropic)",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    const provider = normalizeProviderId(String(providerRaw).trim());
+    const defaultProfileId = `${provider}:manual`;
+
+    const profileIdRaw = await params.prompter.text({
+      message: "Auth profile id",
+      initialValue: defaultProfileId,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    const profileId = String(profileIdRaw).trim();
+
+    const tokenRaw = await params.prompter.text({
+      message: `Paste token for ${provider}`,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    const token = String(tokenRaw).trim();
+
+    const wantsExpiry = await params.prompter.confirm({
+      message: "Does this token expire?",
+      initialValue: false,
+    });
+    const expiresInRaw = wantsExpiry
+      ? await params.prompter.text({
+          message: "Expires in (duration)",
+          initialValue: "365d",
+          validate: (value) => {
+            try {
+              parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
+              return undefined;
+            } catch {
+              return "Invalid duration (e.g. 365d, 12h, 30m)";
+            }
+          },
+        })
+      : "";
+
+    const expiresIn = String(expiresInRaw).trim();
+    const expires = expiresIn
+      ? Date.now() + parseDurationMs(expiresIn, { defaultUnit: "d" })
+      : undefined;
+
+    upsertAuthProfile({
+      profileId,
+      agentDir: params.agentDir,
+      credential: {
+        type: "token",
+        provider,
+        token,
+        ...(expires ? { expires } : {}),
+      },
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId,
+      provider,
+      mode: "token",
     });
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();

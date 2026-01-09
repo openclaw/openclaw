@@ -61,7 +61,7 @@ export function buildAuthChoiceOptions(params: {
   }
 
   const claudeCli = params.store.profiles[CLAUDE_CLI_PROFILE_ID];
-  if (claudeCli?.type === "oauth") {
+  if (claudeCli?.type === "oauth" || claudeCli?.type === "token") {
     options.push({
       value: "claude-cli",
       label: "Anthropic OAuth (Claude CLI)",
@@ -75,7 +75,11 @@ export function buildAuthChoiceOptions(params: {
     });
   }
 
-  options.push({ value: "oauth", label: "Anthropic OAuth (Claude Pro/Max)" });
+  options.push({
+    value: "oauth",
+    label: "Anthropic token (setup-token)",
+    hint: "Runs `claude setup-token`",
+  });
 
   options.push({
     value: "openai-codex",
@@ -87,6 +91,11 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
+  options.push({
+    value: "token",
+    label: "Paste token (advanced)",
+    hint: "Stores as a non-refreshable token profile",
+  });
   options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });

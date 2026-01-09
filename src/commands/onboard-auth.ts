@@ -51,7 +51,7 @@ export function applyAuthProfileConfig(
   params: {
     profileId: string;
     provider: string;
-    mode: "api_key" | "oauth";
+    mode: "api_key" | "oauth" | "token";
     email?: string;
     preferProfileFirst?: boolean;
   },
