@@ -38,7 +38,7 @@ Everything the model receives counts toward the context limit:
 
 Use these in chat:
 
-- `/status` → **compact one‑liner** with the session model, context usage,
+- `/status` → **emoji‑rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
 - `/cost on|off` → appends a **per-response usage line** to every reply.
   - Persists per session (stored as `responseUsage`).
