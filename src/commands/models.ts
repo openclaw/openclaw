@@ -4,6 +4,11 @@ export {
   modelsAliasesRemoveCommand,
 } from "./models/aliases.js";
 export {
+  modelsAuthAddCommand,
+  modelsAuthPasteTokenCommand,
+  modelsAuthSetupTokenCommand,
+} from "./models/auth.js";
+export {
   modelsFallbacksAddCommand,
   modelsFallbacksClearCommand,
   modelsFallbacksListCommand,
