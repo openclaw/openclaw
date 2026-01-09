@@ -301,5 +301,11 @@ describe("buildCommandsMessage", () => {
   it("lists commands with aliases and text-only hints", () => {
     const text = buildCommandsMessage();
     expect(text).toContain("/commands - List all slash commands.");
+    expect(text).toContain(
+      "/think (aliases: /thinking, /t) - Set thinking level.",
+    );
+    expect(text).toContain(
+      "/compact (text-only) - Compact the session context.",
+    );
   });
 });

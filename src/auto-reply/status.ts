@@ -366,7 +366,9 @@ export function buildHelpMessage(): string {
 export function buildCommandsMessage(): string {
   const lines = ["ℹ️ Slash commands"];
   for (const command of listChatCommands()) {
-    const primary = `/${command.nativeName}`;
+    const primary = command.nativeName
+      ? `/${command.nativeName}`
+      : command.textAliases[0]?.trim() || `/${command.key}`;
     const seen = new Set<string>();
     const aliases = command.textAliases
       .map((alias) => alias.trim())
@@ -381,7 +383,8 @@ export function buildCommandsMessage(): string {
     const aliasLabel = aliases.length
       ? ` (aliases: ${aliases.join(", ")})`
       : "";
-    lines.push(`${primary}${aliasLabel} - ${command.description}`);
+    const scopeLabel = command.scope === "text" ? " (text-only)" : "";
+    lines.push(`${primary}${aliasLabel}${scopeLabel} - ${command.description}`);
   }
   return lines.join("\n");
 }

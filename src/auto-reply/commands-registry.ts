@@ -1,11 +1,14 @@
 import type { ClawdbotConfig } from "../config/types.js";
 
+export type CommandScope = "text" | "native" | "both";
+
 export type ChatCommandDefinition = {
   key: string;
-  nativeName: string;
+  nativeName?: string;
   description: string;
   textAliases: string[];
   acceptsArgs?: boolean;
+  scope: CommandScope;
 };
 
 export type NativeCommandSpec = {
@@ -14,15 +17,35 @@ export type NativeCommandSpec = {
   acceptsArgs: boolean;
 };
 
-function defineChatCommand(
-  command: Omit<ChatCommandDefinition, "textAliases"> & { textAlias: string },
-): ChatCommandDefinition {
+type TextAliasSpec = {
+  canonical: string;
+  acceptsArgs: boolean;
+};
+
+function defineChatCommand(command: {
+  key: string;
+  nativeName?: string;
+  description: string;
+  acceptsArgs?: boolean;
+  textAlias?: string;
+  textAliases?: string[];
+  scope?: CommandScope;
+}): ChatCommandDefinition {
+  const aliases = (
+    command.textAliases ?? (command.textAlias ? [command.textAlias] : [])
+  )
+    .map((alias) => alias.trim())
+    .filter(Boolean);
+  const scope =
+    command.scope ??
+    (command.nativeName ? (aliases.length ? "both" : "native") : "text");
   return {
     key: command.key,
     nativeName: command.nativeName,
     description: command.description,
     acceptsArgs: command.acceptsArgs,
-    textAliases: [command.textAlias],
+    textAliases: aliases,
+    scope,
   };
 }
 
@@ -35,13 +58,61 @@ function registerAlias(
   if (!command) {
     throw new Error(`registerAlias: unknown command key: ${key}`);
   }
-  const existing = new Set(command.textAliases.map((alias) => alias.trim()));
+  const existing = new Set(
+    command.textAliases.map((alias) => alias.trim().toLowerCase()),
+  );
   for (const alias of aliases) {
     const trimmed = alias.trim();
     if (!trimmed) continue;
-    if (existing.has(trimmed)) continue;
-    existing.add(trimmed);
+    const lowered = trimmed.toLowerCase();
+    if (existing.has(lowered)) continue;
+    existing.add(lowered);
     command.textAliases.push(trimmed);
+  }
+}
+
+function assertCommandRegistry(commands: ChatCommandDefinition[]): void {
+  const keys = new Set<string>();
+  const nativeNames = new Set<string>();
+  const textAliases = new Set<string>();
+  for (const command of commands) {
+    if (keys.has(command.key)) {
+      throw new Error(`Duplicate command key: ${command.key}`);
+    }
+    keys.add(command.key);
+
+    const nativeName = command.nativeName?.trim();
+    if (command.scope === "text") {
+      if (nativeName) {
+        throw new Error(`Text-only command has native name: ${command.key}`);
+      }
+      if (command.textAliases.length === 0) {
+        throw new Error(`Text-only command missing text alias: ${command.key}`);
+      }
+    } else if (!nativeName) {
+      throw new Error(`Native command missing native name: ${command.key}`);
+    } else {
+      const nativeKey = nativeName.toLowerCase();
+      if (nativeNames.has(nativeKey)) {
+        throw new Error(`Duplicate native command: ${nativeName}`);
+      }
+      nativeNames.add(nativeKey);
+    }
+
+    if (command.scope === "native" && command.textAliases.length > 0) {
+      throw new Error(`Native-only command has text aliases: ${command.key}`);
+    }
+
+    for (const alias of command.textAliases) {
+      if (!alias.startsWith("/")) {
+        throw new Error(`Command alias missing leading '/': ${alias}`);
+      }
+      const aliasKey = alias.toLowerCase();
+      if (textAliases.has(aliasKey)) {
+        throw new Error(`Duplicate command alias: ${alias}`);
+      }
+      textAliases.add(aliasKey);
+    }
   }
 }
 
@@ -118,6 +189,13 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/new",
     }),
     defineChatCommand({
+      key: "compact",
+      description: "Compact the session context.",
+      textAlias: "/compact",
+      scope: "text",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "think",
       nativeName: "think",
       description: "Set thinking level.",
@@ -168,15 +246,11 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
   registerAlias(commands, "elevated", "/elev");
   registerAlias(commands, "model", "/models");
 
+  assertCommandRegistry(commands);
   return commands;
 })();
 
 const NATIVE_COMMAND_SURFACES = new Set(["discord", "slack", "telegram"]);
-
-type TextAliasSpec = {
-  canonical: string;
-  acceptsArgs: boolean;
-};
 
 const TEXT_ALIAS_MAP: Map<string, TextAliasSpec> = (() => {
   const map = new Map<string, TextAliasSpec>();
@@ -210,8 +284,10 @@ export function listChatCommands(): ChatCommandDefinition[] {
 }
 
 export function listNativeCommandSpecs(): NativeCommandSpec[] {
-  return CHAT_COMMANDS.map((command) => ({
-    name: command.nativeName,
+  return CHAT_COMMANDS.filter(
+    (command) => command.scope !== "text" && command.nativeName,
+  ).map((command) => ({
+    name: command.nativeName ?? command.key,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),
   }));
@@ -222,7 +298,9 @@ export function findCommandByNativeName(
 ): ChatCommandDefinition | undefined {
   const normalized = name.trim().toLowerCase();
   return CHAT_COMMANDS.find(
-    (command) => command.nativeName.toLowerCase() === normalized,
+    (command) =>
+      command.scope !== "text" &&
+      command.nativeName?.toLowerCase() === normalized,
   );
 }
 
