@@ -113,7 +113,20 @@ type DiscordThreadStarter = {
   timestamp?: number;
 };
 
+type DiscordChannelInfo = {
+  type: ChannelType;
+  name?: string;
+  topic?: string;
+  parentId?: string;
+};
+
 const DISCORD_THREAD_STARTER_CACHE = new Map<string, DiscordThreadStarter>();
+const DISCORD_CHANNEL_INFO_CACHE_TTL_MS = 5 * 60 * 1000;
+const DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS = 30 * 1000;
+const DISCORD_CHANNEL_INFO_CACHE = new Map<
+  string,
+  { value: DiscordChannelInfo | null; expiresAt: number }
+>();
 const DISCORD_SLOW_LISTENER_THRESHOLD_MS = 1000;
 
 function logSlowDiscordListener(params: {
@@ -139,14 +152,22 @@ async function resolveDiscordThreadStarter(params: {
   channel: DiscordThreadChannel;
   client: Client;
   parentId?: string;
+  parentType?: ChannelType;
 }): Promise<DiscordThreadStarter | null> {
   const cacheKey = params.channel.id;
   const cached = DISCORD_THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) return cached;
   try {
-    if (!params.parentId) return null;
+    const parentType = params.parentType;
+    const isForumParent =
+      parentType === ChannelType.GuildForum ||
+      parentType === ChannelType.GuildMedia;
+    const messageChannelId = isForumParent
+      ? params.channel.id
+      : params.parentId;
+    if (!messageChannelId) return null;
     const starter = (await params.client.rest.get(
-      Routes.channelMessage(params.parentId, params.channel.id),
+      Routes.channelMessage(messageChannelId, params.channel.id),
     )) as {
       content?: string | null;
       embeds?: Array<{ description?: string | null }>;
@@ -225,6 +246,14 @@ export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
   client: Client,
 ) => Promise<void>;
+
+function isDiscordThreadType(type: ChannelType | undefined): boolean {
+  return (
+    type === ChannelType.PublicThread ||
+    type === ChannelType.PrivateThread ||
+    type === ChannelType.AnnouncementThread
+  );
+}
 
 export function resolveDiscordReplyTarget(opts: {
   replyToMode: ReplyToMode;
@@ -666,12 +695,33 @@ export function createDiscordMessageHandler(params: {
         message.channel &&
         "isThread" in message.channel &&
         message.channel.isThread();
-      const threadChannel = isThreadChannel
+      const isThreadByType =
+        isGuildMessage && isDiscordThreadType(channelInfo?.type);
+      const threadChannel: DiscordThreadChannel | null = isThreadChannel
         ? (message.channel as DiscordThreadChannel)
-        : null;
+        : isThreadByType
+          ? {
+              id: message.channelId,
+              name: channelInfo?.name ?? undefined,
+              parentId: channelInfo?.parentId ?? undefined,
+              parent: undefined,
+            }
+          : null;
       const threadParentId =
-        threadChannel?.parentId ?? threadChannel?.parent?.id ?? undefined;
-      const threadParentName = threadChannel?.parent?.name;
+        threadChannel?.parentId ??
+        threadChannel?.parent?.id ??
+        channelInfo?.parentId ??
+        undefined;
+      let threadParentName = threadChannel?.parent?.name;
+      let threadParentType: ChannelType | undefined;
+      if (threadChannel && threadParentId) {
+        const parentInfo = await resolveDiscordChannelInfo(
+          client,
+          threadParentId,
+        );
+        threadParentName = threadParentName ?? parentInfo?.name;
+        threadParentType = parentInfo?.type;
+      }
       const threadName = threadChannel?.name;
       const configChannelName = threadParentName ?? channelName;
       const configChannelSlug = configChannelName
@@ -935,6 +985,7 @@ export function createDiscordMessageHandler(params: {
           channel: threadChannel,
           client,
           parentId: threadParentId,
+          parentType: threadParentType,
         });
         if (starter?.text) {
           const starterEnvelope = formatThreadStarterEnvelope({
@@ -1684,15 +1735,42 @@ async function deliverDiscordReply(params: {
 async function resolveDiscordChannelInfo(
   client: Client,
   channelId: string,
-): Promise<{ type: ChannelType; name?: string; topic?: string } | null> {
+): Promise<DiscordChannelInfo | null> {
+  const cached = DISCORD_CHANNEL_INFO_CACHE.get(channelId);
+  if (cached) {
+    if (cached.expiresAt > Date.now()) return cached.value;
+    DISCORD_CHANNEL_INFO_CACHE.delete(channelId);
+  }
   try {
     const channel = await client.fetchChannel(channelId);
-    if (!channel) return null;
+    if (!channel) {
+      DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
+        value: null,
+        expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
+      });
+      return null;
+    }
     const name = "name" in channel ? (channel.name ?? undefined) : undefined;
     const topic = "topic" in channel ? (channel.topic ?? undefined) : undefined;
-    return { type: channel.type, name, topic };
+    const parentId =
+      "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    const payload: DiscordChannelInfo = {
+      type: channel.type,
+      name,
+      topic,
+      parentId,
+    };
+    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
+      value: payload,
+      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_CACHE_TTL_MS,
+    });
+    return payload;
   } catch (err) {
     logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
+    DISCORD_CHANNEL_INFO_CACHE.set(channelId, {
+      value: null,
+      expiresAt: Date.now() + DISCORD_CHANNEL_INFO_NEGATIVE_CACHE_TTL_MS,
+    });
     return null;
   }
 }

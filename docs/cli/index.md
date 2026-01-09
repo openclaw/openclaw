@@ -377,7 +377,7 @@ Options:
 Clawdbot can surface provider usage/quota when OAuth/API creds are available.
 
 Surfaces:
-- `/status` (adds a short usage line when available)
+- `/status` (alias: `/usage`; adds a short usage line when available)
 - `clawdbot status --usage` (prints full provider breakdown)
 - macOS menu bar (Usage section under Context)
 
