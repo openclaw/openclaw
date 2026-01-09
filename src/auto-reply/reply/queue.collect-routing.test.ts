@@ -6,14 +6,20 @@ import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 
 function createRun(params: {
   prompt: string;
+  messageId?: string;
   originatingChannel?: FollowupRun["originatingChannel"];
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: number;
 }): FollowupRun {
   return {
     prompt: params.prompt,
+    messageId: params.messageId,
     enqueuedAt: Date.now(),
     originatingChannel: params.originatingChannel,
     originatingTo: params.originatingTo,
+    originatingAccountId: params.originatingAccountId,
+    originatingThreadId: params.originatingThreadId,
     run: {
       agentId: "agent",
       agentDir: "/tmp",
@@ -48,6 +54,7 @@ describe("followup queue deduplication", () => {
       key,
       createRun({
         prompt: "[Discord Guild #test channel id:123] Hello",
+        messageId: "m1",
         originatingChannel: "discord",
         originatingTo: "channel:123",
       }),
@@ -55,11 +62,12 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    // Second enqueue with same prompt should be deduplicated
+    // Second enqueue with same message id should be deduplicated
     const second = enqueueFollowupRun(
       key,
       createRun({
-        prompt: "[Discord Guild #test channel id:123] Hello",
+        prompt: "[Discord Guild #test channel id:123] Hello (dupe)",
+        messageId: "m1",
         originatingChannel: "discord",
         originatingTo: "channel:123",
       }),
@@ -67,11 +75,12 @@ describe("followup queue deduplication", () => {
     );
     expect(second).toBe(false);
 
-    // Third enqueue with different prompt should succeed
+    // Third enqueue with different message id should succeed
     const third = enqueueFollowupRun(
       key,
       createRun({
         prompt: "[Discord Guild #test channel id:123] World",
+        messageId: "m2",
         originatingChannel: "discord",
         originatingTo: "channel:123",
       }),
@@ -87,7 +96,7 @@ describe("followup queue deduplication", () => {
     );
   });
 
-  it("deduplicates across different providers using exact prompt match", async () => {
+  it("deduplicates exact prompt when routing matches and no message id", async () => {
     const key = `test-dedup-whatsapp-${Date.now()}`;
     const settings: QueueSettings = {
       mode: "collect",
@@ -131,6 +140,38 @@ describe("followup queue deduplication", () => {
       settings,
     );
     expect(third).toBe(true);
+  });
+
+  it("does not deduplicate across different providers without message id", async () => {
+    const key = `test-dedup-cross-provider-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "Same text",
+        originatingChannel: "whatsapp",
+        originatingTo: "+1234567890",
+      }),
+      settings,
+    );
+    expect(first).toBe(true);
+
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "Same text",
+        originatingChannel: "discord",
+        originatingTo: "channel:123",
+      }),
+      settings,
+    );
+    expect(second).toBe(true);
   });
 });
 

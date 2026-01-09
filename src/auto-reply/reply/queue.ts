@@ -27,6 +27,8 @@ export type QueueSettings = {
 };
 export type FollowupRun = {
   prompt: string;
+  /** Provider message ID, when available (for deduplication). */
+  messageId?: string;
   summaryLine?: string;
   enqueuedAt: number;
   /**
@@ -338,13 +340,27 @@ function getFollowupQueue(
   return created;
 }
 /**
- * Check if a prompt is already queued using exact match.
+ * Check if a run is already queued using a stable dedup key.
  */
-function isPromptAlreadyQueued(
-  prompt: string,
+function isRunAlreadyQueued(
+  run: FollowupRun,
   queue: FollowupQueueState,
 ): boolean {
-  return queue.items.some((item) => item.prompt === prompt);
+  const hasSameRouting = (item: FollowupRun) =>
+    item.originatingChannel === run.originatingChannel &&
+    item.originatingTo === run.originatingTo &&
+    item.originatingAccountId === run.originatingAccountId &&
+    item.originatingThreadId === run.originatingThreadId;
+
+  const messageId = run.messageId?.trim();
+  if (messageId) {
+    return queue.items.some(
+      (item) => item.messageId?.trim() === messageId && hasSameRouting(item),
+    );
+  }
+  return queue.items.some(
+    (item) => item.prompt === run.prompt && hasSameRouting(item),
+  );
 }
 
 export function enqueueFollowupRun(
@@ -353,13 +369,14 @@ export function enqueueFollowupRun(
   settings: QueueSettings,
 ): boolean {
   const queue = getFollowupQueue(key, settings);
-  queue.lastEnqueuedAt = Date.now();
-  queue.lastRun = run.run;
 
-  // Deduplicate: skip if the same prompt is already queued.
-  if (isPromptAlreadyQueued(run.prompt, queue)) {
+  // Deduplicate: skip if the same message is already queued.
+  if (isRunAlreadyQueued(run, queue)) {
     return false;
   }
+
+  queue.lastEnqueuedAt = Date.now();
+  queue.lastRun = run.run;
 
   const cap = queue.cap;
   if (cap > 0 && queue.items.length >= cap) {
