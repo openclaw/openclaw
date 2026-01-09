@@ -468,4 +468,22 @@ describe("Agent-specific sandbox config", () => {
       deny: ["edit"],
     });
   });
+
+  it("includes session_status in default sandbox allowlist", async () => {
+    const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+          },
+        },
+      },
+    };
+
+    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+    expect(sandbox.tools.allow).toContain("session_status");
+  });
 });

@@ -253,7 +253,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 ```json
 {
   "tools": {
-    "allow": ["sessions_list", "sessions_send", "sessions_history"],
+    "allow": ["sessions_list", "sessions_send", "sessions_history", "session_status"],
     "deny": ["bash", "write", "edit", "read", "browser"]
   }
 }
