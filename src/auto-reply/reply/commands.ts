@@ -219,16 +219,13 @@ function resolveModelAuthLabel(
   const providerKey = normalizeProviderId(resolved);
   const store = ensureAuthProfileStore();
   const profileOverride = sessionEntry?.authProfileOverride?.trim();
-  const lastGood = store.lastGood?.[providerKey] ?? store.lastGood?.[resolved];
   const order = resolveAuthProfileOrder({
     cfg,
     store,
     provider: providerKey,
     preferredProfile: profileOverride,
   });
-  const candidates = [profileOverride, lastGood, ...order].filter(
-    Boolean,
-  ) as string[];
+  const candidates = [profileOverride, ...order].filter(Boolean) as string[];
 
   for (const profileId of candidates) {
     const profile = store.profiles[profileId];
