@@ -1,16 +1,11 @@
 import { type Static, type TSchema, Type } from "@sinclair/typebox";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
-import { GATEWAY_AGENT_PROVIDER_VALUES } from "../../utils/message-provider.js";
 
 const NonEmptyString = Type.String({ minLength: 1 });
 const SessionLabelString = Type.String({
   minLength: 1,
   maxLength: SESSION_LABEL_MAX_LENGTH,
 });
-
-const AgentProviderSchema = Type.Union(
-  GATEWAY_AGENT_PROVIDER_VALUES.map((provider) => Type.Literal(provider)),
-);
 
 export const PresenceEntrySchema = Type.Object(
   {
@@ -230,7 +225,7 @@ export const AgentParamsSchema = Type.Object(
     sessionKey: Type.Optional(Type.String()),
     thinking: Type.Optional(Type.String()),
     deliver: Type.Optional(Type.Boolean()),
-    provider: Type.Optional(AgentProviderSchema),
+    provider: Type.Optional(Type.String()),
     timeout: Type.Optional(Type.Integer({ minimum: 0 })),
     lane: Type.Optional(Type.String()),
     extraSystemPrompt: Type.Optional(Type.String()),
