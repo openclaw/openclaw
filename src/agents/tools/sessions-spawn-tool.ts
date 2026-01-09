@@ -25,9 +25,9 @@ const SessionsSpawnToolSchema = Type.Object({
   label: Type.Optional(Type.String()),
   agentId: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
-  runTimeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   // Back-compat alias. Prefer runTimeoutSeconds.
-  timeoutSeconds: Type.Optional(Type.Integer({ minimum: 0 })),
+  timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
   cleanup: Type.Optional(
     Type.Union([Type.Literal("delete"), Type.Literal("keep")]),
   ),
