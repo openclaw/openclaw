@@ -484,6 +484,7 @@ const MSTeamsConfigSchema = z
     dmPolicy: DmPolicySchema.optional().default("pairing"),
     allowFrom: z.array(z.string()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
+    mediaAllowHosts: z.array(z.string()).optional(),
     requireMention: z.boolean().optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
@@ -564,6 +565,7 @@ const CommandsSchema = z
   .object({
     native: z.boolean().optional(),
     text: z.boolean().optional(),
+    restart: z.boolean().optional(),
     useAccessGroups: z.boolean().optional(),
   })
   .optional();
@@ -685,6 +687,7 @@ const RoutingSchema = z
             workspace: z.string().optional(),
             agentDir: z.string().optional(),
             model: z.string().optional(),
+            mentionPatterns: z.array(z.string()).optional(),
             subagents: z
               .object({
                 allowAgents: z.array(z.string()).optional(),
@@ -838,7 +841,9 @@ export const ClawdbotSchema = z.object({
           timeoutMs: z.number().int().nonnegative().optional(),
         })
         .optional(),
+      vars: z.record(z.string(), z.string()).optional(),
     })
+    .catchall(z.string())
     .optional(),
   identity: z
     .object({
@@ -936,7 +941,11 @@ export const ClawdbotSchema = z.object({
           z.string(),
           z.object({
             provider: z.string(),
-            mode: z.union([z.literal("api_key"), z.literal("oauth")]),
+            mode: z.union([
+              z.literal("api_key"),
+              z.literal("oauth"),
+              z.literal("token"),
+            ]),
             email: z.string().optional(),
           }),
         )
@@ -1324,6 +1333,8 @@ export const ClawdbotSchema = z.object({
           url: z.string().optional(),
           token: z.string().optional(),
           password: z.string().optional(),
+          sshTarget: z.string().optional(),
+          sshIdentity: z.string().optional(),
         })
         .optional(),
       reload: z

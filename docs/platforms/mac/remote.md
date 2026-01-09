@@ -5,7 +5,6 @@ read_when:
 ---
 # Remote Clawdbot (macOS ⇄ remote host)
 
-Updated: 2025-12-08
 
 This flow lets the macOS app act as a full remote control for a Clawdbot gateway running on another host (e.g. a Mac Studio). All features—health checks, Voice Wake forwarding, and Web Chat—reuse the same remote SSH configuration from *Settings → General*.
 

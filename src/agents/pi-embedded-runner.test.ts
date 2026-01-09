@@ -68,41 +68,45 @@ function createStubTool(name: string): AgentTool {
 }
 
 describe("splitSdkTools", () => {
+  // Tool names are now capitalized (Bash, Read, etc.) to bypass Anthropic OAuth blocking
   const tools = [
-    createStubTool("read"),
-    createStubTool("bash"),
-    createStubTool("edit"),
-    createStubTool("write"),
+    createStubTool("Read"),
+    createStubTool("Bash"),
+    createStubTool("Edit"),
+    createStubTool("Write"),
     createStubTool("browser"),
   ];
 
-  it("routes built-ins to custom tools when sandboxed", () => {
+  it("routes all tools to customTools when sandboxed", () => {
     const { builtInTools, customTools } = splitSdkTools({
       tools,
       sandboxEnabled: true,
     });
     expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
-      "read",
-      "bash",
-      "edit",
-      "write",
+      "Read",
+      "Bash",
+      "Edit",
+      "Write",
       "browser",
     ]);
   });
 
-  it("keeps built-ins as SDK tools when not sandboxed", () => {
+  it("routes all tools to customTools even when not sandboxed (for OAuth compatibility)", () => {
+    // All tools are now passed as customTools to bypass pi-coding-agent's
+    // built-in tool filtering, which expects lowercase names.
     const { builtInTools, customTools } = splitSdkTools({
       tools,
       sandboxEnabled: false,
     });
-    expect(builtInTools.map((tool) => tool.name)).toEqual([
-      "read",
-      "bash",
-      "edit",
-      "write",
+    expect(builtInTools).toEqual([]);
+    expect(customTools.map((tool) => tool.name)).toEqual([
+      "Read",
+      "Bash",
+      "Edit",
+      "Write",
+      "browser",
     ]);
-    expect(customTools.map((tool) => tool.name)).toEqual(["browser"]);
   });
 });
 

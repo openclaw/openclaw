@@ -29,9 +29,9 @@ describe("Agent-specific tool filtering", () => {
     });
 
     const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).toContain("write");
-    expect(toolNames).not.toContain("bash");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).toContain("Write");
+    expect(toolNames).not.toContain("Bash");
   });
 
   it("should apply agent-specific tool policy", () => {
@@ -63,10 +63,10 @@ describe("Agent-specific tool filtering", () => {
     });
 
     const toolNames = tools.map((t) => t.name);
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("bash");
-    expect(toolNames).not.toContain("write");
-    expect(toolNames).not.toContain("edit");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).not.toContain("Bash");
+    expect(toolNames).not.toContain("Write");
+    expect(toolNames).not.toContain("Edit");
   });
 
   it("should allow different tool policies for different agents", () => {
@@ -96,9 +96,9 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-main",
     });
     const mainToolNames = mainTools.map((t) => t.name);
-    expect(mainToolNames).toContain("bash");
-    expect(mainToolNames).toContain("write");
-    expect(mainToolNames).toContain("edit");
+    expect(mainToolNames).toContain("Bash");
+    expect(mainToolNames).toContain("Write");
+    expect(mainToolNames).toContain("Edit");
 
     // family agent: restricted
     const familyTools = createClawdbotCodingTools({
@@ -108,10 +108,10 @@ describe("Agent-specific tool filtering", () => {
       agentDir: "/tmp/agent-family",
     });
     const familyToolNames = familyTools.map((t) => t.name);
-    expect(familyToolNames).toContain("read");
-    expect(familyToolNames).not.toContain("bash");
-    expect(familyToolNames).not.toContain("write");
-    expect(familyToolNames).not.toContain("edit");
+    expect(familyToolNames).toContain("Read");
+    expect(familyToolNames).not.toContain("Bash");
+    expect(familyToolNames).not.toContain("Write");
+    expect(familyToolNames).not.toContain("Edit");
   });
 
   it("should prefer agent-specific tool policy over global", () => {
@@ -143,7 +143,7 @@ describe("Agent-specific tool filtering", () => {
     const toolNames = tools.map((t) => t.name);
     // Agent policy overrides global: browser is allowed again
     expect(toolNames).toContain("browser");
-    expect(toolNames).not.toContain("bash");
+    expect(toolNames).not.toContain("Bash");
     expect(toolNames).not.toContain("process");
   });
 
@@ -209,9 +209,9 @@ describe("Agent-specific tool filtering", () => {
     // Agent policy should be applied first, then sandbox
     // Agent allows only "read", sandbox allows ["read", "write", "bash"]
     // Result: only "read" (most restrictive wins)
-    expect(toolNames).toContain("read");
-    expect(toolNames).not.toContain("bash");
-    expect(toolNames).not.toContain("write");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).not.toContain("Bash");
+    expect(toolNames).not.toContain("Write");
   });
 
   it("should run bash synchronously when process is denied", async () => {
@@ -229,7 +229,7 @@ describe("Agent-specific tool filtering", () => {
       workspaceDir: "/tmp/test-main",
       agentDir: "/tmp/agent-main",
     });
-    const bash = tools.find((tool) => tool.name === "bash");
+    const bash = tools.find((tool) => tool.name === "Bash");
     expect(bash).toBeDefined();
 
     const result = await bash?.execute("call1", {

@@ -38,6 +38,7 @@ import {
 } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import { getChildLogger } from "../logging.js";
 import { mediaKindFromMime } from "../media/constants.js";
 import { detectMime, isGifMedia } from "../media/mime.js";
@@ -229,7 +230,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 5) * 1024 * 1024;
   const logger = getChildLogger({ module: "telegram-auto-reply" });
-  const mentionRegexes = buildMentionRegexes(cfg);
   let botHasTopicsEnabled: boolean | undefined;
   const resolveBotTopicsEnabled = async (ctx?: TelegramContext) => {
     const fromCtx = ctx?.me as { has_topics_enabled?: boolean } | undefined;
@@ -305,6 +305,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     storeAllowFrom: string[],
   ) => {
     const msg = primaryCtx.message;
+    recordProviderActivity({
+      provider: "telegram",
+      accountId: account.accountId,
+      direction: "inbound",
+    });
     const chatId = msg.chat.id;
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const messageThreadId = (msg as { message_thread_id?: number })
@@ -326,6 +331,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         id: peerId,
       },
     });
+    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const effectiveDmAllow = normalizeAllowFrom([
       ...(allowFrom ?? []),
       ...storeAllowFrom,
@@ -388,8 +394,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
                     first_name?: string;
                     last_name?: string;
                     username?: string;
+                    id?: number;
                   }
                 | undefined;
+              const telegramUserId = from?.id ? String(from.id) : candidate;
               const { code, created } = await upsertTelegramPairingRequest({
                 chatId: candidate,
                 username: from?.username,
@@ -410,6 +418,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
                   chatId,
                   [
                     "Clawdbot: access not configured.",
+                    "",
+                    `Your Telegram user id: ${telegramUserId}`,
                     "",
                     `Pairing code: ${code}`,
                     "",
@@ -480,6 +490,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(msg.text ?? msg.caption ?? "");
+    const effectiveWasMentioned = wasMentioned || shouldBypassMention;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
     if (isGroup && requireMention && canDetectMention) {
       if (!wasMentioned && !shouldBypassMention) {
@@ -586,7 +597,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ReplyToBody: replyTarget?.body,
       ReplyToSender: replyTarget?.sender,
       Timestamp: msg.date ? msg.date * 1000 : undefined,
-      WasMentioned: isGroup ? wasMentioned : undefined,
+      WasMentioned: isGroup ? effectiveWasMentioned : undefined,
       MediaPath: allMedia[0]?.path,
       MediaType: allMedia[0]?.contentType,
       MediaUrl: allMedia[0]?.path,

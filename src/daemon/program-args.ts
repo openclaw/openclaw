@@ -146,15 +146,16 @@ export async function resolveGatewayProgramArguments(params: {
   port: number;
   dev?: boolean;
   runtime?: GatewayRuntimePreference;
+  nodePath?: string;
 }): Promise<GatewayProgramArgs> {
   const gatewayArgs = ["gateway", "--port", String(params.port)];
   const execPath = process.execPath;
   const runtime = params.runtime ?? "auto";
 
   if (runtime === "node") {
-    const nodePath = isNodeRuntime(execPath)
-      ? execPath
-      : await resolveNodePath();
+    const nodePath =
+      params.nodePath ??
+      (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
       programArguments: [nodePath, cliEntrypointPath, ...gatewayArgs],

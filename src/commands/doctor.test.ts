@@ -94,6 +94,7 @@ const serviceIsLoaded = vi.fn().mockResolvedValue(false);
 const serviceStop = vi.fn().mockResolvedValue(undefined);
 const serviceRestart = vi.fn().mockResolvedValue(undefined);
 const serviceUninstall = vi.fn().mockResolvedValue(undefined);
+const callGateway = vi.fn().mockRejectedValue(new Error("gateway closed"));
 
 vi.mock("@clack/prompts", () => ({
   confirm,
@@ -132,6 +133,14 @@ vi.mock("../daemon/inspect.js", () => ({
 vi.mock("../daemon/program-args.js", () => ({
   resolveGatewayProgramArguments,
 }));
+
+vi.mock("../gateway/call.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/call.js")>();
+  return {
+    ...actual,
+    callGateway,
+  };
+});
 
 vi.mock("../process/exec.js", () => ({
   runExec,

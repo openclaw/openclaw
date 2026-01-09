@@ -13,6 +13,11 @@ describe("msteams inbound", () => {
       expect(stripMSTeamsMentionTags("<at>Bot</at> hi")).toBe("hi");
       expect(stripMSTeamsMentionTags("hi <at>Bot</at>")).toBe("hi");
     });
+
+    it("removes <at ...> tags with attributes", () => {
+      expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
+      expect(stripMSTeamsMentionTags('hi <at itemid="2">Bot</at>')).toBe("hi");
+    });
   });
 
   describe("normalizeMSTeamsConversationId", () => {

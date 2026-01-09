@@ -14,7 +14,7 @@ export function extractModelDirective(
   if (!body) return { cleaned: "", hasDirective: false };
 
   const modelMatch = body.match(
-    /(?:^|\s)\/model(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)?)?/i,
+    /(?:^|\s)\/models?(?=$|\s|:)\s*:?\s*([A-Za-z0-9_.:@-]+(?:\/[A-Za-z0-9_.:@-]+)?)?/i,
   );
 
   const aliases = (options?.aliases ?? [])
@@ -42,7 +42,7 @@ export function extractModelDirective(
   }
 
   const cleaned = match
-    ? body.replace(match[0], "").replace(/\s+/g, " ").trim()
+    ? body.replace(match[0], " ").replace(/\s+/g, " ").trim()
     : body.trim();
 
   return {

@@ -33,13 +33,27 @@ export async function setAnthropicApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setGeminiApiKey(key: string, agentDir?: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  upsertAuthProfile({
+    profileId: "google:default",
+    credential: {
+      type: "api_key",
+      provider: "google",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
 export function applyAuthProfileConfig(
   cfg: ClawdbotConfig,
   params: {
     profileId: string;
     provider: string;
-    mode: "api_key" | "oauth";
+    mode: "api_key" | "oauth" | "token";
     email?: string;
+    preferProfileFirst?: boolean;
   },
 ): ClawdbotConfig {
   const profiles = {
@@ -54,13 +68,23 @@ export function applyAuthProfileConfig(
   // Only maintain `auth.order` when the user explicitly configured it.
   // Default behavior: no explicit order -> resolveAuthProfileOrder can round-robin by lastUsed.
   const existingProviderOrder = cfg.auth?.order?.[params.provider];
+  const preferProfileFirst = params.preferProfileFirst ?? true;
+  const reorderedProviderOrder =
+    existingProviderOrder && preferProfileFirst
+      ? [
+          params.profileId,
+          ...existingProviderOrder.filter(
+            (profileId) => profileId !== params.profileId,
+          ),
+        ]
+      : existingProviderOrder;
   const order =
     existingProviderOrder !== undefined
       ? {
           ...cfg.auth?.order,
-          [params.provider]: existingProviderOrder.includes(params.profileId)
-            ? existingProviderOrder
-            : [...existingProviderOrder, params.profileId],
+          [params.provider]: reorderedProviderOrder?.includes(params.profileId)
+            ? reorderedProviderOrder
+            : [...(reorderedProviderOrder ?? []), params.profileId],
         }
       : cfg.auth?.order;
   return {

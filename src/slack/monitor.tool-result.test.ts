@@ -250,6 +250,39 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
   });
 
+  it("treats control commands as mentions for group bypass", async () => {
+    replyMock.mockResolvedValue({ text: "ok" });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "/elevated off",
+        ts: "123",
+        channel: "C1",
+        channel_type: "channel",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(replyMock).toHaveBeenCalledTimes(1);
+    expect(replyMock.mock.calls[0][0].WasMentioned).toBe(true);
+  });
+
   it("threads replies when incoming message is in a thread", async () => {
     replyMock.mockResolvedValue({ text: "thread reply" });
 
@@ -567,6 +600,9 @@ describe("monitorSlackProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Your Slack user id: U1",
+    );
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
       "Pairing code: PAIRCODE",
     );

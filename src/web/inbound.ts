@@ -14,8 +14,10 @@ import {
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { recordProviderActivity } from "../infra/provider-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
@@ -118,6 +120,25 @@ export async function monitorWebInbox(options: {
     { subject?: string; participants?: string[]; expires: number }
   >();
   const GROUP_META_TTL_MS = 5 * 60 * 1000; // 5 minutes
+  const lidLookup = sock.signalRepository?.lidMapping;
+
+  const resolveJidToE164 = async (
+    jid: string | null | undefined,
+  ): Promise<string | null> => {
+    if (!jid) return null;
+    const direct = jidToE164(jid);
+    if (direct) return direct;
+    if (!/(@lid|@hosted\.lid)$/.test(jid)) return null;
+    if (!lidLookup?.getPNForLID) return null;
+    try {
+      const pnJid = await lidLookup.getPNForLID(jid);
+      if (!pnJid) return null;
+      return jidToE164(pnJid);
+    } catch (err) {
+      logVerbose(`LID mapping lookup failed for ${jid}: ${String(err)}`);
+      return null;
+    }
+  };
 
   const getGroupMeta = async (jid: string) => {
     const cached = groupMetaCache.get(jid);
@@ -125,9 +146,14 @@ export async function monitorWebInbox(options: {
     try {
       const meta = await sock.groupMetadata(jid);
       const participants =
-        meta.participants
-          ?.map((p) => jidToE164(p.id) ?? p.id)
-          .filter(Boolean) ?? [];
+        (
+          await Promise.all(
+            meta.participants?.map(async (p) => {
+              const mapped = await resolveJidToE164(p.id);
+              return mapped ?? p.id;
+            }) ?? [],
+          )
+        ).filter(Boolean) ?? [];
       const entry = {
         subject: meta.subject,
         participants,
@@ -147,6 +173,11 @@ export async function monitorWebInbox(options: {
   }) => {
     if (upsert.type !== "notify" && upsert.type !== "append") return;
     for (const msg of upsert.messages ?? []) {
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "inbound",
+      });
       const id = msg.key?.id ?? undefined;
       // De-dupe on message id; Baileys can emit retries.
       if (id && seen.has(id)) continue;
@@ -159,12 +190,12 @@ export async function monitorWebInbox(options: {
         continue;
       const group = isJidGroup(remoteJid);
       const participantJid = msg.key?.participant ?? undefined;
-      const from = group ? remoteJid : jidToE164(remoteJid);
+      const from = group ? remoteJid : await resolveJidToE164(remoteJid);
       // Skip if we still can't resolve an id to key conversation
       if (!from) continue;
       const senderE164 = group
         ? participantJid
-          ? jidToE164(participantJid)
+          ? await resolveJidToE164(participantJid)
           : null
         : from;
       let groupSubject: string | undefined;
@@ -280,14 +311,11 @@ export async function monitorWebInbox(options: {
                 );
                 try {
                   await sock.sendMessage(remoteJid, {
-                    text: [
-                      "Clawdbot: access not configured.",
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve --provider whatsapp <code>",
-                    ].join("\n"),
+                    text: buildPairingReply({
+                      provider: "whatsapp",
+                      idLine: `Your WhatsApp sender id: ${candidate}`,
+                      code,
+                    }),
                   });
                 } catch (err) {
                   logVerbose(
@@ -512,7 +540,7 @@ export async function monitorWebInbox(options: {
       text: string,
       mediaBuffer?: Buffer,
       mediaType?: string,
-      options?: ActiveWebSendOptions,
+      sendOptions?: ActiveWebSendOptions,
     ): Promise<{ messageId: string }> => {
       const jid = toWhatsappJid(to);
       let payload: AnyMessageContent;
@@ -530,7 +558,7 @@ export async function monitorWebInbox(options: {
             mimetype: mediaType,
           };
         } else if (mediaType.startsWith("video/")) {
-          const gifPlayback = options?.gifPlayback;
+          const gifPlayback = sendOptions?.gifPlayback;
           payload = {
             video: mediaBuffer,
             caption: text || undefined,
@@ -549,6 +577,11 @@ export async function monitorWebInbox(options: {
         payload = { text };
       }
       const result = await sock.sendMessage(jid, payload);
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "outbound",
+      });
       return { messageId: result?.key?.id ?? "unknown" };
     },
     /**
@@ -566,6 +599,11 @@ export async function monitorWebInbox(options: {
           values: poll.options,
           selectableCount: poll.maxSelections ?? 1,
         },
+      });
+      recordProviderActivity({
+        provider: "whatsapp",
+        accountId: options.accountId,
+        direction: "outbound",
       });
       return { messageId: result?.key?.id ?? "unknown" };
     },

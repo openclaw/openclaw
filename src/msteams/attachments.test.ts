@@ -108,6 +108,7 @@ describe("msteams attachments", () => {
           { contentType: "image/png", contentUrl: "https://x/img" },
         ],
         maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
@@ -133,6 +134,7 @@ describe("msteams attachments", () => {
           },
         ],
         maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
@@ -156,6 +158,7 @@ describe("msteams attachments", () => {
           },
         ],
         maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
@@ -173,6 +176,7 @@ describe("msteams attachments", () => {
           },
         ],
         maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
       });
 
       expect(media).toHaveLength(1);
@@ -202,11 +206,27 @@ describe("msteams attachments", () => {
         ],
         maxBytes: 1024 * 1024,
         tokenProvider: { getAccessToken: vi.fn(async () => "token") },
+        allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 
       expect(media).toHaveLength(1);
       expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("skips urls outside the allowlist", async () => {
+      const fetchMock = vi.fn();
+      const media = await downloadMSTeamsImageAttachments({
+        attachments: [
+          { contentType: "image/png", contentUrl: "https://evil.test/img" },
+        ],
+        maxBytes: 1024 * 1024,
+        allowHosts: ["graph.microsoft.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+      });
+
+      expect(media).toHaveLength(0);
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it("ignores non-image attachments", async () => {
@@ -216,6 +236,7 @@ describe("msteams attachments", () => {
           { contentType: "application/pdf", contentUrl: "https://x/x.pdf" },
         ],
         maxBytes: 1024 * 1024,
+        allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
       });
 

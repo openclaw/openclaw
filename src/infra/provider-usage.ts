@@ -129,6 +129,16 @@ const usageProviders: UsageProviderId[] = [
   "zai",
 ];
 
+export function resolveUsageProviderId(
+  provider?: string | null,
+): UsageProviderId | undefined {
+  if (!provider) return undefined;
+  const normalized = normalizeProviderId(provider);
+  return usageProviders.includes(normalized as UsageProviderId)
+    ? (normalized as UsageProviderId)
+    : undefined;
+}
+
 const ignoredErrors = new Set([
   "No credentials",
   "No token",

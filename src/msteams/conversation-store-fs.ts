@@ -1,16 +1,10 @@
-import crypto from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-
-import lockfile from "proper-lockfile";
-
-import { resolveStateDir } from "../config/paths.js";
 import type {
   MSTeamsConversationStore,
   MSTeamsConversationStoreEntry,
   StoredConversationReference,
 } from "./conversation-store.js";
+import { resolveMSTeamsStorePath } from "./storage.js";
+import { readJsonFile, withFileLock, writeJsonFile } from "./store-fs.js";
 
 type ConversationStoreData = {
   version: 1;
@@ -23,93 +17,6 @@ type ConversationStoreData = {
 const STORE_FILENAME = "msteams-conversations.json";
 const MAX_CONVERSATIONS = 1000;
 const CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
-const STORE_LOCK_OPTIONS = {
-  retries: {
-    retries: 10,
-    factor: 2,
-    minTimeout: 100,
-    maxTimeout: 10_000,
-    randomize: true,
-  },
-  stale: 30_000,
-} as const;
-
-function resolveStorePath(
-  env: NodeJS.ProcessEnv = process.env,
-  homedir?: () => string,
-): string {
-  const stateDir = homedir
-    ? resolveStateDir(env, homedir)
-    : resolveStateDir(env);
-  return path.join(stateDir, STORE_FILENAME);
-}
-
-function safeParseJson<T>(raw: string): T | null {
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function readJsonFile<T>(
-  filePath: string,
-  fallback: T,
-): Promise<{ value: T; exists: boolean }> {
-  try {
-    const raw = await fs.promises.readFile(filePath, "utf-8");
-    const parsed = safeParseJson<T>(raw);
-    if (parsed == null) return { value: fallback, exists: true };
-    return { value: parsed, exists: true };
-  } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "ENOENT") return { value: fallback, exists: false };
-    return { value: fallback, exists: false };
-  }
-}
-
-async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
-  const dir = path.dirname(filePath);
-  await fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-  const tmp = path.join(
-    dir,
-    `${path.basename(filePath)}.${crypto.randomUUID()}.tmp`,
-  );
-  await fs.promises.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, {
-    encoding: "utf-8",
-  });
-  await fs.promises.chmod(tmp, 0o600);
-  await fs.promises.rename(tmp, filePath);
-}
-
-async function ensureJsonFile(filePath: string, fallback: unknown) {
-  try {
-    await fs.promises.access(filePath);
-  } catch {
-    await writeJsonFile(filePath, fallback);
-  }
-}
-
-async function withFileLock<T>(
-  filePath: string,
-  fallback: unknown,
-  fn: () => Promise<T>,
-): Promise<T> {
-  await ensureJsonFile(filePath, fallback);
-  let release: (() => Promise<void>) | undefined;
-  try {
-    release = await lockfile.lock(filePath, STORE_LOCK_OPTIONS);
-    return await fn();
-  } finally {
-    if (release) {
-      try {
-        await release();
-      } catch {
-        // ignore unlock errors
-      }
-    }
-  }
-}
 
 function parseTimestamp(value: string | undefined): number | null {
   if (!value) return null;
@@ -167,11 +74,17 @@ export function createMSTeamsConversationStoreFs(params?: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   ttlMs?: number;
+  stateDir?: string;
+  storePath?: string;
 }): MSTeamsConversationStore {
-  const env = params?.env ?? process.env;
-  const homedir = params?.homedir ?? os.homedir;
   const ttlMs = params?.ttlMs ?? CONVERSATION_TTL_MS;
-  const filePath = resolveStorePath(env, homedir);
+  const filePath = resolveMSTeamsStorePath({
+    filename: STORE_FILENAME,
+    env: params?.env,
+    homedir: params?.homedir,
+    stateDir: params?.stateDir,
+    storePath: params?.storePath,
+  });
 
   const empty: ConversationStoreData = { version: 1, conversations: {} };
 

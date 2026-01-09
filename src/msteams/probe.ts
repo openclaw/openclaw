@@ -1,5 +1,6 @@
 import type { MSTeamsConfig } from "../config/types.js";
 import { formatUnknownError } from "./errors.js";
+import { loadMSTeamsSdkWithAuth } from "./sdk.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type ProbeMSTeamsResult = {
@@ -20,16 +21,8 @@ export async function probeMSTeams(
   }
 
   try {
-    const { MsalTokenProvider, getAuthConfigWithDefaults } = await import(
-      "@microsoft/agents-hosting"
-    );
-    const authConfig = getAuthConfigWithDefaults({
-      clientId: creds.appId,
-      clientSecret: creds.appPassword,
-      tenantId: creds.tenantId,
-    });
-
-    const tokenProvider = new MsalTokenProvider(authConfig);
+    const { sdk, authConfig } = await loadMSTeamsSdkWithAuth(creds);
+    const tokenProvider = new sdk.MsalTokenProvider(authConfig);
     await tokenProvider.getAccessToken("https://api.botframework.com/.default");
     return { ok: true, appId: creds.appId };
   } catch (err) {

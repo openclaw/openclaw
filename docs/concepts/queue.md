@@ -12,7 +12,7 @@ We now serialize command-based auto-replies (WhatsApp Web listener) through a ti
 - Serializing avoids competing for terminal/stdin, keeps logs readable, and reduces the chance of rate limits from upstream tools.
 
 ## How it works
-- [`src/process/command-queue.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/process/command-queue.ts) holds a lane-aware FIFO queue and drains each lane synchronously.
+- A lane-aware FIFO queue drains each lane synchronously.
 - `runEmbeddedPiAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
 - Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agent.maxConcurrent`.
 - When verbose logging is enabled, queued commands emit a short notice if they waited more than ~2s before starting.
@@ -74,4 +74,4 @@ Defaults: `debounceMs: 1000`, `cap: 20`, `drop: summarize`.
 
 ## Troubleshooting
 - If commands seem stuck, enable verbose logs and look for “queued for …ms” lines to confirm the queue is draining.
-- `enqueueCommand` exposes a lightweight `getQueueSize()` helper if you need to surface queue depth in future diagnostics.
+- If you need queue depth, enable verbose logs and watch for queue timing lines.

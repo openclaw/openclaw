@@ -19,6 +19,10 @@ describe("parseDurationMs", () => {
     expect(parseDurationMs("2h")).toBe(7_200_000);
   });
 
+  it("parses days suffix", () => {
+    expect(parseDurationMs("2d")).toBe(172_800_000);
+  });
+
   it("supports decimals", () => {
     expect(parseDurationMs("0.5s")).toBe(500);
   });

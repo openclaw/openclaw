@@ -45,6 +45,22 @@ function parseContentDispositionFileName(
   return undefined;
 }
 
+async function readErrorBodySnippet(
+  res: Response,
+  maxChars = 200,
+): Promise<string | undefined> {
+  try {
+    const text = await res.text();
+    if (!text) return undefined;
+    const collapsed = text.replace(/\s+/g, " ").trim();
+    if (!collapsed) return undefined;
+    if (collapsed.length <= maxChars) return collapsed;
+    return `${collapsed.slice(0, maxChars)}…`;
+  } catch {
+    return undefined;
+  }
+}
+
 async function loadWebMediaInternal(
   mediaUrl: string,
   options: WebMediaOptions = {},
@@ -85,9 +101,26 @@ async function loadWebMediaInternal(
     } catch {
       // ignore parse errors; leave undefined
     }
-    const res = await fetch(mediaUrl);
+    let res: Response;
+    try {
+      res = await fetch(mediaUrl);
+    } catch (err) {
+      throw new Error(`Failed to fetch media from ${mediaUrl}: ${String(err)}`);
+    }
     if (!res.ok || !res.body) {
-      throw new Error(`Failed to fetch media: HTTP ${res.status}`);
+      const statusText = res.statusText ? ` ${res.statusText}` : "";
+      const redirected =
+        res.url && res.url !== mediaUrl ? ` (redirected to ${res.url})` : "";
+      let detail = `HTTP ${res.status}${statusText}`;
+      if (!res.body) {
+        detail = `HTTP ${res.status}${statusText}; empty response body`;
+      } else if (!res.ok) {
+        const snippet = await readErrorBodySnippet(res);
+        if (snippet) detail += `; body: ${snippet}`;
+      }
+      throw new Error(
+        `Failed to fetch media from ${mediaUrl}${redirected}: ${detail}`,
+      );
     }
     const array = Buffer.from(await res.arrayBuffer());
     const headerFileName = parseContentDispositionFileName(

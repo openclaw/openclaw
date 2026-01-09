@@ -13,6 +13,7 @@ import {
   resolveIMessageAccount,
 } from "../../imessage/accounts.js";
 import { formatAge } from "../../infra/provider-summary.js";
+import { collectProvidersStatusIssues } from "../../infra/providers-status-issues.js";
 import { listChatProviders } from "../../providers/registry.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import {
@@ -74,6 +75,21 @@ export function formatGatewayProvidersStatusLines(
       if (typeof account.running === "boolean") {
         bits.push(account.running ? "running" : "stopped");
       }
+      if (typeof account.connected === "boolean") {
+        bits.push(account.connected ? "connected" : "disconnected");
+      }
+      const inboundAt =
+        typeof account.lastInboundAt === "number" &&
+        Number.isFinite(account.lastInboundAt)
+          ? account.lastInboundAt
+          : null;
+      const outboundAt =
+        typeof account.lastOutboundAt === "number" &&
+        Number.isFinite(account.lastOutboundAt)
+          ? account.lastOutboundAt
+          : null;
+      if (inboundAt) bits.push(`in:${formatAge(Date.now() - inboundAt)}`);
+      if (outboundAt) bits.push(`out:${formatAge(Date.now() - outboundAt)}`);
       if (typeof account.mode === "string" && account.mode.length > 0) {
         bits.push(`mode:${account.mode}`);
       }
@@ -98,12 +114,30 @@ export function formatGatewayProvidersStatusLines(
       ) {
         bits.push(`app:${account.appTokenSource}`);
       }
+      const application = account.application as
+        | { intents?: { messageContent?: string } }
+        | undefined;
+      const messageContent = application?.intents?.messageContent;
+      if (
+        typeof messageContent === "string" &&
+        messageContent.length > 0 &&
+        messageContent !== "enabled"
+      ) {
+        bits.push(`intents:content=${messageContent}`);
+      }
+      if (account.allowUnmentionedGroups === true) {
+        bits.push("groups:unmentioned");
+      }
       if (typeof account.baseUrl === "string" && account.baseUrl) {
         bits.push(`url:${account.baseUrl}`);
       }
       const probe = account.probe as { ok?: boolean } | undefined;
       if (probe && typeof probe.ok === "boolean") {
         bits.push(probe.ok ? "works" : "probe failed");
+      }
+      const audit = account.audit as { ok?: boolean } | undefined;
+      if (audit && typeof audit.ok === "boolean") {
+        bits.push(audit.ok ? "audit ok" : "audit failed");
       }
       if (typeof account.lastError === "string" && account.lastError) {
         bits.push(`error:${account.lastError}`);
@@ -150,6 +184,17 @@ export function formatGatewayProvidersStatusLines(
   }
 
   lines.push("");
+  const issues = collectProvidersStatusIssues(payload);
+  if (issues.length > 0) {
+    lines.push(theme.warn("Warnings:"));
+    for (const issue of issues) {
+      lines.push(
+        `- ${issue.provider} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
+      );
+    }
+    lines.push(`- Run: clawdbot doctor`);
+    lines.push("");
+  }
   lines.push(
     `Tip: ${formatDocsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
   );
@@ -329,10 +374,15 @@ export async function providersStatusCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const timeoutMs = Number(opts.timeout ?? 10_000);
+  const statusLabel = opts.probe
+    ? "Checking provider status (probe)…"
+    : "Checking provider status…";
+  const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
+  if (shouldLogStatus) runtime.log(statusLabel);
   try {
     const payload = await withProgress(
       {
-        label: "Checking provider status…",
+        label: statusLabel,
         indeterminate: true,
         enabled: opts.json !== true,
       },

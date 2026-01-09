@@ -1,13 +1,15 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { runClaudeCliAgent } from "../../agents/claude-cli-runner.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
   resolveSessionTranscriptPath,
@@ -16,8 +18,17 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import {
+  emitAgentEvent,
+  registerAgentRunContext,
+} from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  estimateUsageCost,
+  formatTokenCount,
+  formatUsd,
+  resolveModelCostConfig,
+} from "../../utils/usage-format.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
@@ -47,6 +58,7 @@ import type { TypingController } from "./typing.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 
 const isBunFetchSocketError = (message?: string) =>
   Boolean(message && BUN_FETCH_SOCKET_ERROR_RE.test(message));
@@ -59,6 +71,82 @@ const formatBunFetchSocketError = (message: string) => {
     trimmed || "Unknown error",
     "```",
   ].join("\n");
+};
+
+const formatResponseUsageLine = (params: {
+  usage?: NormalizedUsage;
+  showCost: boolean;
+  costConfig?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+}): string | null => {
+  const usage = params.usage;
+  if (!usage) return null;
+  const input = usage.input;
+  const output = usage.output;
+  if (typeof input !== "number" && typeof output !== "number") return null;
+  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const outputLabel =
+    typeof output === "number" ? formatTokenCount(output) : "?";
+  const cost =
+    params.showCost && typeof input === "number" && typeof output === "number"
+      ? estimateUsageCost({
+          usage: {
+            input,
+            output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+          },
+          cost: params.costConfig,
+        })
+      : undefined;
+  const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const suffix = costLabel ? ` · est ${costLabel}` : "";
+  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+};
+
+const appendUsageLine = (
+  payloads: ReplyPayload[],
+  line: string,
+): ReplyPayload[] => {
+  let index = -1;
+  for (let i = payloads.length - 1; i >= 0; i -= 1) {
+    if (payloads[i]?.text) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return [...payloads, { text: line }];
+  const existing = payloads[index];
+  const existingText = existing.text ?? "";
+  const separator = existingText.endsWith("\n") ? "" : "\n";
+  const next = {
+    ...existing,
+    text: `${existingText}${separator}${line}`,
+  };
+  const updated = payloads.slice();
+  updated[index] = next;
+  return updated;
+};
+
+const withTimeout = async <T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutError: Error,
+): Promise<T> => {
+  if (!timeoutMs || timeoutMs <= 0) return promise;
+  let timer: NodeJS.Timeout | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(timeoutError), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 };
 
 export async function runReplyAgent(params: {
@@ -144,7 +232,12 @@ export async function runReplyAgent(params: {
   const pendingStreamedPayloadKeys = new Set<string>();
   const pendingBlockTasks = new Set<Promise<void>>();
   const pendingToolTasks = new Set<Promise<void>>();
+  let blockReplyChain: Promise<void> = Promise.resolve();
+  let blockReplyAborted = false;
+  let didLogBlockReplyAbort = false;
   let didStreamBlockReply = false;
+  const blockReplyTimeoutMs =
+    opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
   const buildPayloadKey = (payload: ReplyPayload) => {
     const text = payload.text?.trim() ?? "";
     const mediaList = payload.mediaUrls?.length
@@ -168,6 +261,7 @@ export async function runReplyAgent(params: {
     replyToChannel,
   );
   const applyReplyToMode = createReplyToModeFilter(replyToMode);
+  const cfg = followupRun.run.config;
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(
@@ -219,6 +313,7 @@ export async function runReplyAgent(params: {
 
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
+  let responseUsageLine: string | undefined;
   try {
     const runId = crypto.randomUUID();
     if (sessionKey) {
@@ -235,8 +330,61 @@ export async function runReplyAgent(params: {
         cfg: followupRun.run.config,
         provider: followupRun.run.provider,
         model: followupRun.run.model,
-        run: (provider, model) =>
-          runEmbeddedPiAgent({
+        run: (provider, model) => {
+          if (provider === "claude-cli") {
+            const startedAt = Date.now();
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: {
+                phase: "start",
+                startedAt,
+              },
+            });
+            return runClaudeCliAgent({
+              sessionId: followupRun.run.sessionId,
+              sessionKey,
+              sessionFile: followupRun.run.sessionFile,
+              workspaceDir: followupRun.run.workspaceDir,
+              config: followupRun.run.config,
+              prompt: commandBody,
+              provider,
+              model,
+              thinkLevel: followupRun.run.thinkLevel,
+              timeoutMs: followupRun.run.timeoutMs,
+              runId,
+              extraSystemPrompt: followupRun.run.extraSystemPrompt,
+              ownerNumbers: followupRun.run.ownerNumbers,
+              claudeSessionId:
+                sessionEntry?.claudeCliSessionId?.trim() || undefined,
+            })
+              .then((result) => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "end",
+                    startedAt,
+                    endedAt: Date.now(),
+                  },
+                });
+                return result;
+              })
+              .catch((err) => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: err instanceof Error ? err.message : String(err),
+                  },
+                });
+                throw err;
+              });
+          }
+          return runEmbeddedPiAgent({
             sessionId: followupRun.run.sessionId,
             sessionKey,
             messageProvider:
@@ -367,16 +515,49 @@ export async function runReplyAgent(params: {
                     ) {
                       return;
                     }
+                    if (blockReplyAborted) return;
                     pendingStreamedPayloadKeys.add(payloadKey);
-                    const task = (async () => {
-                      await typingSignals.signalTextDelta(taggedPayload.text);
-                      await opts.onBlockReply?.(blockPayload);
-                    })()
-                      .then(() => {
+                    void typingSignals
+                      .signalTextDelta(taggedPayload.text)
+                      .catch((err) => {
+                        logVerbose(
+                          `block reply typing signal failed: ${String(err)}`,
+                        );
+                      });
+                    const timeoutError = new Error(
+                      `block reply delivery timed out after ${blockReplyTimeoutMs}ms`,
+                    );
+                    const abortController = new AbortController();
+                    blockReplyChain = blockReplyChain
+                      .then(async () => {
+                        if (blockReplyAborted) return false;
+                        await withTimeout(
+                          opts.onBlockReply?.(blockPayload, {
+                            abortSignal: abortController.signal,
+                            timeoutMs: blockReplyTimeoutMs,
+                          }) ?? Promise.resolve(),
+                          blockReplyTimeoutMs,
+                          timeoutError,
+                        );
+                        return true;
+                      })
+                      .then((didSend) => {
+                        if (!didSend) return;
                         streamedPayloadKeys.add(payloadKey);
                         didStreamBlockReply = true;
                       })
                       .catch((err) => {
+                        if (err === timeoutError) {
+                          abortController.abort();
+                          blockReplyAborted = true;
+                          if (!didLogBlockReplyAbort) {
+                            didLogBlockReplyAbort = true;
+                            logVerbose(
+                              `block reply delivery timed out after ${blockReplyTimeoutMs}ms; skipping remaining block replies to preserve ordering`,
+                            );
+                          }
+                          return;
+                        }
                         logVerbose(
                           `block reply delivery failed: ${String(err)}`,
                         );
@@ -384,6 +565,7 @@ export async function runReplyAgent(params: {
                       .finally(() => {
                         pendingStreamedPayloadKeys.delete(payloadKey);
                       });
+                    const task = blockReplyChain;
                     pendingBlockTasks.add(task);
                     void task.finally(() => pendingBlockTasks.delete(task));
                   }
@@ -429,7 +611,8 @@ export async function runReplyAgent(params: {
                   pendingToolTasks.add(task);
                 }
               : undefined,
-          }),
+          });
+        },
       });
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
@@ -546,10 +729,10 @@ export async function runReplyAgent(params: {
       })
       .filter(isRenderablePayload);
 
-    // Drop final payloads if block streaming is enabled and we already streamed
-    // block replies. Tool-sent duplicates are filtered below.
+    // Drop final payloads only when block streaming succeeded end-to-end.
+    // If streaming aborted (e.g., timeout), fall back to final payloads.
     const shouldDropFinalPayloads =
-      blockStreamingEnabled && didStreamBlockReply;
+      blockStreamingEnabled && didStreamBlockReply && !blockReplyAborted;
     const messagingToolSentTexts = runResult.messagingToolSentTexts ?? [];
     const messagingToolSentTargets = runResult.messagingToolSentTargets ?? [];
     const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
@@ -584,20 +767,24 @@ export async function runReplyAgent(params: {
       await typingSignals.signalRunStart();
     }
 
-    if (sessionStore && sessionKey) {
-      const usage = runResult.meta.agentMeta?.usage;
-      const modelUsed =
-        runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const providerUsed =
-        runResult.meta.agentMeta?.provider ??
-        fallbackProvider ??
-        followupRun.run.provider;
-      const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+    const usage = runResult.meta.agentMeta?.usage;
+    const modelUsed =
+      runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+    const providerUsed =
+      runResult.meta.agentMeta?.provider ??
+      fallbackProvider ??
+      followupRun.run.provider;
+    const cliSessionId =
+      providerUsed === "claude-cli"
+        ? runResult.meta.agentMeta?.sessionId?.trim()
+        : undefined;
+    const contextTokensUsed =
+      agentCfgContextTokens ??
+      lookupContextTokens(modelUsed) ??
+      sessionEntry?.contextTokens ??
+      DEFAULT_CONTEXT_TOKENS;
 
+    if (sessionStore && sessionKey) {
       if (hasNonzeroUsage(usage)) {
         const entry = sessionEntry ?? sessionStore[sessionKey];
         if (entry) {
@@ -616,6 +803,9 @@ export async function runReplyAgent(params: {
             contextTokens: contextTokensUsed ?? entry.contextTokens,
             updatedAt: Date.now(),
           };
+          if (cliSessionId) {
+            nextEntry.claudeCliSessionId = cliSessionId;
+          }
           sessionStore[sessionKey] = nextEntry;
           if (storePath) {
             await saveSessionStore(storePath, sessionStore);
@@ -629,12 +819,36 @@ export async function runReplyAgent(params: {
             modelProvider: providerUsed ?? entry.modelProvider,
             model: modelUsed ?? entry.model,
             contextTokens: contextTokensUsed ?? entry.contextTokens,
+            claudeCliSessionId: cliSessionId ?? entry.claudeCliSessionId,
           };
           if (storePath) {
             await saveSessionStore(storePath, sessionStore);
           }
         }
       }
+    }
+
+    const responseUsageEnabled =
+      (sessionEntry?.responseUsage ??
+        (sessionKey
+          ? sessionStore?.[sessionKey]?.responseUsage
+          : undefined)) === "on";
+    if (responseUsageEnabled && hasNonzeroUsage(usage)) {
+      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const showCost = authMode === "api-key";
+      const costConfig = showCost
+        ? resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+          })
+        : undefined;
+      const formatted = formatResponseUsageLine({
+        usage,
+        showCost,
+        costConfig,
+      });
+      if (formatted) responseUsageLine = formatted;
     }
 
     // If verbose is enabled and this is a new session, prepend a session hint.
@@ -659,6 +873,9 @@ export async function runReplyAgent(params: {
         { text: `🧭 New session: ${followupRun.run.sessionId}` },
         ...finalPayloads,
       ];
+    }
+    if (responseUsageLine) {
+      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
     return finalizeWithFollowup(

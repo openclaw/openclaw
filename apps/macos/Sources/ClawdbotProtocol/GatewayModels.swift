@@ -664,19 +664,22 @@ public struct SessionsListParams: Codable, Sendable {
     public let includeglobal: Bool?
     public let includeunknown: Bool?
     public let spawnedby: String?
+    public let agentid: String?
 
     public init(
         limit: Int?,
         activeminutes: Int?,
         includeglobal: Bool?,
         includeunknown: Bool?,
-        spawnedby: String?
+        spawnedby: String?,
+        agentid: String?
     ) {
         self.limit = limit
         self.activeminutes = activeminutes
         self.includeglobal = includeglobal
         self.includeunknown = includeunknown
         self.spawnedby = spawnedby
+        self.agentid = agentid
     }
     private enum CodingKeys: String, CodingKey {
         case limit
@@ -684,6 +687,7 @@ public struct SessionsListParams: Codable, Sendable {
         case includeglobal = "includeGlobal"
         case includeunknown = "includeUnknown"
         case spawnedby = "spawnedBy"
+        case agentid = "agentId"
     }
 }
 
@@ -692,6 +696,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let thinkinglevel: AnyCodable?
     public let verboselevel: AnyCodable?
     public let reasoninglevel: AnyCodable?
+    public let responseusage: AnyCodable?
     public let elevatedlevel: AnyCodable?
     public let model: AnyCodable?
     public let spawnedby: AnyCodable?
@@ -703,6 +708,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         thinkinglevel: AnyCodable?,
         verboselevel: AnyCodable?,
         reasoninglevel: AnyCodable?,
+        responseusage: AnyCodable?,
         elevatedlevel: AnyCodable?,
         model: AnyCodable?,
         spawnedby: AnyCodable?,
@@ -713,6 +719,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.thinkinglevel = thinkinglevel
         self.verboselevel = verboselevel
         self.reasoninglevel = reasoninglevel
+        self.responseusage = responseusage
         self.elevatedlevel = elevatedlevel
         self.model = model
         self.spawnedby = spawnedby
@@ -724,6 +731,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case thinkinglevel = "thinkingLevel"
         case verboselevel = "verboseLevel"
         case reasoninglevel = "reasoningLevel"
+        case responseusage = "responseUsage"
         case elevatedlevel = "elevatedLevel"
         case model
         case spawnedby = "spawnedBy"
@@ -1097,6 +1105,51 @@ public struct WebLoginWaitParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case timeoutms = "timeoutMs"
         case accountid = "accountId"
+    }
+}
+
+public struct AgentSummary: Codable, Sendable {
+    public let id: String
+    public let name: String?
+
+    public init(
+        id: String,
+        name: String?
+    ) {
+        self.id = id
+        self.name = name
+    }
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case name
+    }
+}
+
+public struct AgentsListParams: Codable, Sendable {
+}
+
+public struct AgentsListResult: Codable, Sendable {
+    public let defaultid: String
+    public let mainkey: String
+    public let scope: AnyCodable
+    public let agents: [AgentSummary]
+
+    public init(
+        defaultid: String,
+        mainkey: String,
+        scope: AnyCodable,
+        agents: [AgentSummary]
+    ) {
+        self.defaultid = defaultid
+        self.mainkey = mainkey
+        self.scope = scope
+        self.agents = agents
+    }
+    private enum CodingKeys: String, CodingKey {
+        case defaultid = "defaultId"
+        case mainkey = "mainKey"
+        case scope
+        case agents
     }
 }
 

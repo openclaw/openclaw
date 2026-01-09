@@ -7,14 +7,14 @@ read_when:
 
 # Logging
 
+For a user-facing overview (CLI + Control UI + config), see [/logging](/logging).
+
 Clawdbot has two log “surfaces”:
 
 - **Console output** (what you see in the terminal / Debug UI).
-- **File logs** (JSON lines) written by the internal logger.
+- **File logs** (JSON lines) written by the gateway logger.
 
 ## File-based logger
-
-Clawdbot uses a file logger backed by `tslog` ([`src/logging.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/logging.ts)).
 
 - Default rolling log file is under `/tmp/clawdbot/` (one file per day): `clawdbot-YYYY-MM-DD.log`
 - The log file path and level can be configured via `~/.clawdbot/clawdbot.json`:
@@ -40,9 +40,8 @@ clawdbot logs --follow
 
 ## Console capture
 
-The CLI entrypoint enables console capture ([`src/index.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/index.ts) calls `enableConsoleCapture()`).
-That means every `console.log/info/warn/error/debug/trace` is also written into the file logs,
-while still behaving normally on stdout/stderr.
+The CLI captures `console.log/info/warn/error/debug/trace` and writes them to file logs,
+while still printing to stdout/stderr.
 
 You can tune console verbosity independently via:
 
@@ -94,13 +93,8 @@ clawdbot gateway --verbose --ws-log full
 
 ## Console formatting (subsystem logging)
 
-Clawdbot formats console logs via a small wrapper on top of the existing stack:
-
-- **tslog** for structured file logs ([`src/logging.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/logging.ts))
-- **chalk** for colors ([`src/globals.ts`](https://github.com/clawdbot/clawdbot/blob/main/src/globals.ts))
-
 The console formatter is **TTY-aware** and prints consistent, prefixed lines.
-Subsystem loggers are created via `createSubsystemLogger("gateway")`.
+Subsystem loggers keep output grouped and scannable.
 
 Behavior:
 

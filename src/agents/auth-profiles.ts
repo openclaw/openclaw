@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -47,13 +48,29 @@ export type ApiKeyCredential = {
   email?: string;
 };
 
+export type TokenCredential = {
+  /**
+   * Static bearer-style token (often OAuth access token / PAT).
+   * Not refreshable by clawdbot (unlike `type: "oauth"`).
+   */
+  type: "token";
+  provider: string;
+  token: string;
+  /** Optional expiry timestamp (ms since epoch). */
+  expires?: number;
+  email?: string;
+};
+
 export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: OAuthProvider;
   email?: string;
 };
 
-export type AuthProfileCredential = ApiKeyCredential | OAuthCredential;
+export type AuthProfileCredential =
+  | ApiKeyCredential
+  | TokenCredential
+  | OAuthCredential;
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
@@ -219,7 +236,13 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
   for (const [key, value] of Object.entries(record)) {
     if (!value || typeof value !== "object") continue;
     const typed = value as Partial<AuthProfileCredential>;
-    if (typed.type !== "api_key" && typed.type !== "oauth") continue;
+    if (
+      typed.type !== "api_key" &&
+      typed.type !== "oauth" &&
+      typed.type !== "token"
+    ) {
+      continue;
+    }
     entries[key] = {
       ...typed,
       provider: typed.provider ?? (key as OAuthProvider),
@@ -237,7 +260,13 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
   for (const [key, value] of Object.entries(profiles)) {
     if (!value || typeof value !== "object") continue;
     const typed = value as Partial<AuthProfileCredential>;
-    if (typed.type !== "api_key" && typed.type !== "oauth") continue;
+    if (
+      typed.type !== "api_key" &&
+      typed.type !== "oauth" &&
+      typed.type !== "token"
+    ) {
+      continue;
+    }
     if (!typed.provider) continue;
     normalized[key] = typed as AuthProfileCredential;
   }
@@ -276,10 +305,23 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
 }
 
 /**
- * Read Anthropic OAuth credentials from Claude CLI's credential file.
- * Claude CLI stores credentials at ~/.claude/.credentials.json
+ * Read Anthropic OAuth credentials from Claude CLI's keychain entry (macOS)
+ * or credential file (Linux/Windows).
+ *
+ * On macOS, Claude Code stores credentials in keychain "Claude Code-credentials".
+ * On Linux/Windows, it uses ~/.claude/.credentials.json
  */
-function readClaudeCliCredentials(): OAuthCredential | null {
+function readClaudeCliCredentials(options?: {
+  allowKeychainPrompt?: boolean;
+}): TokenCredential | null {
+  if (process.platform === "darwin" && options?.allowKeychainPrompt !== false) {
+    const keychainCreds = readClaudeCliKeychainCredentials();
+    if (keychainCreds) {
+      log.info("read anthropic credentials from claude cli keychain");
+      return keychainCreds;
+    }
+  }
+
   const credPath = path.join(
     resolveUserPath("~"),
     CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
@@ -292,20 +334,49 @@ function readClaudeCliCredentials(): OAuthCredential | null {
   if (!claudeOauth || typeof claudeOauth !== "object") return null;
 
   const accessToken = claudeOauth.accessToken;
-  const refreshToken = claudeOauth.refreshToken;
   const expiresAt = claudeOauth.expiresAt;
 
   if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
   if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
 
   return {
-    type: "oauth",
+    type: "token",
     provider: "anthropic",
-    access: accessToken,
-    refresh: refreshToken,
+    token: accessToken,
     expires: expiresAt,
   };
+}
+
+/**
+ * Read Claude Code credentials from macOS keychain.
+ * Uses the `security` CLI to access keychain without native dependencies.
+ */
+function readClaudeCliKeychainCredentials(): TokenCredential | null {
+  try {
+    const result = execSync(
+      'security find-generic-password -s "Claude Code-credentials" -w',
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const data = JSON.parse(result.trim());
+    const claudeOauth = data?.claudeAiOauth;
+    if (!claudeOauth || typeof claudeOauth !== "object") return null;
+
+    const accessToken = claudeOauth.accessToken;
+    const expiresAt = claudeOauth.expiresAt;
+
+    if (typeof accessToken !== "string" || !accessToken) return null;
+    if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
+
+    return {
+      type: "token",
+      provider: "anthropic",
+      token: accessToken,
+      expires: expiresAt,
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -367,6 +438,20 @@ function shallowEqualOAuthCredentials(
   );
 }
 
+function shallowEqualTokenCredentials(
+  a: TokenCredential | undefined,
+  b: TokenCredential,
+): boolean {
+  if (!a) return false;
+  if (a.type !== "token") return false;
+  return (
+    a.provider === b.provider &&
+    a.token === b.token &&
+    a.expires === b.expires &&
+    a.email === b.email
+  );
+}
+
 /**
  * Sync OAuth credentials from external CLI tools (Claude CLI, Codex CLI) into the store.
  * This allows clawdbot to use the same credentials as these tools without requiring
@@ -374,33 +459,39 @@ function shallowEqualOAuthCredentials(
  *
  * Returns true if any credentials were updated.
  */
-function syncExternalCliCredentials(store: AuthProfileStore): boolean {
+function syncExternalCliCredentials(
+  store: AuthProfileStore,
+  options?: { allowKeychainPrompt?: boolean },
+): boolean {
   let mutated = false;
   const now = Date.now();
 
   // Sync from Claude CLI
-  const claudeCreds = readClaudeCliCredentials();
+  const claudeCreds = readClaudeCliCredentials(options);
   if (claudeCreds) {
     const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    const existingToken = existing?.type === "token" ? existing : undefined;
 
     // Update if: no existing profile, existing is not oauth, or CLI has newer/valid token
     const shouldUpdate =
-      !existingOAuth ||
-      existingOAuth.provider !== "anthropic" ||
-      existingOAuth.expires <= now ||
-      (claudeCreds.expires > now &&
-        claudeCreds.expires > existingOAuth.expires);
+      !existingToken ||
+      existingToken.provider !== "anthropic" ||
+      (existingToken.expires ?? 0) <= now ||
+      ((claudeCreds.expires ?? 0) > now &&
+        (claudeCreds.expires ?? 0) > (existingToken.expires ?? 0));
 
     if (
       shouldUpdate &&
-      !shallowEqualOAuthCredentials(existingOAuth, claudeCreds)
+      !shallowEqualTokenCredentials(existingToken, claudeCreds)
     ) {
       store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
       mutated = true;
       log.info("synced anthropic credentials from claude cli", {
         profileId: CLAUDE_CLI_PROFILE_ID,
-        expires: new Date(claudeCreds.expires).toISOString(),
+        expires:
+          typeof claudeCreds.expires === "number"
+            ? new Date(claudeCreds.expires).toISOString()
+            : "unknown",
       });
     }
   }
@@ -463,6 +554,16 @@ export function loadAuthProfileStore(): AuthProfileStore {
           key: cred.key,
           ...(cred.email ? { email: cred.email } : {}),
         };
+      } else if (cred.type === "token") {
+        store.profiles[profileId] = {
+          type: "token",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          token: cred.token,
+          ...(typeof cred.expires === "number"
+            ? { expires: cred.expires }
+            : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
       } else {
         store.profiles[profileId] = {
           type: "oauth",
@@ -486,13 +587,16 @@ export function loadAuthProfileStore(): AuthProfileStore {
   return store;
 }
 
-export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
+export function ensureAuthProfileStore(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
   if (asStore) {
     // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
+    const synced = syncExternalCliCredentials(asStore, options);
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -515,6 +619,16 @@ export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
           key: cred.key,
           ...(cred.email ? { email: cred.email } : {}),
         };
+      } else if (cred.type === "token") {
+        store.profiles[profileId] = {
+          type: "token",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          token: cred.token,
+          ...(typeof cred.expires === "number"
+            ? { expires: cred.expires }
+            : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
       } else {
         store.profiles[profileId] = {
           type: "oauth",
@@ -532,7 +646,7 @@ export function ensureAuthProfileStore(agentDir?: string): AuthProfileStore {
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store);
+  const syncedCli = syncExternalCliCredentials(store, options);
   const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
   if (shouldWrite) {
     saveJsonFile(authPath, store);
@@ -827,16 +941,17 @@ function orderProfilesByMode(
   // Then by lastUsed (oldest first = round-robin within type)
   const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
-    const typeScore = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
+    const typeScore =
+      type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
     const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
     return { profileId, typeScore, lastUsed };
   });
 
-  // Primary sort: type preference (oauth > api_key).
+  // Primary sort: type preference (oauth > token > api_key).
   // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .sort((a, b) => {
-      // First by type (oauth > api_key)
+      // First by type (oauth > token > api_key)
       if (a.typeScore !== b.typeScore) return a.typeScore - b.typeScore;
       // Then by lastUsed (oldest first)
       return a.lastUsed - b.lastUsed;
@@ -866,10 +981,26 @@ export async function resolveApiKeyForProfile(params: {
   if (!cred) return null;
   const profileConfig = cfg?.auth?.profiles?.[profileId];
   if (profileConfig && profileConfig.provider !== cred.provider) return null;
-  if (profileConfig && profileConfig.mode !== cred.type) return null;
+  if (profileConfig && profileConfig.mode !== cred.type) {
+    // Compatibility: treat "oauth" config as compatible with stored token profiles.
+    if (!(profileConfig.mode === "oauth" && cred.type === "token")) return null;
+  }
 
   if (cred.type === "api_key") {
     return { apiKey: cred.key, provider: cred.provider, email: cred.email };
+  }
+  if (cred.type === "token") {
+    const token = cred.token?.trim();
+    if (!token) return null;
+    if (
+      typeof cred.expires === "number" &&
+      Number.isFinite(cred.expires) &&
+      cred.expires > 0 &&
+      Date.now() >= cred.expires
+    ) {
+      return null;
+    }
+    return { apiKey: token, provider: cred.provider, email: cred.email };
   }
   if (Date.now() < cred.expires) {
     return {

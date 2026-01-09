@@ -6,62 +6,85 @@ read_when:
 ---
 # Cron jobs (Gateway scheduler)
 
-Cron runs inside the Gateway and schedules background work so Clawdbot can
-wake itself up, run isolated agent jobs, and deliver reminders on time.
+Cron is the Gateway’s built-in scheduler. It persists jobs, wakes the agent at
+the right time, and can optionally deliver output back to a chat.
 
-## Update checklist (internal)
-- [x] Audit cron + heartbeat behavior in code
-- [x] Rewrite cron doc as user-facing feature
-- [x] Update heartbeat docs + templates
-- [x] Update cron links in docs
-- [x] Update changelog
-- [x] Run full gate (lint/build/test/docs)
+If you want *“run this every morning”* or *“poke the agent in 20 minutes”*,
+cron is the mechanism.
 
-## What cron is
-- **Gateway-owned scheduler** that persists jobs under `~/.clawdbot/cron/`.
-- **Two execution modes**:
-  - **Main session jobs** enqueue `System:` events and rely on the heartbeat runner.
-  - **Isolated jobs** run a dedicated agent turn in `cron:<jobId>` sessions.
-- **Wakeups** are first-class: a job can trigger the next heartbeat or run it now.
+## TL;DR
+- Cron runs **inside the Gateway** (not inside the model).
+- Jobs persist under `~/.clawdbot/cron/` so restarts don’t lose schedules.
+- Two execution styles:
+  - **Main session**: enqueue a system event, then run on the next heartbeat.
+  - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, optionally deliver output.
+- Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 
-## When to use it
-- Recurring reminders: “every weekday at 7:30” or “every 2h.”
-- Background chores: summarize inboxes, check dashboards, watch logs.
-- Automation that should not pollute the main chat history.
-- Scheduled wakeups that drive the heartbeat pipeline.
+## Concepts
 
-## Schedules
+### Jobs
+A cron job is a stored record with:
+- a **schedule** (when it should run),
+- a **payload** (what it should do),
+- optional **delivery** (where output should be sent).
+
+Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
+In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
+
+### Schedules
 Cron supports three schedule kinds:
-- `at`: one-shot timestamp in ms.
+- `at`: one-shot timestamp (ms since epoch).
 - `every`: fixed interval (ms).
-- `cron`: 5-field cron expression, optional IANA timezone.
+- `cron`: 5-field cron expression with optional IANA timezone.
 
-Cron expressions use `croner` under the hood. If a timezone is omitted, the
-server’s local timezone is used.
+Cron expressions use `croner`. If a timezone is omitted, the Gateway host’s
+local timezone is used.
 
-## Job types
+### Main vs isolated execution
 
-### Main session jobs
+#### Main session jobs (system events)
 Main jobs enqueue a system event and optionally wake the heartbeat runner.
-They **must** use `payload.kind = "systemEvent"`.
+They must use `payload.kind = "systemEvent"`.
 
-- **`wakeMode: "next-heartbeat"`** (default): the event waits for the next
-  scheduled heartbeat.
-- **`wakeMode: "now"`**: the event triggers an immediate heartbeat run.
+- `wakeMode: "next-heartbeat"` (default): event waits for the next scheduled heartbeat.
+- `wakeMode: "now"`: event triggers an immediate heartbeat run.
 
-### Isolated jobs
-Isolated jobs run a dedicated agent turn in session `cron:<jobId>` and can
-optionally deliver a message.
+This is the best fit when you want the normal heartbeat prompt + main-session context.
+See [Heartbeat](/gateway/heartbeat).
+
+#### Isolated jobs (dedicated cron sessions)
+Isolated jobs run a dedicated agent turn in session `cron:<jobId>`.
 
 Key behaviors:
 - Prompt is prefixed with `[cron:<jobId> <job name>]` for traceability.
-- A summary is posted to the main session with prefix `Cron` (or
-  `isolation.postToMainPrefix`).
+- A summary is posted to the main session (prefix `Cron`, configurable).
 - `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
-- `payload.deliver: true` sends output to a provider; otherwise it stays internal.
+- If `payload.deliver: true`, output is delivered to a provider; otherwise it stays internal.
+
+Use isolated jobs for noisy, frequent, or “background chores” that shouldn’t spam
+your main chat history.
+
+### Delivery (provider + target)
+Isolated jobs can deliver output to a provider. The job payload can specify:
+- `provider`: `whatsapp` / `telegram` / `discord` / `slack` / `signal` / `imessage` / `last`
+- `to`: provider-specific recipient target
+
+If `provider` or `to` is omitted, cron can fall back to the main session’s “last route”
+(the last place the agent replied).
+
+#### Telegram delivery targets (topics / forum threads)
+Telegram supports forum topics via `message_thread_id`. For cron delivery, you can encode
+the topic/thread into the `to` field:
+
+- `-1001234567890` (chat id only)
+- `-1001234567890:topic:123` (preferred: explicit topic marker)
+- `-1001234567890:123` (shorthand: numeric suffix)
+
+Prefixed targets like `telegram:...` / `telegram:group:...` are also accepted:
+- `telegram:group:-1001234567890:topic:123`
 
 ## Storage & history
-- Job store: `~/.clawdbot/cron/jobs.json` (JSON, Gateway-managed).
+- Job store: `~/.clawdbot/cron/jobs.json` (Gateway-managed JSON).
 - Run history: `~/.clawdbot/cron/runs/<jobId>.jsonl` (JSONL, auto-pruned).
 - Override store path: `cron.store` in config.
 
@@ -70,16 +93,16 @@ Key behaviors:
 ```json5
 {
   cron: {
-    enabled: true,                // default true
+    enabled: true, // default true
     store: "~/.clawdbot/cron/jobs.json",
-    maxConcurrentRuns: 1           // default 1
+    maxConcurrentRuns: 1 // default 1
   }
 }
 ```
 
 Disable cron entirely:
 - `cron.enabled: false` (config)
-- or `CLAWDBOT_SKIP_CRON=1` (env)
+- `CLAWDBOT_SKIP_CRON=1` (env)
 
 ## CLI quickstart
 
@@ -106,6 +129,19 @@ clawdbot cron add \
   --to "+15551234567"
 ```
 
+Recurring isolated job (deliver to a Telegram topic):
+```bash
+clawdbot cron add \
+  --name "Nightly summary (topic)" \
+  --cron "0 22 * * *" \
+  --tz "America/Los_Angeles" \
+  --session isolated \
+  --message "Summarize today; send to the nightly topic." \
+  --deliver \
+  --provider telegram \
+  --to "-1001234567890:topic:123"
+```
+
 Manual run (debug):
 ```bash
 clawdbot cron run <jobId> --force
@@ -121,12 +157,19 @@ Immediate wake without creating a job:
 clawdbot wake --mode now --text "Next heartbeat: check battery."
 ```
 
-## API surface (Gateway)
+## Gateway API surface
 - `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`
 - `cron.run` (force or due), `cron.runs`
 - `wake` (enqueue system event + optional heartbeat)
 
-## Tips
-- Use **main session jobs** when you want the heartbeat prompt + existing context.
-- Use **isolated jobs** for noisy, frequent, or long-running work.
-- Keep messages short; cron turns are full agent runs and can burn tokens.
+## Troubleshooting
+
+### “Nothing runs”
+- Check cron is enabled: `cron.enabled` and `CLAWDBOT_SKIP_CRON`.
+- Check the Gateway is running continuously (cron runs inside the Gateway process).
+- For `cron` schedules: confirm timezone (`--tz`) vs the host timezone.
+
+### Telegram delivers to the wrong place
+- For forum topics, use `-100…:topic:<id>` so it’s explicit and unambiguous.
+- If you see `telegram:...` prefixes in logs or stored “last route” targets, that’s normal;
+  cron delivery accepts them and still parses topic IDs correctly.

@@ -19,6 +19,7 @@ import { normalizeGroupActivation } from "../../auto-reply/group-activation.js";
 import {
   normalizeReasoningLevel,
   normalizeThinkLevel,
+  normalizeUsageDisplay,
   normalizeVerboseLevel,
 } from "../../auto-reply/thinking.js";
 import { loadConfig } from "../../config/config.js";
@@ -234,6 +235,28 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       }
     }
 
+    if ("responseUsage" in p) {
+      const raw = p.responseUsage;
+      if (raw === null) {
+        delete next.responseUsage;
+      } else if (raw !== undefined) {
+        const normalized = normalizeUsageDisplay(String(raw));
+        if (!normalized) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              'invalid responseUsage (use "on"|"off")',
+            ),
+          );
+          return;
+        }
+        if (normalized === "off") delete next.responseUsage;
+        else next.responseUsage = normalized;
+      }
+    }
+
     if ("model" in p) {
       const raw = p.model;
       if (raw === null) {
@@ -276,6 +299,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           cfg,
           catalog,
           defaultProvider: resolvedDefault.provider,
+          defaultModel: resolvedDefault.model,
         });
         const key = modelKey(resolved.ref.provider, resolved.ref.model);
         if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
@@ -394,6 +418,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       thinkingLevel: entry?.thinkingLevel,
       verboseLevel: entry?.verboseLevel,
       reasoningLevel: entry?.reasoningLevel,
+      responseUsage: entry?.responseUsage,
       model: entry?.model,
       contextTokens: entry?.contextTokens,
       sendPolicy: entry?.sendPolicy,

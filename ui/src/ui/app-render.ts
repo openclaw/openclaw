@@ -26,6 +26,7 @@ import type {
   StatusSummary,
 } from "./types";
 import type {
+  ChatQueueItem,
   CronFormState,
   DiscordForm,
   IMessageForm,
@@ -60,6 +61,7 @@ import {
   saveSkillApiKey,
   updateSkillEdit,
   updateSkillEnabled,
+  type SkillMessage,
 } from "./controllers/skills";
 import { loadNodes } from "./controllers/nodes";
 import { loadChatHistory } from "./controllers/chat";
@@ -100,6 +102,7 @@ export type AppViewState = {
   chatStream: string | null;
   chatRunId: string | null;
   chatThinkingLevel: string | null;
+  chatQueue: ChatQueueItem[];
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
   configLoading: boolean;
@@ -166,6 +169,7 @@ export type AppViewState = {
   skillsError: string | null;
   skillsFilter: string;
   skillEdits: Record<string, string>;
+  skillMessages: Record<string, SkillMessage>;
   skillsBusyKey: string | null;
   debugLoading: boolean;
   debugStatus: StatusSummary | null;
@@ -196,6 +200,7 @@ export type AppViewState = {
   handleWhatsAppLogout: () => Promise<void>;
   handleTelegramSave: () => Promise<void>;
   handleSendChat: (messageOverride?: string, opts?: { restoreDraft?: boolean }) => Promise<void>;
+  removeQueuedMessage: (id: string) => void;
   resetToolStream: () => void;
   handleLogsScroll: (event: Event) => void;
   exportLogs: (lines: string[], label: string) => void;
@@ -353,6 +358,7 @@ export function renderApp(state: AppViewState) {
               limit: state.sessionsFilterLimit,
               includeGlobal: state.sessionsIncludeGlobal,
               includeUnknown: state.sessionsIncludeUnknown,
+              basePath: state.basePath,
               onFiltersChange: (next) => {
                 state.sessionsFilterActive = next.activeMinutes;
                 state.sessionsFilterLimit = next.limit;
@@ -391,13 +397,15 @@ export function renderApp(state: AppViewState) {
               error: state.skillsError,
               filter: state.skillsFilter,
               edits: state.skillEdits,
+              messages: state.skillMessages,
               busyKey: state.skillsBusyKey,
               onFilterChange: (next) => (state.skillsFilter = next),
-              onRefresh: () => loadSkills(state),
+              onRefresh: () => loadSkills(state, { clearMessages: true }),
               onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
               onEdit: (key, value) => updateSkillEdit(state, key, value),
               onSaveKey: (key) => saveSkillApiKey(state, key),
-              onInstall: (name, installId) => installSkill(state, name, installId),
+              onInstall: (skillKey, name, installId) =>
+                installSkill(state, skillKey, name, installId),
             })
           : nothing}
 
@@ -418,6 +426,7 @@ export function renderApp(state: AppViewState) {
                 state.chatStream = null;
                 state.chatStreamStartedAt = null;
                 state.chatRunId = null;
+                state.chatQueue = [];
                 state.resetToolStream();
                 state.resetChatScroll();
                 state.applySettings({
@@ -435,6 +444,7 @@ export function renderApp(state: AppViewState) {
               stream: state.chatStream,
               streamStartedAt: state.chatStreamStartedAt,
               draft: state.chatMessage,
+              queue: state.chatQueue,
               connected: state.connected,
               canSend: state.connected,
               disabledReason: chatDisabledReason,
@@ -449,6 +459,7 @@ export function renderApp(state: AppViewState) {
               },
               onDraftChange: (next) => (state.chatMessage = next),
               onSend: () => state.handleSendChat(),
+              onQueueRemove: (id) => state.removeQueuedMessage(id),
               onNewSession: () =>
                 state.handleSendChat("/new", { restoreDraft: true }),
             })

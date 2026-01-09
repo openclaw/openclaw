@@ -27,4 +27,20 @@ describe("mention helpers", () => {
     });
     expect(matchesMentionPatterns("CLAWD: hi", regexes)).toBe(true);
   });
+
+  it("uses per-agent mention patterns when configured", () => {
+    const regexes = buildMentionRegexes(
+      {
+        routing: {
+          groupChat: { mentionPatterns: ["\\bglobal\\b"] },
+          agents: {
+            work: { mentionPatterns: ["\\bworkbot\\b"] },
+          },
+        },
+      },
+      "work",
+    );
+    expect(matchesMentionPatterns("workbot: hi", regexes)).toBe(true);
+    expect(matchesMentionPatterns("global: hi", regexes)).toBe(false);
+  });
 });

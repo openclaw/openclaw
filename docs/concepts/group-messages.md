@@ -7,7 +7,7 @@ read_when:
 
 Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that thread separate from the personal DM session.
 
-Note: `routing.groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/iMessage as well; this doc focuses on WhatsApp-specific behavior.
+Note: `routing.groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/iMessage as well; this doc focuses on WhatsApp-specific behavior. For multi-agent setups, you can override per agent with `routing.agents.<agentId>.mentionPatterns`.
 
 ## What’s implemented (2025-12-03)
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Defaults can be set in config (`whatsapp.groups`) and overridden per group via `/activation`. When `whatsapp.groups` is set, it also acts as a group allowlist (include `"*"` to allow all).
@@ -61,7 +61,6 @@ Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when 
 4) Session-level directives (`/verbose on`, `/think high`, `/new` or `/reset`, `/compact`) apply only to that group’s session; send them as standalone messages so they register. Your personal DM session remains independent.
 
 ## Testing / verification
-- Automated: `pnpm test -- src/web/auto-reply.test.ts --runInBand` (covers mention gating, history injection, sender suffix).
 - Manual smoke:
   - Send an `@clawd` ping in the group and confirm a reply that references the sender name.
   - Send a second ping and verify the history block is included then cleared on the next turn.

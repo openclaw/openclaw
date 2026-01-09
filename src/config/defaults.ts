@@ -161,6 +161,26 @@ export function applyLoggingDefaults(cfg: ClawdbotConfig): ClawdbotConfig {
   };
 }
 
+export function applyContextPruningDefaults(
+  cfg: ClawdbotConfig,
+): ClawdbotConfig {
+  const agent = cfg.agent;
+  if (!agent) return cfg;
+  const contextPruning = agent?.contextPruning;
+  if (contextPruning?.mode) return cfg;
+
+  return {
+    ...cfg,
+    agent: {
+      ...agent,
+      contextPruning: {
+        ...contextPruning,
+        mode: "adaptive",
+      },
+    },
+  };
+}
+
 export function resetSessionDefaultsWarningForTests() {
   defaultWarnState = { warned: false };
 }

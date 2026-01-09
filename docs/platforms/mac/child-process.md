@@ -1,72 +1,56 @@
 ---
-summary: "Running the gateway as a child process of the macOS app and why"
+summary: "Gateway lifecycle on macOS (launchd + attach-only)"
 read_when:
   - Integrating the mac app with the gateway lifecycle
 ---
-# Clawdbot gateway as a child process of the macOS app
+# Gateway lifecycle on macOS
 
-Date: 2025-12-06 · Status: draft · Owner: steipete
+The macOS app **manages the Gateway via launchd** by default. This gives you
+reliable auto‑start at login and restart on crashes.
 
-Note (2025-12-19): the current implementation prefers a **launchd LaunchAgent** that runs the **bundled bun-compiled gateway**. This doc remains as an alternative mode for tighter coupling to the UI.
+Child‑process mode (Gateway spawned directly by the app) is **not in use** today.
+If you need tighter coupling to the UI, use **Attach‑only** and run the Gateway
+manually in a terminal.
 
-## Goal
-Run the Node-based Clawdbot/clawdbot gateway as a direct child of the LSUIElement app (instead of a launchd agent) while keeping all TCC-sensitive work inside the Swift app/broker layer and wiring the existing “Clawdbot Active” toggle to start/stop the child.
+## Default behavior (launchd)
 
-## When to prefer the child-process mode
-- You want gateway lifetime strictly coupled to the menu-bar app (dies when the app quits) and controlled by the “Clawdbot Active” toggle without touching launchd.
-- You’re okay giving up login persistence/auto-restart that launchd provides, or you’ll add your own backoff loop.
-- You want simpler log capture and supervision inside the app (no external plist or user-visible LaunchAgent).
+- The app installs a per‑user LaunchAgent labeled `com.clawdbot.gateway`.
+- When Local mode is enabled, the app ensures the LaunchAgent is loaded and
+  starts the Gateway if needed.
+- Logs are written to the launchd gateway log path (visible in Debug Settings).
 
-## Tradeoffs vs. launchd
-- **Pros:** tighter coupling to UI state; simpler surface (no plist install/bootout); easier to stream stdout/stderr; fewer moving parts for beta users.
-- **Cons:** no built-in KeepAlive/login auto-start; app crash kills gateway; you must build your own restart/backoff; Activity Monitor will show both processes under the app; still need correct TCC handling (see below).
-- **TCC:** behaviorally, child processes often inherit the parent app’s “responsible process” for TCC, but this is *not a contract*. Continue to route all protected actions through the Swift app/broker so prompts stay tied to the signed app bundle.
+Common commands:
 
-## TCC guardrails (must keep)
-- Screen Recording, Accessibility, mic, and speech prompts must originate from the signed Swift app/broker. The Node child should never call these APIs directly; route through the app’s node commands (via Gateway `node.invoke`) for:
-  - `system.notify`
-  - `system.run` (including `needsScreenRecording`)
-  - `screen.record` / `camera.*`
-  - PeekabooBridge UI automation (`peekaboo …`)
-- Usage strings (`NSMicrophoneUsageDescription`, `NSSpeechRecognitionUsageDescription`, etc.) stay in the app target’s Info.plist; a bare Node binary has none and would fail.
-- If you ever embed Node that *must* touch TCC, wrap that call in a tiny signed helper target inside the app bundle and have Node exec that helper instead of calling the API directly.
+```bash
+launchctl kickstart -k gui/$UID/com.clawdbot.gateway
+launchctl bootout gui/$UID/com.clawdbot.gateway
+```
 
-## Process manager design (Swift Subprocess)
-- Add a small `GatewayProcessManager` (Swift) that owns:
-  - `execution: Execution?` from `Swift Subprocess` to track the child.
-  - `start(config)` called when “Clawdbot Active” flips ON:
-    - binary: host Node running the bundled gateway under `Clawdbot.app/Contents/Resources/Gateway/`
-    - args: current clawdbot entrypoint and flags
-    - cwd/env: point to `~/.clawdbot` as today; inject the expanded PATH so Homebrew Node resolves under launchd
-    - output: stream stdout/stderr to `/tmp/clawdbot-gateway.log` (cap buffer via Subprocess OutputLimits)
-    - restart: optional linear/backoff restart if exit was non-zero and Active is still true
-  - `stop()` called when Active flips OFF or app terminates: cancel the execution and `waitUntilExit`.
-- Wire SwiftUI toggle:
-- ON: `GatewayProcessManager.start(...)`
-- OFF: `GatewayProcessManager.stop()` (no launchctl calls in this mode)
-- Keep the existing `LaunchdManager` around so we can switch back if needed; the toggle can choose between launchd or child mode with a flag if we want both.
+## Attach‑only (developer mode)
 
-## Packaging and signing
-- Bundle the gateway payload (dist + production node_modules) under `Contents/Resources/Gateway/`; rely on host Node ≥22 instead of embedding a runtime.
-- Codesign native addons and dylibs inside the bundle; no nested runtime binary to sign now.
-- Host runtime should not call TCC APIs directly; keep privileged work inside the app/broker.
+Attach‑only tells the app to **connect to an existing Gateway** without spawning
+one. This is ideal for local dev (hot‑reload, custom flags).
 
-## Logging and observability
-- Stream child stdout/stderr to `/tmp/clawdbot-gateway.log`; surface the last N lines in the Debug tab.
-- Emit a user notification (via existing NotificationManager) on crash/exit while Active is true.
-- Add a lightweight heartbeat from Node → app (e.g., ping over stdout) so the app can show status in the menu.
+Steps:
 
-## Failure/edge cases
-- App crash/quit kills the gateway. Decide if that is acceptable for the deployment tier; otherwise, stick with launchd for production and keep child-process for dev/experiments.
-- If the gateway exits repeatedly, back off (e.g., 1s/2s/5s/10s) and give up after N attempts with a menu warning.
-- Respect the existing pause semantics: when paused, the broker should return `ok=false, "clawdbot paused"`; the gateway should avoid calling privileged routes while paused.
+1) Start the Gateway yourself:
+   ```bash
+   pnpm gateway:watch
+   ```
+2) In the macOS app: Debug Settings → Gateway → **Attach only**.
 
-## Open questions / follow-ups
-- Do we need dual-mode (launchd for prod, child for dev)? If yes, gate via a setting or build flag.
-- Embedding a runtime is off the table for now; we rely on host Node for size/simplicity. Revisit only if host PATH drift becomes painful.
-- Do we want a tiny signed helper for rare TCC actions that cannot be brokered via the Swift app/broker?
+The UI should show “Using existing gateway …” once connected.
 
-## Decision snapshot (current recommendation)
-- Keep all TCC surfaces in the Swift app/broker (node commands + PeekabooBridgeHost).
-- Implement `GatewayProcessManager` with Swift Subprocess to start/stop the gateway on the “Clawdbot Active” toggle.
-- Maintain the launchd path as a fallback for uptime/login persistence until child-mode proves stable.
+## Remote mode
+
+Remote mode never starts a local Gateway. The app uses an SSH tunnel to the
+remote host and connects over that tunnel.
+
+## Why we prefer launchd
+
+- Auto‑start at login.
+- Built‑in restart/KeepAlive semantics.
+- Predictable logs and supervision.
+
+If a true child‑process mode is ever needed again, it should be documented as a
+separate, explicit dev‑only mode.

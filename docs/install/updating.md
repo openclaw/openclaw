@@ -59,8 +59,7 @@ From the repo checkout:
 git pull
 pnpm install
 pnpm build
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 pnpm clawdbot doctor
 pnpm clawdbot health
 ```
@@ -109,7 +108,7 @@ Runbook + exact service labels: [Gateway runbook](/gateway)
 Install a known-good version:
 
 ```bash
-npm i -g clawdbot@2026.1.8
+npm i -g clawdbot@2026.1.9
 ```
 
 Then restart + re-run doctor:

@@ -10,6 +10,7 @@ import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
 const shortDelayCmd = isWin ? "ping -n 2 127.0.0.1 > nul" : "sleep 0.05";
+const yieldDelayCmd = isWin ? "ping -n 3 127.0.0.1 > nul" : "sleep 0.2";
 const longDelayCmd = isWin ? "ping -n 4 127.0.0.1 > nul" : "sleep 2";
 const joinCommands = (commands: string[]) =>
   commands.join(isWin ? " & " : "; ");
@@ -51,7 +52,7 @@ beforeEach(() => {
 describe("bash tool backgrounding", () => {
   it("backgrounds after yield and can be polled", async () => {
     const result = await bashTool.execute("call1", {
-      command: echoAfterDelay("done"),
+      command: joinCommands([yieldDelayCmd, "echo done"]),
       yieldMs: 10,
     });
 

@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
 import { sendMessageMSTeams } from "../msteams/send.js";
+import { PROVIDER_ID_LABELS } from "../pairing/pairing-labels.js";
 import {
   approveProviderPairingCode,
   listProviderPairingRequests,
@@ -100,8 +101,9 @@ export function registerPairingCli(program: Command) {
       }
       for (const r of requests) {
         const meta = r.meta ? JSON.stringify(r.meta) : "";
+        const idLabel = PROVIDER_ID_LABELS[provider];
         console.log(
-          `${r.code}  id=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
+          `${r.code}  ${idLabel}=${r.id}${meta ? `  meta=${meta}` : ""}  ${r.createdAt}`,
         );
       }
     });

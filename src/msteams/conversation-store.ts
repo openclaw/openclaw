@@ -17,6 +17,8 @@ export type StoredConversationReference = {
   bot?: { id?: string; name?: string };
   /** Conversation details */
   conversation?: { id?: string; conversationType?: string; tenantId?: string };
+  /** Team ID for channel messages (when available). */
+  teamId?: string;
   /** Channel ID (usually "msteams") */
   channelId?: string;
   /** Service URL for sending messages back */
