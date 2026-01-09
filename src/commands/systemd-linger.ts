@@ -2,6 +2,7 @@ import { note as clackNote } from "@clack/prompts";
 
 import {
   enableSystemdUserLinger,
+  isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -32,6 +33,13 @@ export async function ensureSystemdUserLingerInteractive(params: {
   const env = params.env ?? process.env;
   const prompter = params.prompter ?? { note };
   const title = params.title ?? "Systemd";
+  if (!(await isSystemdUserServiceAvailable())) {
+    await prompter.note(
+      "Systemd user services are unavailable. Skipping lingering checks.",
+      title,
+    );
+    return;
+  }
   const status = await readSystemdUserLingerStatus(env);
   if (!status) {
     await prompter.note(
@@ -98,6 +106,7 @@ export async function ensureSystemdUserLingerNonInteractive(params: {
 }): Promise<void> {
   if (process.platform !== "linux") return;
   const env = params.env ?? process.env;
+  if (!(await isSystemdUserServiceAvailable())) return;
   const status = await readSystemdUserLingerStatus(env);
   if (!status || status.linger === "yes") return;
 

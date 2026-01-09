@@ -12,6 +12,7 @@ docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
   trap "" PIPE
   export TERM=xterm-256color
+  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-providers --skip-skills --skip-daemon --skip-ui"
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
   export PATH="/tmp/clawdbot-bin:$PATH"
@@ -42,7 +43,7 @@ TRASH
   }
 
   start_gateway() {
-    node dist/index.js gateway --port 18789 --bind loopback > /tmp/gateway-e2e.log 2>&1 &
+    node dist/index.js gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
     GATEWAY_PID="$!"
   }
 
@@ -71,6 +72,7 @@ TRASH
     local command="$3"
     local send_fn="$4"
     local with_gateway="${5:-false}"
+    local validate_fn="${6:-}"
 
     echo "== Wizard case: $case_name =="
     export HOME="$home_dir"
@@ -78,8 +80,9 @@ TRASH
 
     input_fifo="$(mktemp -u "/tmp/clawdbot-onboard-${case_name}.XXXXXX")"
     mkfifo "$input_fifo"
+    local log_path="/tmp/clawdbot-onboard-${case_name}.log"
     # Run under script to keep an interactive TTY for clack prompts.
-    script -q -c "$command" /dev/null < "$input_fifo" &
+    script -q -c "$command" "$log_path" < "$input_fifo" &
     wizard_pid=$!
     exec 3> "$input_fifo"
 
@@ -96,15 +99,19 @@ TRASH
     wait "$wizard_pid"
     rm -f "$input_fifo"
     stop_gateway "$gw_pid"
+    if [ -n "$validate_fn" ]; then
+      "$validate_fn" "$log_path"
+    fi
   }
 
   run_wizard() {
     local case_name="$1"
     local home_dir="$2"
     local send_fn="$3"
+    local validate_fn="${4:-}"
 
     # Default onboarding command wrapper.
-    run_wizard_cmd "$case_name" "$home_dir" "node dist/index.js onboard" "$send_fn" true
+    run_wizard_cmd "$case_name" "$home_dir" "node dist/index.js onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
   }
 
   make_home() {
@@ -129,23 +136,7 @@ TRASH
 
   send_local_basic() {
     # Choose local gateway, accept defaults, skip provider/skills/daemon, skip UI.
-    send $'"'"'\r'"'"' 1.0
-    send $'"'"'\r'"'"' 1.0
-    send "" 1.2
-    send $'"'"'\e[B'"'"' 0.6
-    send $'"'"'\e[B'"'"' 0.6
-    send $'"'"'\e[B'"'"' 0.6
-    send $'"'"'\e[B'"'"' 0.6
-    send $'"'"'\e[B'"'"' 0.6
-    send $'"'"'\r'"'"' 0.6
     send $'"'"'\r'"'"' 0.5
-    send $'"'"'\r'"'"' 0.5
-    send $'"'"'\r'"'"' 0.5
-    send $'"'"'\r'"'"' 0.5
-    send $'"'"'n\r'"'"' 0.5
-    send $'"'"'n\r'"'"' 0.5
-    send $'"'"'n\r'"'"' 0.5
-    send $'"'"'n\r'"'"' 0.5
   }
 
   send_reset_config_only() {
@@ -160,62 +151,31 @@ TRASH
 
   send_providers_flow() {
     # Configure providers via configure wizard.
-    send "" 0.6
+    send $'"'"'\r'"'"' 1.0
+    send "" 1.5
+    # Provider mode (default Configure providers)
     send $'"'"'\r'"'"' 0.8
-    send "" 1.2
-    # Select Providers section only.
-    send $'"'"'\e[B'"'"' 0.5
-    send $'"'"'\e[B'"'"' 0.5
-    send $'"'"'\e[B'"'"' 0.5
-    send $'"'"'\e[B'"'"' 0.5
-    send $'"'"' '"'"' 0.4
-    send $'"'"'\r'"'"' 0.6
-    # Configure providers now? (default Yes)
-    send $'"'"'\r'"'"' 0.8
-    send "" 0.8
-    # Select Telegram, Discord, Slack.
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.4
-    send $'"'"'\r'"'"' 0.6
-    send $'"'"'tg_token\r'"'"' 0.8
-    send $'"'"'discord_token\r'"'"' 0.8
-    send "" 0.6
-    send $'"'"'\r'"'"' 0.6
-    send "" 0.6
-    send $'"'"'slack_bot\r'"'"' 0.8
-    send "" 0.6
-    send $'"'"'slack_app\r'"'"' 0.8
+    send "" 1.0
+    # Configure chat providers now? -> No
+    send $'"'"'n\r'"'"' 0.6
   }
 
   send_skills_flow() {
     # Select skills section and skip optional installs.
-    send "" 0.6
-    send $'"'"'\r'"'"' 0.6
-    send "" 1.0
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"'\e[B'"'"' 0.4
-    send $'"'"' '"'"' 0.3
-    send $'"'"'\r'"'"' 0.4
-    send $'"'"'n\r'"'"' 0.4
-    send $'"'"'n\r'"'"' 0.4
+    send $'"'"'\r'"'"' 1.0
+    send "" 1.2
+    send $'"'"'n\r'"'"' 0.6
   }
 
   run_case_local_basic() {
     local home_dir
     home_dir="$(make_home local-basic)"
-    run_wizard local-basic "$home_dir" send_local_basic
+    run_wizard local-basic "$home_dir" send_local_basic validate_local_basic_log
 
     # Assert config + workspace scaffolding.
     workspace_dir="$HOME/clawd"
     config_path="$HOME/.clawdbot/clawdbot.json"
-    sessions_dir="$HOME/.clawdbot/sessions"
+    sessions_dir="$HOME/.clawdbot/agents/main/sessions"
 
     assert_file "$config_path"
     assert_dir "$sessions_dir"
@@ -383,7 +343,7 @@ NODE
     local home_dir
     home_dir="$(make_home providers)"
     # Providers-only configure flow.
-    run_wizard_cmd providers "$home_dir" "node dist/index.js configure" send_providers_flow
+    run_wizard_cmd providers "$home_dir" "node dist/index.js configure --section providers" send_providers_flow
 
     config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
@@ -395,21 +355,22 @@ import JSON5 from "json5";
 const cfg = JSON5.parse(fs.readFileSync(process.env.CONFIG_PATH, "utf-8"));
 const errors = [];
 
-if (cfg?.telegram?.botToken !== "tg_token") {
-  errors.push(`telegram.botToken mismatch (got ${cfg?.telegram?.botToken ?? "unset"})`);
-}
-if (cfg?.discord?.token !== "discord_token") {
-  errors.push(`discord.token mismatch (got ${cfg?.discord?.token ?? "unset"})`);
-}
-if (cfg?.slack?.botToken !== "slack_bot") {
-  errors.push(`slack.botToken mismatch (got ${cfg?.slack?.botToken ?? "unset"})`);
-}
-if (cfg?.slack?.appToken !== "slack_app") {
-  errors.push(`slack.appToken mismatch (got ${cfg?.slack?.appToken ?? "unset"})`);
-}
-if (cfg?.wizard?.lastRunMode !== "local") {
-  errors.push(`wizard.lastRunMode mismatch (got ${cfg?.wizard?.lastRunMode ?? "unset"})`);
-}
+    if (cfg?.telegram?.botToken) {
+      errors.push(`telegram.botToken should be unset (got ${cfg?.telegram?.botToken})`);
+    }
+    if (cfg?.discord?.token) {
+      errors.push(`discord.token should be unset (got ${cfg?.discord?.token})`);
+    }
+    if (cfg?.slack?.botToken || cfg?.slack?.appToken) {
+      errors.push(
+        `slack tokens should be unset (got bot=${cfg?.slack?.botToken ?? "unset"}, app=${cfg?.slack?.appToken ?? "unset"})`,
+      );
+    }
+    if (cfg?.wizard?.lastRunCommand !== "configure") {
+      errors.push(
+        `wizard.lastRunCommand mismatch (got ${cfg?.wizard?.lastRunCommand ?? "unset"})`,
+      );
+    }
 
 if (errors.length > 0) {
   console.error(errors.join("\n"));
@@ -433,7 +394,7 @@ NODE
 }
 JSON
 
-    run_wizard_cmd skills "$home_dir" "node dist/index.js configure" send_skills_flow
+    run_wizard_cmd skills "$home_dir" "node dist/index.js configure --section skills" send_skills_flow
 
     config_path="$HOME/.clawdbot/clawdbot.json"
     assert_file "$config_path"
@@ -460,6 +421,20 @@ if (errors.length > 0) {
   process.exit(1);
 }
 NODE
+  }
+
+  assert_log_not_contains() {
+    local file_path="$1"
+    local needle="$2"
+    if grep -q "$needle" "$file_path"; then
+      echo "Unexpected log output: $needle"
+      exit 1
+    fi
+  }
+
+  validate_local_basic_log() {
+    local log_path="$1"
+    assert_log_not_contains "$log_path" "systemctl --user unavailable"
   }
 
   run_case_local_basic

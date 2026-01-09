@@ -19,6 +19,7 @@ import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -429,41 +430,53 @@ export async function runNonInteractiveOnboarding(
   const daemonRuntimeRaw = opts.daemonRuntime ?? DEFAULT_GATEWAY_DAEMON_RUNTIME;
 
   if (opts.installDaemon) {
-    if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
-      runtime.error("Invalid --daemon-runtime (use node or bun)");
-      runtime.exit(1);
-      return;
-    }
-    const service = resolveGatewayService();
-    const devMode =
-      process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
-      process.argv[1]?.endsWith(".ts");
-    const nodePath = await resolvePreferredNodePath({
-      env: process.env,
-      runtime: daemonRuntimeRaw,
-    });
-    const { programArguments, workingDirectory } =
-      await resolveGatewayProgramArguments({
-        port,
-        dev: devMode,
+    const systemdAvailable =
+      process.platform === "linux"
+        ? await isSystemdUserServiceAvailable()
+        : true;
+    if (process.platform === "linux" && !systemdAvailable) {
+      runtime.log(
+        "Systemd user services are unavailable; skipping daemon install.",
+      );
+    } else {
+      if (!isGatewayDaemonRuntime(daemonRuntimeRaw)) {
+        runtime.error("Invalid --daemon-runtime (use node or bun)");
+        runtime.exit(1);
+        return;
+      }
+      const service = resolveGatewayService();
+      const devMode =
+        process.argv[1]?.includes(`${path.sep}src${path.sep}`) &&
+        process.argv[1]?.endsWith(".ts");
+      const nodePath = await resolvePreferredNodePath({
+        env: process.env,
         runtime: daemonRuntimeRaw,
-        nodePath,
       });
-    const environment = buildServiceEnvironment({
-      env: process.env,
-      port,
-      token: gatewayToken,
-      launchdLabel:
-        process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
-    });
-    await service.install({
-      env: process.env,
-      stdout: process.stdout,
-      programArguments,
-      workingDirectory,
-      environment,
-    });
-    await ensureSystemdUserLingerNonInteractive({ runtime });
+      const { programArguments, workingDirectory } =
+        await resolveGatewayProgramArguments({
+          port,
+          dev: devMode,
+          runtime: daemonRuntimeRaw,
+          nodePath,
+        });
+      const environment = buildServiceEnvironment({
+        env: process.env,
+        port,
+        token: gatewayToken,
+        launchdLabel:
+          process.platform === "darwin"
+            ? GATEWAY_LAUNCH_AGENT_LABEL
+            : undefined,
+      });
+      await service.install({
+        env: process.env,
+        stdout: process.stdout,
+        programArguments,
+        workingDirectory,
+        environment,
+      });
+      await ensureSystemdUserLingerNonInteractive({ runtime });
+    }
   }
 
   if (!opts.skipHealth) {

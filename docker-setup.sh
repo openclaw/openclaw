@@ -98,7 +98,7 @@ echo "  - Gateway token: $CLAWDBOT_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
-docker compose -f "$COMPOSE_FILE" run --rm clawdbot-cli onboard
+docker compose -f "$COMPOSE_FILE" run --rm clawdbot-cli onboard --no-install-daemon
 
 echo ""
 echo "==> Provider setup (optional)"

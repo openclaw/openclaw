@@ -241,6 +241,7 @@ export function buildProgram() {
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
     .option("--non-interactive", "Run without prompts", false)
+    .option("--flow <flow>", "Wizard flow: quickstart|advanced")
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
@@ -276,17 +277,30 @@ export function buildProgram() {
     .option("--tailscale <mode>", "Tailscale: off|serve|funnel")
     .option("--tailscale-reset-on-exit", "Reset tailscale serve/funnel on exit")
     .option("--install-daemon", "Install gateway daemon")
+    .option("--no-install-daemon", "Skip gateway daemon install")
+    .option("--skip-daemon", "Skip gateway daemon install")
     .option("--daemon-runtime <runtime>", "Daemon runtime: node|bun")
+    .option("--skip-providers", "Skip provider setup")
     .option("--skip-skills", "Skip skills setup")
     .option("--skip-health", "Skip health check")
+    .option("--skip-ui", "Skip Control UI/TUI prompts")
     .option("--node-manager <name>", "Node manager for skills: npm|pnpm|bun")
     .option("--json", "Output JSON summary", false)
-    .action(async (opts) => {
+    .action(async (opts, command) => {
       try {
+        const installDaemon =
+          typeof command?.getOptionValueSource === "function"
+            ? command.getOptionValueSource("skipDaemon") === "cli"
+              ? false
+              : command.getOptionValueSource("installDaemon") === "cli"
+                ? Boolean(opts.installDaemon)
+                : undefined
+            : undefined;
         await onboardCommand(
           {
             workspace: opts.workspace as string | undefined,
             nonInteractive: Boolean(opts.nonInteractive),
+            flow: opts.flow as "quickstart" | "advanced" | undefined,
             mode: opts.mode as "local" | "remote" | undefined,
             authChoice: opts.authChoice as
               | "oauth"
@@ -332,10 +346,12 @@ export function buildProgram() {
             remoteToken: opts.remoteToken as string | undefined,
             tailscale: opts.tailscale as "off" | "serve" | "funnel" | undefined,
             tailscaleResetOnExit: Boolean(opts.tailscaleResetOnExit),
-            installDaemon: Boolean(opts.installDaemon),
+            installDaemon,
             daemonRuntime: opts.daemonRuntime as "node" | "bun" | undefined,
+            skipProviders: Boolean(opts.skipProviders),
             skipSkills: Boolean(opts.skipSkills),
             skipHealth: Boolean(opts.skipHealth),
+            skipUi: Boolean(opts.skipUi),
             nodeManager: opts.nodeManager as "npm" | "pnpm" | "bun" | undefined,
             json: Boolean(opts.json),
           },

@@ -337,6 +337,19 @@ async function execSystemctl(
   }
 }
 
+export async function isSystemdUserServiceAvailable(): Promise<boolean> {
+  const res = await execSystemctl(["--user", "status"]);
+  if (res.code === 0) return true;
+  const detail = `${res.stderr} ${res.stdout}`.toLowerCase();
+  if (!detail) return false;
+  if (detail.includes("not found")) return false;
+  if (detail.includes("failed to connect")) return false;
+  if (detail.includes("not been booted")) return false;
+  if (detail.includes("no such file or directory")) return false;
+  if (detail.includes("not supported")) return false;
+  return false;
+}
+
 async function assertSystemdAvailable() {
   const res = await execSystemctl(["--user", "status"]);
   if (res.code === 0) return;
