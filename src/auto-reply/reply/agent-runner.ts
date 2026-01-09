@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../../agents/cli-session.js";
+import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -394,6 +395,10 @@ export async function runReplyAgent(params: {
         cfg: followupRun.run.config,
         provider: followupRun.run.provider,
         model: followupRun.run.model,
+        fallbacksOverride: resolveAgentModelFallbacksOverride(
+          followupRun.run.config,
+          resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+        ),
         run: (provider, model) =>
           runEmbeddedPiAgent({
             sessionId: followupRun.run.sessionId,
@@ -586,6 +591,10 @@ export async function runReplyAgent(params: {
           cfg: followupRun.run.config,
           provider: followupRun.run.provider,
           model: followupRun.run.model,
+          fallbacksOverride: resolveAgentModelFallbacksOverride(
+            followupRun.run.config,
+            resolveAgentIdFromSessionKey(followupRun.run.sessionKey),
+          ),
           run: (provider, model) => {
             if (isCliProvider(provider, followupRun.run.config)) {
               const startedAt = Date.now();
