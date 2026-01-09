@@ -12,6 +12,7 @@ const forceFreePortAndWait = vi.fn(async () => ({
   escalatedToSigkill: false,
 }));
 const serviceIsLoaded = vi.fn().mockResolvedValue(true);
+const discoverGatewayBeacons = vi.fn(async () => []);
 
 const runtimeLogs: string[] = [];
 const runtimeErrors: string[] = [];
@@ -90,6 +91,10 @@ vi.mock("../daemon/program-args.js", () => ({
   }),
 }));
 
+vi.mock("../infra/bonjour-discovery.js", () => ({
+  discoverGatewayBeacons: (opts: unknown) => discoverGatewayBeacons(opts),
+}));
+
 describe("gateway-cli coverage", () => {
   it("registers call/health/status commands and routes to callGateway", async () => {
     runtimeLogs.length = 0;
@@ -108,6 +113,57 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
+  });
+
+  it("registers gateway discover and prints JSON", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    discoverGatewayBeacons.mockReset();
+    discoverGatewayBeacons.mockResolvedValueOnce([
+      {
+        instanceName: "Studio (Clawdbot)",
+        displayName: "Studio",
+        domain: "local.",
+        host: "studio.local",
+        lanHost: "studio.local",
+        tailnetDns: "studio.tailnet.ts.net",
+        gatewayPort: 18789,
+        bridgePort: 18790,
+        sshPort: 22,
+      },
+    ]);
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await program.parseAsync(["gateway", "discover", "--json"], { from: "user" });
+
+    expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
+    expect(runtimeLogs.join("\n")).toContain('"beacons"');
+    expect(runtimeLogs.join("\n")).toContain('"wsUrl"');
+    expect(runtimeLogs.join("\n")).toContain("ws://");
+  });
+
+  it("validates gateway discover timeout", async () => {
+    runtimeLogs.length = 0;
+    runtimeErrors.length = 0;
+    discoverGatewayBeacons.mockReset();
+
+    const { registerGatewayCli } = await import("./gateway-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerGatewayCli(program);
+
+    await expect(
+      program.parseAsync(["gateway", "discover", "--timeout", "0"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors.join("\n")).toContain("gateway discover failed:");
+    expect(discoverGatewayBeacons).not.toHaveBeenCalled();
   });
 
   it("fails gateway call on invalid params JSON", async () => {
