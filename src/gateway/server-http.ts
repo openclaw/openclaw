@@ -12,6 +12,7 @@ import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   extractHookToken,
   HOOK_PROVIDER_ERROR,
+  type HookMessageProvider,
   type HooksConfigResolved,
   normalizeAgentPayload,
   normalizeHookHeaders,
@@ -35,15 +36,7 @@ type HookDispatchers = {
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    provider:
-      | "last"
-      | "whatsapp"
-      | "telegram"
-      | "discord"
-      | "slack"
-      | "signal"
-      | "imessage"
-      | "msteams";
+    provider: HookMessageProvider;
     to?: string;
     model?: string;
     thinking?: string;
