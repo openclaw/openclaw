@@ -2,7 +2,6 @@
   --shell-pad: 16px;
   --shell-gap: 16px;
   --shell-nav-width: 220px;
-  --shell-nav-collapsed-width: 56px;
   --shell-topbar-height: 56px;
   --shell-focus-duration: 220ms;
   --shell-focus-ease: cubic-bezier(0.2, 0.85, 0.25, 1);
@@ -19,7 +18,7 @@
 }
 
 .shell--nav-collapsed {
-  grid-template-columns: var(--shell-nav-collapsed-width) minmax(0, 1fr);
+  grid-template-columns: 0px minmax(0, 1fr);
 }
 
 .shell--chat-focus {
@@ -298,13 +297,12 @@
   flex-direction: column;
   gap: 20px;
   min-height: 0;
-  height: calc(100vh - var(--shell-pad) * 2 - var(--topbar-height, 80px) - var(--shell-gap));
   overflow-y: auto; /* Enable vertical scrolling for pages with long content */
   overflow-x: hidden;
 }
 
 .shell--chat .content {
-  height: calc(100vh - var(--shell-pad) * 2 - var(--topbar-height, 80px) - var(--shell-gap));
+  /* No-op: keep chat layout consistent with other tabs */
 }
 
 .docs-link {

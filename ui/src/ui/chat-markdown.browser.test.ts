@@ -16,21 +16,24 @@ beforeEach(() => {
     // no-op: avoid real gateway WS connections in browser tests
   };
   window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
+  localStorage.clear();
   document.body.innerHTML = "";
 });
 
 afterEach(() => {
   ClawdbotApp.prototype.connect = originalConnect;
   window.__CLAWDBOT_CONTROL_UI_BASE_PATH__ = undefined;
+  localStorage.clear();
   document.body.innerHTML = "";
 });
 
 describe("chat markdown rendering", () => {
-  // Skip: Tool card rendering was refactored to use sidebar-based output display.
-  // The .chat-tool-card__output class is only in the legacy renderer and requires
-  // the <details> element to be expanded. New layout uses renderToolCard() which
-  // shows preview/inline text without the __output wrapper.
-  it.skip("renders markdown inside tool result cards", async () => {
+  it("renders markdown inside tool result cards", async () => {
+    localStorage.setItem(
+      "clawdbot.control.settings.v1",
+      JSON.stringify({ useNewChatLayout: false }),
+    );
+
     const app = mountApp("/chat");
     await app.updateComplete;
 

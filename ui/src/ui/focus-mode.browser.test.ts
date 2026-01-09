@@ -28,10 +28,7 @@ afterEach(() => {
 });
 
 describe("chat focus mode", () => {
-  // Skip: Focus mode toggle button was moved to settings panel, no longer in chat view.
-  // The shell--chat-focus class still works when settings.chatFocusMode is true,
-  // but there's no in-chat toggle button to test.
-  it.skip("collapses header + sidebar on chat tab only", async () => {
+  it("collapses header + sidebar on chat tab only", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
@@ -68,4 +65,3 @@ describe("chat focus mode", () => {
     expect(shell?.classList.contains("shell--chat-focus")).toBe(true);
   });
 });
-

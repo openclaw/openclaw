@@ -3,7 +3,7 @@ import { html, nothing } from "lit";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway";
 import {
   TAB_GROUPS,
-  iconClassForTab,
+  iconForTab,
   pathForTab,
   subtitleForTab,
   titleForTab,
@@ -608,7 +608,7 @@ function renderTab(state: AppViewState, tab: Tab) {
       }}
       title=${titleForTab(tab)}
     >
-      <i class="nav-item__icon ${iconClassForTab(tab)}"></i>
+      <span class="nav-item__icon" aria-hidden="true">${iconForTab(tab)}</span>
       <span class="nav-item__text">${titleForTab(tab)}</span>
     </a>
   `;
@@ -620,8 +620,9 @@ function renderChatControls(state: AppViewState) {
   const listIcon = html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"></line><line x1="8" y1="12" x2="21" y2="12"></line><line x1="8" y1="18" x2="21" y2="18"></line><line x1="3" y1="6" x2="3.01" y2="6"></line><line x1="3" y1="12" x2="3.01" y2="12"></line><line x1="3" y1="18" x2="3.01" y2="18"></line></svg>`;
   // Icon for grouped view
   const groupIcon = html`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>`;
-  // Refresh icon (Flaticon style)
+  // Refresh icon
   const refreshIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>`;
+  const focusIcon = html`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7V4h3"></path><path d="M20 7V4h-3"></path><path d="M4 17v3h3"></path><path d="M20 17v3h-3"></path><circle cx="12" cy="12" r="3"></circle></svg>`;
   return html`
     <div class="chat-controls">
       <label class="field chat-controls__session">
@@ -637,7 +638,11 @@ function renderChatControls(state: AppViewState) {
             state.chatRunId = null;
             state.resetToolStream();
             state.resetChatScroll();
-            state.applySettings({ ...state.settings, sessionKey: next });
+            state.applySettings({
+              ...state.settings,
+              sessionKey: next,
+              lastActiveSessionKey: next,
+            });
             void loadChatHistory(state);
           }}
         >
@@ -661,6 +666,18 @@ function renderChatControls(state: AppViewState) {
         ${refreshIcon}
       </button>
       <span class="chat-controls__separator">|</span>
+      <button
+        class="btn btn--sm btn--icon ${state.settings.chatFocusMode ? "active" : ""}"
+        @click=${() =>
+          state.applySettings({
+            ...state.settings,
+            chatFocusMode: !state.settings.chatFocusMode,
+          })}
+        aria-pressed=${state.settings.chatFocusMode}
+        title="Toggle focus mode (hide sidebar + page header)"
+      >
+        ${focusIcon}
+      </button>
       <button
         class="btn btn--sm btn--icon ${state.settings.useNewChatLayout ? "active" : ""}"
         @click=${() =>

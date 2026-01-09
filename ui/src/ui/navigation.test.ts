@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   TAB_GROUPS,
-  iconClassForTab,
+  iconForTab,
   inferBasePathFromPathname,
   normalizeBasePath,
   normalizePath,
@@ -16,33 +16,34 @@ import {
 /** All valid tab identifiers derived from TAB_GROUPS */
 const ALL_TABS: Tab[] = TAB_GROUPS.flatMap((group) => group.tabs) as Tab[];
 
-describe("iconClassForTab", () => {
+describe("iconForTab", () => {
   it("returns a non-empty string for every tab", () => {
     for (const tab of ALL_TABS) {
-      const icon = iconClassForTab(tab);
+      const icon = iconForTab(tab);
       expect(icon).toBeTruthy();
       expect(typeof icon).toBe("string");
       expect(icon.length).toBeGreaterThan(0);
     }
   });
 
-  it("returns expected icon classes for each tab", () => {
-    expect(iconClassForTab("chat")).toBe("fi fi-rr-comment");
-    expect(iconClassForTab("overview")).toBe("fi fi-rr-chart-histogram");
-    expect(iconClassForTab("connections")).toBe("fi fi-rr-link");
-    expect(iconClassForTab("instances")).toBe("fi fi-rr-radar");
-    expect(iconClassForTab("sessions")).toBe("fi fi-rr-document");
-    expect(iconClassForTab("cron")).toBe("fi fi-rr-clock");
-    expect(iconClassForTab("skills")).toBe("fi fi-rr-bolt");
-    expect(iconClassForTab("nodes")).toBe("fi fi-rr-computer");
-    expect(iconClassForTab("config")).toBe("fi fi-rr-settings");
-    expect(iconClassForTab("debug")).toBe("fi fi-rr-bug");
+  it("returns stable icons for known tabs", () => {
+    expect(iconForTab("chat")).toBe("💬");
+    expect(iconForTab("overview")).toBe("📊");
+    expect(iconForTab("connections")).toBe("🔗");
+    expect(iconForTab("instances")).toBe("📡");
+    expect(iconForTab("sessions")).toBe("📄");
+    expect(iconForTab("cron")).toBe("⏰");
+    expect(iconForTab("skills")).toBe("⚡️");
+    expect(iconForTab("nodes")).toBe("🖥️");
+    expect(iconForTab("config")).toBe("⚙️");
+    expect(iconForTab("debug")).toBe("🐞");
+    expect(iconForTab("logs")).toBe("🧾");
   });
 
-  it("returns fallback icon class for unknown tab", () => {
+  it("returns a fallback icon for unknown tab", () => {
     // TypeScript won't allow this normally, but runtime could receive unexpected values
     const unknownTab = "unknown" as Tab;
-    expect(iconClassForTab(unknownTab)).toBe("fi fi-rr-file");
+    expect(iconForTab(unknownTab)).toBe("📁");
   });
 });
 

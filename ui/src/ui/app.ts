@@ -205,6 +205,7 @@ export class ClawdbotApp extends LitElement {
   @state() eventLog: EventLogEntry[] = [];
   private eventLogBuffer: EventLogEntry[] = [];
   private toolStreamSyncTimer: number | null = null;
+  private sidebarCloseTimer: number | null = null;
 
   @state() sessionKey = this.settings.sessionKey;
   @state() chatLoading = false;
@@ -1156,6 +1157,10 @@ export class ClawdbotApp extends LitElement {
 
   // Sidebar handlers for tool output viewing
   handleOpenSidebar(content: string) {
+    if (this.sidebarCloseTimer != null) {
+      window.clearTimeout(this.sidebarCloseTimer);
+      this.sidebarCloseTimer = null;
+    }
     this.sidebarContent = content;
     this.sidebarError = null;
     this.sidebarOpen = true;
@@ -1164,9 +1169,14 @@ export class ClawdbotApp extends LitElement {
   handleCloseSidebar() {
     this.sidebarOpen = false;
     // Clear content after transition
-    setTimeout(() => {
+    if (this.sidebarCloseTimer != null) {
+      window.clearTimeout(this.sidebarCloseTimer);
+    }
+    this.sidebarCloseTimer = window.setTimeout(() => {
+      if (this.sidebarOpen) return;
       this.sidebarContent = null;
       this.sidebarError = null;
+      this.sidebarCloseTimer = null;
     }, 200);
   }
 

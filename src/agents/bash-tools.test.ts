@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import {
   bashTool,
@@ -50,6 +50,16 @@ beforeEach(() => {
 });
 
 describe("bash tool backgrounding", () => {
+  const originalShell = process.env.SHELL;
+
+  beforeEach(() => {
+    if (!isWin) process.env.SHELL = "/bin/bash";
+  });
+
+  afterEach(() => {
+    if (!isWin) process.env.SHELL = originalShell;
+  });
+
   it(
     "backgrounds after yield and can be polled",
     async () => {
@@ -171,9 +181,7 @@ describe("bash tool backgrounding", () => {
     expect(text).toContain("hi");
   });
 
-  // Skip: Fails when user's shell config (.zshenv) sources files that don't exist in test env,
-  // adding extra lines to stdout and breaking line count assertions.
-  it.skip("logs line-based slices and defaults to last lines", async () => {
+  it("logs line-based slices and defaults to last lines", async () => {
     const result = await bashTool.execute("call1", {
       command: echoLines(["one", "two", "three"]),
       background: true,
@@ -193,9 +201,7 @@ describe("bash tool backgrounding", () => {
     expect(status).toBe("completed");
   });
 
-  // Skip: Fails when user's shell config (.zshenv) sources files that don't exist in test env,
-  // adding extra lines to stdout and breaking offset assertions.
-  it.skip("supports line offsets for log slices", async () => {
+  it("supports line offsets for log slices", async () => {
     const result = await bashTool.execute("call1", {
       command: echoLines(["alpha", "beta", "gamma"]),
       background: true,
