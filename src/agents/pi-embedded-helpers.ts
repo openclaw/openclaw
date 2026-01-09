@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 
-import type { AgentMessage, AgentToolResult } from "@mariozechner/pi-agent-core";
+import type {
+  AgentMessage,
+  AgentToolResult,
+} from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import {
   normalizeThinkLevel,

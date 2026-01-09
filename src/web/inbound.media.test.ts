@@ -3,12 +3,21 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi
   .fn()
   .mockResolvedValue({ code: "PAIRCODE", created: true });
+const saveMediaBufferSpy = vi.fn();
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
@@ -32,6 +41,19 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertProviderPairingRequest: (...args: unknown[]) =>
     upsertPairingRequestMock(...args),
 }));
+
+vi.mock("../media/store.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../media/store.js")>();
+  return {
+    ...actual,
+    saveMediaBuffer: vi.fn(
+      async (...args: Parameters<typeof actual.saveMediaBuffer>) => {
+        saveMediaBufferSpy(...args);
+        return actual.saveMediaBuffer(...args);
+      },
+    ),
+  };
+});
 
 const HOME = path.join(
   os.tmpdir(),
@@ -87,6 +109,10 @@ vi.mock("./session.js", () => {
 import { monitorWebInbox } from "./inbound.js";
 
 describe("web inbound media saves with extension", () => {
+  beforeEach(() => {
+    saveMediaBufferSpy.mockClear();
+  });
+
   beforeAll(async () => {
     await fs.rm(HOME, { recursive: true, force: true });
   });
@@ -179,6 +205,46 @@ describe("web inbound media saves with extension", () => {
     const msg = onMessage.mock.calls[0][0];
     expect(msg.chatType).toBe("group");
     expect(msg.mentionedJids).toEqual(["999@s.whatsapp.net"]);
+
+    await listener.close();
+  });
+
+  it("passes mediaMaxMb to saveMediaBuffer", async () => {
+    const onMessage = vi.fn();
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      mediaMaxMb: 1,
+    });
+    const { createWaSocket } = await import("./session.js");
+    const realSock = await (
+      createWaSocket as unknown as () => Promise<{
+        ev: import("node:events").EventEmitter;
+      }>
+    )();
+
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "img3", fromMe: false, remoteJid: "222@s.whatsapp.net" },
+          message: { imageMessage: { mimetype: "image/jpeg" } },
+          messageTimestamp: 1_700_000_003,
+        },
+      ],
+    };
+
+    realSock.ev.emit("messages.upsert", upsert);
+
+    for (let i = 0; i < 10; i++) {
+      if (onMessage.mock.calls.length > 0) break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
+    expect(saveMediaBufferSpy).toHaveBeenCalled();
+    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
+    expect(lastCall?.[3]).toBe(1 * 1024 * 1024);
 
     await listener.close();
   });

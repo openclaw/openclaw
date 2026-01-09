@@ -593,23 +593,11 @@ export async function startGatewayServer(
     dispatchWakeHook,
   });
 
-  // Try to use Tailscale funnel URL for serve feature (public URLs)
-  let serveBaseUrl: string;
-  try {
-    const tailnetHost = await getTailnetHostname();
-    serveBaseUrl = `https://${tailnetHost}`;
-    log.info(`Serve base URL (Tailscale): ${serveBaseUrl}`);
-  } catch {
-    const serveHost = bindHost === "0.0.0.0" ? "localhost" : bindHost;
-    serveBaseUrl = `http://${serveHost}:${port}`;
-    log.info(`Serve base URL (local): ${serveBaseUrl}`);
-  }
   const httpServer: HttpServer = createGatewayHttpServer({
     canvasHost,
     controlUiEnabled,
     controlUiBasePath,
     handleHooksRequest,
-    serveBaseUrl,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: Awaited<ReturnType<typeof startNodeBridgeServer>> | null = null;

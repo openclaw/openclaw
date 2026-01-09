@@ -758,7 +758,6 @@ export async function compactEmbeddedPiSession(params: {
   enqueue?: typeof enqueueCommand;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
-  serveBaseUrl?: string;
 }): Promise<EmbeddedPiCompactResult> {
   const sessionLane = resolveSessionLane(
     params.sessionKey?.trim() || params.sessionId,
@@ -854,7 +853,6 @@ export async function compactEmbeddedPiSession(params: {
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           config: params.config,
-          serveBaseUrl: params.serveBaseUrl,
         });
         const machineName = await getMachineDisplayName();
         const runtimeInfo = {
@@ -1017,7 +1015,6 @@ export async function runEmbeddedPiAgent(params: {
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   enforceFinalTag?: boolean;
-  serveBaseUrl?: string;
 }): Promise<EmbeddedPiRunResult> {
   const sessionLane = resolveSessionLane(
     params.sessionKey?.trim() || params.sessionId,
@@ -1053,7 +1050,7 @@ export async function runEmbeddedPiAgent(params: {
         provider,
         preferredProfile: explicitProfileId,
       });
-if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
+      if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
         throw new Error(
           `Auth profile "${explicitProfileId}" is not configured for ${provider}.`,
         );
@@ -1169,7 +1166,6 @@ if (explicitProfileId && !profileOrder.includes(explicitProfileId)) {
             sessionKey: params.sessionKey ?? params.sessionId,
             agentDir,
             config: params.config,
-            serveBaseUrl: params.serveBaseUrl,
           });
           const machineName = await getMachineDisplayName();
           const runtimeInfo = {

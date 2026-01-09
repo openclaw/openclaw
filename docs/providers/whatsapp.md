@@ -151,7 +151,8 @@ Behavior:
 
 ## Limits
 - Outbound text is chunked to `whatsapp.textChunkLimit` (default 4000).
-- Media items are capped by `agents.defaults.mediaMaxMb` (default 5 MB).
+- Inbound media saves are capped by `whatsapp.mediaMaxMb` (default 50 MB).
+- Outbound media items are capped by `agents.defaults.mediaMaxMb` (default 5 MB).
 
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
@@ -166,7 +167,7 @@ Behavior:
     - Gateway: `send` params include `gifPlayback: true`
 
 ## Media limits + optimization
-- Default cap: 5 MB (per media item).
+- Default outbound cap: 5 MB (per media item).
 - Override: `agents.defaults.mediaMaxMb`.
 - Images are auto-optimized to JPEG under cap (resize + quality sweep).
 - Oversize media => error; media reply falls back to text warning.
@@ -187,7 +188,9 @@ Behavior:
 - `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
 - `whatsapp.selfChatMode` (same-phone setup; suppress pairing replies for outbound DMs).
 - `whatsapp.allowFrom` (DM allowlist).
+- `whatsapp.mediaMaxMb` (inbound media save cap).
 - `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
+- `whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap).
 - `whatsapp.groupAllowFrom` (group sender allowlist).
 - `whatsapp.groupPolicy` (group policy).
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
