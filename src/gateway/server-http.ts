@@ -11,11 +11,14 @@ import type { createSubsystemLogger } from "../logging.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import {
   extractHookToken,
+  HOOK_PROVIDER_ERROR,
   type HooksConfigResolved,
   normalizeAgentPayload,
   normalizeHookHeaders,
   normalizeWakePayload,
   readJsonBody,
+  resolveHookDeliver,
+  resolveHookProvider,
 } from "./hooks.js";
 import { applyHookMappings } from "./hooks-mapping.js";
 
@@ -171,13 +174,18 @@ export function createHooksRequestHandler(
             sendJson(res, 200, { ok: true, mode: mapped.action.mode });
             return true;
           }
+          const provider = resolveHookProvider(mapped.action.provider);
+          if (!provider) {
+            sendJson(res, 400, { ok: false, error: HOOK_PROVIDER_ERROR });
+            return true;
+          }
           const runId = dispatchAgentHook({
             message: mapped.action.message,
             name: mapped.action.name ?? "Hook",
             wakeMode: mapped.action.wakeMode,
             sessionKey: mapped.action.sessionKey ?? "",
-            deliver: mapped.action.deliver !== false,
-            provider: mapped.action.provider ?? "last",
+            deliver: resolveHookDeliver(mapped.action.deliver),
+            provider,
             to: mapped.action.to,
             model: mapped.action.model,
             thinking: mapped.action.thinking,

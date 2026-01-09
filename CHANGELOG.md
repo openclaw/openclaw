@@ -18,6 +18,7 @@
 - CLI: move `clawdbot message` to subcommands (`message send|poll|…`), fold Discord/Slack/Telegram/WhatsApp tools into `message`, and require `--provider` unless only one provider is configured.
 - CLI: improve `logs` output (pretty/plain/JSONL), add gateway unreachable hint, and document logging.
 - Hooks: default hook agent delivery to true. (#533) — thanks @mcinteerj
+- Hooks: normalize hook agent providers (aliases + msteams support).
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
 - Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223
 - Deps: bump Pi to 0.40.0 and drop pi-ai patch (upstream 429 fix). (#543) — thanks @mcinteerj

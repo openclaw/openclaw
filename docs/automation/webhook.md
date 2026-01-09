@@ -71,7 +71,7 @@ Payload:
 - `sessionKey` optional (string): The key used to identify the agent's session. Defaults to a random `hook:<uuid>`. Using a consistent key allows for a multi-turn conversation within the hook context.
 - `wakeMode` optional (`now` | `next-heartbeat`): Whether to trigger an immediate heartbeat (default `now`) or wait for the next periodic check.
 - `deliver` optional (boolean): If `true`, the agent's response will be sent to the messaging provider. Defaults to `true`. Responses that are only heartbeat acknowledgments are automatically skipped.
-- `provider` optional (string): The messaging service for delivery. One of: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`. Defaults to `last`.
+- `provider` optional (string): The messaging service for delivery. One of: `last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `msteams`. Defaults to `last`.
 - `to` optional (string): The recipient identifier for the provider (e.g., phone number for WhatsApp/Signal, chat ID for Telegram, channel ID for Discord/Slack). Defaults to the last recipient in the main session.
 - `model` optional (string): Model override (e.g., `anthropic/claude-3-5-sonnet` or an alias). Must be in the allowed model list if restricted.
 - `thinking` optional (string): Thinking level override (e.g., `low`, `medium`, `high`).

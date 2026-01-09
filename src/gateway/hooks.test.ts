@@ -87,6 +87,15 @@ describe("gateway hooks helpers", () => {
       expect(imsg.value.provider).toBe("imessage");
     }
 
+    const teams = normalizeAgentPayload(
+      { message: "yo", provider: "teams" },
+      { idFactory: () => "x" },
+    );
+    expect(teams.ok).toBe(true);
+    if (teams.ok) {
+      expect(teams.value.provider).toBe("msteams");
+    }
+
     const bad = normalizeAgentPayload({ message: "yo", provider: "sms" });
     expect(bad.ok).toBe(false);
   });
