@@ -139,14 +139,22 @@ async function resolveDiscordThreadStarter(params: {
   channel: DiscordThreadChannel;
   client: Client;
   parentId?: string;
+  parentType?: ChannelType;
 }): Promise<DiscordThreadStarter | null> {
   const cacheKey = params.channel.id;
   const cached = DISCORD_THREAD_STARTER_CACHE.get(cacheKey);
   if (cached) return cached;
   try {
-    if (!params.parentId) return null;
+    const parentType = params.parentType;
+    const isForumParent =
+      parentType === ChannelType.GuildForum ||
+      parentType === ChannelType.GuildMedia;
+    const messageChannelId = isForumParent
+      ? params.channel.id
+      : params.parentId;
+    if (!messageChannelId) return null;
     const starter = (await params.client.rest.get(
-      Routes.channelMessage(params.parentId, params.channel.id),
+      Routes.channelMessage(messageChannelId, params.channel.id),
     )) as {
       content?: string | null;
       embeds?: Array<{ description?: string | null }>;
@@ -225,6 +233,14 @@ export type DiscordMessageHandler = (
   data: DiscordMessageEvent,
   client: Client,
 ) => Promise<void>;
+
+function isDiscordThreadType(type: ChannelType | undefined): boolean {
+  return (
+    type === ChannelType.PublicThread ||
+    type === ChannelType.PrivateThread ||
+    type === ChannelType.AnnouncementThread
+  );
+}
 
 export function resolveDiscordReplyTarget(opts: {
   replyToMode: ReplyToMode;
@@ -666,12 +682,32 @@ export function createDiscordMessageHandler(params: {
         message.channel &&
         "isThread" in message.channel &&
         message.channel.isThread();
+      const isThreadByType =
+        isGuildMessage && isDiscordThreadType(channelInfo?.type);
       const threadChannel = isThreadChannel
         ? (message.channel as DiscordThreadChannel)
-        : null;
+        : isThreadByType
+          ? {
+              id: message.channelId,
+              name: channelInfo?.name ?? undefined,
+              parentId: channelInfo?.parentId ?? undefined,
+            }
+          : null;
       const threadParentId =
-        threadChannel?.parentId ?? threadChannel?.parent?.id ?? undefined;
-      const threadParentName = threadChannel?.parent?.name;
+        threadChannel?.parentId ??
+        threadChannel?.parent?.id ??
+        channelInfo?.parentId ??
+        undefined;
+      let threadParentName = threadChannel?.parent?.name;
+      let threadParentType: ChannelType | undefined;
+      if (threadChannel && threadParentId) {
+        const parentInfo = await resolveDiscordChannelInfo(
+          client,
+          threadParentId,
+        );
+        threadParentName = threadParentName ?? parentInfo?.name;
+        threadParentType = parentInfo?.type;
+      }
       const threadName = threadChannel?.name;
       const configChannelName = threadParentName ?? channelName;
       const configChannelSlug = configChannelName
@@ -935,6 +971,7 @@ export function createDiscordMessageHandler(params: {
           channel: threadChannel,
           client,
           parentId: threadParentId,
+          parentType: threadParentType,
         });
         if (starter?.text) {
           const starterEnvelope = formatThreadStarterEnvelope({
@@ -1684,13 +1721,17 @@ async function deliverDiscordReply(params: {
 async function resolveDiscordChannelInfo(
   client: Client,
   channelId: string,
-): Promise<{ type: ChannelType; name?: string; topic?: string } | null> {
+): Promise<
+  { type: ChannelType; name?: string; topic?: string; parentId?: string } | null
+> {
   try {
     const channel = await client.fetchChannel(channelId);
     if (!channel) return null;
     const name = "name" in channel ? (channel.name ?? undefined) : undefined;
     const topic = "topic" in channel ? (channel.topic ?? undefined) : undefined;
-    return { type: channel.type, name, topic };
+    const parentId =
+      "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
+    return { type: channel.type, name, topic, parentId };
   } catch (err) {
     logVerbose(`discord: failed to fetch channel ${channelId}: ${String(err)}`);
     return null;

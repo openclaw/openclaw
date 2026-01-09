@@ -1,6 +1,7 @@
 import type { Client } from "@buape/carbon";
 import { ChannelType, MessageType } from "@buape/carbon";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Routes } from "discord-api-types/v10";
 
 const sendMock = vi.fn();
 const reactMock = vi.fn();
@@ -379,6 +380,112 @@ describe("discord tool result dispatch", () => {
     expect(capturedCtx?.ParentSessionKey).toBe("agent:main:discord:channel:p1");
     expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
     expect(capturedCtx?.ThreadLabel).toContain("Discord thread #general");
+  });
+
+  it("treats forum threads as distinct sessions without channel payloads", async () => {
+    const { createDiscordMessageHandler } = await import("./monitor.js");
+    let capturedCtx:
+      | {
+          SessionKey?: string;
+          ParentSessionKey?: string;
+          ThreadStarterBody?: string;
+          ThreadLabel?: string;
+        }
+      | undefined;
+    dispatchMock.mockImplementationOnce(async ({ ctx, dispatcher }) => {
+      capturedCtx = ctx;
+      dispatcher.sendFinalReply({ text: "hi" });
+      return { queuedFinal: true, counts: { final: 1 } };
+    });
+
+    const cfg = {
+      agent: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/clawd" },
+      session: { store: "/tmp/clawdbot-sessions.json" },
+      discord: {
+        dm: { enabled: true, policy: "open" },
+        guilds: { "*": { requireMention: false } },
+      },
+      routing: { allowFrom: [] },
+    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+
+    const handler = createDiscordMessageHandler({
+      cfg,
+      discordConfig: cfg.discord,
+      accountId: "default",
+      token: "token",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+        exit: (code: number): never => {
+          throw new Error(`exit ${code}`);
+        },
+      },
+      botUserId: "bot-id",
+      guildHistories: new Map(),
+      historyLimit: 0,
+      mediaMaxBytes: 10_000,
+      textLimit: 2000,
+      replyToMode: "off",
+      dmEnabled: true,
+      groupDmEnabled: false,
+      guildEntries: { "*": { requireMention: false } },
+    });
+
+    const fetchChannel = vi
+      .fn()
+      .mockResolvedValueOnce({
+        type: ChannelType.PublicThread,
+        name: "topic-1",
+        parentId: "forum-1",
+      })
+      .mockResolvedValueOnce({
+        type: ChannelType.GuildForum,
+        name: "support",
+      });
+    const restGet = vi.fn().mockResolvedValue({
+      content: "starter message",
+      author: { id: "u1", username: "Alice", discriminator: "0001" },
+      timestamp: new Date().toISOString(),
+    });
+    const client = {
+      fetchChannel,
+      rest: {
+        get: restGet,
+      },
+    } as unknown as Client;
+
+    await handler(
+      {
+        message: {
+          id: "m6",
+          content: "thread reply",
+          channelId: "t1",
+          timestamp: new Date().toISOString(),
+          type: MessageType.Default,
+          attachments: [],
+          embeds: [],
+          mentionedEveryone: false,
+          mentionedUsers: [],
+          mentionedRoles: [],
+          author: { id: "u2", bot: false, username: "Bob", tag: "Bob#2" },
+        },
+        author: { id: "u2", bot: false, username: "Bob", tag: "Bob#2" },
+        member: { displayName: "Bob" },
+        guild: { id: "g1", name: "Guild" },
+        guild_id: "g1",
+      },
+      client,
+    );
+
+    expect(capturedCtx?.SessionKey).toBe("agent:main:discord:channel:t1");
+    expect(capturedCtx?.ParentSessionKey).toBe(
+      "agent:main:discord:channel:forum-1",
+    );
+    expect(capturedCtx?.ThreadStarterBody).toContain("starter message");
+    expect(capturedCtx?.ThreadLabel).toContain("Discord thread #support");
+    expect(restGet).toHaveBeenCalledWith(
+      Routes.channelMessage("t1", "t1"),
+    );
   });
 
   it("scopes thread sessions to the routed agent", async () => {
