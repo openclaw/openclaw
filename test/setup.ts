@@ -2,6 +2,31 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+function sanitizeWindowsCIOutput(text: string): string {
+  return text
+    .replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]/g, "?")
+    .replace(/[\uD800-\uDFFF]/g, "?");
+}
+
+if (process.platform === "win32" && process.env.GITHUB_ACTIONS === "true") {
+  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+  const originalStderrWrite = process.stderr.write.bind(process.stderr);
+
+  process.stdout.write = ((chunk: unknown, ...args: unknown[]) => {
+    if (typeof chunk === "string") {
+      return originalStdoutWrite(sanitizeWindowsCIOutput(chunk), ...args);
+    }
+    return originalStdoutWrite(chunk as never, ...args);
+  }) as typeof process.stdout.write;
+
+  process.stderr.write = ((chunk: unknown, ...args: unknown[]) => {
+    if (typeof chunk === "string") {
+      return originalStderrWrite(sanitizeWindowsCIOutput(chunk), ...args);
+    }
+    return originalStderrWrite(chunk as never, ...args);
+  }) as typeof process.stderr.write;
+}
+
 const originalHome = process.env.HOME;
 const originalUserProfile = process.env.USERPROFILE;
 const originalXdgConfigHome = process.env.XDG_CONFIG_HOME;
