@@ -25,6 +25,7 @@
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
+- Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
