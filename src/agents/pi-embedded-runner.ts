@@ -89,9 +89,8 @@ import { resolveSandboxContext } from "./sandbox.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
-  buildWorkspaceSkillsPrompt,
   loadWorkspaceSkillEntries,
-  type SkillEntry,
+  resolveSkillsPromptForRun,
   type SkillSnapshot,
 } from "./skills.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
@@ -622,24 +621,6 @@ export function createSystemPromptOverride(
   return () => trimmed;
 }
 
-export function resolveSkillsPrompt(params: {
-  skillsSnapshot?: SkillSnapshot;
-  skillEntries?: SkillEntry[];
-  config?: ClawdbotConfig;
-  workspaceDir: string;
-}): string {
-  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
-  if (snapshotPrompt) return snapshotPrompt;
-  if (params.skillEntries && params.skillEntries.length > 0) {
-    const prompt = buildWorkspaceSkillsPrompt(params.workspaceDir, {
-      entries: params.skillEntries,
-      config: params.config,
-    });
-    return prompt.trim() ? prompt : "";
-  }
-  return "";
-}
-
 // Tool names are now capitalized (Bash, Read, Write, Edit) to bypass Anthropic's
 // OAuth token blocking of lowercase names. However, pi-coding-agent's SDK has
 // hardcoded lowercase names in its built-in tool registry, so we must pass ALL
@@ -866,9 +847,9 @@ export async function compactEmbeddedPiSession(params: {
               skills: skillEntries ?? [],
               config: params.config,
             });
-        const skillsPrompt = resolveSkillsPrompt({
+        const skillsPrompt = resolveSkillsPromptForRun({
           skillsSnapshot: params.skillsSnapshot,
-          skillEntries: shouldLoadSkillEntries ? skillEntries : undefined,
+          entries: shouldLoadSkillEntries ? skillEntries : undefined,
           config: params.config,
           workspaceDir: effectiveWorkspace,
         });
@@ -1196,9 +1177,9 @@ export async function runEmbeddedPiAgent(params: {
                 skills: skillEntries ?? [],
                 config: params.config,
               });
-          const skillsPrompt = resolveSkillsPrompt({
+          const skillsPrompt = resolveSkillsPromptForRun({
             skillsSnapshot: params.skillsSnapshot,
-            skillEntries: shouldLoadSkillEntries ? skillEntries : undefined,
+            entries: shouldLoadSkillEntries ? skillEntries : undefined,
             config: params.config,
             workspaceDir: effectiveWorkspace,
           });

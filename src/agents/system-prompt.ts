@@ -139,6 +139,14 @@ export function buildAgentSystemPrompt(params: {
     runtimeProvider === "telegram" &&
     runtimeCapabilitiesLower.has("inlinebuttons");
   const skillsLines = skillsPrompt ? [skillsPrompt, ""] : [];
+  const skillsSection = skillsPrompt
+    ? [
+        "## Skills",
+        "Skills provide task-specific instructions. Use `read` to load the SKILL.md at the location listed for that skill.",
+        ...skillsLines,
+        "",
+      ]
+    : [];
 
   const lines = [
     "You are a personal assistant running inside Clawdbot.",
@@ -166,10 +174,7 @@ export function buildAgentSystemPrompt(params: {
     "TOOLS.md does not control tool availability; it is user guidance for how to use external tools.",
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
     "",
-    "## Skills",
-    "Skills provide task-specific instructions. Use `read` to load the SKILL.md at the location listed for that skill.",
-    ...skillsLines,
-    "",
+    ...skillsSection,
     hasGateway ? "## Clawdbot Self-Update" : "",
     hasGateway
       ? [
