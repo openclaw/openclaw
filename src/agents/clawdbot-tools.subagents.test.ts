@@ -57,6 +57,7 @@ describe("subagents", () => {
         const params = request.params as {
           message?: string;
           sessionKey?: string;
+          provider?: string;
           timeout?: number;
         };
         const message = params?.message ?? "";
@@ -67,6 +68,7 @@ describe("subagents", () => {
           childRunId = runId;
           childSessionKey = sessionKey;
           sessionLastAssistantText.set(sessionKey, "result");
+          expect(params?.provider).toBe("discord");
           expect(params?.timeout).toBe(1);
         }
         return {
@@ -155,10 +157,16 @@ describe("subagents", () => {
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
     const first = agentCalls[0]?.params as
-      | { lane?: string; deliver?: boolean; sessionKey?: string }
+      | {
+          lane?: string;
+          deliver?: boolean;
+          sessionKey?: string;
+          provider?: string;
+        }
       | undefined;
     expect(first?.lane).toBe("subagent");
     expect(first?.deliver).toBe(false);
+    expect(first?.provider).toBe("discord");
     expect(first?.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
     expect(childSessionKey?.startsWith("agent:main:subagent:")).toBe(true);
 

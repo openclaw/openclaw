@@ -170,6 +170,7 @@ export function createSessionsSpawnTool(opts?: {
           params: {
             message: task,
             sessionKey: childSessionKey,
+            provider: opts?.agentProvider,
             idempotencyKey: childIdem,
             deliver: false,
             lane: "subagent",
