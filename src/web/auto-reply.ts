@@ -1,6 +1,6 @@
 import {
-  resolveIdentityNamePrefix,
-  resolveResponsePrefix,
+  resolveEffectiveMessagesConfig,
+  resolveMessagePrefix,
 } from "../agents/identity.js";
 import {
   chunkMarkdownText,
@@ -1038,13 +1038,9 @@ export async function monitorWebProvider(
 
     const buildLine = (msg: WebInboundMsg, agentId: string) => {
       // Build message prefix: explicit config > identity name > default based on allowFrom
-      let messagePrefix = cfg.messages?.messagePrefix;
-      if (messagePrefix === undefined) {
-        const hasAllowFrom = (cfg.whatsapp?.allowFrom?.length ?? 0) > 0;
-        messagePrefix = hasAllowFrom
-          ? ""
-          : (resolveIdentityNamePrefix(cfg, agentId) ?? "[clawdbot]");
-      }
+      const messagePrefix = resolveMessagePrefix(cfg, agentId, {
+        hasAllowFrom: (cfg.whatsapp?.allowFrom?.length ?? 0) > 0,
+      });
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
       const senderLabel =
         msg.chatType === "group"
@@ -1178,7 +1174,10 @@ export async function monitorWebProvider(
       const textLimit = resolveTextChunkLimit(cfg, "whatsapp");
       let didLogHeartbeatStrip = false;
       let didSendReply = false;
-      const responsePrefix = resolveResponsePrefix(cfg, route.agentId);
+      const responsePrefix = resolveEffectiveMessagesConfig(
+        cfg,
+        route.agentId,
+      ).responsePrefix;
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
           responsePrefix,

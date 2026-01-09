@@ -7,12 +7,12 @@
  * across multiple providers.
  */
 
-import { resolveAgentIdFromSessionKey } from "../../agents/agent-scope.js";
-import { resolveResponsePrefix } from "../../agents/identity.js";
+import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { sendMessageMSTeams } from "../../msteams/send.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -65,10 +65,10 @@ export async function routeReply(
 
   // Debug: `pnpm test src/auto-reply/reply/route-reply.test.ts`
   const responsePrefix = params.sessionKey
-    ? resolveResponsePrefix(
+    ? resolveEffectiveMessagesConfig(
         cfg,
         resolveAgentIdFromSessionKey(params.sessionKey),
-      )
+      ).responsePrefix
     : cfg.messages?.responsePrefix;
   const normalized = normalizeReplyPayload(payload, {
     responsePrefix,

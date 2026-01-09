@@ -8,7 +8,7 @@ import { Bot, InputFile, webhookCallback } from "grammy";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
   resolveAckReaction,
-  resolveResponsePrefix,
+  resolveEffectiveMessagesConfig,
 } from "../agents/identity.js";
 import { EmbeddedBlockChunker } from "../agents/pi-embedded-block-chunker.js";
 import {
@@ -729,7 +729,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
-        responsePrefix: resolveResponsePrefix(cfg, route.agentId),
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
         deliver: async (payload, info) => {
           if (info.kind === "final") {
             await flushDraft();

@@ -6,7 +6,7 @@ import {
 import type { WebClient as SlackWebClient } from "@slack/web-api";
 import {
   resolveAckReaction,
-  resolveResponsePrefix,
+  resolveEffectiveMessagesConfig,
 } from "../agents/identity.js";
 import {
   chunkMarkdownText,
@@ -1119,7 +1119,8 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     };
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
-        responsePrefix: resolveResponsePrefix(cfg, route.agentId),
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
         deliver: async (payload) => {
           await deliverReplies({
             replies: [payload],

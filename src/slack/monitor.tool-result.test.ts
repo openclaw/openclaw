@@ -154,6 +154,70 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock.mock.calls[1][1]).toBe("PFX final reply");
   });
 
+  it("derives responsePrefix from routed agent identity when unset", async () => {
+    config = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            identity: { name: "Mainbot", theme: "space lobster", emoji: "🦞" },
+          },
+          {
+            id: "rich",
+            identity: { name: "Richbot", theme: "lion bot", emoji: "🦁" },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "rich",
+          match: { provider: "slack", peer: { kind: "dm", id: "U1" } },
+        },
+      ],
+      messages: {
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+      },
+      slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
+    };
+
+    replyMock.mockImplementation(async (_ctx, opts) => {
+      await opts?.onToolResult?.({ text: "tool update" });
+      return { text: "final reply" };
+    });
+
+    const controller = new AbortController();
+    const run = monitorSlackProvider({
+      botToken: "bot-token",
+      appToken: "app-token",
+      abortSignal: controller.signal,
+    });
+
+    await waitForEvent("message");
+    const handler = getSlackHandlers()?.get("message");
+    if (!handler) throw new Error("Slack message handler not registered");
+
+    await handler({
+      event: {
+        type: "message",
+        user: "U1",
+        text: "hello",
+        ts: "123",
+        channel: "C1",
+        channel_type: "im",
+      },
+    });
+
+    await flush();
+    controller.abort();
+    await run;
+
+    expect(sendMock).toHaveBeenCalledTimes(2);
+    expect(sendMock.mock.calls[0][1]).toBe("[Richbot] tool update");
+    expect(sendMock.mock.calls[1][1]).toBe("[Richbot] final reply");
+  });
+
   it("updates assistant thread status when replies start", async () => {
     replyMock.mockImplementation(async (_ctx, opts) => {
       await opts?.onReplyStart?.();

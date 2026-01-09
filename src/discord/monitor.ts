@@ -19,7 +19,7 @@ import { ApplicationCommandOptionType, Routes } from "discord-api-types/v10";
 
 import {
   resolveAckReaction,
-  resolveResponsePrefix,
+  resolveEffectiveMessagesConfig,
 } from "../agents/identity.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
@@ -1033,7 +1033,8 @@ export function createDiscordMessageHandler(params: {
       let didSendReply = false;
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
-          responsePrefix: resolveResponsePrefix(cfg, route.agentId),
+          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+            .responsePrefix,
           deliver: async (payload) => {
             await deliverDiscordReply({
               replies: [payload],
@@ -1513,7 +1514,8 @@ function createDiscordNativeCommand(params: {
 
       let didReply = false;
       const dispatcher = createReplyDispatcher({
-        responsePrefix: resolveResponsePrefix(cfg, route.agentId),
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
         deliver: async (payload, _info) => {
           await deliverDiscordInteractionReply({
             interaction,
