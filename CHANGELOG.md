@@ -144,6 +144,7 @@
 - Docs: split CLI install commands into separate code blocks. (#601) — thanks @martinpucik
 - WhatsApp: record outbound provider activity using the active account id. (#537) — thanks @Nachx639
 - Discord: add gateway HELLO timeout to detect zombie connections. (#608) — thanks @NicholasSpisak
+- Docker: cache dependency layer for faster rebuilds. (#605) — thanks @zknicker
 
 ## 2026.1.8
 
