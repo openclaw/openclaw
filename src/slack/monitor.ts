@@ -58,7 +58,13 @@ import type { RuntimeEnv } from "../runtime.js";
 import { resolveSlackAccount } from "./accounts.js";
 import { reactSlackMessage } from "./actions.js";
 import { sendMessageSlack } from "./send.js";
+import { resolveSlackThreadTargets } from "./threading.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
+import type {
+  SlackAppMentionEvent,
+  SlackFile,
+  SlackMessageEvent,
+} from "./types.js";
 
 export type MonitorSlackOpts = {
   botToken?: string;
@@ -69,45 +75,6 @@ export type MonitorSlackOpts = {
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;
   slashCommand?: SlackSlashCommandConfig;
-};
-
-type SlackFile = {
-  id?: string;
-  name?: string;
-  mimetype?: string;
-  size?: number;
-  url_private?: string;
-  url_private_download?: string;
-};
-
-type SlackMessageEvent = {
-  type: "message";
-  user?: string;
-  bot_id?: string;
-  subtype?: string;
-  username?: string;
-  text?: string;
-  ts?: string;
-  thread_ts?: string;
-  event_ts?: string;
-  parent_user_id?: string;
-  channel: string;
-  channel_type?: "im" | "mpim" | "channel" | "group";
-  files?: SlackFile[];
-};
-
-type SlackAppMentionEvent = {
-  type: "app_mention";
-  user?: string;
-  bot_id?: string;
-  username?: string;
-  text?: string;
-  ts?: string;
-  thread_ts?: string;
-  event_ts?: string;
-  parent_user_id?: string;
-  channel: string;
-  channel_type?: "im" | "mpim" | "channel" | "group";
 };
 
 type SlackReactionEvent = {
@@ -1102,12 +1069,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       );
     }
 
-    const incomingThreadTs = message.thread_ts;
-    const eventTs = message.event_ts;
-    const messageTs = message.ts ?? eventTs;
-    const replyThreadTs =
-      incomingThreadTs ?? (replyToMode === "all" ? messageTs : undefined);
-    const statusThreadTs = replyThreadTs ?? messageTs;
+    const { replyThreadTs, statusThreadTs } = resolveSlackThreadTargets({
+      message,
+      replyToMode,
+    });
     let didSetStatus = false;
     const onReplyStart = async () => {
       didSetStatus = true;

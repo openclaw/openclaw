@@ -38,3 +38,12 @@ export function createReplyToModeFilter(
     return payload;
   };
 }
+
+export function createReplyToModeFilterForChannel(
+  mode: ReplyToMode,
+  channel?: OriginatingChannelType,
+) {
+  return createReplyToModeFilter(mode, {
+    allowTagsWhenOff: channel === "slack",
+  });
+}
