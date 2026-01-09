@@ -313,12 +313,12 @@ describe("context-pruning", () => {
       makeUser("u1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "Bash",
         text: "x".repeat(20_000),
       }),
       makeToolResult({
         toolCallId: "t2",
-        toolName: "browser",
+        toolName: "Browser",
         text: "y".repeat(20_000),
       }),
     ];

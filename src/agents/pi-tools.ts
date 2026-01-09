@@ -403,7 +403,6 @@ function normalizeToolNames(list?: string[]) {
  * Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
  * Renaming to capitalized versions bypasses the block while maintaining compatibility
  * with regular API keys.
- * @see https://github.com/anthropics/claude-code/issues/XXX
  */
 const OAUTH_BLOCKED_TOOL_NAMES: Record<string, string> = {
   bash: "Bash",

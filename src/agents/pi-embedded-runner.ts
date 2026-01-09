@@ -616,7 +616,6 @@ export function createSystemPromptOverride(
 // OAuth token blocking of lowercase names. However, pi-coding-agent's SDK has
 // hardcoded lowercase names in its built-in tool registry, so we must pass ALL
 // tools as customTools to bypass the SDK's filtering.
-// See: https://github.com/anthropics/claude-code/issues/XXX
 
 type AnyAgentTool = AgentTool;
 

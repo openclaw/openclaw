@@ -72,6 +72,7 @@
 - Commands: return /status in directive-only multi-line messages.
 - Models: fall back to configured models when the provider catalog is unavailable.
 - Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
+- Agent: bypass Anthropic OAuth tool-name blocks by capitalizing built-ins and keeping pruning tool matching case-insensitive. (#553) — thanks @andrewting19
 
 ## 2026.1.8
 
