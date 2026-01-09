@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     include: ["src/**/*.test.ts", "test/format-error.test.ts"],
     setupFiles: ["test/setup.ts"],
+    globalSetup: ["test/vitest-global-setup.ts"],
     exclude: [
       "dist/**",
       "apps/macos/**",
