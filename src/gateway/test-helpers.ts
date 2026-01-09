@@ -392,9 +392,40 @@ export function installGatewayTestHooks() {
   });
 }
 
+let nextTestPortOffset = 0;
+
 export async function getFreePort(): Promise<number> {
+  const workerIdRaw =
+    process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID ?? "";
+  const workerId = Number.parseInt(workerIdRaw, 10);
+  const shard = Number.isFinite(workerId)
+    ? Math.max(0, workerId)
+    : Math.abs(process.pid);
+
+  // Avoid flaky "get a free port then bind later" races by allocating from a
+  // deterministic per-worker port range. Still probe for EADDRINUSE to avoid
+  // collisions with external processes.
+  const rangeSize = 1000;
+  const shardCount = 30;
+  const base = 30_000 + (Math.abs(shard) % shardCount) * rangeSize; // <= 59_999
+
+  for (let attempt = 0; attempt < rangeSize; attempt++) {
+    const port = base + (nextTestPortOffset++ % rangeSize);
+    // eslint-disable-next-line no-await-in-loop
+    const ok = await new Promise<boolean>((resolve) => {
+      const server = createServer();
+      server.once("error", () => resolve(false));
+      server.listen(port, "127.0.0.1", () => {
+        server.close(() => resolve(true));
+      });
+    });
+    if (ok) return port;
+  }
+
+  // Fallback: let the OS pick a port.
   return await new Promise((resolve, reject) => {
     const server = createServer();
+    server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
       const port = (server.address() as AddressInfo).port;
       server.close((err) => (err ? reject(err) : resolve(port)));
@@ -454,14 +485,29 @@ export async function startServerWithClient(
   token?: string,
   opts?: GatewayServerOptions,
 ) {
-  const port = await getFreePort();
+  let port = await getFreePort();
   const prev = process.env.CLAWDBOT_GATEWAY_TOKEN;
   if (token === undefined) {
     delete process.env.CLAWDBOT_GATEWAY_TOKEN;
   } else {
     process.env.CLAWDBOT_GATEWAY_TOKEN = token;
   }
-  const server = await startGatewayServer(port, opts);
+
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      server = await startGatewayServer(port, opts);
+      break;
+    } catch (err) {
+      const code = (err as { cause?: { code?: string } }).cause?.code;
+      if (code !== "EADDRINUSE") throw err;
+      port = await getFreePort();
+    }
+  }
+  if (!server) {
+    throw new Error("failed to start gateway server after retries");
+  }
+
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
   await new Promise<void>((resolve) => ws.once("open", resolve));
   return { server, ws, port, prevToken: prev };
