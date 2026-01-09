@@ -6,6 +6,7 @@
 - Node bridge: harden keepalive + heartbeat handling (TCP keepalive, better disconnects, and keepalive config tests). (#577) — thanks @steipete
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
+- Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
 - Commands: accept /models as an alias for /model.
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Debugging: add raw model stream logging flags and document gateway watch mode.

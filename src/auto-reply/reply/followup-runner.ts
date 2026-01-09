@@ -196,6 +196,7 @@ export function createFollowupRunner(params: {
           | undefined);
       const applyReplyToMode = createReplyToModeFilter(
         resolveReplyToMode(queued.run.config, replyToChannel),
+        { allowTagsWhenOff: replyToChannel === "slack" },
       );
 
       const replyTaggedPayloads: ReplyPayload[] = applyReplyThreading({

@@ -1101,14 +1101,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     const incomingThreadTs = message.thread_ts;
     const eventTs = message.event_ts;
+    const messageTs = message.ts ?? eventTs;
     const replyThreadTs =
-      replyToMode === "all"
-        ? (incomingThreadTs ?? message.ts ?? eventTs)
-        : replyToMode === "first"
-          ? incomingThreadTs
-          : undefined;
-    const statusThreadTs =
-      replyThreadTs ?? incomingThreadTs ?? message.ts ?? eventTs;
+      incomingThreadTs ?? (replyToMode === "all" ? messageTs : undefined);
+    const statusThreadTs = replyThreadTs ?? messageTs;
     let didSetStatus = false;
     const onReplyStart = async () => {
       didSetStatus = true;

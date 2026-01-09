@@ -291,7 +291,7 @@ describe("monitorSlackProvider tool results", () => {
       },
       slack: {
         dm: { enabled: true, policy: "open", allowFrom: ["*"] },
-        replyToMode: "first",
+        replyToMode: "off",
       },
     };
 
