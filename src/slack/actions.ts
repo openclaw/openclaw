@@ -151,7 +151,6 @@ export async function sendSlackMessage(
     accountId: opts.accountId,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
-    threadTs: opts.threadTs,
     client: opts.client,
     threadTs: opts.threadTs,
   });
