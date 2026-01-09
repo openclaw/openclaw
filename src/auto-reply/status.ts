@@ -297,7 +297,10 @@ export function buildStatusMessage(args: StatusArgs): string {
   const activationLine = activationParts.filter(Boolean).join(" · ");
 
   const authMode = resolveModelAuthMode(provider, args.config);
-  const showCost = authMode === "api-key";
+  const authLabelValue =
+    args.modelAuth ??
+    (authMode && authMode !== "unknown" ? authMode : undefined);
+  const showCost = authLabelValue === "api-key" || authLabelValue === "mixed";
   const costConfig = showCost
     ? resolveModelCostConfig({
         provider,
@@ -320,21 +323,19 @@ export function buildStatusMessage(args: StatusArgs): string {
   const costLabel = showCost && hasUsage ? formatUsd(cost) : undefined;
 
   const modelLabel = model ? `${provider}/${model}` : "unknown";
-  const authLabelValue =
-    args.modelAuth ??
-    (authMode && authMode !== "unknown" ? authMode : undefined);
   const authLabel = authLabelValue ? ` · 🔑 ${authLabelValue}` : "";
   const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
   const commit = resolveCommitHash();
   const versionLine = `🦞 ClawdBot ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
   const costLine = costLabel ? `💵 Cost: ${costLabel}` : null;
+  const usageCostLine =
+    usagePair && costLine ? `${usagePair} · ${costLine}` : usagePair ?? costLine;
 
   return [
     versionLine,
     modelLine,
-    usagePair,
-    costLine,
+    usageCostLine,
     `📚 ${contextLine}`,
     args.usageLine,
     `🧵 ${sessionLine}`,

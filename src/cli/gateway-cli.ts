@@ -50,6 +50,8 @@ type GatewayRunOpts = {
   verbose?: boolean;
   wsLog?: unknown;
   compact?: boolean;
+  rawStream?: boolean;
+  rawStreamPath?: unknown;
 };
 
 type GatewayRunParams = {
@@ -299,6 +301,14 @@ async function runGatewayCommand(
     defaultRuntime.exit(1);
   }
   setGatewayWsLogStyle(wsLogStyle);
+
+  if (opts.rawStream) {
+    process.env.CLAWDBOT_RAW_STREAM = "1";
+  }
+  const rawStreamPath = toOptionString(opts.rawStreamPath);
+  if (rawStreamPath) {
+    process.env.CLAWDBOT_RAW_STREAM_PATH = rawStreamPath;
+  }
 
   const cfg = loadConfig();
   const portOverride = parsePort(opts.port);
@@ -565,6 +575,8 @@ function addGatewayRunCommand(
       "auto",
     )
     .option("--compact", 'Alias for "--ws-log compact"', false)
+    .option("--raw-stream", "Log raw model stream events to jsonl", false)
+    .option("--raw-stream-path <path>", "Raw stream jsonl path")
     .action(async (opts) => {
       await runGatewayCommand(opts, params);
     });
