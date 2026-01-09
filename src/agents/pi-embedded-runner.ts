@@ -79,7 +79,7 @@ import {
 import {
   extractAssistantText,
   extractAssistantThinking,
-  formatReasoningMarkdown,
+  formatReasoningMessage,
 } from "./pi-embedded-utils.js";
 import { setContextPruningRuntime } from "./pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "./pi-extensions/context-pruning/settings.js";
@@ -1606,7 +1606,7 @@ export async function runEmbeddedPiAgent(params: {
 
           const reasoningText =
             lastAssistant && params.reasoningLevel === "on"
-              ? formatReasoningMarkdown(extractAssistantThinking(lastAssistant))
+              ? formatReasoningMessage(extractAssistantThinking(lastAssistant))
               : "";
           if (reasoningText) replyItems.push({ text: reasoningText });
 

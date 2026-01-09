@@ -48,7 +48,7 @@ Text + native (when enabled):
 - `/reset` or `/new`
 - `/think <level>` (aliases: `/thinking`, `/t`)
 - `/verbose on|off` (alias: `/v`)
-- `/reasoning on|off|stream` (alias: `/reason`; `stream` = Telegram draft only)
+- `/reasoning on|off|stream` (alias: `/reason`; when on, sends a separate message prefixed `Reasoning:`; `stream` = Telegram draft only)
 - `/elevated on|off` (alias: `/elev`)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)

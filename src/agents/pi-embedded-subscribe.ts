@@ -16,15 +16,16 @@ import { isMessagingToolDuplicate } from "./pi-embedded-helpers.js";
 import {
   extractAssistantText,
   extractAssistantThinking,
-  formatReasoningMarkdown,
+  extractThinkingFromTaggedStream,
+  extractThinkingFromTaggedText,
+  formatReasoningMessage,
   inferToolMetaFromArgs,
+  promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
 const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
 const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
-const THINKING_OPEN_GLOBAL_RE = /<\s*think(?:ing)?\s*>/gi;
-const THINKING_CLOSE_GLOBAL_RE = /<\s*\/\s*think(?:ing)?\s*>/gi;
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*think(?:ing)?\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
@@ -121,96 +122,6 @@ function stripUnpairedThinkingTags(text: string): string {
   if (!hasOpen) return text.replace(THINKING_CLOSE_RE, "");
   if (!hasClose) return text.replace(THINKING_OPEN_RE, "");
   return text;
-}
-
-type ThinkTaggedSplitBlock =
-  | { type: "thinking"; thinking: string }
-  | { type: "text"; text: string };
-
-function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
-  const trimmedStart = text.trimStart();
-  // Avoid false positives: only treat it as structured thinking when it begins
-  // with a think tag (common for local/OpenAI-compat providers that emulate
-  // reasoning blocks via tags).
-  if (!trimmedStart.startsWith("<")) return null;
-  if (!THINKING_OPEN_RE.test(trimmedStart)) return null;
-  if (!THINKING_CLOSE_RE.test(text)) return null;
-
-  THINKING_TAG_SCAN_RE.lastIndex = 0;
-  let inThinking = false;
-  let cursor = 0;
-  let thinkingStart = 0;
-  const blocks: ThinkTaggedSplitBlock[] = [];
-
-  const pushText = (value: string) => {
-    if (!value) return;
-    blocks.push({ type: "text", text: value });
-  };
-  const pushThinking = (value: string) => {
-    const cleaned = value.trim();
-    if (!cleaned) return;
-    blocks.push({ type: "thinking", thinking: cleaned });
-  };
-
-  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
-    const index = match.index ?? 0;
-    const isClose = Boolean(match[1]?.includes("/"));
-
-    if (!inThinking && !isClose) {
-      pushText(text.slice(cursor, index));
-      thinkingStart = index + match[0].length;
-      inThinking = true;
-      continue;
-    }
-
-    if (inThinking && isClose) {
-      pushThinking(text.slice(thinkingStart, index));
-      cursor = index + match[0].length;
-      inThinking = false;
-    }
-  }
-
-  if (inThinking) return null;
-  pushText(text.slice(cursor));
-
-  const hasThinking = blocks.some((b) => b.type === "thinking");
-  if (!hasThinking) return null;
-  return blocks;
-}
-
-function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
-  if (!Array.isArray(message.content)) return;
-  const hasThinkingBlock = message.content.some(
-    (block) => block.type === "thinking",
-  );
-  if (hasThinkingBlock) return;
-
-  const next: AssistantMessage["content"] = [];
-  let changed = false;
-
-  for (const block of message.content) {
-    if (block.type !== "text") {
-      next.push(block);
-      continue;
-    }
-    const split = splitThinkingTaggedText(block.text);
-    if (!split) {
-      next.push(block);
-      continue;
-    }
-    changed = true;
-    for (const part of split) {
-      if (part.type === "thinking") {
-        next.push({ type: "thinking", thinking: part.thinking });
-      } else if (part.type === "text") {
-        const cleaned = part.text.trimStart();
-        if (cleaned) next.push({ type: "text", text: cleaned });
-      }
-    }
-  }
-
-  if (!changed) return;
-  message.content = next;
 }
 
 function normalizeSlackTarget(raw: string): string | undefined {
@@ -533,49 +444,9 @@ export function subscribeEmbeddedPiSession(params: {
     });
   };
 
-  const extractThinkingFromText = (text: string): string => {
-    if (!text || !THINKING_TAG_RE.test(text)) return "";
-    THINKING_TAG_RE.lastIndex = 0;
-    let result = "";
-    let lastIndex = 0;
-    let inThinking = false;
-    for (const match of text.matchAll(THINKING_TAG_RE)) {
-      const idx = match.index ?? 0;
-      if (inThinking) {
-        result += text.slice(lastIndex, idx);
-      }
-      const tag = match[0].toLowerCase();
-      inThinking = !tag.includes("/");
-      lastIndex = idx + match[0].length;
-    }
-    return result.trim();
-  };
-
-  const extractThinkingFromStream = (text: string): string => {
-    if (!text) return "";
-    const closed = extractThinkingFromText(text);
-    if (closed) return closed;
-    const openMatches = [...text.matchAll(THINKING_OPEN_GLOBAL_RE)];
-    if (openMatches.length === 0) return "";
-    const closeMatches = [...text.matchAll(THINKING_CLOSE_GLOBAL_RE)];
-    const lastOpen = openMatches[openMatches.length - 1];
-    const lastClose = closeMatches[closeMatches.length - 1];
-    if (lastClose && (lastClose.index ?? -1) > (lastOpen.index ?? -1)) {
-      return closed;
-    }
-    const start = (lastOpen.index ?? 0) + lastOpen[0].length;
-    return text.slice(start).trim();
-  };
-
-  const formatReasoningDraft = (text: string): string => {
-    const trimmed = text.trim();
-    if (!trimmed) return "";
-    return `Reasoning:\n${trimmed}`;
-  };
-
   const emitReasoningStream = (text: string) => {
     if (!streamReasoning || !params.onReasoningStream) return;
-    const formatted = formatReasoningDraft(text);
+    const formatted = formatReasoningMessage(text);
     if (!formatted) return;
     if (formatted === lastStreamedReasoning) return;
     lastStreamedReasoning = formatted;
@@ -851,7 +722,7 @@ export function subscribeEmbeddedPiSession(params: {
 
             if (streamReasoning) {
               // Handle partial <think> tags: stream whatever reasoning is visible so far.
-              emitReasoningStream(extractThinkingFromStream(deltaBuffer));
+              emitReasoningStream(extractThinkingFromTaggedStream(deltaBuffer));
             }
 
             const cleaned = params.enforceFinalTag
@@ -932,10 +803,10 @@ export function subscribeEmbeddedPiSession(params: {
           const rawThinking =
             includeReasoning || streamReasoning
               ? extractAssistantThinking(assistantMessage) ||
-                extractThinkingFromText(rawText)
+                extractThinkingFromTaggedText(rawText)
               : "";
           const formattedReasoning = rawThinking
-            ? formatReasoningMarkdown(rawThinking)
+            ? formatReasoningMessage(rawThinking)
             : "";
           const text = baseText;
 
@@ -951,19 +822,23 @@ export function subscribeEmbeddedPiSession(params: {
           assistantTextBaseline = assistantTexts.length;
 
           const onBlockReply = params.onBlockReply;
-          const shouldEmitReasoning =
+          const shouldEmitReasoning = Boolean(
             includeReasoning &&
-            Boolean(formattedReasoning) &&
-            Boolean(onBlockReply) &&
-            formattedReasoning !== lastReasoningSent;
+              formattedReasoning &&
+              onBlockReply &&
+              formattedReasoning !== lastReasoningSent,
+          );
           const shouldEmitReasoningBeforeAnswer =
             shouldEmitReasoning &&
             blockReplyBreak === "message_end" &&
             !addedDuringMessage;
-          if (shouldEmitReasoningBeforeAnswer && formattedReasoning) {
+          const maybeEmitReasoning = () => {
+            if (!shouldEmitReasoning || !formattedReasoning) return;
             lastReasoningSent = formattedReasoning;
             void onBlockReply?.({ text: formattedReasoning });
-          }
+          };
+
+          if (shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
 
           if (
             (blockReplyBreak === "message_end" ||
@@ -995,14 +870,7 @@ export function subscribeEmbeddedPiSession(params: {
               }
             }
           }
-          if (
-            shouldEmitReasoning &&
-            !shouldEmitReasoningBeforeAnswer &&
-            formattedReasoning
-          ) {
-            lastReasoningSent = formattedReasoning;
-            void onBlockReply?.({ text: formattedReasoning });
-          }
+          if (!shouldEmitReasoningBeforeAnswer) maybeEmitReasoning();
           if (streamReasoning && rawThinking) {
             emitReasoningStream(rawThinking);
           }
