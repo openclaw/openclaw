@@ -1168,6 +1168,7 @@ describe("web auto-reply", () => {
     expect(payload.OriginatingChannel).toBe("whatsapp");
     expect(payload.OriginatingTo).toBe("+15551234567");
     expect(payload.To).toBe("+19998887777");
+    expect(payload.OriginatingTo).not.toBe(payload.To);
   });
 
   it("uses per-agent mention patterns for group gating", async () => {
