@@ -315,11 +315,12 @@ export async function monitorSignalProvider(
       if (!envelope) return;
       if (envelope.syncMessage) return;
 
-      // Handle reaction messages
-      if (envelope.reactionMessage) {
+      const dataMessage =
+        envelope.dataMessage ?? envelope.editMessage?.dataMessage;
+      if (envelope.reactionMessage && !dataMessage) {
         const reaction = envelope.reactionMessage;
         if (reaction.isRemove) return; // Ignore reaction removals
-        const emoji = reaction.emoji ?? "👍";
+        const emoji = reaction.emoji ?? "unknown";
         const sender = resolveSignalSender(envelope);
         if (!sender) return;
         const senderDisplay = formatSignalSenderDisplay(sender);
@@ -329,9 +330,6 @@ export async function monitorSignalProvider(
         // Future: could dispatch as a notification or store for context
         return;
       }
-
-      const dataMessage =
-        envelope.dataMessage ?? envelope.editMessage?.dataMessage;
       if (!dataMessage) return;
 
       const sender = resolveSignalSender(envelope);
