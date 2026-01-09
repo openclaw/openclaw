@@ -28,6 +28,54 @@ tsx watch src/entry.ts gateway --force
 Add any gateway CLI flags after `gateway:watch` and they will be passed through
 on each restart.
 
+## Dev profile + dev gateway (--dev)
+
+Use the dev profile to isolate state and spin up a safe, disposable setup for
+debugging. There are **two** `--dev` flags:
+
+- **Global `--dev` (profile):** isolates state under `~/.clawdbot-dev` and
+  defaults the gateway port to `19001` (derived ports shift with it).
+- **`gateway --dev`: tells the Gateway to auto-create a default config +
+  workspace** when missing (and skip BOOTSTRAP.md).
+
+Recommended flow:
+
+```bash
+pnpm clawdbot --dev gateway --dev
+pnpm clawdbot --dev tui
+```
+
+What this does:
+
+1) **Profile isolation** (global `--dev`)
+   - `CLAWDBOT_PROFILE=dev`
+   - `CLAWDBOT_STATE_DIR=~/.clawdbot-dev`
+   - `CLAWDBOT_CONFIG_PATH=~/.clawdbot-dev/clawdbot.json`
+   - `CLAWDBOT_GATEWAY_PORT=19001` (bridge/canvas/browser shift accordingly)
+
+2) **Dev bootstrap** (`gateway --dev`)
+   - Writes a minimal config if missing (`gateway.mode=local`, bind loopback).
+   - Sets `agent.workspace` to the dev workspace.
+   - Sets `agent.skipBootstrap=true` (no BOOTSTRAP.md).
+   - Seeds the workspace files if missing:
+     `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`.
+   - Default identity: **C3‑PO** (protocol droid).
+
+Reset flow (fresh start):
+
+```bash
+pnpm clawdbot --dev gateway --dev --reset
+```
+
+`--reset` wipes config, credentials, sessions, and the dev workspace (using
+`trash`, not `rm`), then recreates the default dev setup.
+
+Tip: if a non‑dev gateway is already running (launchd/systemd), stop it first:
+
+```bash
+clawdbot daemon stop
+```
+
 ## Raw stream logging (Clawdbot)
 
 Clawdbot can log the **raw assistant stream** before any filtering/formatting.
