@@ -101,6 +101,10 @@ export function buildAuthChoiceOptions(params: {
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({ value: "minimax-cloud", label: "MiniMax M2.1 (minimax.io)" });
   options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
+  options.push({
+    value: "minimax-api",
+    label: "MiniMax API (platform.minimax.io)",
+  });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }
