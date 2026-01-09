@@ -57,6 +57,7 @@
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
 - TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
 - Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
+- Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
 
 ## 2026.1.8
 
