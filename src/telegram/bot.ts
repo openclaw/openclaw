@@ -71,6 +71,8 @@ const PARSE_ERR_RE =
 // Media group aggregation - Telegram sends multi-image messages as separate updates
 // with a shared media_group_id. We buffer them and process as a single message after a short delay.
 const MEDIA_GROUP_TIMEOUT_MS = 500;
+const RECENT_TELEGRAM_UPDATE_TTL_MS = 5 * 60_000;
+const RECENT_TELEGRAM_UPDATE_MAX = 2000;
 
 type TelegramMessage = Message.CommonMessage;
 
@@ -82,6 +84,62 @@ type MediaGroupEntry = {
     ctx: TelegramContext;
   }>;
   timer: ReturnType<typeof setTimeout>;
+};
+
+type TelegramUpdateKeyContext = {
+  update?: {
+    update_id?: number;
+    message?: TelegramMessage;
+    edited_message?: TelegramMessage;
+  };
+  update_id?: number;
+  message?: TelegramMessage;
+  callbackQuery?: { id?: string; message?: TelegramMessage };
+};
+
+const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
+  const updateId = ctx.update?.update_id ?? ctx.update_id;
+  if (typeof updateId === "number") return `update:${updateId}`;
+  const callbackId = ctx.callbackQuery?.id;
+  if (callbackId) return `callback:${callbackId}`;
+  const msg =
+    ctx.message ??
+    ctx.update?.message ??
+    ctx.update?.edited_message ??
+    ctx.callbackQuery?.message;
+  const chatId = msg?.chat?.id;
+  const messageId = msg?.message_id;
+  if (typeof chatId !== "undefined" && typeof messageId === "number") {
+    return `message:${chatId}:${messageId}`;
+  }
+  return undefined;
+};
+
+const shouldSkipTelegramUpdate = (
+  cache: Map<string, { ts: number }>,
+  key?: string,
+) => {
+  if (!key) return false;
+  const now = Date.now();
+  const existing = cache.get(key);
+  if (existing && now - existing.ts < RECENT_TELEGRAM_UPDATE_TTL_MS) {
+    return true;
+  }
+  if (existing) cache.delete(key);
+  cache.set(key, { ts: now });
+  if (cache.size > RECENT_TELEGRAM_UPDATE_MAX) {
+    for (const [cachedKey, entry] of cache) {
+      if (now - entry.ts > RECENT_TELEGRAM_UPDATE_TTL_MS) {
+        cache.delete(cachedKey);
+      }
+    }
+    while (cache.size > RECENT_TELEGRAM_UPDATE_MAX) {
+      const oldestKey = cache.keys().next().value as string | undefined;
+      if (!oldestKey) break;
+      cache.delete(oldestKey);
+    }
+  }
+  return false;
 };
 
 /** Telegram Location object */
@@ -169,6 +227,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
+
+  const recentUpdates = new Map<string, { ts: number }>();
+  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
+    const key = buildTelegramUpdateKey(ctx);
+    const skipped = shouldSkipTelegramUpdate(recentUpdates, key);
+    if (skipped && key && shouldLogVerbose()) {
+      logVerbose(`telegram dedupe: skipped ${key}`);
+    }
+    return skipped;
+  };
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
 
@@ -804,6 +872,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       bot.command(command.name, async (ctx) => {
         const msg = ctx.message;
         if (!msg) return;
+        if (shouldSkipUpdate(ctx)) return;
         const chatId = msg.chat.id;
         const isGroup =
           msg.chat.type === "group" || msg.chat.type === "supergroup";
@@ -997,6 +1066,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.on("callback_query", async (ctx) => {
     const callback = ctx.callbackQuery;
     if (!callback) return;
+    if (shouldSkipUpdate(ctx)) return;
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -1032,6 +1102,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     try {
       const msg = ctx.message;
       if (!msg) return;
+      if (shouldSkipUpdate(ctx)) return;
 
       const chatId = msg.chat.id;
       const isGroup =
