@@ -265,7 +265,8 @@ For groups, use `whatsapp.groupPolicy` + `whatsapp.groupAllowFrom`.
   whatsapp: {
     dmPolicy: "pairing", // pairing | allowlist | open | disabled
     allowFrom: ["+15555550123", "+447700900123"],
-    textChunkLimit: 4000 // optional outbound chunk size (chars)
+    textChunkLimit: 4000, // optional outbound chunk size (chars)
+    mediaMaxMb: 50 // optional inbound media cap (MB)
   }
 }
 ```

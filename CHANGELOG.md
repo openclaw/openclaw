@@ -38,6 +38,7 @@
 - Doctor: repair gateway service entrypoint when switching between npm and git installs; add Docker e2e coverage. — thanks @steipete
 - Daemon: align generated systemd unit with docs for network-online + restart delay. (#479) — thanks @azade-c
 - Daemon: add KillMode=process to systemd units to avoid podman restart hangs. (#541) — thanks @ogulcancelik
+- WhatsApp: make inbound media size cap configurable (default 50 MB). (#505) — thanks @koala73
 - Doctor: run legacy state migrations in non-interactive mode without prompts.
 - Cron: parse Telegram topic targets for isolated delivery. (#478) — thanks @nachoiacovino
 - Outbound: default Telegram account selection for config-only tokens; remove heartbeat-specific accountId handling. (follow-up #516) — thanks @YuriNachos

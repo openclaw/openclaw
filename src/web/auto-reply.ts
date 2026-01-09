@@ -788,6 +788,7 @@ export async function monitorWebProvider(
       groupAllowFrom: account.groupAllowFrom,
       groupPolicy: account.groupPolicy,
       textChunkLimit: account.textChunkLimit,
+      mediaMaxMb: account.mediaMaxMb,
       blockStreaming: account.blockStreaming,
       groups: account.groups,
     },
@@ -1305,6 +1306,7 @@ export async function monitorWebProvider(
       verbose,
       accountId: account.accountId,
       authDir: account.authDir,
+      mediaMaxMb: account.mediaMaxMb,
       onMessage: async (msg) => {
         handledMessages += 1;
         lastMessageAt = Date.now();
