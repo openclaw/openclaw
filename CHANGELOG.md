@@ -139,6 +139,7 @@
 - Discord: add channel/category management actions (create/edit/move/delete + category removal). (#487) - thanks @NicholasSpisak
 - Docs: split CLI install commands into separate code blocks. (#601) — thanks @martinpucik
 - WhatsApp: record outbound provider activity using the active account id. (#537) — thanks @Nachx639
+- Discord: add gateway HELLO timeout to detect zombie connections. (#608) — thanks @NicholasSpisak
 
 ## 2026.1.8
 
