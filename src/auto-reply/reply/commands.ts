@@ -504,6 +504,14 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
+    if (cfg.commands?.restart !== true) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /restart is disabled. Set commands.restart=true to enable.",
+        },
+      };
+    }
     const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
     if (hasSigusr1Listener) {
       scheduleGatewaySigusr1Restart({ reason: "/restart" });

@@ -182,6 +182,7 @@ Core actions:
 
 Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
+- `restart` is disabled by default; enable with `commands.restart: true`.
 
 ### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn`
 List sessions, inspect transcript history, or send to another session.

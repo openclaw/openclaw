@@ -18,6 +18,7 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
   commands: {
     native: false,
     text: true,
+    restart: false,
     useAccessGroups: true
   }
 }
@@ -54,6 +55,7 @@ Text-only:
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
 - `/cost` appends per-response token usage; it only shows dollar cost when the model uses an API key (OAuth hides cost).
+- `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
 

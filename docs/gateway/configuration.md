@@ -591,6 +591,7 @@ Controls how chat commands are enabled across connectors.
   commands: {
     native: false,          // register native commands when supported
     text: true,             // parse slash commands in chat messages
+    restart: false,         // allow /restart + gateway restart tool
     useAccessGroups: true   // enforce access-group allowlists/policies for commands
   }
 }
@@ -601,6 +602,7 @@ Notes:
 - `commands.text: false` disables parsing chat messages for commands.
 - `commands.native: true` registers native commands on supported connectors (Discord/Slack/Telegram). Platforms without native commands still rely on text commands.
 - `commands.native: false` skips native registration; Discord/Telegram clear previously registered commands on startup. Slack commands are managed in the Slack app.
+- `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
 
 ### `web` (WhatsApp web provider)
