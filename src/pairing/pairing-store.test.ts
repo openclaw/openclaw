@@ -106,4 +106,31 @@ describe("pairing store", () => {
       }
     });
   });
+
+  it("caps pending requests at the default limit", async () => {
+    await withTempStateDir(async () => {
+      const ids = ["+15550000001", "+15550000002", "+15550000003"];
+      for (const id of ids) {
+        const created = await upsertProviderPairingRequest({
+          provider: "whatsapp",
+          id,
+        });
+        expect(created.created).toBe(true);
+      }
+
+      const blocked = await upsertProviderPairingRequest({
+        provider: "whatsapp",
+        id: "+15550000004",
+      });
+      expect(blocked.created).toBe(false);
+
+      const list = await listProviderPairingRequests("whatsapp");
+      const listIds = list.map((entry) => entry.id);
+      expect(listIds).toHaveLength(3);
+      expect(listIds).toContain("+15550000001");
+      expect(listIds).toContain("+15550000002");
+      expect(listIds).toContain("+15550000003");
+      expect(listIds).not.toContain("+15550000004");
+    });
+  });
 });

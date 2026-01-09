@@ -103,9 +103,9 @@ on outbound replies.
 If you run Clawdbot on your **personal WhatsApp number**, enable `whatsapp.selfChatMode` (see sample above).
 
 Behavior:
-- Suppresses pairing replies for **outbound DMs** (prevents spamming contacts).
+- Outbound DMs never trigger pairing replies (prevents spamming contacts).
 - Inbound unknown senders still follow `whatsapp.dmPolicy`.
-- Self-chat mode avoids auto read receipts and ignores mention JIDs.
+- Self-chat mode (allowFrom includes your number) avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
 ## Message normalization (what the model sees)
@@ -186,7 +186,7 @@ Behavior:
 
 ## Config quick map
 - `whatsapp.dmPolicy` (DM policy: pairing/allowlist/open/disabled).
-- `whatsapp.selfChatMode` (same-phone setup; suppress pairing replies for outbound DMs).
+- `whatsapp.selfChatMode` (same-phone setup; bot uses your personal WhatsApp number).
 - `whatsapp.allowFrom` (DM allowlist).
 - `whatsapp.mediaMaxMb` (inbound media save cap).
 - `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).

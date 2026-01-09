@@ -123,7 +123,6 @@ export type WhatsAppConfig = {
   dmPolicy?: DmPolicy;
   /**
    * Same-phone setup (bot uses your personal WhatsApp number).
-   * When true, suppress pairing replies for outbound DMs.
    */
   selfChatMode?: boolean;
   /** Optional allowlist for WhatsApp direct chats (E.164). */
@@ -168,7 +167,7 @@ export type WhatsAppAccountConfig = {
   authDir?: string;
   /** Direct message access policy (default: pairing). */
   dmPolicy?: DmPolicy;
-  /** Same-phone setup for this account (suppresses pairing replies for outbound DMs). */
+  /** Same-phone setup for this account (bot uses your personal WhatsApp number). */
   selfChatMode?: boolean;
   allowFrom?: string[];
   groupAllowFrom?: string[];

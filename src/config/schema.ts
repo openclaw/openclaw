@@ -205,7 +205,7 @@ const FIELD_HELP: Record<string, string> = {
   "whatsapp.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires whatsapp.allowFrom=["*"].',
   "whatsapp.selfChatMode":
-    "Same-phone setup (bot uses your personal WhatsApp number). Suppresses pairing replies for outbound DMs.",
+    "Same-phone setup (bot uses your personal WhatsApp number).",
   "signal.dmPolicy":
     'Direct message access control ("pairing" recommended). "open" requires signal.allowFrom=["*"].',
   "imessage.dmPolicy":
