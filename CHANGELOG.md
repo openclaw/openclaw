@@ -15,6 +15,7 @@
 - Commands: accept /models as an alias for /model.
 - Commands: add `/usage` as an alias for `/status`. (#492) — thanks @lc0rp
 - Models/Auth: add MiniMax Anthropic-compatible API onboarding (minimax-api). (#590) — thanks @mneves75
+- Models: centralize model override validation + hooks Gmail warnings in doctor. (#602) — thanks @steipete
 - Commands: harden slash command registry and list text-only commands in `/commands`.
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Debugging: add raw model stream logging flags and document gateway watch mode.
