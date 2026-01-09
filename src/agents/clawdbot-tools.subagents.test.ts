@@ -169,6 +169,12 @@ describe("subagents", () => {
     expect(first?.provider).toBe("discord");
     expect(first?.sessionKey?.startsWith("agent:main:subagent:")).toBe(true);
     expect(childSessionKey?.startsWith("agent:main:subagent:")).toBe(true);
+    const second = agentCalls[1]?.params as
+      | { provider?: string; deliver?: boolean; lane?: string }
+      | undefined;
+    expect(second?.lane).toBe("nested");
+    expect(second?.deliver).toBe(false);
+    expect(second?.provider).toBe("webchat");
 
     expect(sendParams.provider).toBe("discord");
     expect(sendParams.to).toBe("channel:req");

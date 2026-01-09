@@ -268,7 +268,10 @@ describe("sessions tools", () => {
     );
     expect(agentCalls).toHaveLength(8);
     for (const call of agentCalls) {
-      expect(call.params).toMatchObject({ lane: "nested" });
+      expect(call.params).toMatchObject({
+        lane: "nested",
+        provider: "webchat",
+      });
     }
     expect(
       agentCalls.some(
@@ -393,6 +396,15 @@ describe("sessions tools", () => {
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
     await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const agentCalls = calls.filter((call) => call.method === "agent");
+    expect(agentCalls).toHaveLength(4);
+    for (const call of agentCalls) {
+      expect(call.params).toMatchObject({
+        lane: "nested",
+        provider: "webchat",
+      });
+    }
 
     const replySteps = calls.filter(
       (call) =>

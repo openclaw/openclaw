@@ -375,6 +375,50 @@ describe("gateway server agent", () => {
     await server.close();
   });
 
+  test("agent uses webchat for internal runs when last provider is webchat", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: "sess-main-webchat-internal",
+            updatedAt: Date.now(),
+            lastProvider: "webchat",
+            lastTo: "+1555",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const res = await rpcReq(ws, "agent", {
+      message: "hi",
+      sessionKey: "main",
+      provider: "last",
+      deliver: false,
+      idempotencyKey: "idem-agent-webchat-internal",
+    });
+    expect(res.ok).toBe(true);
+
+    const spy = vi.mocked(agentCommand);
+    const call = spy.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    expectProviders(call, "webchat");
+    expect(call.to).toBeUndefined();
+    expect(call.deliver).toBe(false);
+    expect(call.bestEffortDeliver).toBe(true);
+    expect(call.sessionId).toBe("sess-main-webchat-internal");
+
+    ws.close();
+    await server.close();
+  });
+
   test(
     "agent ack response then final response",
     { timeout: 8000 },
