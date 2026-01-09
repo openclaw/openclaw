@@ -153,6 +153,42 @@ describe("monitorSignalProvider tool results", () => {
     );
   });
 
+  it("ignores reaction-only messages", async () => {
+    const abortController = new AbortController();
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      const payload = {
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Ada",
+          timestamp: 1,
+          reactionMessage: {
+            emoji: "👍",
+            targetAuthor: "+15550002222",
+            targetSentTimestamp: 2,
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
+  });
+
   it("does not resend pairing code when a request is already pending", async () => {
     config = {
       ...config,
