@@ -37,18 +37,25 @@ function parseRecipient(to: string): {
   id: string;
 } {
   const trimmed = to.trim();
+  const finalize = (type: "conversation" | "user", id: string) => {
+    const normalized = id.trim();
+    if (!normalized) {
+      throw new Error(`Invalid --to value: missing ${type} id`);
+    }
+    return { type, id: normalized };
+  };
   if (trimmed.startsWith("conversation:")) {
-    return { type: "conversation", id: trimmed.slice("conversation:".length) };
+    return finalize("conversation", trimmed.slice("conversation:".length));
   }
   if (trimmed.startsWith("user:")) {
-    return { type: "user", id: trimmed.slice("user:".length) };
+    return finalize("user", trimmed.slice("user:".length));
   }
   // Assume it's a conversation ID if it looks like one
   if (trimmed.startsWith("19:") || trimmed.includes("@thread")) {
-    return { type: "conversation", id: trimmed };
+    return finalize("conversation", trimmed);
   }
   // Otherwise treat as user ID
-  return { type: "user", id: trimmed };
+  return finalize("user", trimmed);
 }
 
 /**
