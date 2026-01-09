@@ -67,6 +67,24 @@ clawdbot models status
 clawdbot doctor
 ```
 
+## Controlling which credential is used
+
+### Per-session (chat command)
+
+Use `/model <alias-or-id>@<profileId>` to pin a specific provider credential for the current session (example profile ids: `anthropic:claude-cli`, `anthropic:default`). Use `/model status` to see candidates + which one is next.
+
+### Per-agent (CLI override)
+
+Set an explicit auth profile order override for an agent (stored in that agent’s `auth-profiles.json`):
+
+```bash
+clawdbot models auth order get --provider anthropic
+clawdbot models auth order set --provider anthropic anthropic:claude-cli
+clawdbot models auth order clear --provider anthropic
+```
+
+Use `--agent <id>` to target a specific agent; omit it to use the configured default agent.
+
 ## How sync works
 
 1. **Claude Code** stores credentials in `~/.claude/.credentials.json` (or
