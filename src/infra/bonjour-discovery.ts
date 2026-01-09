@@ -270,6 +270,7 @@ async function discoverWideAreaViaTailnetDns(
 
   if (!nameserver || ptrs.length === 0) return [];
   if (remainingMs() <= 0) return [];
+  const nameserverArg = `@${nameserver}`;
 
   const results: GatewayBonjourBeacon[] = [];
   for (const ptr of ptrs) {
@@ -285,7 +286,7 @@ async function discoverWideAreaViaTailnetDns(
         "+short",
         "+time=1",
         "+tries=1",
-        `@${nameserver}`,
+        nameserverArg,
         ptrName,
         "SRV",
       ],
@@ -312,7 +313,7 @@ async function discoverWideAreaViaTailnetDns(
         "+short",
         "+time=1",
         "+tries=1",
-        `@${nameserver}`,
+        nameserverArg,
         ptrName,
         "TXT",
       ],
