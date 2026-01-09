@@ -21,9 +21,7 @@ function extractMessage(value: Record<string, unknown>): string {
   return parts.join(" ");
 }
 
-function parseMetaName(
-  raw?: unknown,
-): { subsystem?: string; module?: string } {
+function parseMetaName(raw?: unknown): { subsystem?: string; module?: string } {
   if (typeof raw !== "string") return {};
   try {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
