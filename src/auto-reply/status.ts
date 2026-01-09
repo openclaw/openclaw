@@ -20,14 +20,14 @@ import {
   type SessionScope,
 } from "../config/sessions.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
-import { VERSION } from "../version.js";
-import { listChatCommands } from "./commands-registry.js";
 import {
   estimateUsageCost,
   formatTokenCount as formatTokenCountShared,
   formatUsd,
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
+import { VERSION } from "../version.js";
+import { listChatCommands } from "./commands-registry.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
