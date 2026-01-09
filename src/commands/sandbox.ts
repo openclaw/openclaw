@@ -1,12 +1,12 @@
 import { confirm as clackConfirm } from "@clack/prompts";
 
 import {
-  type SandboxBrowserInfo,
-  type SandboxContainerInfo,
   listSandboxBrowsers,
   listSandboxContainers,
   removeSandboxBrowserContainer,
   removeSandboxContainer,
+  type SandboxBrowserInfo,
+  type SandboxContainerInfo,
 } from "../agents/sandbox.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
@@ -107,8 +107,9 @@ function validateRecreateOptions(
     runtime.exit(1);
   }
 
-  const exclusiveCount = [opts.all, opts.session, opts.agent].filter(Boolean)
-    .length;
+  const exclusiveCount = [opts.all, opts.session, opts.agent].filter(
+    Boolean,
+  ).length;
   if (exclusiveCount > 1) {
     runtime.error("Please specify only one of: --all, --session, --agent");
     runtime.exit(1);

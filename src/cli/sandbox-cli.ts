@@ -58,7 +58,10 @@ Modifiers:
 };
 
 function createRunner(
-  commandFn: (opts: CommandOptions, runtime: typeof defaultRuntime) => Promise<void>,
+  commandFn: (
+    opts: CommandOptions,
+    runtime: typeof defaultRuntime,
+  ) => Promise<void>,
 ) {
   return async (opts: CommandOptions) => {
     try {
@@ -68,14 +71,6 @@ function createRunner(
       defaultRuntime.exit(1);
     }
   };
-}
-
-function normalizeOptions(opts: CommandOptions): CommandOptions {
-  const normalized: CommandOptions = {};
-  for (const [key, value] of Object.entries(opts)) {
-    normalized[key] = typeof value === "boolean" ? value : value;
-  }
-  return normalized;
 }
 
 // --- Registration ---

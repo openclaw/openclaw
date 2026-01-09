@@ -48,9 +48,13 @@ export function displayContainers(
       renderItem: (container, rt) => {
         rt.log(`  ${container.containerName}`);
         rt.log(`    Status:  ${formatStatus(container.running)}`);
-        rt.log(`    Image:   ${container.image} ${formatImageMatch(container.imageMatch)}`);
+        rt.log(
+          `    Image:   ${container.image} ${formatImageMatch(container.imageMatch)}`,
+        );
         rt.log(`    Age:     ${formatAge(Date.now() - container.createdAtMs)}`);
-        rt.log(`    Idle:    ${formatAge(Date.now() - container.lastUsedAtMs)}`);
+        rt.log(
+          `    Idle:    ${formatAge(Date.now() - container.lastUsedAtMs)}`,
+        );
         rt.log(`    Session: ${container.sessionKey}`);
         rt.log("");
       },
@@ -71,7 +75,9 @@ export function displayBrowsers(
       renderItem: (browser, rt) => {
         rt.log(`  ${browser.containerName}`);
         rt.log(`    Status:  ${formatStatus(browser.running)}`);
-        rt.log(`    Image:   ${browser.image} ${formatImageMatch(browser.imageMatch)}`);
+        rt.log(
+          `    Image:   ${browser.image} ${formatImageMatch(browser.imageMatch)}`,
+        );
         rt.log(`    CDP:     ${browser.cdpPort}`);
         if (browser.noVncPort) {
           rt.log(`    noVNC:   ${browser.noVncPort}`);
