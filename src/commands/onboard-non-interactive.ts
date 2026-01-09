@@ -23,6 +23,7 @@ import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   isGatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import { applyGoogleGeminiModelDefault } from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
@@ -133,6 +134,7 @@ export async function runNonInteractiveOnboarding(
       provider: "google",
       mode: "api_key",
     });
+    nextConfig = applyGoogleGeminiModelDefault(nextConfig).next;
   } else if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,

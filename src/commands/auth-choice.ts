@@ -26,6 +26,10 @@ import {
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
 import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
+import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
   applyMinimaxProviderConfig,
@@ -427,6 +431,19 @@ export async function applyAuthChoice(params: {
       provider: "google",
       mode: "api_key",
     });
+    if (params.setDefaultModel) {
+      const applied = applyGoogleGeminiModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+          "Model configured",
+        );
+      }
+    } else {
+      agentModelOverride = GOOGLE_GEMINI_DEFAULT_MODEL;
+      await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
+    }
   } else if (params.authChoice === "apiKey") {
     const key = await params.prompter.text({
       message: "Enter Anthropic API key",

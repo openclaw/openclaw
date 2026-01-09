@@ -37,6 +37,7 @@
 - Signal: accept UUID-only senders for pairing/allowlists/routing when sourceNumber is missing. (#523) — thanks @neist
 - Agent system prompt: avoid automatic self-updates unless explicitly requested.
 - Onboarding: tighten QuickStart hint copy for configuring later.
+- Onboarding: set Gemini 3 Pro as the default model for Gemini API key auth. (#489) — thanks @jonasjancarik
 - Onboarding: avoid “token expired” for Codex CLI when expiry is heuristic.
 - Onboarding: QuickStart jumps straight into provider selection with Telegram preselected when unset.
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).

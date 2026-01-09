@@ -50,6 +50,10 @@ import {
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
   type GatewayDaemonRuntime,
 } from "./daemon-runtime.js";
+import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
@@ -529,6 +533,14 @@ async function promptAuthConfig(
       provider: "google",
       mode: "api_key",
     });
+    const applied = applyGoogleGeminiModelDefault(next);
+    next = applied.next;
+    if (applied.changed) {
+      note(
+        `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+        "Model configured",
+      );
+    }
   } else if (authChoice === "apiKey") {
     const key = guardCancel(
       await text({
