@@ -1,5 +1,4 @@
-import type { ApiClientOptions } from "grammy";
-import { Bot } from "grammy";
+import { type ApiClientOptions, Bot } from "grammy";
 import { resolveTelegramFetch } from "./fetch.js";
 
 export async function setTelegramWebhook(opts: {

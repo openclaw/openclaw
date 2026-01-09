@@ -80,8 +80,8 @@ export async function sendMessageSignal(
     if (typeof accountInfo.config.mediaMaxMb === "number") {
       return accountInfo.config.mediaMaxMb * 1024 * 1024;
     }
-    if (typeof cfg.agent?.mediaMaxMb === "number") {
-      return cfg.agent.mediaMaxMb * 1024 * 1024;
+    if (typeof cfg.agents?.defaults?.mediaMaxMb === "number") {
+      return cfg.agents.defaults.mediaMaxMb * 1024 * 1024;
     }
     return 8 * 1024 * 1024;
   })();

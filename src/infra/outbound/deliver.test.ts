@@ -114,7 +114,9 @@ describe("deliverOutboundPayloads", () => {
 
   it("uses iMessage media maxBytes from agent fallback", async () => {
     const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1" });
-    const cfg: ClawdbotConfig = { agent: { mediaMaxMb: 3 } };
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { mediaMaxMb: 3 } },
+    };
 
     await deliverOutboundPayloads({
       cfg,

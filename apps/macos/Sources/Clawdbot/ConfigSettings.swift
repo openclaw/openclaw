@@ -387,13 +387,20 @@ struct ConfigSettings: View {
 
     private func loadConfig() async {
         let parsed = await ConfigStore.load()
-        let agent = parsed["agent"] as? [String: Any]
-        let heartbeatMinutes = agent?["heartbeatMinutes"] as? Int
-        let heartbeatBody = agent?["heartbeatBody"] as? String
+        let agents = parsed["agents"] as? [String: Any]
+        let defaults = agents?["defaults"] as? [String: Any]
+        let heartbeat = defaults?["heartbeat"] as? [String: Any]
+        let heartbeatEvery = heartbeat?["every"] as? String
+        let heartbeatBody = heartbeat?["prompt"] as? String
         let browser = parsed["browser"] as? [String: Any]
         let talk = parsed["talk"] as? [String: Any]
 
-        let loadedModel = (agent?["model"] as? String) ?? ""
+        let loadedModel: String = {
+            if let raw = defaults?["model"] as? String { return raw }
+            if let modelDict = defaults?["model"] as? [String: Any],
+               let primary = modelDict["primary"] as? String { return primary }
+            return ""
+        }()
         if !loadedModel.isEmpty {
             self.configModel = loadedModel
             self.customModel = loadedModel
@@ -402,7 +409,13 @@ struct ConfigSettings: View {
             self.customModel = SessionLoader.fallbackModel
         }
 
-        if let heartbeatMinutes { self.heartbeatMinutes = heartbeatMinutes }
+        if let heartbeatEvery {
+            let digits = heartbeatEvery.trimmingCharacters(in: .whitespacesAndNewlines)
+                .prefix { $0.isNumber }
+            if let minutes = Int(digits) {
+                self.heartbeatMinutes = minutes
+            }
+        }
         if let heartbeatBody, !heartbeatBody.isEmpty { self.heartbeatBody = heartbeatBody }
 
         if let browser {
@@ -480,25 +493,49 @@ struct ConfigSettings: View {
     @MainActor
     private static func buildAndSaveConfig(_ draft: ConfigDraft) async -> String? {
         var root = await ConfigStore.load()
-        var agent = root["agent"] as? [String: Any] ?? [:]
+        var agents = root["agents"] as? [String: Any] ?? [:]
+        var defaults = agents["defaults"] as? [String: Any] ?? [:]
         var browser = root["browser"] as? [String: Any] ?? [:]
         var talk = root["talk"] as? [String: Any] ?? [:]
 
         let chosenModel = (draft.configModel == "__custom__" ? draft.customModel : draft.configModel)
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedModel = chosenModel
-        if !trimmedModel.isEmpty { agent["model"] = trimmedModel }
+        if !trimmedModel.isEmpty {
+            var model = defaults["model"] as? [String: Any] ?? [:]
+            model["primary"] = trimmedModel
+            defaults["model"] = model
+
+            var models = defaults["models"] as? [String: Any] ?? [:]
+            if models[trimmedModel] == nil {
+                models[trimmedModel] = [:]
+            }
+            defaults["models"] = models
+        }
 
         if let heartbeatMinutes = draft.heartbeatMinutes {
-            agent["heartbeatMinutes"] = heartbeatMinutes
+            var heartbeat = defaults["heartbeat"] as? [String: Any] ?? [:]
+            heartbeat["every"] = "\(heartbeatMinutes)m"
+            defaults["heartbeat"] = heartbeat
         }
 
         let trimmedBody = draft.heartbeatBody.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedBody.isEmpty {
-            agent["heartbeatBody"] = trimmedBody
+            var heartbeat = defaults["heartbeat"] as? [String: Any] ?? [:]
+            heartbeat["prompt"] = trimmedBody
+            defaults["heartbeat"] = heartbeat
         }
 
-        root["agent"] = agent
+        if defaults.isEmpty {
+            agents.removeValue(forKey: "defaults")
+        } else {
+            agents["defaults"] = defaults
+        }
+        if agents.isEmpty {
+            root.removeValue(forKey: "agents")
+        } else {
+            root["agents"] = agents
+        }
 
         browser["enabled"] = draft.browserEnabled
         let trimmedUrl = draft.browserControlUrl.trimmingCharacters(in: .whitespacesAndNewlines)

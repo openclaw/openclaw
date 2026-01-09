@@ -9,19 +9,19 @@ CLAWDBOT runs a single embedded agent runtime derived from **p-mono**.
 
 ## Workspace (required)
 
-CLAWDBOT uses a single agent workspace directory (`agent.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
+CLAWDBOT uses a single agent workspace directory (`agents.defaults.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
 
 Recommended: use `clawdbot setup` to create `~/.clawdbot/clawdbot.json` if missing and initialize the workspace files.
 
 Full workspace layout + backup guide: [`docs/agent-workspace.md`](/concepts/agent-workspace)
 
-If `agent.sandbox` is enabled, non-main sessions can override this with
-per-session workspaces under `agent.sandbox.workspaceRoot` (see
+If `agents.defaults.sandbox` is enabled, non-main sessions can override this with
+per-session workspaces under `agents.defaults.sandbox.workspaceRoot` (see
 [`docs/configuration.md`](/gateway/configuration)).
 
 ## Bootstrap files (injected)
 
-Inside `agent.workspace`, CLAWDBOT expects these user-editable files:
+Inside `agents.defaults.workspace`, CLAWDBOT expects these user-editable files:
 - `AGENTS.md` — operating instructions + “memory”
 - `SOUL.md` — persona, boundaries, tone
 - `TOOLS.md` — user-maintained tool notes (e.g. `imsg`, `sag`, conventions)
@@ -84,9 +84,9 @@ current turn ends, then a new agent turn starts with the queued payloads. See
 [`docs/queue.md`](/concepts/queue) for mode + debounce/cap behavior.
 
 Block streaming sends completed assistant blocks as soon as they finish; disable
-via `agent.blockStreamingDefault: "off"` if you only want the final response.
-Tune the boundary via `agent.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
-Control soft block chunking with `agent.blockStreamingChunk` (defaults to
+via `agents.defaults.blockStreamingDefault: "off"` if you only want the final response.
+Tune the boundary via `agents.defaults.blockStreamingBreak` (`text_end` vs `message_end`; defaults to text_end).
+Control soft block chunking with `agents.defaults.blockStreamingChunk` (defaults to
 800–1200 chars; prefers paragraph breaks, then newlines; sentences last).
 Verbose tool summaries are emitted at tool start (no debounce); Control UI
 streams tool output via agent events when available.
@@ -95,7 +95,7 @@ More details: [Streaming + chunking](/concepts/streaming).
 ## Configuration (minimal)
 
 At minimum, set:
-- `agent.workspace`
+- `agents.defaults.workspace`
 - `whatsapp.allowFrom` (strongly recommended)
 
 ---

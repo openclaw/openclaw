@@ -25,6 +25,7 @@ type SessionListRow = {
   key: string;
   kind: SessionKind;
   provider: string;
+  label?: string;
   displayName?: string;
   updatedAt?: number | null;
   sessionId?: string;
@@ -53,7 +54,7 @@ const SessionsListToolSchema = Type.Object({
 function resolveSandboxSessionToolsVisibility(
   cfg: ReturnType<typeof loadConfig>,
 ) {
-  return cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+  return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
 export function createSessionsListTool(opts?: {
@@ -126,7 +127,7 @@ export function createSessionsListTool(opts?: {
 
       const sessions = Array.isArray(list?.sessions) ? list.sessions : [];
       const storePath = typeof list?.path === "string" ? list.path : undefined;
-      const routingA2A = cfg.routing?.agentToAgent;
+      const routingA2A = cfg.tools?.agentToAgent;
       const a2aEnabled = routingA2A?.enabled === true;
       const allowPatterns = Array.isArray(routingA2A?.allow)
         ? routingA2A.allow
@@ -205,6 +206,7 @@ export function createSessionsListTool(opts?: {
           key: displayKey,
           kind,
           provider: derivedProvider,
+          label: typeof entry.label === "string" ? entry.label : undefined,
           displayName:
             typeof entry.displayName === "string"
               ? entry.displayName

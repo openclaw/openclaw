@@ -48,25 +48,28 @@ export async function setupCommand(
 
   const existingRaw = await readConfigFileRaw();
   const cfg = existingRaw.parsed;
-  const agent = cfg.agent ?? {};
+  const defaults = cfg.agents?.defaults ?? {};
 
   const workspace =
-    desiredWorkspace ?? agent.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+    desiredWorkspace ?? defaults.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
 
   const next: ClawdbotConfig = {
     ...cfg,
-    agent: {
-      ...agent,
-      workspace,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        workspace,
+      },
     },
   };
 
-  if (!existingRaw.exists || agent.workspace !== workspace) {
+  if (!existingRaw.exists || defaults.workspace !== workspace) {
     await writeConfigFile(next);
     runtime.log(
       !existingRaw.exists
         ? `Wrote ${CONFIG_PATH_CLAWDBOT}`
-        : `Updated ${CONFIG_PATH_CLAWDBOT} (set agent.workspace)`,
+        : `Updated ${CONFIG_PATH_CLAWDBOT} (set agents.defaults.workspace)`,
     );
   } else {
     runtime.log(`Config OK: ${CONFIG_PATH_CLAWDBOT}`);
@@ -74,7 +77,7 @@ export async function setupCommand(
 
   const ws = await ensureAgentWorkspace({
     dir: workspace,
-    ensureBootstrapFiles: !next.agent?.skipBootstrap,
+    ensureBootstrapFiles: !next.agents?.defaults?.skipBootstrap,
   });
   runtime.log(`Workspace OK: ${ws.dir}`);
 

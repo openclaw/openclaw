@@ -12,6 +12,87 @@ type LegacyConfigMigration = {
   apply: (raw: Record<string, unknown>, changes: string[]) => void;
 };
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  Boolean(value && typeof value === "object" && !Array.isArray(value));
+
+const getRecord = (value: unknown): Record<string, unknown> | null =>
+  isRecord(value) ? value : null;
+
+const ensureRecord = (
+  root: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> => {
+  const existing = root[key];
+  if (isRecord(existing)) return existing;
+  const next: Record<string, unknown> = {};
+  root[key] = next;
+  return next;
+};
+
+const mergeMissing = (
+  target: Record<string, unknown>,
+  source: Record<string, unknown>,
+) => {
+  for (const [key, value] of Object.entries(source)) {
+    if (value === undefined) continue;
+    const existing = target[key];
+    if (existing === undefined) {
+      target[key] = value;
+      continue;
+    }
+    if (isRecord(existing) && isRecord(value)) {
+      mergeMissing(existing, value);
+    }
+  }
+};
+
+const getAgentsList = (agents: Record<string, unknown> | null) => {
+  const list = agents?.list;
+  return Array.isArray(list) ? list : [];
+};
+
+const resolveDefaultAgentIdFromRaw = (raw: Record<string, unknown>) => {
+  const agents = getRecord(raw.agents);
+  const list = getAgentsList(agents);
+  const defaultEntry = list.find(
+    (entry): entry is { id: string } =>
+      isRecord(entry) &&
+      entry.default === true &&
+      typeof entry.id === "string" &&
+      entry.id.trim() !== "",
+  );
+  if (defaultEntry) return defaultEntry.id.trim();
+  const routing = getRecord(raw.routing);
+  const routingDefault =
+    typeof routing?.defaultAgentId === "string"
+      ? routing.defaultAgentId.trim()
+      : "";
+  if (routingDefault) return routingDefault;
+  const firstEntry = list.find(
+    (entry): entry is { id: string } =>
+      isRecord(entry) && typeof entry.id === "string" && entry.id.trim() !== "",
+  );
+  if (firstEntry) return firstEntry.id.trim();
+  return "main";
+};
+
+const ensureAgentEntry = (
+  list: unknown[],
+  id: string,
+): Record<string, unknown> => {
+  const normalized = id.trim();
+  const existing = list.find(
+    (entry): entry is Record<string, unknown> =>
+      isRecord(entry) &&
+      typeof entry.id === "string" &&
+      entry.id.trim() === normalized,
+  );
+  if (existing) return existing;
+  const created: Record<string, unknown> = { id: normalized };
+  list.push(created);
+  return created;
+};
+
 const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "allowFrom"],
@@ -19,9 +100,44 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
       "routing.allowFrom was removed; use whatsapp.allowFrom instead (run `clawdbot doctor` to migrate).",
   },
   {
+    path: ["routing", "bindings"],
+    message:
+      "routing.bindings was moved; use top-level bindings instead (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["routing", "agents"],
+    message:
+      "routing.agents was moved; use agents.list instead (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["routing", "defaultAgentId"],
+    message:
+      "routing.defaultAgentId was moved; use agents.list[].default instead (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["routing", "agentToAgent"],
+    message:
+      "routing.agentToAgent was moved; use tools.agentToAgent instead (run `clawdbot doctor` to migrate).",
+  },
+  {
     path: ["routing", "groupChat", "requireMention"],
     message:
       'routing.groupChat.requireMention was removed; use whatsapp/telegram/imessage groups defaults (e.g. whatsapp.groups."*".requireMention) instead (run `clawdbot doctor` to migrate).',
+  },
+  {
+    path: ["routing", "groupChat", "mentionPatterns"],
+    message:
+      "routing.groupChat.mentionPatterns was moved; use agents.list[].groupChat.mentionPatterns or messages.groupChat.mentionPatterns instead (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["routing", "queue"],
+    message:
+      "routing.queue was moved; use messages.queue instead (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["routing", "transcribeAudio"],
+    message:
+      "routing.transcribeAudio was moved; use audio.transcription instead (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["telegram", "requireMention"],
@@ -29,36 +145,46 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
       'telegram.requireMention was removed; use telegram.groups."*".requireMention instead (run `clawdbot doctor` to migrate).',
   },
   {
+    path: ["identity"],
+    message:
+      "identity was moved; use agents.list[].identity instead (run `clawdbot doctor` to migrate).",
+  },
+  {
+    path: ["agent"],
+    message:
+      "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/bash settings) instead (run `clawdbot doctor` to migrate).",
+  },
+  {
     path: ["agent", "model"],
     message:
-      "agent.model string was replaced by agent.model.primary/fallbacks and agent.models (run `clawdbot doctor` to migrate).",
+      "agent.model string was replaced by agents.defaults.model.primary/fallbacks and agents.defaults.models (run `clawdbot doctor` to migrate).",
     match: (value) => typeof value === "string",
   },
   {
     path: ["agent", "imageModel"],
     message:
-      "agent.imageModel string was replaced by agent.imageModel.primary/fallbacks (run `clawdbot doctor` to migrate).",
+      "agent.imageModel string was replaced by agents.defaults.imageModel.primary/fallbacks (run `clawdbot doctor` to migrate).",
     match: (value) => typeof value === "string",
   },
   {
     path: ["agent", "allowedModels"],
     message:
-      "agent.allowedModels was replaced by agent.models (run `clawdbot doctor` to migrate).",
+      "agent.allowedModels was replaced by agents.defaults.models (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["agent", "modelAliases"],
     message:
-      "agent.modelAliases was replaced by agent.models.*.alias (run `clawdbot doctor` to migrate).",
+      "agent.modelAliases was replaced by agents.defaults.models.*.alias (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["agent", "modelFallbacks"],
     message:
-      "agent.modelFallbacks was replaced by agent.model.fallbacks (run `clawdbot doctor` to migrate).",
+      "agent.modelFallbacks was replaced by agents.defaults.model.fallbacks (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["agent", "imageModelFallbacks"],
     message:
-      "agent.imageModelFallbacks was replaced by agent.imageModel.fallbacks (run `clawdbot doctor` to migrate).",
+      "agent.imageModelFallbacks was replaced by agents.defaults.imageModel.fallbacks (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["gateway", "token"],
@@ -236,11 +362,11 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
     describe:
       "Migrate legacy agent.model/allowedModels/modelAliases/modelFallbacks/imageModelFallbacks to agent.models + model lists",
     apply: (raw, changes) => {
-      const agent =
-        raw.agent && typeof raw.agent === "object"
-          ? (raw.agent as Record<string, unknown>)
-          : null;
+      const agentRoot = getRecord(raw.agent);
+      const defaults = getRecord(getRecord(raw.agents)?.defaults);
+      const agent = agentRoot ?? defaults;
       if (!agent) return;
+      const label = agentRoot ? "agent" : "agents.defaults";
 
       const legacyModel =
         typeof agent.model === "string" ? String(agent.model) : undefined;
@@ -358,32 +484,343 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       agent.models = models;
 
       if (legacyModel !== undefined) {
-        changes.push("Migrated agent.model string → agent.model.primary.");
+        changes.push(
+          `Migrated ${label}.model string → ${label}.model.primary.`,
+        );
       }
       if (legacyModelFallbacks.length > 0) {
-        changes.push("Migrated agent.modelFallbacks → agent.model.fallbacks.");
+        changes.push(
+          `Migrated ${label}.modelFallbacks → ${label}.model.fallbacks.`,
+        );
       }
       if (legacyImageModel !== undefined) {
         changes.push(
-          "Migrated agent.imageModel string → agent.imageModel.primary.",
+          `Migrated ${label}.imageModel string → ${label}.imageModel.primary.`,
         );
       }
       if (legacyImageModelFallbacks.length > 0) {
         changes.push(
-          "Migrated agent.imageModelFallbacks → agent.imageModel.fallbacks.",
+          `Migrated ${label}.imageModelFallbacks → ${label}.imageModel.fallbacks.`,
         );
       }
       if (legacyAllowed.length > 0) {
-        changes.push("Migrated agent.allowedModels → agent.models.");
+        changes.push(`Migrated ${label}.allowedModels → ${label}.models.`);
       }
       if (Object.keys(legacyAliases).length > 0) {
-        changes.push("Migrated agent.modelAliases → agent.models.*.alias.");
+        changes.push(
+          `Migrated ${label}.modelAliases → ${label}.models.*.alias.`,
+        );
       }
 
       delete agent.allowedModels;
       delete agent.modelAliases;
       delete agent.modelFallbacks;
       delete agent.imageModelFallbacks;
+    },
+  },
+  {
+    id: "routing.agents-v2",
+    describe: "Move routing.agents/defaultAgentId to agents.list",
+    apply: (raw, changes) => {
+      const routing = getRecord(raw.routing);
+      if (!routing) return;
+
+      const routingAgents = getRecord(routing.agents);
+      const agents = ensureRecord(raw, "agents");
+      const list = getAgentsList(agents);
+
+      if (routingAgents) {
+        for (const [rawId, entryRaw] of Object.entries(routingAgents)) {
+          const agentId = String(rawId ?? "").trim();
+          const entry = getRecord(entryRaw);
+          if (!agentId || !entry) continue;
+
+          const target = ensureAgentEntry(list, agentId);
+          const entryCopy: Record<string, unknown> = { ...entry };
+
+          if ("mentionPatterns" in entryCopy) {
+            const mentionPatterns = entryCopy.mentionPatterns;
+            const groupChat = ensureRecord(target, "groupChat");
+            if (groupChat.mentionPatterns === undefined) {
+              groupChat.mentionPatterns = mentionPatterns;
+              changes.push(
+                `Moved routing.agents.${agentId}.mentionPatterns → agents.list (id "${agentId}").groupChat.mentionPatterns.`,
+              );
+            } else {
+              changes.push(
+                `Removed routing.agents.${agentId}.mentionPatterns (agents.list groupChat mentionPatterns already set).`,
+              );
+            }
+            delete entryCopy.mentionPatterns;
+          }
+
+          const legacyGroupChat = getRecord(entryCopy.groupChat);
+          if (legacyGroupChat) {
+            const groupChat = ensureRecord(target, "groupChat");
+            mergeMissing(groupChat, legacyGroupChat);
+            delete entryCopy.groupChat;
+          }
+
+          const legacySandbox = getRecord(entryCopy.sandbox);
+          if (legacySandbox) {
+            const sandboxTools = getRecord(legacySandbox.tools);
+            if (sandboxTools) {
+              const tools = ensureRecord(target, "tools");
+              const sandbox = ensureRecord(tools, "sandbox");
+              const toolPolicy = ensureRecord(sandbox, "tools");
+              mergeMissing(toolPolicy, sandboxTools);
+              delete legacySandbox.tools;
+              changes.push(
+                `Moved routing.agents.${agentId}.sandbox.tools → agents.list (id "${agentId}").tools.sandbox.tools.`,
+              );
+            }
+            entryCopy.sandbox = legacySandbox;
+          }
+
+          mergeMissing(target, entryCopy);
+        }
+        delete routing.agents;
+        changes.push("Moved routing.agents → agents.list.");
+      }
+
+      const defaultAgentId =
+        typeof routing.defaultAgentId === "string"
+          ? routing.defaultAgentId.trim()
+          : "";
+      if (defaultAgentId) {
+        const hasDefault = list.some(
+          (entry): entry is Record<string, unknown> =>
+            isRecord(entry) && entry.default === true,
+        );
+        if (!hasDefault) {
+          const entry = ensureAgentEntry(list, defaultAgentId);
+          entry.default = true;
+          changes.push(
+            `Moved routing.defaultAgentId → agents.list (id "${defaultAgentId}").default.`,
+          );
+        } else {
+          changes.push(
+            "Removed routing.defaultAgentId (agents.list default already set).",
+          );
+        }
+        delete routing.defaultAgentId;
+      }
+
+      if (list.length > 0) {
+        agents.list = list;
+      }
+
+      if (Object.keys(routing).length === 0) {
+        delete raw.routing;
+      }
+    },
+  },
+  {
+    id: "routing.config-v2",
+    describe:
+      "Move routing bindings/groupChat/queue/agentToAgent/transcribeAudio",
+    apply: (raw, changes) => {
+      const routing = getRecord(raw.routing);
+      if (!routing) return;
+
+      if (routing.bindings !== undefined) {
+        if (raw.bindings === undefined) {
+          raw.bindings = routing.bindings;
+          changes.push("Moved routing.bindings → bindings.");
+        } else {
+          changes.push("Removed routing.bindings (bindings already set).");
+        }
+        delete routing.bindings;
+      }
+
+      if (routing.agentToAgent !== undefined) {
+        const tools = ensureRecord(raw, "tools");
+        if (tools.agentToAgent === undefined) {
+          tools.agentToAgent = routing.agentToAgent;
+          changes.push("Moved routing.agentToAgent → tools.agentToAgent.");
+        } else {
+          changes.push(
+            "Removed routing.agentToAgent (tools.agentToAgent already set).",
+          );
+        }
+        delete routing.agentToAgent;
+      }
+
+      if (routing.queue !== undefined) {
+        const messages = ensureRecord(raw, "messages");
+        if (messages.queue === undefined) {
+          messages.queue = routing.queue;
+          changes.push("Moved routing.queue → messages.queue.");
+        } else {
+          changes.push("Removed routing.queue (messages.queue already set).");
+        }
+        delete routing.queue;
+      }
+
+      const groupChat = getRecord(routing.groupChat);
+      if (groupChat) {
+        const historyLimit = groupChat.historyLimit;
+        if (historyLimit !== undefined) {
+          const messages = ensureRecord(raw, "messages");
+          const messagesGroup = ensureRecord(messages, "groupChat");
+          if (messagesGroup.historyLimit === undefined) {
+            messagesGroup.historyLimit = historyLimit;
+            changes.push(
+              "Moved routing.groupChat.historyLimit → messages.groupChat.historyLimit.",
+            );
+          } else {
+            changes.push(
+              "Removed routing.groupChat.historyLimit (messages.groupChat.historyLimit already set).",
+            );
+          }
+          delete groupChat.historyLimit;
+        }
+
+        const mentionPatterns = groupChat.mentionPatterns;
+        if (mentionPatterns !== undefined) {
+          const messages = ensureRecord(raw, "messages");
+          const messagesGroup = ensureRecord(messages, "groupChat");
+          if (messagesGroup.mentionPatterns === undefined) {
+            messagesGroup.mentionPatterns = mentionPatterns;
+            changes.push(
+              "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
+            );
+          } else {
+            changes.push(
+              "Removed routing.groupChat.mentionPatterns (messages.groupChat.mentionPatterns already set).",
+            );
+          }
+          delete groupChat.mentionPatterns;
+        }
+
+        if (Object.keys(groupChat).length === 0) {
+          delete routing.groupChat;
+        } else {
+          routing.groupChat = groupChat;
+        }
+      }
+
+      if (routing.transcribeAudio !== undefined) {
+        const audio = ensureRecord(raw, "audio");
+        if (audio.transcription === undefined) {
+          audio.transcription = routing.transcribeAudio;
+          changes.push("Moved routing.transcribeAudio → audio.transcription.");
+        } else {
+          changes.push(
+            "Removed routing.transcribeAudio (audio.transcription already set).",
+          );
+        }
+        delete routing.transcribeAudio;
+      }
+
+      if (Object.keys(routing).length === 0) {
+        delete raw.routing;
+      }
+    },
+  },
+  {
+    id: "agent.defaults-v2",
+    describe: "Move agent config to agents.defaults and tools",
+    apply: (raw, changes) => {
+      const agent = getRecord(raw.agent);
+      if (!agent) return;
+
+      const agents = ensureRecord(raw, "agents");
+      const defaults = getRecord(agents.defaults) ?? {};
+      const tools = ensureRecord(raw, "tools");
+
+      const agentTools = getRecord(agent.tools);
+      if (agentTools) {
+        if (tools.allow === undefined && agentTools.allow !== undefined) {
+          tools.allow = agentTools.allow;
+          changes.push("Moved agent.tools.allow → tools.allow.");
+        }
+        if (tools.deny === undefined && agentTools.deny !== undefined) {
+          tools.deny = agentTools.deny;
+          changes.push("Moved agent.tools.deny → tools.deny.");
+        }
+      }
+
+      const elevated = getRecord(agent.elevated);
+      if (elevated) {
+        if (tools.elevated === undefined) {
+          tools.elevated = elevated;
+          changes.push("Moved agent.elevated → tools.elevated.");
+        } else {
+          changes.push("Removed agent.elevated (tools.elevated already set).");
+        }
+      }
+
+      const bash = getRecord(agent.bash);
+      if (bash) {
+        if (tools.bash === undefined) {
+          tools.bash = bash;
+          changes.push("Moved agent.bash → tools.bash.");
+        } else {
+          changes.push("Removed agent.bash (tools.bash already set).");
+        }
+      }
+
+      const sandbox = getRecord(agent.sandbox);
+      if (sandbox) {
+        const sandboxTools = getRecord(sandbox.tools);
+        if (sandboxTools) {
+          const toolsSandbox = ensureRecord(tools, "sandbox");
+          const toolPolicy = ensureRecord(toolsSandbox, "tools");
+          mergeMissing(toolPolicy, sandboxTools);
+          delete sandbox.tools;
+          changes.push("Moved agent.sandbox.tools → tools.sandbox.tools.");
+        }
+      }
+
+      const subagents = getRecord(agent.subagents);
+      if (subagents) {
+        const subagentTools = getRecord(subagents.tools);
+        if (subagentTools) {
+          const toolsSubagents = ensureRecord(tools, "subagents");
+          const toolPolicy = ensureRecord(toolsSubagents, "tools");
+          mergeMissing(toolPolicy, subagentTools);
+          delete subagents.tools;
+          changes.push("Moved agent.subagents.tools → tools.subagents.tools.");
+        }
+      }
+
+      const agentCopy: Record<string, unknown> = structuredClone(agent);
+      delete agentCopy.tools;
+      delete agentCopy.elevated;
+      delete agentCopy.bash;
+      if (isRecord(agentCopy.sandbox)) delete agentCopy.sandbox.tools;
+      if (isRecord(agentCopy.subagents)) delete agentCopy.subagents.tools;
+
+      mergeMissing(defaults, agentCopy);
+      agents.defaults = defaults;
+      raw.agents = agents;
+      delete raw.agent;
+      changes.push("Moved agent → agents.defaults.");
+    },
+  },
+  {
+    id: "identity->agents.list",
+    describe: "Move identity to agents.list[].identity",
+    apply: (raw, changes) => {
+      const identity = getRecord(raw.identity);
+      if (!identity) return;
+
+      const agents = ensureRecord(raw, "agents");
+      const list = getAgentsList(agents);
+      const defaultId = resolveDefaultAgentIdFromRaw(raw);
+      const entry = ensureAgentEntry(list, defaultId);
+      if (entry.identity === undefined) {
+        entry.identity = identity;
+        changes.push(
+          `Moved identity → agents.list (id "${defaultId}").identity.`,
+        );
+      } else {
+        changes.push("Removed identity (agents.list identity already set).");
+      }
+      agents.list = list;
+      raw.agents = agents;
+      delete raw.identity;
     },
   },
 ];

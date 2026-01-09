@@ -85,7 +85,8 @@ export const agentCommand = hoisted.agentCommand;
 
 export const testState = {
   agentConfig: undefined as Record<string, unknown> | undefined,
-  routingConfig: undefined as Record<string, unknown> | undefined,
+  agentsConfig: undefined as Record<string, unknown> | undefined,
+  bindingsConfig: undefined as Array<Record<string, unknown>> | undefined,
   sessionStorePath: undefined as string | undefined,
   sessionConfig: undefined as Record<string, unknown> | undefined,
   allowFrom: undefined as string[] | undefined,
@@ -242,12 +243,18 @@ vi.mock("../config/config.js", async () => {
       changes: testState.migrationChanges,
     }),
     loadConfig: () => ({
-      agent: {
-        model: "anthropic/claude-opus-4-5",
-        workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
-        ...testState.agentConfig,
-      },
-      routing: testState.routingConfig,
+      agents: (() => {
+        const defaults = {
+          model: "anthropic/claude-opus-4-5",
+          workspace: path.join(os.tmpdir(), "clawd-gateway-test"),
+          ...testState.agentConfig,
+        };
+        if (testState.agentsConfig) {
+          return { ...testState.agentsConfig, defaults };
+        }
+        return { defaults };
+      })(),
+      bindings: testState.bindingsConfig,
       whatsapp: {
         allowFrom: testState.allowFrom,
       },
@@ -356,7 +363,8 @@ export function installGatewayTestHooks() {
     testState.sessionConfig = undefined;
     testState.sessionStorePath = undefined;
     testState.agentConfig = undefined;
-    testState.routingConfig = undefined;
+    testState.agentsConfig = undefined;
+    testState.bindingsConfig = undefined;
     testState.allowFrom = undefined;
     testIsNixMode.value = false;
     cronIsolatedRun.mockClear();

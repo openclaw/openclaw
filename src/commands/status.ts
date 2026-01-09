@@ -86,7 +86,7 @@ export async function getStatusSummary(): Promise<StatusSummary> {
   });
   const configModel = resolved.model ?? DEFAULT_MODEL;
   const configContextTokens =
-    cfg.agent?.contextTokens ??
+    cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(configModel) ??
     DEFAULT_CONTEXT_TOKENS;
 

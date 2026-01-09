@@ -43,6 +43,7 @@ If you want pairing instead of allowlist, set `whatsapp.dmPolicy` to `pairing`. 
 
 ### Personal number (fallback)
 Quick fallback: run Clawdbot on **your own number**. Message yourself (WhatsApp “Message yourself”) for testing so you don’t spam contacts. Expect to read verification codes on your main phone during setup and experiments. **Must enable self-chat mode.**
+When the wizard asks for your personal WhatsApp number, enter the phone you will message from (the owner/sender), not the assistant number.
 
 **Sample config (personal number, self-chat):**
 ```json
@@ -57,6 +58,9 @@ Quick fallback: run Clawdbot on **your own number**. Message yourself (WhatsApp 
   }
 }
 ```
+
+Tip: if you set the routed agent’s `identity.name`, you can omit
+`messages.responsePrefix` and it will default to `[{identity.name}]`.
 
 ### Number sourcing tips
 - **Local eSIM** from your country's mobile carrier (most reliable)
@@ -147,7 +151,7 @@ Behavior:
 
 ## Limits
 - Outbound text is chunked to `whatsapp.textChunkLimit` (default 4000).
-- Media items are capped by `agent.mediaMaxMb` (default 5 MB).
+- Media items are capped by `agents.defaults.mediaMaxMb` (default 5 MB).
 
 ## Outbound send (text + media)
 - Uses active web listener; error if gateway not running.
@@ -163,13 +167,13 @@ Behavior:
 
 ## Media limits + optimization
 - Default cap: 5 MB (per media item).
-- Override: `agent.mediaMaxMb`.
+- Override: `agents.defaults.mediaMaxMb`.
 - Images are auto-optimized to JPEG under cap (resize + quality sweep).
 - Oversize media => error; media reply falls back to text warning.
 
 ## Heartbeats
 - **Gateway heartbeat** logs connection health (`web.heartbeatSeconds`, default 60s).
-- **Agent heartbeat** is global (`agent.heartbeat.*`) and runs in the main session.
+- **Agent heartbeat** is global (`agents.defaults.heartbeat.*`) and runs in the main session.
   - Uses the configured heartbeat prompt (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`) + `HEARTBEAT_OK` skip behavior.
   - Delivery defaults to the last used provider (or configured target).
 
@@ -188,16 +192,15 @@ Behavior:
 - `whatsapp.groupPolicy` (group policy).
 - `whatsapp.groups` (group allowlist + mention gating defaults; use `"*"` to allow all)
 - `whatsapp.actions.reactions` (gate WhatsApp tool reactions).
-- `routing.groupChat.mentionPatterns`
-- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
-- `routing.groupChat.historyLimit`
+- `agents.list[].groupChat.mentionPatterns` (or `messages.groupChat.mentionPatterns`)
+- `messages.groupChat.historyLimit`
 - `messages.messagePrefix` (inbound prefix)
 - `messages.responsePrefix` (outbound prefix)
-- `agent.mediaMaxMb`
-- `agent.heartbeat.every`
-- `agent.heartbeat.model` (optional override)
-- `agent.heartbeat.target`
-- `agent.heartbeat.to`
+- `agents.defaults.mediaMaxMb`
+- `agents.defaults.heartbeat.every`
+- `agents.defaults.heartbeat.model` (optional override)
+- `agents.defaults.heartbeat.target`
+- `agents.defaults.heartbeat.to`
 - `session.*` (scope, idle, store, mainKey)
 - `web.enabled` (disable provider startup when false)
 - `web.heartbeatSeconds`

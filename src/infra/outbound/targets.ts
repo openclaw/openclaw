@@ -9,6 +9,7 @@ export type OutboundProvider =
   | "slack"
   | "signal"
   | "imessage"
+  | "msteams"
   | "none";
 
 export type HeartbeatTarget = OutboundProvider | "last";
@@ -31,6 +32,7 @@ export function resolveOutboundTarget(params: {
     | "slack"
     | "signal"
     | "imessage"
+    | "msteams"
     | "webchat";
   to?: string;
   allowFrom?: string[];
@@ -104,6 +106,17 @@ export function resolveOutboundTarget(params: {
     }
     return { ok: true, to: trimmed };
   }
+  if (params.provider === "msteams") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to MS Teams requires --to <conversationId|user:ID|conversation:ID>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
   return {
     ok: false,
     error: new Error(
@@ -117,7 +130,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   entry?: SessionEntry;
 }): OutboundTarget {
   const { cfg, entry } = params;
-  const rawTarget = cfg.agent?.heartbeat?.target;
+  const rawTarget = cfg.agents?.defaults?.heartbeat?.target;
   const target: HeartbeatTarget =
     rawTarget === "whatsapp" ||
     rawTarget === "telegram" ||
@@ -125,6 +138,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     rawTarget === "slack" ||
     rawTarget === "signal" ||
     rawTarget === "imessage" ||
+    rawTarget === "msteams" ||
     rawTarget === "none" ||
     rawTarget === "last"
       ? rawTarget
@@ -134,9 +148,9 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   const explicitTo =
-    typeof cfg.agent?.heartbeat?.to === "string" &&
-    cfg.agent.heartbeat.to.trim()
-      ? cfg.agent.heartbeat.to.trim()
+    typeof cfg.agents?.defaults?.heartbeat?.to === "string" &&
+    cfg.agents.defaults.heartbeat.to.trim()
+      ? cfg.agents.defaults.heartbeat.to.trim()
       : undefined;
 
   const lastProvider =
@@ -152,6 +166,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     | "slack"
     | "signal"
     | "imessage"
+    | "msteams"
     | undefined =
     target === "last"
       ? lastProvider
@@ -160,7 +175,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
           target === "discord" ||
           target === "slack" ||
           target === "signal" ||
-          target === "imessage"
+          target === "imessage" ||
+          target === "msteams"
         ? target
         : undefined;
 

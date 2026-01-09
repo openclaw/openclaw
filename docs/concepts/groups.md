@@ -88,11 +88,16 @@ Group messages require a mention unless overridden per group. Defaults live per 
       "123": { requireMention: false }
     }
   },
-  routing: {
-    groupChat: {
-      mentionPatterns: ["@clawd", "clawdbot", "\\+15555550123"],
-      historyLimit: 50
-    }
+  agents: {
+    list: [
+      {
+        id: "main",
+        groupChat: {
+          mentionPatterns: ["@clawd", "clawdbot", "\\+15555550123"],
+          historyLimit: 50
+        }
+      }
+    ]
   }
 }
 ```
@@ -100,7 +105,7 @@ Group messages require a mention unless overridden per group. Defaults live per 
 Notes:
 - `mentionPatterns` are case-insensitive regexes.
 - Surfaces that provide explicit mentions still pass; patterns are a fallback.
-- Per-agent override: `routing.agents.<agentId>.mentionPatterns` (useful when multiple agents share a group).
+- Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `discord.guilds."*"` (overridable per guild/channel).
 

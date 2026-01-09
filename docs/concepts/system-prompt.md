@@ -17,7 +17,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Tooling**: current tool list + short descriptions.
 - **Skills**: tells the model how to load skill instructions on demand.
 - **Clawdbot Self-Update**: how to run `config.apply` and `update.run`.
-- **Workspace**: working directory (`agent.workspace`).
+- **Workspace**: working directory (`agents.defaults.workspace`).
 - **Workspace Files (injected)**: indicates bootstrap files are included below.
 - **Time**: UTC default + the user’s local time (already converted).
 - **Reply Tags**: optional reply tag syntax for supported providers.
@@ -43,9 +43,9 @@ Large files are truncated with a marker. Missing files inject a short missing-fi
 The Time line is compact and explicit:
 
 - Assume timestamps are **UTC** unless stated.
-- The listed **user time** is already converted to `agent.userTimezone` (if set).
+- The listed **user time** is already converted to `agents.defaults.userTimezone` (if set).
 
-Use `agent.userTimezone` in `~/.clawdbot/clawdbot.json` to change the user time zone.
+Use `agents.defaults.userTimezone` in `~/.clawdbot/clawdbot.json` to change the user time zone.
 
 ## Skills
 

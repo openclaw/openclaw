@@ -6,18 +6,17 @@ import type { SandboxDockerConfig } from "./sandbox.js";
 describe("Agent-specific tool filtering", () => {
   it("should apply global tool policy when no agent-specific policy exists", () => {
     const cfg: ClawdbotConfig = {
-      agent: {
-        tools: {
-          allow: ["read", "write"],
-          deny: ["bash"],
-        },
+      tools: {
+        allow: ["read", "write"],
+        deny: ["bash"],
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             workspace: "~/clawd",
           },
-        },
+        ],
       },
     };
 
@@ -36,22 +35,21 @@ describe("Agent-specific tool filtering", () => {
 
   it("should apply agent-specific tool policy", () => {
     const cfg: ClawdbotConfig = {
-      agent: {
-        tools: {
-          allow: ["read", "write", "bash"],
-          deny: [],
-        },
+      tools: {
+        allow: ["read", "write", "bash"],
+        deny: [],
       },
-      routing: {
-        agents: {
-          restricted: {
+      agents: {
+        list: [
+          {
+            id: "restricted",
             workspace: "~/clawd-restricted",
             tools: {
               allow: ["read"], // Agent override: only read
               deny: ["bash", "write", "edit"],
             },
           },
-        },
+        ],
       },
     };
 
@@ -71,20 +69,22 @@ describe("Agent-specific tool filtering", () => {
 
   it("should allow different tool policies for different agents", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             workspace: "~/clawd",
             // No tools restriction - all tools available
           },
-          family: {
+          {
+            id: "family",
             workspace: "~/clawd-family",
             tools: {
               allow: ["read"],
               deny: ["bash", "write", "edit", "process"],
             },
           },
-        },
+        ],
       },
     };
 
@@ -116,20 +116,19 @@ describe("Agent-specific tool filtering", () => {
 
   it("should prefer agent-specific tool policy over global", () => {
     const cfg: ClawdbotConfig = {
-      agent: {
-        tools: {
-          deny: ["browser"], // Global deny
-        },
+      tools: {
+        deny: ["browser"], // Global deny
       },
-      routing: {
-        agents: {
-          work: {
+      agents: {
+        list: [
+          {
+            id: "work",
             workspace: "~/clawd-work",
             tools: {
               deny: ["bash", "process"], // Agent deny (override)
             },
           },
-        },
+        ],
       },
     };
 
@@ -149,19 +148,16 @@ describe("Agent-specific tool filtering", () => {
 
   it("should work with sandbox tools filtering", () => {
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          tools: {
-            allow: ["read", "write", "bash"], // Sandbox allows these
-            deny: [],
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
           },
         },
-      },
-      routing: {
-        agents: {
-          restricted: {
+        list: [
+          {
+            id: "restricted",
             workspace: "~/clawd-restricted",
             sandbox: {
               mode: "all",
@@ -171,6 +167,14 @@ describe("Agent-specific tool filtering", () => {
               allow: ["read"], // Agent further restricts to only read
               deny: ["bash", "write"],
             },
+          },
+        ],
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            allow: ["read", "write", "bash"], // Sandbox allows these
+            deny: [],
           },
         },
       },
@@ -216,10 +220,8 @@ describe("Agent-specific tool filtering", () => {
 
   it("should run bash synchronously when process is denied", async () => {
     const cfg: ClawdbotConfig = {
-      agent: {
-        tools: {
-          deny: ["process"],
-        },
+      tools: {
+        deny: ["process"],
       },
     };
 

@@ -10,8 +10,8 @@ surface anything that needs attention without spamming you.
 
 ## Defaults
 
-- Interval: `30m` (set `agent.heartbeat.every`; use `0m` to disable).
-- Prompt body (configurable via `agent.heartbeat.prompt`):
+- Interval: `30m` (set `agents.defaults.heartbeat.every`; use `0m` to disable).
+- Prompt body (configurable via `agents.defaults.heartbeat.prompt`):
   `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
 - The heartbeat prompt is sent **verbatim** as the user message. The system
   prompt includes a “Heartbeat” section and the run is flagged internally.
@@ -33,14 +33,16 @@ and logged; a message that is only `HEARTBEAT_OK` is dropped.
 
 ```json5
 {
-  agent: {
-    heartbeat: {
-      every: "30m",           // default: 30m (0m disables)
-      model: "anthropic/claude-opus-4-5",
-      target: "last",         // last | whatsapp | telegram | discord | slack | signal | imessage | none
-      to: "+15551234567",     // optional provider-specific override
-      prompt: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.",
-      ackMaxChars: 30          // max chars allowed after HEARTBEAT_OK
+  agents: {
+    defaults: {
+      heartbeat: {
+        every: "30m",           // default: 30m (0m disables)
+        model: "anthropic/claude-opus-4-5",
+        target: "last",         // last | whatsapp | telegram | discord | slack | signal | imessage | none
+        to: "+15551234567",     // optional provider-specific override
+        prompt: "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.",
+        ackMaxChars: 30          // max chars allowed after HEARTBEAT_OK
+      }
     }
   }
 }

@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import type { CliDeps } from "../cli/deps.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { CronJob } from "./types.js";
@@ -23,15 +23,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-cron-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = base;
-  try {
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(fn, { prefix: "clawdbot-cron-" });
 }
 
 async function writeSessionStore(home: string) {
@@ -63,9 +55,11 @@ function makeCfg(
   overrides: Partial<ClawdbotConfig> = {},
 ): ClawdbotConfig {
   const base: ClawdbotConfig = {
-    agent: {
-      model: "anthropic/claude-opus-4-5",
-      workspace: path.join(home, "clawd"),
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "clawd"),
+      },
     },
     session: { store: storePath, mainKey: "main" },
   } as ClawdbotConfig;
@@ -738,7 +732,13 @@ describe("runCronIsolatedAgentTurn", () => {
       });
 
       const cfg = makeCfg(home, storePath);
-      cfg.agent = { ...cfg.agent, heartbeat: { ackMaxChars: 0 } };
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          heartbeat: { ackMaxChars: 0 },
+        },
+      };
 
       const res = await runCronIsolatedAgentTurn({
         cfg,

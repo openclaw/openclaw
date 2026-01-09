@@ -108,7 +108,7 @@ function formatUserTime(date: Date, timeZone: string): string | undefined {
 }
 
 function buildModelAliasLines(cfg?: ClawdbotConfig) {
-  const models = cfg?.agent?.models ?? {};
+  const models = cfg?.agents?.defaults?.models ?? {};
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
@@ -134,7 +134,9 @@ function buildSystemPrompt(params: {
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
 }) {
-  const userTimezone = resolveUserTimezone(params.config?.agent?.userTimezone);
+  const userTimezone = resolveUserTimezone(
+    params.config?.agents?.defaults?.userTimezone,
+  );
   const userTime = formatUserTime(new Date(), userTimezone);
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
@@ -143,7 +145,7 @@ function buildSystemPrompt(params: {
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
     heartbeatPrompt: resolveHeartbeatPrompt(
-      params.config?.agent?.heartbeat?.prompt,
+      params.config?.agents?.defaults?.heartbeat?.prompt,
     ),
     runtimeInfo: {
       host: "clawdbot",

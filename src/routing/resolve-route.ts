@@ -1,9 +1,9 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
   buildAgentPeerSessionKey,
   DEFAULT_ACCOUNT_ID,
-  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "./session-key.js";
@@ -81,19 +81,13 @@ export function buildAgentSessionKey(params: {
 }
 
 function listBindings(cfg: ClawdbotConfig) {
-  const bindings = cfg.routing?.bindings;
+  const bindings = cfg.bindings;
   return Array.isArray(bindings) ? bindings : [];
 }
 
 function listAgents(cfg: ClawdbotConfig) {
-  const agents = cfg.routing?.agents;
-  return agents && typeof agents === "object" ? agents : undefined;
-}
-
-function resolveDefaultAgentId(cfg: ClawdbotConfig): string {
-  const explicit = cfg.routing?.defaultAgentId?.trim();
-  if (explicit) return explicit;
-  return DEFAULT_AGENT_ID;
+  const agents = cfg.agents?.list;
+  return Array.isArray(agents) ? agents : [];
 }
 
 function pickFirstExistingAgentId(
@@ -102,8 +96,10 @@ function pickFirstExistingAgentId(
 ): string {
   const normalized = normalizeAgentId(agentId);
   const agents = listAgents(cfg);
-  if (!agents) return normalized;
-  if (Object.hasOwn(agents, normalized)) return normalized;
+  if (agents.length === 0) return normalized;
+  if (agents.some((agent) => normalizeAgentId(agent.id) === normalized)) {
+    return normalized;
+  }
   return normalizeAgentId(resolveDefaultAgentId(cfg));
 }
 

@@ -8,7 +8,7 @@ read_when:
 
 ## First run (recommended)
 
-Clawdbot uses a dedicated workspace directory for the agent. Default: `~/clawd` (configurable via `agent.workspace`).
+Clawdbot uses a dedicated workspace directory for the agent. Default: `~/clawd` (configurable via `agents.defaults.workspace`).
 
 1) Create the workspace (if it doesn’t already exist):
 
@@ -30,13 +30,11 @@ cp docs/reference/templates/TOOLS.md ~/clawd/TOOLS.md
 cp docs/reference/AGENTS.default.md ~/clawd/AGENTS.md
 ```
 
-4) Optional: choose a different workspace by setting `agent.workspace` (supports `~`):
+4) Optional: choose a different workspace by setting `agents.defaults.workspace` (supports `~`):
 
 ```json5
 {
-  agent: {
-    workspace: "~/clawd"
-  }
+  agents: { defaults: { workspace: "~/clawd" } }
 }
 ```
 

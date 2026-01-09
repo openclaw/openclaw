@@ -17,6 +17,10 @@ import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
 import type { APIAttachment } from "discord-api-types/v10";
 import { ApplicationCommandOptionType, Routes } from "discord-api-types/v10";
 
+import {
+  resolveAckReaction,
+  resolveEffectiveMessagesConfig,
+} from "../agents/identity.js";
 import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
@@ -60,6 +64,7 @@ import {
 } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { truncateUtf16Safe } from "../utils.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveDiscordAccount } from "./accounts.js";
 import { chunkDiscordText } from "./chunk.js";
@@ -501,7 +506,6 @@ export function createDiscordMessageHandler(params: {
     guildEntries,
   } = params;
   const logger = getChildLogger({ module: "discord-auto-reply" });
-  const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const groupPolicy = discordConfig?.groupPolicy ?? "open";
 
@@ -842,6 +846,7 @@ export function createDiscordMessageHandler(params: {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
         return;
       }
+      const ackReaction = resolveAckReaction(cfg, route.agentId);
       const shouldAckReaction = () => {
         if (!ackReaction) return false;
         if (ackReactionScope === "all") return true;
@@ -1016,7 +1021,10 @@ export function createDiscordMessageHandler(params: {
       }
 
       if (shouldLogVerbose()) {
-        const preview = combinedBody.slice(0, 200).replace(/\n/g, "\\n");
+        const preview = truncateUtf16Safe(combinedBody, 200).replace(
+          /\n/g,
+          "\\n",
+        );
         logVerbose(
           `discord inbound: channel=${message.channelId} from=${ctxPayload.From} preview="${preview}"`,
         );
@@ -1025,7 +1033,8 @@ export function createDiscordMessageHandler(params: {
       let didSendReply = false;
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
-          responsePrefix: cfg.messages?.responsePrefix,
+          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+            .responsePrefix,
           deliver: async (payload) => {
             await deliverDiscordReply({
               replies: [payload],
@@ -1505,7 +1514,8 @@ function createDiscordNativeCommand(params: {
 
       let didReply = false;
       const dispatcher = createReplyDispatcher({
-        responsePrefix: cfg.messages?.responsePrefix,
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
         deliver: async (payload, _info) => {
           await deliverDiscordInteractionReply({
             interaction,

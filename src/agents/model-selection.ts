@@ -65,7 +65,7 @@ export function buildModelAliasIndex(params: {
   const byAlias = new Map<string, { alias: string; ref: ModelRef }>();
   const byKey = new Map<string, string[]>();
 
-  const rawModels = params.cfg.agent?.models ?? {};
+  const rawModels = params.cfg.agents?.defaults?.models ?? {};
   for (const [keyRaw, entryRaw] of Object.entries(rawModels)) {
     const parsed = parseModelRef(String(keyRaw ?? ""), params.defaultProvider);
     if (!parsed) continue;
@@ -109,7 +109,7 @@ export function resolveConfiguredModelRef(params: {
   defaultModel: string;
 }): ModelRef {
   const rawModel = (() => {
-    const raw = params.cfg.agent?.model as
+    const raw = params.cfg.agents?.defaults?.model as
       | { primary?: string }
       | string
       | undefined;
@@ -128,7 +128,7 @@ export function resolveConfiguredModelRef(params: {
       aliasIndex,
     });
     if (resolved) return resolved.ref;
-    // TODO(steipete): drop this fallback once provider-less agent.model is fully deprecated.
+    // TODO(steipete): drop this fallback once provider-less agents.defaults.model is fully deprecated.
     return { provider: "anthropic", model: trimmed };
   }
   return { provider: params.defaultProvider, model: params.defaultModel };
@@ -145,7 +145,7 @@ export function buildAllowedModelSet(params: {
   allowedKeys: Set<string>;
 } {
   const rawAllowlist = (() => {
-    const modelMap = params.cfg.agent?.models ?? {};
+    const modelMap = params.cfg.agents?.defaults?.models ?? {};
     return Object.keys(modelMap);
   })();
   const allowAny = rawAllowlist.length === 0;
@@ -203,7 +203,7 @@ export function resolveThinkingDefault(params: {
   model: string;
   catalog?: ModelCatalogEntry[];
 }): ThinkLevel {
-  const configured = params.cfg.agent?.thinkingDefault;
+  const configured = params.cfg.agents?.defaults?.thinkingDefault;
   if (configured) return configured;
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,

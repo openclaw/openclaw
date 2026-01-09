@@ -110,12 +110,14 @@ describe("resolveExtraParams", () => {
     it("respects explicit thinking config from user (disable thinking)", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "zai/glm-4.7": {
-                params: {
-                  thinking: {
-                    type: "disabled",
+          agents: {
+            defaults: {
+              models: {
+                "zai/glm-4.7": {
+                  params: {
+                    thinking: {
+                      type: "disabled",
+                    },
                   },
                 },
               },
@@ -136,12 +138,14 @@ describe("resolveExtraParams", () => {
     it("preserves other params while adding thinking config", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "zai/glm-4.7": {
-                params: {
-                  temperature: 0.7,
-                  max_tokens: 4096,
+          agents: {
+            defaults: {
+              models: {
+                "zai/glm-4.7": {
+                  params: {
+                    temperature: 0.7,
+                    max_tokens: 4096,
+                  },
                 },
               },
             },
@@ -164,13 +168,15 @@ describe("resolveExtraParams", () => {
     it("does not override explicit thinking config even if partial", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "zai/glm-4.7": {
-                params: {
-                  thinking: {
-                    type: "enabled",
-                    // User explicitly omitted clear_thinking
+          agents: {
+            defaults: {
+              models: {
+                "zai/glm-4.7": {
+                  params: {
+                    thinking: {
+                      type: "enabled",
+                      // User explicitly omitted clear_thinking
+                    },
                   },
                 },
               },
@@ -214,12 +220,14 @@ describe("resolveExtraParams", () => {
     it("passes through params for non-GLM models without modification", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "openai/gpt-4": {
-                params: {
-                  logprobs: true,
-                  top_logprobs: 5,
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-4": {
+                  params: {
+                    logprobs: true,
+                    top_logprobs: 5,
+                  },
                 },
               },
             },
@@ -264,7 +272,7 @@ describe("resolveExtraParams", () => {
 
     it("handles config with empty models gracefully", () => {
       const result = resolveExtraParams({
-        cfg: { agent: { models: {} } },
+        cfg: { agents: { defaults: { models: {} } } },
         provider: "zai",
         modelId: "glm-4.7",
       });
@@ -280,12 +288,14 @@ describe("resolveExtraParams", () => {
     it("model alias lookup uses exact provider/model key", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "zai/glm-4.7": {
-                alias: "smart",
-                params: {
-                  custom_param: "value",
+          agents: {
+            defaults: {
+              models: {
+                "zai/glm-4.7": {
+                  alias: "smart",
+                  params: {
+                    custom_param: "value",
+                  },
                 },
               },
             },
@@ -307,11 +317,13 @@ describe("resolveExtraParams", () => {
     it("treats thinking: null as explicit config (no auto-enable)", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "zai/glm-4.7": {
-                params: {
-                  thinking: null,
+          agents: {
+            defaults: {
+              models: {
+                "zai/glm-4.7": {
+                  params: {
+                    thinking: null,
+                  },
                 },
               },
             },
@@ -374,11 +386,13 @@ describe("resolveExtraParams", () => {
     it("thinkLevel: 'off' still passes through explicit config", () => {
       const result = resolveExtraParams({
         cfg: {
-          agent: {
-            models: {
-              "zai/glm-4.7": {
-                params: {
-                  custom_param: "value",
+          agents: {
+            defaults: {
+              models: {
+                "zai/glm-4.7": {
+                  params: {
+                    custom_param: "value",
+                  },
                 },
               },
             },

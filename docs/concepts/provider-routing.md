@@ -42,35 +42,33 @@ Examples:
 
 Routing picks **one agent** for each inbound message:
 
-1. **Exact peer match** (`routing.bindings` with `peer.kind` + `peer.id`).
+1. **Exact peer match** (`bindings` with `peer.kind` + `peer.id`).
 2. **Guild match** (Discord) via `guildId`.
 3. **Team match** (Slack) via `teamId`.
 4. **Account match** (`accountId` on the provider).
 5. **Provider match** (any account on that provider).
-6. **Default agent** (`routing.defaultAgentId`, fallback to `main`).
+6. **Default agent** (`agents.list[].default`, else first list entry, fallback to `main`).
 
 The matched agent determines which workspace and session store are used.
 
 ## Config overview
 
-- `routing.defaultAgentId`: default agent when no binding matches.
-- `routing.agents`: named agent definitions (workspace, model, etc.).
-- `routing.bindings`: map inbound providers/accounts/peers to agents.
+- `agents.list`: named agent definitions (workspace, model, etc.).
+- `bindings`: map inbound providers/accounts/peers to agents.
 
 Example:
 
 ```json5
 {
-  routing: {
-    defaultAgentId: "main",
-    agents: {
-      support: { name: "Support", workspace: "~/clawd-support" }
-    },
-    bindings: [
-      { match: { provider: "slack", teamId: "T123" }, agentId: "support" },
-      { match: { provider: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" }
+  agents: {
+    list: [
+      { id: "support", name: "Support", workspace: "~/clawd-support" }
     ]
-  }
+  },
+  bindings: [
+    { match: { provider: "slack", teamId: "T123" }, agentId: "support" },
+    { match: { provider: "telegram", peer: { kind: "group", id: "-100123" } }, agentId: "support" }
+  ]
 }
 ```
 

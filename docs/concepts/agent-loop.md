@@ -42,7 +42,7 @@ Short, exact flow of one agent run.
 
 ## Timeouts
 - `agent.wait` default: 30s (just the wait). `timeoutMs` param overrides.
-- Agent runtime: `agent.timeoutSeconds` default 600s; enforced in `runEmbeddedPiAgent` abort timer.
+- Agent runtime: `agents.defaults.timeoutSeconds` default 600s; enforced in `runEmbeddedPiAgent` abort timer.
 
 ## Where things can end early
 - Agent timeout (abort)

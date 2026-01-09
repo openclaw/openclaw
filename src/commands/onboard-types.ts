@@ -12,6 +12,7 @@ export type AuthChoice =
   | "antigravity"
   | "apiKey"
   | "gemini-api-key"
+  | "minimax-cloud"
   | "minimax"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
@@ -29,6 +30,7 @@ export type OnboardOptions = {
   anthropicApiKey?: string;
   openaiApiKey?: string;
   geminiApiKey?: string;
+  minimaxApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

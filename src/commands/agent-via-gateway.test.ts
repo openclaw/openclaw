@@ -29,9 +29,11 @@ const configSpy = vi.spyOn(configModule, "loadConfig");
 
 function mockConfig(storePath: string, overrides?: Partial<ClawdbotConfig>) {
   configSpy.mockReturnValue({
-    agent: {
-      timeoutSeconds: 600,
-      ...overrides?.agent,
+    agents: {
+      defaults: {
+        timeoutSeconds: 600,
+        ...overrides?.agents?.defaults,
+      },
     },
     session: {
       store: storePath,

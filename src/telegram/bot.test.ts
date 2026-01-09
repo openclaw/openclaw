@@ -360,7 +360,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       identity: { name: "Bert" },
-      routing: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
       telegram: { groups: { "*": { requireMention: true } } },
     });
 
@@ -438,8 +438,11 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
-      messages: { ackReaction: "👀", ackReactionScope: "group-mentions" },
-      routing: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      messages: {
+        ackReaction: "👀",
+        ackReactionScope: "group-mentions",
+        groupChat: { mentionPatterns: ["\\bbert\\b"] },
+      },
       telegram: { groups: { "*": { requireMention: true } } },
     });
 
@@ -483,7 +486,7 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
-      routing: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
+      messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
       telegram: { groups: { "*": { requireMention: true } } },
     });
 
@@ -515,7 +518,7 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
-      routing: { groupChat: { mentionPatterns: [] } },
+      messages: { groupChat: { mentionPatterns: [] } },
       telegram: { groups: { "*": { requireMention: true } } },
     });
 
@@ -790,17 +793,15 @@ describe("createTelegramBot", () => {
     );
     loadConfig.mockReturnValue({
       telegram: { groups: { "*": { requireMention: true } } },
-      routing: {
-        bindings: [
-          {
-            agentId: "ops",
-            match: {
-              provider: "telegram",
-              peer: { kind: "group", id: "123" },
-            },
+      bindings: [
+        {
+          agentId: "ops",
+          match: {
+            provider: "telegram",
+            peer: { kind: "group", id: "123" },
           },
-        ],
-      },
+        },
+      ],
       session: { store: storePath },
     });
 

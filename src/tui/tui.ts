@@ -6,6 +6,7 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -33,6 +34,7 @@ export type TuiOptions = {
   thinking?: string;
   timeoutMs?: number;
   historyLimit?: number;
+  message?: string;
 };
 
 type ChatEvent = {
@@ -131,9 +133,7 @@ export async function runTui(opts: TuiOptions) {
   let sessionScope: SessionScope = (config.session?.scope ??
     "per-sender") as SessionScope;
   let sessionMainKey = (config.session?.mainKey ?? "main").trim() || "main";
-  let agentDefaultId = normalizeAgentId(
-    config.routing?.defaultAgentId ?? "main",
-  );
+  let agentDefaultId = resolveDefaultAgentId(config);
   let currentAgentId = agentDefaultId;
   let agents: AgentSummary[] = [];
   const agentNames = new Map<string, string>();
@@ -147,6 +147,8 @@ export async function runTui(opts: TuiOptions) {
   let toolsExpanded = false;
   let showThinking = false;
   let deliverDefault = Boolean(opts.deliver);
+  const autoMessage = opts.message?.trim();
+  let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
 
@@ -977,6 +979,10 @@ export async function runTui(opts: TuiOptions) {
         await loadHistory();
         chatLog.addSystem("gateway connected");
         tui.requestRender();
+        if (!autoMessageSent && autoMessage) {
+          autoMessageSent = true;
+          await sendMessage(autoMessage);
+        }
       } else {
         chatLog.addSystem("gateway reconnected");
       }

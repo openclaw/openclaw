@@ -212,7 +212,7 @@ export async function getReplyFromConfig(
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const cfg = configOverride ?? loadConfig();
   const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
-  const agentCfg = cfg.agent;
+  const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({
     cfg,
@@ -239,7 +239,7 @@ export async function getReplyFromConfig(
     resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
-    ensureBootstrapFiles: !cfg.agent?.skipBootstrap,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
   });
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
@@ -257,7 +257,7 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   let transcribedText: string | undefined;
-  if (cfg.routing?.transcribeAudio && isAudio(ctx.MediaType)) {
+  if (cfg.audio?.transcription && isAudio(ctx.MediaType)) {
     const transcribed = await transcribeInboundAudio(cfg, ctx, defaultRuntime);
     if (transcribed?.text) {
       transcribedText = transcribed.text;
@@ -329,7 +329,7 @@ export async function getReplyFromConfig(
       cmd.textAliases.map((a) => a.replace(/^\//, "").toLowerCase()),
     ),
   );
-  const configuredAliases = Object.values(cfg.agent?.models ?? {})
+  const configuredAliases = Object.values(cfg.agents?.defaults?.models ?? {})
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
@@ -391,7 +391,7 @@ export async function getReplyFromConfig(
     sessionCtx.Provider?.trim().toLowerCase() ??
     ctx.Provider?.trim().toLowerCase() ??
     "";
-  const elevatedConfig = agentCfg?.elevated;
+  const elevatedConfig = cfg.tools?.elevated;
   const discordElevatedFallback =
     messageProviderKey === "discord" ? cfg.discord?.dm?.allowFrom : undefined;
   const elevatedEnabled = elevatedConfig?.enabled !== false;
@@ -582,6 +582,7 @@ export async function getReplyFromConfig(
     directives,
     effectiveModelDirective,
     cfg,
+    agentDir,
     sessionEntry,
     sessionStore,
     sessionKey,

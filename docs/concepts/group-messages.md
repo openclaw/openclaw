@@ -7,7 +7,7 @@ read_when:
 
 Goal: let Clawd sit in WhatsApp groups, wake up only when pinged, and keep that thread separate from the personal DM session.
 
-Note: `routing.groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/iMessage as well; this doc focuses on WhatsApp-specific behavior. For multi-agent setups, you can override per agent with `routing.agents.<agentId>.mentionPatterns`.
+Note: `agents.list[].groupChat.mentionPatterns` is now used by Telegram/Discord/Slack/iMessage as well; this doc focuses on WhatsApp-specific behavior. For multi-agent setups, set `agents.list[].groupChat.mentionPatterns` per agent (or use `messages.groupChat.mentionPatterns` as a global fallback).
 
 ## What’s implemented (2025-12-03)
 - Activation modes: `mention` (default) or `always`. `mention` requires a ping (real WhatsApp @-mentions via `mentionedJids`, regex patterns, or the bot’s E.164 anywhere in the text). `always` wakes the agent on every message but it should reply only when it can add meaningful value; otherwise it returns the silent token `NO_REPLY`. Defaults can be set in config (`whatsapp.groups`) and overridden per group via `/activation`. When `whatsapp.groups` is set, it also acts as a group allowlist (include `"*"` to allow all).
@@ -28,16 +28,21 @@ Add a `groupChat` block to `~/.clawdbot/clawdbot.json` so display-name pings wor
       "*": { "requireMention": true }
     }
   },
-  "routing": {
-    "groupChat": {
-      "historyLimit": 50,
-      "mentionPatterns": [
-        "@?clawd",
-        "@?clawd\\s*uk",
-        "@?clawdbot",
-        "\\+?447700900123"
-      ]
-    }
+  "agents": {
+    "list": [
+      {
+        "id": "main",
+        "groupChat": {
+          "historyLimit": 50,
+          "mentionPatterns": [
+            "@?clawd",
+            "@?clawd\\s*uk",
+            "@?clawdbot",
+            "\\+?447700900123"
+          ]
+        }
+      }
+    ]
   }
 }
 ```
@@ -70,4 +75,4 @@ Only the owner number (from `whatsapp.allowFrom`, or the bot’s own E.164 when 
 - Heartbeats are intentionally skipped for groups to avoid noisy broadcasts.
 - Echo suppression uses the combined batch string; if you send identical text twice without mentions, only the first will get a response.
 - Session store entries will appear as `agent:<agentId>:whatsapp:group:<jid>` in the session store (`~/.clawdbot/agents/<agentId>/sessions/sessions.json` by default); a missing entry just means the group hasn’t triggered a run yet.
-- Typing indicators in groups follow `agent.typingMode` (default: `message` when unmentioned).
+- Typing indicators in groups follow `agents.defaults.typingMode` (default: `message` when unmentioned).

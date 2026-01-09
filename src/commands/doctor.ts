@@ -4,6 +4,10 @@ import {
   note as clackNote,
   outro as clackOutro,
 } from "@clack/prompts";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { buildWorkspaceSkillStatus } from "../agents/skills-status.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -25,7 +29,7 @@ import { collectProvidersStatusIssues } from "../infra/providers-status-issues.j
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import { resolveUserPath, sleep } from "../utils.js";
+import { sleep } from "../utils.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -69,11 +73,7 @@ import {
   shouldSuggestMemorySystem,
 } from "./doctor-workspace.js";
 import { healthCommand } from "./health.js";
-import {
-  applyWizardMetadata,
-  DEFAULT_WORKSPACE,
-  printWizardHeader,
-} from "./onboard-helpers.js";
+import { applyWizardMetadata, printWizardHeader } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 const intro = (message: string) =>
@@ -114,10 +114,13 @@ export async function doctorCommand(
         .join("\n"),
       "Legacy config keys detected",
     );
-    const migrate = await prompter.confirm({
-      message: "Migrate legacy config entries now?",
-      initialValue: true,
-    });
+    const migrate =
+      options.nonInteractive === true
+        ? true
+        : await prompter.confirm({
+            message: "Migrate legacy config entries now?",
+            initialValue: true,
+          });
     if (migrate) {
       // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
       const { config: migrated, changes } = migrateLegacyConfig(
@@ -224,8 +227,9 @@ export async function doctorCommand(
     }
   }
 
-  const workspaceDir = resolveUserPath(
-    cfg.agent?.workspace ?? DEFAULT_WORKSPACE,
+  const workspaceDir = resolveAgentWorkspaceDir(
+    cfg,
+    resolveDefaultAgentId(cfg),
   );
   const legacyWorkspace = detectLegacyWorkspaceDirs({ workspaceDir });
   if (legacyWorkspace.legacyDirs.length > 0) {
@@ -415,8 +419,9 @@ export async function doctorCommand(
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
 
   if (options.workspaceSuggestions !== false) {
-    const workspaceDir = resolveUserPath(
-      cfg.agent?.workspace ?? DEFAULT_WORKSPACE,
+    const workspaceDir = resolveAgentWorkspaceDir(
+      cfg,
+      resolveDefaultAgentId(cfg),
     );
     noteWorkspaceBackupTip(workspaceDir);
     if (await shouldSuggestMemorySystem(workspaceDir)) {

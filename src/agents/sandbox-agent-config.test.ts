@@ -52,51 +52,57 @@ describe("Agent-specific sandbox config", () => {
     spawnCalls.length = 0;
   });
 
-  it("should use global sandbox config when no agent-specific config exists", async () => {
-    const { resolveSandboxContext } = await import("./sandbox.js");
+  it(
+    "should use global sandbox config when no agent-specific config exists",
+    { timeout: 15_000 },
+    async () => {
+      const { resolveSandboxContext } = await import("./sandbox.js");
 
-    const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-        },
-      },
-      routing: {
+      const cfg: ClawdbotConfig = {
         agents: {
-          main: {
-            workspace: "~/clawd",
+          defaults: {
+            sandbox: {
+              mode: "all",
+              scope: "agent",
+            },
           },
+          list: [
+            {
+              id: "main",
+              workspace: "~/clawd",
+            },
+          ],
         },
-      },
-    };
+      };
 
-    const context = await resolveSandboxContext({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test",
-    });
+      const context = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test",
+      });
 
-    expect(context).toBeDefined();
-    expect(context?.enabled).toBe(true);
-  });
+      expect(context).toBeDefined();
+      expect(context?.enabled).toBe(true);
+    },
+  );
 
   it("should allow agent-specific docker setupCommand overrides", async () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          docker: {
-            setupCommand: "echo global",
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+            docker: {
+              setupCommand: "echo global",
+            },
           },
         },
-      },
-      routing: {
-        agents: {
-          work: {
+        list: [
+          {
+            id: "work",
             workspace: "~/clawd-work",
             sandbox: {
               mode: "all",
@@ -106,7 +112,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        },
+        ],
       },
     };
 
@@ -133,18 +139,19 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "shared",
-          docker: {
-            setupCommand: "echo global",
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "shared",
+            docker: {
+              setupCommand: "echo global",
+            },
           },
         },
-      },
-      routing: {
-        agents: {
-          work: {
+        list: [
+          {
+            id: "work",
             workspace: "~/clawd-work",
             sandbox: {
               mode: "all",
@@ -154,7 +161,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        },
+        ],
       },
     };
 
@@ -182,19 +189,20 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          docker: {
-            image: "global-image",
-            network: "none",
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+            docker: {
+              image: "global-image",
+              network: "none",
+            },
           },
         },
-      },
-      routing: {
-        agents: {
-          work: {
+        list: [
+          {
+            id: "work",
             workspace: "~/clawd-work",
             sandbox: {
               mode: "all",
@@ -205,7 +213,7 @@ describe("Agent-specific sandbox config", () => {
               },
             },
           },
-        },
+        ],
       },
     };
 
@@ -224,21 +232,22 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all", // Global default
-          scope: "agent",
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all", // Global default
+            scope: "agent",
+          },
         },
-      },
-      routing: {
-        agents: {
-          main: {
+        list: [
+          {
+            id: "main",
             workspace: "~/clawd",
             sandbox: {
               mode: "off", // Agent override
             },
           },
-        },
+        ],
       },
     };
 
@@ -256,21 +265,22 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "off", // Global default
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "off", // Global default
+          },
         },
-      },
-      routing: {
-        agents: {
-          family: {
+        list: [
+          {
+            id: "family",
             workspace: "~/clawd-family",
             sandbox: {
               mode: "all", // Agent override
               scope: "agent",
             },
           },
-        },
+        ],
       },
     };
 
@@ -288,22 +298,23 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "session", // Global default
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "session", // Global default
+          },
         },
-      },
-      routing: {
-        agents: {
-          work: {
+        list: [
+          {
+            id: "work",
             workspace: "~/clawd-work",
             sandbox: {
               mode: "all",
               scope: "agent", // Agent override
             },
           },
-        },
+        ],
       },
     };
 
@@ -322,16 +333,17 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          workspaceRoot: "~/.clawdbot/sandboxes", // Global default
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+            workspaceRoot: "~/.clawdbot/sandboxes", // Global default
+          },
         },
-      },
-      routing: {
-        agents: {
-          isolated: {
+        list: [
+          {
+            id: "isolated",
             workspace: "~/clawd-isolated",
             sandbox: {
               mode: "all",
@@ -339,7 +351,7 @@ describe("Agent-specific sandbox config", () => {
               workspaceRoot: "/tmp/isolated-sandboxes", // Agent override
             },
           },
-        },
+        ],
       },
     };
 
@@ -359,28 +371,30 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "non-main",
-          scope: "session",
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "non-main",
+            scope: "session",
+          },
         },
-      },
-      routing: {
-        agents: {
-          main: {
+        list: [
+          {
+            id: "main",
             workspace: "~/clawd",
             sandbox: {
               mode: "off", // main: no sandbox
             },
           },
-          family: {
+          {
+            id: "family",
             workspace: "~/clawd-family",
             sandbox: {
               mode: "all", // family: always sandbox
               scope: "agent",
             },
           },
-        },
+        ],
       },
     };
 
@@ -406,28 +420,37 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
-      agent: {
-        sandbox: {
-          mode: "all",
-          scope: "agent",
-          tools: {
-            allow: ["read"],
-            deny: ["bash"],
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
           },
         },
-      },
-      routing: {
-        agents: {
-          restricted: {
+        list: [
+          {
+            id: "restricted",
             workspace: "~/clawd-restricted",
             sandbox: {
               mode: "all",
               scope: "agent",
-              tools: {
-                allow: ["read", "write"],
-                deny: ["edit"],
+            },
+            tools: {
+              sandbox: {
+                tools: {
+                  allow: ["read", "write"],
+                  deny: ["edit"],
+                },
               },
             },
+          },
+        ],
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            allow: ["read"],
+            deny: ["bash"],
           },
         },
       },

@@ -14,10 +14,10 @@ describe("diffConfigPaths", () => {
   });
 
   it("captures array changes", () => {
-    const prev = { routing: { groupChat: { mentionPatterns: ["a"] } } };
-    const next = { routing: { groupChat: { mentionPatterns: ["b"] } } };
+    const prev = { messages: { groupChat: { mentionPatterns: ["a"] } } };
+    const next = { messages: { groupChat: { mentionPatterns: ["b"] } } };
     const paths = diffConfigPaths(prev, next);
-    expect(paths).toContain("routing.groupChat.mentionPatterns");
+    expect(paths).toContain("messages.groupChat.mentionPatterns");
   });
 });
 

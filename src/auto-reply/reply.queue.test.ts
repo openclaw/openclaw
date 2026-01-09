@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 import {
   isEmbeddedPiRunActive,
   isEmbeddedPiRunStreaming,
@@ -32,31 +31,26 @@ function makeResult(text: string) {
 }
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-queue-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = base;
-  try {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    try {
-      await fs.rm(base, { recursive: true, force: true });
-    } catch {
-      // ignore cleanup failures in tests
-    }
-  }
+  return withTempHomeBase(
+    async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      return await fn(home);
+    },
+    { prefix: "clawdbot-queue-" },
+  );
 }
 
 function makeCfg(home: string, queue?: Record<string, unknown>) {
   return {
-    agent: {
-      model: "anthropic/claude-opus-4-5",
-      workspace: path.join(home, "clawd"),
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: path.join(home, "clawd"),
+      },
     },
     whatsapp: { allowFrom: ["*"] },
     session: { store: path.join(home, "sessions.json") },
-    routing: queue ? { queue } : undefined,
+    messages: queue ? { queue } : undefined,
   };
 }
 

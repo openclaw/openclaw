@@ -64,10 +64,10 @@ group messages, so use admin if you need full visibility.
 
 ## How it works (behavior)
 - Inbound messages are normalized into the shared provider envelope with reply context and media placeholders.
-- Group replies require a mention by default (native @mention or `routing.groupChat.mentionPatterns`).
-- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
+- Group replies require a mention by default (native @mention or `agents.list[].groupChat.mentionPatterns` / `messages.groupChat.mentionPatterns`).
+- Multi-agent override: set per-agent patterns on `agents.list[].groupChat.mentionPatterns`.
 - Replies always route back to the same Telegram chat.
-- Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agent.maxConcurrent`.
+- Long-polling uses grammY runner with per-chat sequencing; overall concurrency is capped by `agents.defaults.maxConcurrent`.
 
 ## Formatting (Telegram HTML)
 - Outbound Telegram text uses `parse_mode: "HTML"` (Telegram’s supported tag subset).
@@ -81,7 +81,7 @@ group messages, so use admin if you need full visibility.
 
 ## Group activation modes
 
-By default, the bot only responds to mentions in groups (`@botname` or patterns in `routing.groupChat.mentionPatterns`). To change this behavior:
+By default, the bot only responds to mentions in groups (`@botname` or patterns in `agents.list[].groupChat.mentionPatterns`). To change this behavior:
 
 ### Via config (recommended)
 
@@ -280,7 +280,7 @@ Provider options:
 - `telegram.actions.sendMessage`: gate Telegram tool message sends.
 
 Related global options:
-- `routing.groupChat.mentionPatterns` (mention gating patterns).
-- `routing.agents.<agentId>.mentionPatterns` overrides for multi-agent setups.
+- `agents.list[].groupChat.mentionPatterns` (mention gating patterns).
+- `messages.groupChat.mentionPatterns` (global fallback).
 - `commands.native`, `commands.text`, `commands.useAccessGroups` (command behavior).
 - `messages.responsePrefix`, `messages.ackReaction`, `messages.ackReactionScope`.

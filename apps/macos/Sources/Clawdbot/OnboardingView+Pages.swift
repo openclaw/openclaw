@@ -607,7 +607,7 @@ extension OnboardingView {
                                     let saved = await self.saveAgentWorkspace(AgentWorkspace.displayPath(for: url))
                                     if saved {
                                         self.workspaceStatus =
-                                            "Saved to ~/.clawdbot/clawdbot.json (agent.workspace)"
+                                            "Saved to ~/.clawdbot/clawdbot.json (agents.defaults.workspace)"
                                     }
                                 }
                             }

@@ -313,7 +313,7 @@ export async function monitorWebInbox(options: {
                   await sock.sendMessage(remoteJid, {
                     text: buildPairingReply({
                       provider: "whatsapp",
-                      idLine: `Your WhatsApp sender id: ${candidate}`,
+                      idLine: `Your WhatsApp phone number: ${candidate}`,
                       code,
                     }),
                   });

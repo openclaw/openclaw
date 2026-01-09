@@ -59,7 +59,7 @@ EOF
 
 cat <<NOTE
 Built ${TARGET_IMAGE}.
-To use it, set agent.sandbox.docker.image to "${TARGET_IMAGE}" and restart.
+To use it, set agents.defaults.sandbox.docker.image to "${TARGET_IMAGE}" and restart.
 If you want a clean re-create, remove old sandbox containers:
   docker rm -f \$(docker ps -aq --filter label=clawdbot.sandbox=1)
 NOTE

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { createClawdbotCodingTools } from "./pi-tools.js";
+import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
 describe("createClawdbotCodingTools", () => {
@@ -62,6 +62,28 @@ describe("createClawdbotCodingTools", () => {
     expect(format?.type).toBe("string");
     expect(format?.anyOf).toBeUndefined();
     expect(format?.enum).toEqual(["aria", "ai"]);
+  });
+
+  it("inlines local $ref before removing unsupported keywords", () => {
+    const cleaned = __testing.cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        foo: { $ref: "#/$defs/Foo" },
+      },
+      $defs: {
+        Foo: { type: "string", enum: ["a", "b"] },
+      },
+    }) as {
+      $defs?: unknown;
+      properties?: Record<string, unknown>;
+    };
+
+    expect(cleaned.$defs).toBeUndefined();
+    expect(cleaned.properties).toBeDefined();
+    expect(cleaned.properties?.foo).toMatchObject({
+      type: "string",
+      enum: ["a", "b"],
+    });
   });
 
   it("preserves action enums in normalized schemas", () => {
@@ -171,7 +193,7 @@ describe("createClawdbotCodingTools", () => {
       sessionKey: "agent:main:subagent:test",
       // Intentionally partial config; only fields used by pi-tools are provided.
       config: {
-        agent: {
+        tools: {
           subagents: {
             tools: {
               // Policy matching is case-insensitive
@@ -325,10 +347,58 @@ describe("createClawdbotCodingTools", () => {
 
   it("filters tools by agent tool policy even without sandbox", () => {
     const tools = createClawdbotCodingTools({
-      config: { agent: { tools: { deny: ["browser"] } } },
+      config: { tools: { deny: ["browser"] } },
     });
     // NOTE: bash is capitalized to bypass Anthropic OAuth blocking
     expect(tools.some((tool) => tool.name === "Bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+  });
+
+  it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {
+    const tools = createClawdbotCodingTools();
+
+    // Helper to recursively check schema for unsupported keywords
+    const unsupportedKeywords = new Set([
+      "patternProperties",
+      "additionalProperties",
+      "$schema",
+      "$id",
+      "$ref",
+      "$defs",
+      "definitions",
+    ]);
+
+    const findUnsupportedKeywords = (
+      schema: unknown,
+      path: string,
+    ): string[] => {
+      const found: string[] = [];
+      if (!schema || typeof schema !== "object") return found;
+      if (Array.isArray(schema)) {
+        schema.forEach((item, i) => {
+          found.push(...findUnsupportedKeywords(item, `${path}[${i}]`));
+        });
+        return found;
+      }
+      for (const [key, value] of Object.entries(
+        schema as Record<string, unknown>,
+      )) {
+        if (unsupportedKeywords.has(key)) {
+          found.push(`${path}.${key}`);
+        }
+        if (value && typeof value === "object") {
+          found.push(...findUnsupportedKeywords(value, `${path}.${key}`));
+        }
+      }
+      return found;
+    };
+
+    for (const tool of tools) {
+      const violations = findUnsupportedKeywords(
+        tool.parameters,
+        `${tool.name}.parameters`,
+      );
+      expect(violations).toEqual([]);
+    }
   });
 });

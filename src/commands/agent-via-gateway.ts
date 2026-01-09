@@ -80,7 +80,7 @@ function parseTimeoutSeconds(opts: {
   const raw =
     opts.timeout !== undefined
       ? Number.parseInt(String(opts.timeout), 10)
-      : (opts.cfg.agent?.timeoutSeconds ?? 600);
+      : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (Number.isNaN(raw) || raw <= 0) {
     throw new Error("--timeout must be a positive integer (seconds)");
   }

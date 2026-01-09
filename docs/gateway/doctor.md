@@ -94,8 +94,18 @@ legacy config format, so stale configs are repaired without manual intervention.
 
 Current migrations:
 - `routing.allowFrom` → `whatsapp.allowFrom`
+- `routing.groupChat.requireMention` → `whatsapp/telegram/imessage.groups."*".requireMention`
+- `routing.groupChat.historyLimit` → `messages.groupChat.historyLimit`
+- `routing.groupChat.mentionPatterns` → `messages.groupChat.mentionPatterns`
+- `routing.queue` → `messages.queue`
+- `routing.bindings` → top-level `bindings`
+- `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
+- `routing.agentToAgent` → `tools.agentToAgent`
+- `routing.transcribeAudio` → `audio.transcription`
+- `identity` → `agents.list[].identity`
+- `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/bash/sandbox/subagents)
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
-  → `agent.models` + `agent.model.primary/fallbacks` + `agent.imageModel.primary/fallbacks`
+  → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
 
 ### 3) Legacy state migrations (disk layout)
 Doctor can migrate older on-disk layouts into the current structure:

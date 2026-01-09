@@ -24,13 +24,14 @@ export type ConfigSchemaResponse = {
 };
 
 const GROUP_LABELS: Record<string, string> = {
-  identity: "Identity",
   wizard: "Wizard",
   logging: "Logging",
   gateway: "Gateway",
-  agent: "Agent",
+  agents: "Agents",
+  tools: "Tools",
+  bindings: "Bindings",
+  audio: "Audio",
   models: "Models",
-  routing: "Routing",
   messages: "Messages",
   commands: "Commands",
   session: "Session",
@@ -52,35 +53,38 @@ const GROUP_LABELS: Record<string, string> = {
 };
 
 const GROUP_ORDER: Record<string, number> = {
-  identity: 10,
   wizard: 20,
   gateway: 30,
-  agent: 40,
-  models: 50,
-  routing: 60,
-  messages: 70,
-  commands: 75,
-  session: 80,
-  cron: 90,
-  hooks: 100,
-  ui: 110,
-  browser: 120,
-  talk: 130,
-  telegram: 140,
-  discord: 150,
-  slack: 155,
-  signal: 160,
-  imessage: 170,
-  whatsapp: 180,
-  skills: 190,
-  discovery: 200,
-  presence: 210,
-  voicewake: 220,
+  agents: 40,
+  tools: 50,
+  bindings: 55,
+  audio: 60,
+  models: 70,
+  messages: 80,
+  commands: 85,
+  session: 90,
+  cron: 100,
+  hooks: 110,
+  ui: 120,
+  browser: 130,
+  talk: 140,
+  telegram: 150,
+  discord: 160,
+  slack: 165,
+  signal: 170,
+  imessage: 180,
+  whatsapp: 190,
+  skills: 200,
+  discovery: 210,
+  presence: 220,
+  voicewake: 230,
   logging: 900,
 };
 
 const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.url": "Remote Gateway URL",
+  "gateway.remote.sshTarget": "Remote Gateway SSH Target",
+  "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.auth.token": "Gateway Token",
@@ -88,14 +92,14 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
-  "agent.workspace": "Workspace",
+  "agents.defaults.workspace": "Workspace",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
-  "agent.models": "Models",
-  "agent.model.primary": "Primary Model",
-  "agent.model.fallbacks": "Model Fallbacks",
-  "agent.imageModel.primary": "Image Model",
-  "agent.imageModel.fallbacks": "Image Model Fallbacks",
+  "agents.defaults.models": "Models",
+  "agents.defaults.model.primary": "Primary Model",
+  "agents.defaults.model.fallbacks": "Model Fallbacks",
+  "agents.defaults.imageModel.primary": "Image Model",
+  "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
   "commands.restart": "Allow Restart",
@@ -134,6 +138,10 @@ const FIELD_LABELS: Record<string, string> = {
 
 const FIELD_HELP: Record<string, string> = {
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
+  "gateway.remote.sshTarget":
+    "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
+  "gateway.remote.sshIdentity":
+    "Optional SSH identity file path (passed to ssh -i).",
   "gateway.auth.token":
     "Required for multi-machine access or non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
@@ -148,14 +156,14 @@ const FIELD_HELP: Record<string, string> = {
   "auth.profiles": "Named auth profiles (provider + mode + optional email).",
   "auth.order":
     "Ordered auth profile IDs per provider (used for automatic failover).",
-  "agent.models":
+  "agents.defaults.models":
     "Configured model catalog (keys are full provider/model IDs).",
-  "agent.model.primary": "Primary model (provider/model).",
-  "agent.model.fallbacks":
+  "agents.defaults.model.primary": "Primary model (provider/model).",
+  "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",
-  "agent.imageModel.primary":
+  "agents.defaults.imageModel.primary":
     "Optional image model (provider/model) used when the primary model lacks image input.",
-  "agent.imageModel.fallbacks":
+  "agents.defaults.imageModel.fallbacks":
     "Ordered fallback image models (provider/model).",
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
@@ -208,6 +216,7 @@ const FIELD_HELP: Record<string, string> = {
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
+  "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/clawdbot",
 };
 

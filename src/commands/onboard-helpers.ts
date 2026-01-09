@@ -36,13 +36,13 @@ export function guardCancel<T>(value: T, runtime: RuntimeEnv): T {
 
 export function summarizeExistingConfig(config: ClawdbotConfig): string {
   const rows: string[] = [];
-  if (config.agent?.workspace)
-    rows.push(`workspace: ${config.agent.workspace}`);
-  if (config.agent?.model) {
+  const defaults = config.agents?.defaults;
+  if (defaults?.workspace) rows.push(`workspace: ${defaults.workspace}`);
+  if (defaults?.model) {
     const model =
-      typeof config.agent.model === "string"
-        ? config.agent.model
-        : config.agent.model.primary;
+      typeof defaults.model === "string"
+        ? defaults.model
+        : defaults.model.primary;
     if (model) rows.push(`model: ${model}`);
   }
   if (config.gateway?.mode) rows.push(`gateway.mode: ${config.gateway.mode}`);

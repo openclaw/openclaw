@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 
 import {
@@ -10,6 +9,8 @@ import {
   type MockInstance,
   vi,
 } from "vitest";
+
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -39,33 +40,27 @@ const runtime: RuntimeEnv = {
 const configSpy = vi.spyOn(configModule, "loadConfig");
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-agent-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = base;
-  try {
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    fs.rmSync(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(fn, { prefix: "clawdbot-agent-" });
 }
 
 function mockConfig(
   home: string,
   storePath: string,
-  routingOverrides?: Partial<NonNullable<ClawdbotConfig["routing"]>>,
-  agentOverrides?: Partial<NonNullable<ClawdbotConfig["agent"]>>,
+  agentOverrides?: Partial<
+    NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>
+  >,
   telegramOverrides?: Partial<NonNullable<ClawdbotConfig["telegram"]>>,
 ) {
   configSpy.mockReturnValue({
-    agent: {
-      model: { primary: "anthropic/claude-opus-4-5" },
-      models: { "anthropic/claude-opus-4-5": {} },
-      workspace: path.join(home, "clawd"),
-      ...agentOverrides,
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-4-5" },
+        models: { "anthropic/claude-opus-4-5": {} },
+        workspace: path.join(home, "clawd"),
+        ...agentOverrides,
+      },
     },
     session: { store: storePath, mainKey: "main" },
-    routing: routingOverrides ? { ...routingOverrides } : undefined,
     telegram: telegramOverrides ? { ...telegramOverrides } : undefined,
   });
 }
@@ -153,11 +148,15 @@ describe("agentCommand", () => {
     });
   });
 
-  it("uses provider/model from agent.model", async () => {
+  it("uses provider/model from agents.defaults.model.primary", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store, undefined, {
-        model: "openai/gpt-4.1-mini",
+      mockConfig(home, store, {
+        model: { primary: "openai/gpt-4.1-mini" },
+        models: {
+          "anthropic/claude-opus-4-5": {},
+          "openai/gpt-4.1-mini": {},
+        },
       });
 
       await agentCommand({ message: "hi", to: "+1555" }, runtime);
@@ -269,7 +268,7 @@ describe("agentCommand", () => {
   it("passes through telegram accountId when delivering", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      mockConfig(home, store, undefined, undefined, { botToken: "t-1" });
+      mockConfig(home, store, undefined, { botToken: "t-1" });
       const deps = {
         sendMessageWhatsApp: vi.fn(),
         sendMessageTelegram: vi

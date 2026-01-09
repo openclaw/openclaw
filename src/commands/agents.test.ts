@@ -1,9 +1,9 @@
+import os from "node:os";
 import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   applyAgentBindings,
   applyAgentConfig,
@@ -12,27 +12,32 @@ import {
 } from "./agents.js";
 
 describe("agents helpers", () => {
-  it("buildAgentSummaries includes default + routing agents", () => {
+  it("buildAgentSummaries includes default + configured agents", () => {
     const cfg: ClawdbotConfig = {
-      agent: { workspace: "/main-ws", model: { primary: "anthropic/claude" } },
-      routing: {
-        defaultAgentId: "work",
-        agents: {
-          work: {
+      agents: {
+        defaults: {
+          workspace: "/main-ws",
+          model: { primary: "anthropic/claude" },
+        },
+        list: [
+          { id: "main" },
+          {
+            id: "work",
+            default: true,
             name: "Work",
             workspace: "/work-ws",
             agentDir: "/state/agents/work/agent",
             model: "openai/gpt-4.1",
           },
-        },
-        bindings: [
-          {
-            agentId: "work",
-            match: { provider: "whatsapp", accountId: "biz" },
-          },
-          { agentId: "main", match: { provider: "telegram" } },
         ],
       },
+      bindings: [
+        {
+          agentId: "work",
+          match: { provider: "whatsapp", accountId: "biz" },
+        },
+        { agentId: "main", match: { provider: "telegram" } },
+      ],
     };
 
     const summaries = buildAgentSummaries(cfg);
@@ -40,7 +45,7 @@ describe("agents helpers", () => {
     const work = summaries.find((summary) => summary.id === "work");
 
     expect(main).toBeTruthy();
-    expect(main?.workspace).toBe(path.resolve("/main-ws"));
+    expect(main?.workspace).toBe(path.join(os.homedir(), "clawd-main"));
     expect(main?.bindings).toBe(1);
     expect(main?.model).toBe("anthropic/claude");
     expect(main?.agentDir.endsWith(path.join("agents", "main", "agent"))).toBe(
@@ -57,10 +62,8 @@ describe("agents helpers", () => {
 
   it("applyAgentConfig merges updates", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        agents: {
-          work: { workspace: "/old-ws", model: "anthropic/claude" },
-        },
+      agents: {
+        list: [{ id: "work", workspace: "/old-ws", model: "anthropic/claude" }],
       },
     };
 
@@ -71,7 +74,7 @@ describe("agents helpers", () => {
       agentDir: "/state/work/agent",
     });
 
-    const work = next.routing?.agents?.work;
+    const work = next.agents?.list?.find((agent) => agent.id === "work");
     expect(work?.name).toBe("Work");
     expect(work?.workspace).toBe("/new-ws");
     expect(work?.agentDir).toBe("/state/work/agent");
@@ -80,14 +83,12 @@ describe("agents helpers", () => {
 
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        bindings: [
-          {
-            agentId: "main",
-            match: { provider: "whatsapp", accountId: "default" },
-          },
-        ],
-      },
+      bindings: [
+        {
+          agentId: "main",
+          match: { provider: "whatsapp", accountId: "default" },
+        },
+      ],
     };
 
     const result = applyAgentBindings(cfg, [
@@ -108,32 +109,36 @@ describe("agents helpers", () => {
     expect(result.added).toHaveLength(1);
     expect(result.skipped).toHaveLength(1);
     expect(result.conflicts).toHaveLength(1);
-    expect(result.config.routing?.bindings).toHaveLength(2);
+    expect(result.config.bindings).toHaveLength(2);
   });
 
   it("pruneAgentConfig removes agent, bindings, and allowlist entries", () => {
     const cfg: ClawdbotConfig = {
-      routing: {
-        defaultAgentId: "work",
-        agents: {
-          work: { workspace: "/work-ws" },
-          home: { workspace: "/home-ws" },
-        },
-        bindings: [
-          { agentId: "work", match: { provider: "whatsapp" } },
-          { agentId: "home", match: { provider: "telegram" } },
+      agents: {
+        list: [
+          { id: "work", default: true, workspace: "/work-ws" },
+          { id: "home", workspace: "/home-ws" },
         ],
+      },
+      bindings: [
+        { agentId: "work", match: { provider: "whatsapp" } },
+        { agentId: "home", match: { provider: "telegram" } },
+      ],
+      tools: {
         agentToAgent: { enabled: true, allow: ["work", "home"] },
       },
     };
 
     const result = pruneAgentConfig(cfg, "work");
-    expect(result.config.routing?.agents?.work).toBeUndefined();
-    expect(result.config.routing?.agents?.home).toBeTruthy();
-    expect(result.config.routing?.bindings).toHaveLength(1);
-    expect(result.config.routing?.bindings?.[0]?.agentId).toBe("home");
-    expect(result.config.routing?.agentToAgent?.allow).toEqual(["home"]);
-    expect(result.config.routing?.defaultAgentId).toBe(DEFAULT_AGENT_ID);
+    expect(
+      result.config.agents?.list?.some((agent) => agent.id === "work"),
+    ).toBe(false);
+    expect(
+      result.config.agents?.list?.some((agent) => agent.id === "home"),
+    ).toBe(true);
+    expect(result.config.bindings).toHaveLength(1);
+    expect(result.config.bindings?.[0]?.agentId).toBe("home");
+    expect(result.config.tools?.agentToAgent?.allow).toEqual(["home"]);
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
   });

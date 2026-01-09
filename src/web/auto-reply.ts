@@ -1,4 +1,8 @@
 import {
+  resolveEffectiveMessagesConfig,
+  resolveMessagePrefix,
+} from "../agents/identity.js";
+import {
   chunkMarkdownText,
   resolveTextChunkLimit,
 } from "../auto-reply/chunk.js";
@@ -341,7 +345,7 @@ export async function runWebHeartbeatOnce(opts: {
 
     const replyResult = await replyResolver(
       {
-        Body: resolveHeartbeatPrompt(cfg.agent?.heartbeat?.prompt),
+        Body: resolveHeartbeatPrompt(cfg.agents?.defaults?.heartbeat?.prompt),
         From: to,
         To: to,
         MessageSid: sessionId ?? sessionSnapshot.entry?.sessionId,
@@ -377,7 +381,8 @@ export async function runWebHeartbeatOnce(opts: {
     );
     const ackMaxChars = Math.max(
       0,
-      cfg.agent?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+        DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
     );
     const stripped = stripHeartbeatToken(replyPayload.text, {
       mode: "heartbeat",
@@ -786,7 +791,7 @@ export async function monitorWebProvider(
       groups: account.groups,
     },
   } satisfies ReturnType<typeof loadConfig>;
-  const configuredMaxMb = cfg.agent?.mediaMaxMb;
+  const configuredMaxMb = cfg.agents?.defaults?.mediaMaxMb;
   const maxMediaBytes =
     typeof configuredMaxMb === "number" && configuredMaxMb > 0
       ? configuredMaxMb * 1024 * 1024
@@ -800,7 +805,7 @@ export async function monitorWebProvider(
     buildMentionConfig(cfg, agentId);
   const baseMentionConfig = resolveMentionConfig();
   const groupHistoryLimit =
-    cfg.routing?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
     string,
     Array<{ sender: string; body: string; timestamp?: number }>
@@ -1031,13 +1036,11 @@ export async function monitorWebProvider(
       return `[Replying to ${sender}${idPart}]\n${msg.replyToBody}\n[/Replying]`;
     };
 
-    const buildLine = (msg: WebInboundMsg) => {
-      // Build message prefix: explicit config > default based on allowFrom
-      let messagePrefix = cfg.messages?.messagePrefix;
-      if (messagePrefix === undefined) {
-        const hasAllowFrom = (cfg.whatsapp?.allowFrom?.length ?? 0) > 0;
-        messagePrefix = hasAllowFrom ? "" : "[clawdbot]";
-      }
+    const buildLine = (msg: WebInboundMsg, agentId: string) => {
+      // Build message prefix: explicit config > identity name > default based on allowFrom
+      const messagePrefix = resolveMessagePrefix(cfg, agentId, {
+        hasAllowFrom: (cfg.whatsapp?.allowFrom?.length ?? 0) > 0,
+      });
       const prefixStr = messagePrefix ? `${messagePrefix} ` : "";
       const senderLabel =
         msg.chatType === "group"
@@ -1068,7 +1071,7 @@ export async function monitorWebProvider(
       status.lastEventAt = status.lastMessageAt;
       emitStatus();
       const conversationId = msg.conversationId ?? msg.from;
-      let combinedBody = buildLine(msg);
+      let combinedBody = buildLine(msg, route.agentId);
       let shouldClearGroupHistory = false;
 
       if (msg.chatType === "group") {
@@ -1086,7 +1089,10 @@ export async function monitorWebProvider(
               }),
             )
             .join("\\n");
-          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(msg)}`;
+          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(
+            msg,
+            route.agentId,
+          )}`;
         }
         // Always surface who sent the triggering message so the agent can address them.
         const senderLabel =
@@ -1168,9 +1174,13 @@ export async function monitorWebProvider(
       const textLimit = resolveTextChunkLimit(cfg, "whatsapp");
       let didLogHeartbeatStrip = false;
       let didSendReply = false;
+      const responsePrefix = resolveEffectiveMessagesConfig(
+        cfg,
+        route.agentId,
+      ).responsePrefix;
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
-          responsePrefix: cfg.messages?.responsePrefix,
+          responsePrefix,
           onHeartbeatStrip: () => {
             if (!didLogHeartbeatStrip) {
               didLogHeartbeatStrip = true;

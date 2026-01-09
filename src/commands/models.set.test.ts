@@ -39,9 +39,11 @@ describe("models set + fallbacks", () => {
       string,
       unknown
     >;
-    expect(written.agent).toEqual({
-      model: { primary: "zai/glm-4.7" },
-      models: { "zai/glm-4.7": {} },
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { primary: "zai/glm-4.7" },
+        models: { "zai/glm-4.7": {} },
+      },
     });
   });
 
@@ -52,7 +54,7 @@ describe("models set + fallbacks", () => {
       raw: "{}",
       parsed: {},
       valid: true,
-      config: { agent: { model: { fallbacks: [] } } },
+      config: { agents: { defaults: { model: { fallbacks: [] } } } },
       issues: [],
       legacyIssues: [],
     });
@@ -67,9 +69,11 @@ describe("models set + fallbacks", () => {
       string,
       unknown
     >;
-    expect(written.agent).toEqual({
-      model: { fallbacks: ["zai/glm-4.7"] },
-      models: { "zai/glm-4.7": {} },
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { fallbacks: ["zai/glm-4.7"] },
+        models: { "zai/glm-4.7": {} },
+      },
     });
   });
 
@@ -95,9 +99,11 @@ describe("models set + fallbacks", () => {
       string,
       unknown
     >;
-    expect(written.agent).toEqual({
-      model: { primary: "zai/glm-4.7" },
-      models: { "zai/glm-4.7": {} },
+    expect(written.agents).toEqual({
+      defaults: {
+        model: { primary: "zai/glm-4.7" },
+        models: { "zai/glm-4.7": {} },
+      },
     });
   });
 });

@@ -1,6 +1,7 @@
 import type { ClawdbotConfig } from "../../config/config.js";
 import { listEnabledDiscordAccounts } from "../../discord/accounts.js";
 import { listEnabledIMessageAccounts } from "../../imessage/accounts.js";
+import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { listEnabledSignalAccounts } from "../../signal/accounts.js";
 import { listEnabledSlackAccounts } from "../../slack/accounts.js";
 import { listEnabledTelegramAccounts } from "../../telegram/accounts.js";
@@ -17,7 +18,8 @@ export type MessageProviderId =
   | "discord"
   | "slack"
   | "signal"
-  | "imessage";
+  | "imessage"
+  | "msteams";
 
 const MESSAGE_PROVIDERS: MessageProviderId[] = [
   "whatsapp",
@@ -26,6 +28,7 @@ const MESSAGE_PROVIDERS: MessageProviderId[] = [
   "slack",
   "signal",
   "imessage",
+  "msteams",
 ];
 
 function isKnownProvider(value: string): value is MessageProviderId {
@@ -70,6 +73,11 @@ function isIMessageConfigured(cfg: ClawdbotConfig): boolean {
   return listEnabledIMessageAccounts(cfg).some((account) => account.configured);
 }
 
+function isMSTeamsConfigured(cfg: ClawdbotConfig): boolean {
+  if (!cfg.msteams || cfg.msteams.enabled === false) return false;
+  return Boolean(resolveMSTeamsCredentials(cfg.msteams));
+}
+
 export async function listConfiguredMessageProviders(
   cfg: ClawdbotConfig,
 ): Promise<MessageProviderId[]> {
@@ -80,6 +88,7 @@ export async function listConfiguredMessageProviders(
   if (isSlackConfigured(cfg)) providers.push("slack");
   if (isSignalConfigured(cfg)) providers.push("signal");
   if (isIMessageConfigured(cfg)) providers.push("imessage");
+  if (isMSTeamsConfigured(cfg)) providers.push("msteams");
   return providers;
 }
 

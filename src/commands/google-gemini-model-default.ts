@@ -17,7 +17,7 @@ export function applyGoogleGeminiModelDefault(cfg: ClawdbotConfig): {
   next: ClawdbotConfig;
   changed: boolean;
 } {
-  const current = resolvePrimaryModel(cfg.agent?.model)?.trim();
+  const current = resolvePrimaryModel(cfg.agents?.defaults?.model)?.trim();
   if (current === GOOGLE_GEMINI_DEFAULT_MODEL) {
     return { next: cfg, changed: false };
   }
@@ -25,12 +25,19 @@ export function applyGoogleGeminiModelDefault(cfg: ClawdbotConfig): {
   return {
     next: {
       ...cfg,
-      agent: {
-        ...cfg.agent,
-        model:
-          cfg.agent?.model && typeof cfg.agent.model === "object"
-            ? { ...cfg.agent.model, primary: GOOGLE_GEMINI_DEFAULT_MODEL }
-            : { primary: GOOGLE_GEMINI_DEFAULT_MODEL },
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          model:
+            cfg.agents?.defaults?.model &&
+            typeof cfg.agents.defaults.model === "object"
+              ? {
+                  ...cfg.agents.defaults.model,
+                  primary: GOOGLE_GEMINI_DEFAULT_MODEL,
+                }
+              : { primary: GOOGLE_GEMINI_DEFAULT_MODEL },
+        },
       },
     },
     changed: true,

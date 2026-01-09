@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const MINIMAX_KEY = process.env.MINIMAX_API_KEY ?? "";
 const MINIMAX_BASE_URL =
   process.env.MINIMAX_BASE_URL?.trim() || "https://api.minimax.io/v1";
-const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "minimax-m2.1";
+const MINIMAX_MODEL = process.env.MINIMAX_MODEL?.trim() || "MiniMax-M2.1";
 const LIVE = process.env.MINIMAX_LIVE_TEST === "1" || process.env.LIVE === "1";
 
 const describeLive = LIVE && MINIMAX_KEY ? describe : describe.skip;

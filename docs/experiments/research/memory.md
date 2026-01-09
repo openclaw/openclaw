@@ -8,7 +8,7 @@ read_when:
 
 # Workspace Memory v2 (offline): research notes
 
-Target: Clawd-style workspace (`agent.workspace`, default `~/clawd`) where “memory” is stored as one Markdown file per day (`memory/YYYY-MM-DD.md`) plus a small set of stable files (e.g. `memory.md`, `SOUL.md`).
+Target: Clawd-style workspace (`agents.defaults.workspace`, default `~/clawd`) where “memory” is stored as one Markdown file per day (`memory/YYYY-MM-DD.md`) plus a small set of stable files (e.g. `memory.md`, `SOUL.md`).
 
 This doc proposes an **offline-first** memory architecture that keeps Markdown as the canonical, reviewable source of truth, but adds **structured recall** (search, entity summaries, confidence updates) via a derived index.
 
@@ -159,7 +159,7 @@ Recommendation: **deep integration in Clawdbot**, but keep a separable core libr
 
 ### Why integrate into Clawdbot?
 - Clawdbot already knows:
-  - the workspace path (`agent.workspace`)
+  - the workspace path (`agents.defaults.workspace`)
   - the session model + heartbeats
   - logging + troubleshooting patterns
 - You want the agent itself to call the tools:

@@ -105,7 +105,7 @@ import { loadWorkspaceBootstrapFiles } from "./workspace.js";
  * - GLM-4.5/4.6: Interleaved thinking (clear_thinking: true) - reasoning cleared each turn
  *
  * Users can override via config:
- *   agent.models["zai/glm-4.7"].params.thinking = { type: "disabled" }
+ *   agents.defaults.models["zai/glm-4.7"].params.thinking = { type: "disabled" }
  *
  * Or disable via runtime flag: --thinking off
  *
@@ -119,7 +119,7 @@ export function resolveExtraParams(params: {
   thinkLevel?: string;
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
-  const modelConfig = params.cfg?.agent?.models?.[modelKey];
+  const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
   let extraParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
 
   // Auto-enable thinking for ZAI GLM-4.x models when not explicitly configured
@@ -200,10 +200,10 @@ function resolveContextWindowTokens(params: {
   if (fromModelsConfig) return fromModelsConfig;
 
   const fromAgentConfig =
-    typeof params.cfg?.agent?.contextTokens === "number" &&
-    Number.isFinite(params.cfg.agent.contextTokens) &&
-    params.cfg.agent.contextTokens > 0
-      ? Math.floor(params.cfg.agent.contextTokens)
+    typeof params.cfg?.agents?.defaults?.contextTokens === "number" &&
+    Number.isFinite(params.cfg.agents.defaults.contextTokens) &&
+    params.cfg.agents.defaults.contextTokens > 0
+      ? Math.floor(params.cfg.agents.defaults.contextTokens)
       : undefined;
   if (fromAgentConfig) return fromAgentConfig;
 
@@ -217,7 +217,7 @@ function buildContextPruningExtension(params: {
   modelId: string;
   model: Model<Api> | undefined;
 }): { additionalExtensionPaths?: string[] } {
-  const raw = params.cfg?.agent?.contextPruning;
+  const raw = params.cfg?.agents?.defaults?.contextPruning;
   if (raw?.mode !== "adaptive" && raw?.mode !== "aggressive") return {};
 
   const settings = computeEffectiveSettings(raw);
@@ -254,7 +254,7 @@ export type EmbeddedPiRunMeta = {
 };
 
 function buildModelAliasLines(cfg?: ClawdbotConfig) {
-  const models = cfg?.agent?.models ?? {};
+  const models = cfg?.agents?.defaults?.models ?? {};
   const entries: Array<{ alias: string; model: string }> = [];
   for (const [keyRaw, entryRaw] of Object.entries(models)) {
     const model = String(keyRaw ?? "").trim();
@@ -844,7 +844,7 @@ export async function compactEmbeddedPiSession(params: {
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
         const tools = createClawdbotCodingTools({
           bash: {
-            ...params.config?.agent?.bash,
+            ...params.config?.tools?.bash,
             elevated: params.bashElevated,
           },
           sandbox,
@@ -865,7 +865,7 @@ export async function compactEmbeddedPiSession(params: {
         const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
         const reasoningTagHint = provider === "ollama";
         const userTimezone = resolveUserTimezone(
-          params.config?.agent?.userTimezone,
+          params.config?.agents?.defaults?.userTimezone,
         );
         const userTime = formatUserTime(new Date(), userTimezone);
         const appendPrompt = buildEmbeddedSystemPrompt({
@@ -875,7 +875,7 @@ export async function compactEmbeddedPiSession(params: {
           ownerNumbers: params.ownerNumbers,
           reasoningTagHint,
           heartbeatPrompt: resolveHeartbeatPrompt(
-            params.config?.agent?.heartbeat?.prompt,
+            params.config?.agents?.defaults?.heartbeat?.prompt,
           ),
           runtimeInfo,
           sandboxInfo,
@@ -1157,7 +1157,7 @@ export async function runEmbeddedPiAgent(params: {
           // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
           const tools = createClawdbotCodingTools({
             bash: {
-              ...params.config?.agent?.bash,
+              ...params.config?.tools?.bash,
               elevated: params.bashElevated,
             },
             sandbox,
@@ -1178,7 +1178,7 @@ export async function runEmbeddedPiAgent(params: {
           const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
           const reasoningTagHint = provider === "ollama";
           const userTimezone = resolveUserTimezone(
-            params.config?.agent?.userTimezone,
+            params.config?.agents?.defaults?.userTimezone,
           );
           const userTime = formatUserTime(new Date(), userTimezone);
           const appendPrompt = buildEmbeddedSystemPrompt({
@@ -1188,7 +1188,7 @@ export async function runEmbeddedPiAgent(params: {
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
             heartbeatPrompt: resolveHeartbeatPrompt(
-              params.config?.agent?.heartbeat?.prompt,
+              params.config?.agents?.defaults?.heartbeat?.prompt,
             ),
             runtimeInfo,
             sandboxInfo,
@@ -1444,7 +1444,8 @@ export async function runEmbeddedPiAgent(params: {
           }
 
           const fallbackConfigured =
-            (params.config?.agent?.model?.fallbacks?.length ?? 0) > 0;
+            (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) >
+            0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
 

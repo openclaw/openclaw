@@ -14,20 +14,20 @@ rotation, cooldowns, and how that interacts with fallbacks.
 
 Clawdbot selects models in this order:
 
-1) **Primary** model (`agent.model.primary` or `agent.model`).
-2) **Fallbacks** in `agent.model.fallbacks` (in order).
+1) **Primary** model (`agents.defaults.model.primary` or `agents.defaults.model`).
+2) **Fallbacks** in `agents.defaults.model.fallbacks` (in order).
 3) **Provider auth failover** happens inside a provider before moving to the
    next model.
 
 Related:
-- `agent.models` is the allowlist/catalog of models Clawdbot can use (plus aliases).
-- `agent.imageModel` is used **only when** the primary model can’t accept images.
+- `agents.defaults.models` is the allowlist/catalog of models Clawdbot can use (plus aliases).
+- `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 
 ## Config keys (overview)
 
-- `agent.model.primary` and `agent.model.fallbacks`
-- `agent.imageModel.primary` and `agent.imageModel.fallbacks`
-- `agent.models` (allowlist + aliases + provider params)
+- `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
+- `agents.defaults.imageModel.primary` and `agents.defaults.imageModel.fallbacks`
+- `agents.defaults.models` (allowlist + aliases + provider params)
 - `models.providers` (custom providers written into `models.json`)
 
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
@@ -35,7 +35,7 @@ to `zai/*`.
 
 ## “Model is not allowed” (and why replies stop)
 
-If `agent.models` is set, it becomes the **allowlist** for `/model` and for
+If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
 session overrides. When a user selects a model that isn’t in that allowlist,
 Clawdbot returns:
 
@@ -46,8 +46,8 @@ Model "provider/model" is not allowed. Use /model to list available models.
 This happens **before** a normal reply is generated, so the message can feel
 like it “didn’t respond.” The fix is to either:
 
-- Add the model to `agent.models`, or
-- Clear the allowlist (remove `agent.models`), or
+- Add the model to `agents.defaults.models`, or
+- Clear the allowlist (remove `agents.defaults.models`), or
 - Pick a model from `/model list`.
 
 Example allowlist config:
@@ -111,6 +111,13 @@ JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
 (effective auth per provider).
 Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
 
+Preferred Anthropic auth is the Claude CLI setup-token (run on the gateway host):
+
+```bash
+claude setup-token
+clawdbot models status
+```
+
 ## Scanning (OpenRouter free models)
 
 `clawdbot models scan` inspects OpenRouter’s **free model catalog** and can
@@ -123,8 +130,8 @@ Key flags:
 - `--max-age-days <days>`: skip older models
 - `--provider <name>`: provider prefix filter
 - `--max-candidates <n>`: fallback list size
-- `--set-default`: set `agent.model.primary` to the first selection
-- `--set-image`: set `agent.imageModel.primary` to the first image selection
+- `--set-default`: set `agents.defaults.model.primary` to the first selection
+- `--set-image`: set `agents.defaults.imageModel.primary` to the first image selection
 
 Probing requires an OpenRouter API key (from auth profiles or
 `OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.

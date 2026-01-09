@@ -33,7 +33,9 @@ type ModelSelectionState = {
 
 export async function createModelSelectionState(params: {
   cfg: ClawdbotConfig;
-  agentCfg: ClawdbotConfig["agent"] | undefined;
+  agentCfg:
+    | NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>
+    | undefined;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -201,7 +203,9 @@ export function resolveModelDirectiveSelection(params: {
 }
 
 export function resolveContextTokens(params: {
-  agentCfg: ClawdbotConfig["agent"] | undefined;
+  agentCfg:
+    | NonNullable<NonNullable<ClawdbotConfig["agents"]>["defaults"]>
+    | undefined;
   model: string;
 }): number {
   return (

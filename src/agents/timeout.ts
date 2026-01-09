@@ -8,7 +8,7 @@ const normalizeNumber = (value: unknown): number | undefined =>
     : undefined;
 
 export function resolveAgentTimeoutSeconds(cfg?: ClawdbotConfig): number {
-  const raw = normalizeNumber(cfg?.agent?.timeoutSeconds);
+  const raw = normalizeNumber(cfg?.agents?.defaults?.timeoutSeconds);
   const seconds = raw ?? DEFAULT_AGENT_TIMEOUT_SECONDS;
   return Math.max(seconds, 1);
 }

@@ -127,12 +127,12 @@ or state drift because only one workspace is active.
 Symptoms: `pwd` or file tools show `~/.clawdbot/sandboxes/...` even though you
 expected the host workspace.
 
-**Why:** `agent.sandbox.mode: "non-main"` keys off `session.mainKey` (default `"main"`).
+**Why:** `agents.defaults.sandbox.mode: "non-main"` keys off `session.mainKey` (default `"main"`).
 Group/channel sessions use their own keys, so they are treated as non-main and
 get sandbox workspaces.
 
 **Fix options:**
-- If you want host workspaces for an agent: set `routing.agents.<id>.sandbox.mode: "off"`.
+- If you want host workspaces for an agent: set `agents.list[].sandbox.mode: "off"`.
 - If you want host workspace access inside sandbox: set `workspaceAccess: "rw"` for that agent.
 
 ### "Agent was aborted"
@@ -157,8 +157,8 @@ Look for `AllowFrom: ...` in the output.
 **Check 2:** For group chats, is mention required?
 ```bash
 # The message must match mentionPatterns or explicit mentions; defaults live in provider groups/guilds.
-# Multi-agent: `routing.agents.<agentId>.mentionPatterns` overrides global patterns.
-grep -n "routing\\|groupChat\\|mentionPatterns\\|whatsapp\\.groups\\|telegram\\.groups\\|imessage\\.groups\\|discord\\.guilds" \
+# Multi-agent: `agents.list[].groupChat.mentionPatterns` overrides global patterns.
+grep -n "agents\\|groupChat\\|mentionPatterns\\|whatsapp\\.groups\\|telegram\\.groups\\|imessage\\.groups\\|discord\\.guilds" \
   "${CLAWDBOT_CONFIG_PATH:-$HOME/.clawdbot/clawdbot.json}"
 ```
 

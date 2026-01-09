@@ -134,7 +134,7 @@ curl -X POST http://127.0.0.1:18789/hooks/agent \
   -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.2-mini"}'
 ```
 
-If you enforce `agent.models`, make sure the override model is included there.
+If you enforce `agents.defaults.models`, make sure the override model is included there.
 
 ```bash
 curl -X POST http://127.0.0.1:18789/hooks/gmail \

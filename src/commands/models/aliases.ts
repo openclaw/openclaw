@@ -13,7 +13,7 @@ export async function modelsAliasesListCommand(
 ) {
   ensureFlagCompatibility(opts);
   const cfg = loadConfig();
-  const models = cfg.agent?.models ?? {};
+  const models = cfg.agents?.defaults?.models ?? {};
   const aliases = Object.entries(models).reduce<Record<string, string>>(
     (acc, [modelKey, entry]) => {
       const alias = entry?.alias?.trim();
@@ -53,7 +53,7 @@ export async function modelsAliasesAddCommand(
   const resolved = resolveModelTarget({ raw: modelRaw, cfg: loadConfig() });
   const _updated = await updateConfig((cfg) => {
     const modelKey = `${resolved.provider}/${resolved.model}`;
-    const nextModels = { ...cfg.agent?.models };
+    const nextModels = { ...cfg.agents?.defaults?.models };
     for (const [key, entry] of Object.entries(nextModels)) {
       const existing = entry?.alias?.trim();
       if (existing && existing === alias && key !== modelKey) {
@@ -64,9 +64,12 @@ export async function modelsAliasesAddCommand(
     nextModels[modelKey] = { ...existing, alias };
     return {
       ...cfg,
-      agent: {
-        ...cfg.agent,
-        models: nextModels,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models: nextModels,
+        },
       },
     };
   });
@@ -81,7 +84,7 @@ export async function modelsAliasesRemoveCommand(
 ) {
   const alias = normalizeAlias(aliasRaw);
   const updated = await updateConfig((cfg) => {
-    const nextModels = { ...cfg.agent?.models };
+    const nextModels = { ...cfg.agents?.defaults?.models };
     let found = false;
     for (const [key, entry] of Object.entries(nextModels)) {
       if (entry?.alias?.trim() === alias) {
@@ -95,17 +98,22 @@ export async function modelsAliasesRemoveCommand(
     }
     return {
       ...cfg,
-      agent: {
-        ...cfg.agent,
-        models: nextModels,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          models: nextModels,
+        },
       },
     };
   });
 
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   if (
-    !updated.agent?.models ||
-    Object.values(updated.agent.models).every((entry) => !entry?.alias?.trim())
+    !updated.agents?.defaults?.models ||
+    Object.values(updated.agents.defaults.models).every(
+      (entry) => !entry?.alias?.trim(),
+    )
   ) {
     runtime.log("No aliases configured.");
   }

@@ -6,7 +6,7 @@ read_when:
 # Audio / Voice Notes — 2025-12-05
 
 ## What works
-- **Optional transcription**: If `routing.transcribeAudio.command` is set in `~/.clawdbot/clawdbot.json`, CLAWDBOT will:
+- **Optional transcription**: If `audio.transcription.command` is set in `~/.clawdbot/clawdbot.json`, CLAWDBOT will:
   1) Download inbound audio to a temp path when WhatsApp only provides a URL.
   2) Run the configured CLI (templated with `{{MediaPath}}`), expecting transcript on stdout.
   3) Replace `Body` with the transcript, set `{{Transcript}}`, and prepend the original media path plus a `Transcript:` section in the command prompt so models see both.
@@ -17,8 +17,8 @@ read_when:
 Requires `OPENAI_API_KEY` in env and `openai` CLI installed:
 ```json5
 {
-  routing: {
-    transcribeAudio: {
+  audio: {
+    transcription: {
       command: [
         "openai",
         "api",
