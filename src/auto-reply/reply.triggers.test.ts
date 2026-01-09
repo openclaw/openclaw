@@ -218,6 +218,70 @@ describe("trigger handling", () => {
     });
   });
 
+  it("reports active auth profile and key snippet in status", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const agentDir = join(home, ".clawdbot", "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        join(agentDir, "auth-profiles.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "anthropic:work": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-test-1234567890abcdef",
+              },
+            },
+            lastGood: { anthropic: "anthropic:work" },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const sessionKey = resolveSessionKey("per-sender", {
+        From: "+1002",
+        To: "+2000",
+        Provider: "whatsapp",
+      } as Parameters<typeof resolveSessionKey>[1]);
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "session-auth",
+              updatedAt: Date.now(),
+              authProfileOverride: "anthropic:work",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1002",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1002",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("🔑 api-key");
+      expect(text).toContain("…");
+      expect(text).toContain("(anthropic:work)");
+      expect(text).not.toContain("mixed");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("ignores inline /status and runs the agent", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
