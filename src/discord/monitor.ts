@@ -255,6 +255,58 @@ function isDiscordThreadType(type: ChannelType | undefined): boolean {
   );
 }
 
+type DiscordThreadParentInfo = {
+  id?: string;
+  name?: string;
+  type?: ChannelType;
+};
+
+function resolveDiscordThreadChannel(params: {
+  isGuildMessage: boolean;
+  message: DiscordMessageEvent["message"];
+  channelInfo: DiscordChannelInfo | null;
+}): DiscordThreadChannel | null {
+  if (!params.isGuildMessage) return null;
+  const { message, channelInfo } = params;
+  const channel =
+    "channel" in message
+      ? (message as { channel?: unknown }).channel
+      : undefined;
+  const isThreadChannel =
+    channel &&
+    typeof channel === "object" &&
+    "isThread" in channel &&
+    typeof (channel as { isThread?: unknown }).isThread === "function" &&
+    (channel as { isThread: () => boolean }).isThread();
+  if (isThreadChannel) return channel as unknown as DiscordThreadChannel;
+  if (!isDiscordThreadType(channelInfo?.type)) return null;
+  return {
+    id: message.channelId,
+    name: channelInfo?.name ?? undefined,
+    parentId: channelInfo?.parentId ?? undefined,
+    parent: undefined,
+  };
+}
+
+async function resolveDiscordThreadParentInfo(params: {
+  client: Client;
+  threadChannel: DiscordThreadChannel;
+  channelInfo: DiscordChannelInfo | null;
+}): Promise<DiscordThreadParentInfo> {
+  const { threadChannel, channelInfo, client } = params;
+  const parentId =
+    threadChannel.parentId ??
+    threadChannel.parent?.id ??
+    channelInfo?.parentId ??
+    undefined;
+  if (!parentId) return {};
+  let parentName = threadChannel.parent?.name;
+  const parentInfo = await resolveDiscordChannelInfo(client, parentId);
+  parentName = parentName ?? parentInfo?.name;
+  const parentType = parentInfo?.type;
+  return { id: parentId, name: parentName, type: parentType };
+}
+
 export function resolveDiscordReplyTarget(opts: {
   replyToMode: ReplyToMode;
   replyToId?: string;
@@ -690,37 +742,23 @@ export function createDiscordMessageHandler(params: {
         "name" in message.channel
           ? message.channel.name
           : undefined);
-      const isThreadChannel =
-        isGuildMessage &&
-        message.channel &&
-        "isThread" in message.channel &&
-        message.channel.isThread();
-      const isThreadByType =
-        isGuildMessage && isDiscordThreadType(channelInfo?.type);
-      const threadChannel: DiscordThreadChannel | null = isThreadChannel
-        ? (message.channel as DiscordThreadChannel)
-        : isThreadByType
-          ? {
-              id: message.channelId,
-              name: channelInfo?.name ?? undefined,
-              parentId: channelInfo?.parentId ?? undefined,
-              parent: undefined,
-            }
-          : null;
-      const threadParentId =
-        threadChannel?.parentId ??
-        threadChannel?.parent?.id ??
-        channelInfo?.parentId ??
-        undefined;
-      let threadParentName = threadChannel?.parent?.name;
+      const threadChannel = resolveDiscordThreadChannel({
+        isGuildMessage,
+        message,
+        channelInfo,
+      });
+      let threadParentId: string | undefined;
+      let threadParentName: string | undefined;
       let threadParentType: ChannelType | undefined;
-      if (threadChannel && threadParentId) {
-        const parentInfo = await resolveDiscordChannelInfo(
+      if (threadChannel) {
+        const parentInfo = await resolveDiscordThreadParentInfo({
           client,
-          threadParentId,
-        );
-        threadParentName = threadParentName ?? parentInfo?.name;
-        threadParentType = parentInfo?.type;
+          threadChannel,
+          channelInfo,
+        });
+        threadParentId = parentInfo.id;
+        threadParentName = parentInfo.name;
+        threadParentType = parentInfo.type;
       }
       const threadName = threadChannel?.name;
       const configChannelName = threadParentName ?? channelName;
