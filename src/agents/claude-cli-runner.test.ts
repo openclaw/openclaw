@@ -18,8 +18,20 @@ function createDeferred<T>() {
   };
 }
 
+async function waitForCalls(
+  mockFn: { mock: { calls: unknown[][] } },
+  count: number,
+) {
+  for (let i = 0; i < 50; i += 1) {
+    if (mockFn.mock.calls.length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error(`Expected ${count} calls, got ${mockFn.mock.calls.length}`);
+}
+
 vi.mock("../process/exec.js", () => ({
-  runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
+  runCommandWithTimeout: (...args: unknown[]) =>
+    runCommandWithTimeoutMock(...args),
 }));
 
 describe("runClaudeCliAgent", () => {
@@ -120,8 +132,7 @@ describe("runClaudeCliAgent", () => {
       runId: "run-2",
     });
 
-    await Promise.resolve();
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    await waitForCalls(runCommandWithTimeoutMock, 1);
 
     firstDeferred.resolve({
       stdout: JSON.stringify({ message: "ok", session_id: "sid-1" }),
@@ -131,8 +142,7 @@ describe("runClaudeCliAgent", () => {
       killed: false,
     });
 
-    await Promise.resolve();
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
+    await waitForCalls(runCommandWithTimeoutMock, 2);
 
     secondDeferred.resolve({
       stdout: JSON.stringify({ message: "ok", session_id: "sid-2" }),
