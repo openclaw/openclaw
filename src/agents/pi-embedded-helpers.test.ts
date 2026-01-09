@@ -304,6 +304,19 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out[0]?.role).toBe("user");
   });
 
+  it("drops empty assistant error messages", async () => {
+    const input = [
+      { role: "user", content: "hello" },
+      { role: "assistant", stopReason: "error", content: [] },
+      { role: "assistant", stopReason: "error" },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    expect(out[0]?.role).toBe("user");
+  });
+
   it("leaves non-assistant messages unchanged", async () => {
     const input = [
       { role: "user", content: "hello" },
