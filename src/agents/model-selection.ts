@@ -124,6 +124,7 @@ export function buildAllowedModelSet(params: {
   cfg: ClawdbotConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
+  defaultModel?: string;
 }): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
@@ -134,11 +135,17 @@ export function buildAllowedModelSet(params: {
     return Object.keys(modelMap);
   })();
   const allowAny = rawAllowlist.length === 0;
+  const defaultModel = params.defaultModel?.trim();
+  const defaultKey =
+    defaultModel && params.defaultProvider
+      ? modelKey(params.defaultProvider, defaultModel)
+      : undefined;
   const catalogKeys = new Set(
     params.catalog.map((entry) => modelKey(entry.provider, entry.id)),
   );
 
   if (allowAny) {
+    if (defaultKey) catalogKeys.add(defaultKey);
     return {
       allowAny: true,
       allowedCatalog: params.catalog,
@@ -156,11 +163,16 @@ export function buildAllowedModelSet(params: {
     }
   }
 
+  if (defaultKey) {
+    allowedKeys.add(defaultKey);
+  }
+
   const allowedCatalog = params.catalog.filter((entry) =>
     allowedKeys.has(modelKey(entry.provider, entry.id)),
   );
 
   if (allowedCatalog.length === 0) {
+    if (defaultKey) catalogKeys.add(defaultKey);
     return {
       allowAny: true,
       allowedCatalog: params.catalog,

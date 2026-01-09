@@ -319,6 +319,7 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: params.cfg,
       catalog: await loadCatalog(),
       defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
     });
     const key = modelKey(
       resolvedOverride.ref.provider,

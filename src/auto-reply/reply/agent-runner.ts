@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
+import { runClaudeCliAgent } from "../../agents/claude-cli-runner.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
@@ -17,7 +18,7 @@ import {
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
-import { registerAgentRunContext } from "../../infra/agent-events.js";
+import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   estimateUsageCost,
@@ -326,8 +327,61 @@ export async function runReplyAgent(params: {
         cfg: followupRun.run.config,
         provider: followupRun.run.provider,
         model: followupRun.run.model,
-        run: (provider, model) =>
-          runEmbeddedPiAgent({
+        run: (provider, model) => {
+          if (provider === "claude-cli") {
+            const startedAt = Date.now();
+            emitAgentEvent({
+              runId,
+              stream: "lifecycle",
+              data: {
+                phase: "start",
+                startedAt,
+              },
+            });
+            return runClaudeCliAgent({
+              sessionId: followupRun.run.sessionId,
+              sessionKey,
+              sessionFile: followupRun.run.sessionFile,
+              workspaceDir: followupRun.run.workspaceDir,
+              config: followupRun.run.config,
+              prompt: commandBody,
+              provider,
+              model,
+              thinkLevel: followupRun.run.thinkLevel,
+              timeoutMs: followupRun.run.timeoutMs,
+              runId,
+              extraSystemPrompt: followupRun.run.extraSystemPrompt,
+              ownerNumbers: followupRun.run.ownerNumbers,
+              resumeSessionId:
+                sessionEntry?.claudeCliSessionId?.trim() || undefined,
+            })
+              .then((result) => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "end",
+                    startedAt,
+                    endedAt: Date.now(),
+                  },
+                });
+                return result;
+              })
+              .catch((err) => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "error",
+                    startedAt,
+                    endedAt: Date.now(),
+                    error: err instanceof Error ? err.message : String(err),
+                  },
+                });
+                throw err;
+              });
+          }
+          return runEmbeddedPiAgent({
             sessionId: followupRun.run.sessionId,
             sessionKey,
             messageProvider:
@@ -554,7 +608,8 @@ export async function runReplyAgent(params: {
                   pendingToolTasks.add(task);
                 }
               : undefined,
-          }),
+          });
+        },
       });
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
@@ -716,6 +771,10 @@ export async function runReplyAgent(params: {
       runResult.meta.agentMeta?.provider ??
       fallbackProvider ??
       followupRun.run.provider;
+    const cliSessionId =
+      providerUsed === "claude-cli"
+        ? runResult.meta.agentMeta?.sessionId?.trim()
+        : undefined;
     const contextTokensUsed =
       agentCfgContextTokens ??
       lookupContextTokens(modelUsed) ??
@@ -741,6 +800,9 @@ export async function runReplyAgent(params: {
             contextTokens: contextTokensUsed ?? entry.contextTokens,
             updatedAt: Date.now(),
           };
+          if (cliSessionId) {
+            nextEntry.claudeCliSessionId = cliSessionId;
+          }
           sessionStore[sessionKey] = nextEntry;
           if (storePath) {
             await saveSessionStore(storePath, sessionStore);
@@ -754,6 +816,7 @@ export async function runReplyAgent(params: {
             modelProvider: providerUsed ?? entry.modelProvider,
             model: modelUsed ?? entry.model,
             contextTokens: contextTokensUsed ?? entry.contextTokens,
+            claudeCliSessionId: cliSessionId ?? entry.claudeCliSessionId,
           };
           if (storePath) {
             await saveSessionStore(storePath, sessionStore);
