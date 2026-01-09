@@ -53,3 +53,4 @@ apps/ios/*.mobileprovision
 
 # Local untracked files
 .local/
+.vscode/
