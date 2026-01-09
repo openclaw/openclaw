@@ -31,6 +31,8 @@ Not sandboxed:
 - `"off"`: no sandboxing.
 - `"non-main"`: sandbox only **non-main** sessions (default if you want normal chats on host).
 - `"all"`: every session runs in a sandbox.
+Note: `"non-main"` is based on `session.mainKey` (default `"main"`), not agent id.
+Group/channel sessions use their own keys, so they count as non-main and will be sandboxed.
 
 ## Scope
 `agent.sandbox.scope` controls **how many containers** are created:

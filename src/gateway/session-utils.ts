@@ -51,6 +51,8 @@ export type GatewaySessionRow = {
   inputTokens?: number;
   outputTokens?: number;
   totalTokens?: number;
+  responseUsage?: "on" | "off";
+  modelProvider?: string;
   model?: string;
   contextTokens?: number;
   lastProvider?: SessionEntry["lastProvider"];
@@ -503,6 +505,8 @@ export function listSessionsFromStore(params: {
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
         totalTokens: total,
+        responseUsage: entry?.responseUsage,
+        modelProvider: entry?.modelProvider,
         model: entry?.model,
         contextTokens: entry?.contextTokens,
         lastProvider: entry?.lastProvider,

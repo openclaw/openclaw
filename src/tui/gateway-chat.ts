@@ -44,7 +44,11 @@ export type GatewaySessionList = {
     sendPolicy?: string;
     model?: string;
     contextTokens?: number | null;
+    inputTokens?: number | null;
+    outputTokens?: number | null;
     totalTokens?: number | null;
+    responseUsage?: "on" | "off";
+    modelProvider?: string;
     displayName?: string;
     provider?: string;
     room?: string;

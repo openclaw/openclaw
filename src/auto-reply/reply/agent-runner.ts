@@ -2,12 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
-import { hasNonzeroUsage } from "../../agents/usage.js";
+import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import {
   loadSessionStore,
   resolveSessionTranscriptPath,
@@ -18,6 +19,12 @@ import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
+import {
+  estimateUsageCost,
+  formatTokenCount,
+  formatUsd,
+  resolveModelCostConfig,
+} from "../../utils/usage-format.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
@@ -60,6 +67,65 @@ const formatBunFetchSocketError = (message: string) => {
     trimmed || "Unknown error",
     "```",
   ].join("\n");
+};
+
+const formatResponseUsageLine = (params: {
+  usage?: NormalizedUsage;
+  showCost: boolean;
+  costConfig?: {
+    input: number;
+    output: number;
+    cacheRead: number;
+    cacheWrite: number;
+  };
+}): string | null => {
+  const usage = params.usage;
+  if (!usage) return null;
+  const input = usage.input;
+  const output = usage.output;
+  if (typeof input !== "number" && typeof output !== "number") return null;
+  const inputLabel = typeof input === "number" ? formatTokenCount(input) : "?";
+  const outputLabel =
+    typeof output === "number" ? formatTokenCount(output) : "?";
+  const cost =
+    params.showCost && typeof input === "number" && typeof output === "number"
+      ? estimateUsageCost({
+          usage: {
+            input,
+            output,
+            cacheRead: usage.cacheRead,
+            cacheWrite: usage.cacheWrite,
+          },
+          cost: params.costConfig,
+        })
+      : undefined;
+  const costLabel = params.showCost ? formatUsd(cost) : undefined;
+  const suffix = costLabel ? ` · est ${costLabel}` : "";
+  return `Usage: ${inputLabel} in / ${outputLabel} out${suffix}`;
+};
+
+const appendUsageLine = (
+  payloads: ReplyPayload[],
+  line: string,
+): ReplyPayload[] => {
+  let index = -1;
+  for (let i = payloads.length - 1; i >= 0; i -= 1) {
+    if (payloads[i]?.text) {
+      index = i;
+      break;
+    }
+  }
+  if (index === -1) return [...payloads, { text: line }];
+  const existing = payloads[index];
+  const existingText = existing.text ?? "";
+  const separator = existingText.endsWith("\n") ? "" : "\n";
+  const next = {
+    ...existing,
+    text: `${existingText}${separator}${line}`,
+  };
+  const updated = payloads.slice();
+  updated[index] = next;
+  return updated;
 };
 
 const withTimeout = async <T>(
@@ -191,6 +257,7 @@ export async function runReplyAgent(params: {
     replyToChannel,
   );
   const applyReplyToMode = createReplyToModeFilter(replyToMode);
+  const cfg = followupRun.run.config;
 
   if (shouldSteer && isStreaming) {
     const steered = queueEmbeddedPiMessage(
@@ -242,6 +309,7 @@ export async function runReplyAgent(params: {
 
   let didLogHeartbeatStrip = false;
   let autoCompactionCompleted = false;
+  let responseUsageLine: string | undefined;
   try {
     const runId = crypto.randomUUID();
     if (sessionKey) {
@@ -641,20 +709,20 @@ export async function runReplyAgent(params: {
       await typingSignals.signalRunStart();
     }
 
-    if (sessionStore && sessionKey) {
-      const usage = runResult.meta.agentMeta?.usage;
-      const modelUsed =
-        runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-      const providerUsed =
-        runResult.meta.agentMeta?.provider ??
-        fallbackProvider ??
-        followupRun.run.provider;
-      const contextTokensUsed =
-        agentCfgContextTokens ??
-        lookupContextTokens(modelUsed) ??
-        sessionEntry?.contextTokens ??
-        DEFAULT_CONTEXT_TOKENS;
+    const usage = runResult.meta.agentMeta?.usage;
+    const modelUsed =
+      runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+    const providerUsed =
+      runResult.meta.agentMeta?.provider ??
+      fallbackProvider ??
+      followupRun.run.provider;
+    const contextTokensUsed =
+      agentCfgContextTokens ??
+      lookupContextTokens(modelUsed) ??
+      sessionEntry?.contextTokens ??
+      DEFAULT_CONTEXT_TOKENS;
 
+    if (sessionStore && sessionKey) {
       if (hasNonzeroUsage(usage)) {
         const entry = sessionEntry ?? sessionStore[sessionKey];
         if (entry) {
@@ -694,6 +762,29 @@ export async function runReplyAgent(params: {
       }
     }
 
+    const responseUsageEnabled =
+      (sessionEntry?.responseUsage ??
+        (sessionKey
+          ? sessionStore?.[sessionKey]?.responseUsage
+          : undefined)) === "on";
+    if (responseUsageEnabled && hasNonzeroUsage(usage)) {
+      const authMode = resolveModelAuthMode(providerUsed, cfg);
+      const showCost = authMode === "api-key";
+      const costConfig = showCost
+        ? resolveModelCostConfig({
+            provider: providerUsed,
+            model: modelUsed,
+            config: cfg,
+          })
+        : undefined;
+      const formatted = formatResponseUsageLine({
+        usage,
+        showCost,
+        costConfig,
+      });
+      if (formatted) responseUsageLine = formatted;
+    }
+
     // If verbose is enabled and this is a new session, prepend a session hint.
     let finalPayloads = replyPayloads;
     if (autoCompactionCompleted) {
@@ -716,6 +807,9 @@ export async function runReplyAgent(params: {
         { text: `🧭 New session: ${followupRun.run.sessionId}` },
         ...finalPayloads,
       ];
+    }
+    if (responseUsageLine) {
+      finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
     return finalizeWithFollowup(

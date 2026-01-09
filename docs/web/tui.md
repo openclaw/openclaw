@@ -53,6 +53,7 @@ Use SSH tunneling or Tailscale to reach the Gateway WS.
 - `/think <off|minimal|low|medium|high>`
 - `/verbose <on|off>`
 - `/reasoning <on|off|stream>` (stream = Telegram draft only)
+- `/cost <on|off>`
 - `/elevated <on|off>`
 - `/elev <on|off>`
 - `/activation <mention|always>`

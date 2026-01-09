@@ -252,6 +252,15 @@ The global `agent.workspace` and `agent.sandbox` are still supported for backwar
 
 ---
 
+## Common Pitfall: "non-main"
+
+`sandbox.mode: "non-main"` is based on `session.mainKey` (default `"main"`),
+not the agent id. Group/channel sessions always get their own keys, so they
+are treated as non-main and will be sandboxed. If you want an agent to never
+sandbox, set `routing.agents.<id>.sandbox.mode: "off"`.
+
+---
+
 ## Testing
 
 After configuring multi-agent sandbox and tools:

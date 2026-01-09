@@ -65,6 +65,14 @@ export function getSlashCommands(): SlashCommand[] {
         ),
     },
     {
+      name: "cost",
+      description: "Toggle per-response usage line",
+      getArgumentCompletions: (prefix) =>
+        TOGGLE.filter((v) => v.startsWith(prefix.toLowerCase())).map(
+          (value) => ({ value, label: value }),
+        ),
+    },
+    {
       name: "elevated",
       description: "Set elevated on/off",
       getArgumentCompletions: (prefix) =>
@@ -116,6 +124,7 @@ export function helpText(): string {
     "/think <off|minimal|low|medium|high>",
     "/verbose <on|off>",
     "/reasoning <on|off>",
+    "/cost <on|off>",
     "/elevated <on|off>",
     "/elev <on|off>",
     "/activation <mention|always>",
