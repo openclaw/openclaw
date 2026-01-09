@@ -565,9 +565,13 @@ export function createProviderManager(
             application: probe.application,
           });
           const messageContent = probe.application?.intents?.messageContent;
-          if (messageContent && messageContent !== "enabled") {
+          if (messageContent === "disabled") {
             logDiscord.warn(
-              `[${account.accountId}] Discord Message Content Intent is ${messageContent}; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
+              `[${account.accountId}] Discord Message Content Intent is disabled; bot may not respond to channel messages. Enable it in Discord Dev Portal (Bot → Privileged Gateway Intents) or require mentions.`,
+            );
+          } else if (messageContent === "limited") {
+            logDiscord.info(
+              `[${account.accountId}] Discord Message Content Intent is limited; bots under 100 servers can use it without verification.`,
             );
           }
         } catch (err) {
