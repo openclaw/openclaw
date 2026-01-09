@@ -12,11 +12,14 @@ import {
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
-  normalizeVerboseLevel,
 } from "../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
+import {
+  applyVerboseOverride,
+  parseVerboseOverride,
+} from "../sessions/level-overrides.js";
 import { normalizeSendPolicy } from "../sessions/send-policy.js";
 import { parseSessionLabel } from "../sessions/session-label.js";
 import {
@@ -103,13 +106,9 @@ export async function applySessionsPatchToStore(params: {
 
   if ("verboseLevel" in patch) {
     const raw = patch.verboseLevel;
-    if (raw === null) {
-      delete next.verboseLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeVerboseLevel(String(raw));
-      if (!normalized) return invalid('invalid verboseLevel (use "on"|"off")');
-      next.verboseLevel = normalized;
-    }
+    const parsed = parseVerboseOverride(raw);
+    if (!parsed.ok) return invalid(parsed.error);
+    applyVerboseOverride(next, parsed.value);
   }
 
   if ("reasoningLevel" in patch) {

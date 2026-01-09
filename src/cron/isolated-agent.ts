@@ -425,8 +425,12 @@ export async function runCronIsolatedAgentTurn(params: {
     const sessionFile = resolveSessionTranscriptPath(
       cronSession.sessionEntry.sessionId,
     );
+    const resolvedVerboseLevel =
+      (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
+      (agentCfg?.verboseDefault as "on" | "off" | undefined);
     registerAgentRunContext(cronSession.sessionEntry.sessionId, {
       sessionKey: params.sessionKey,
+      verboseLevel: resolvedVerboseLevel,
     });
     const messageProvider = resolvedDelivery.provider;
     const claudeSessionId = cronSession.sessionEntry.claudeCliSessionId?.trim();
@@ -464,12 +468,7 @@ export async function runCronIsolatedAgentTurn(params: {
           provider: providerOverride,
           model: modelOverride,
           thinkLevel,
-          verboseLevel:
-            (cronSession.sessionEntry.verboseLevel as
-              | "on"
-              | "off"
-              | undefined) ??
-            (agentCfg?.verboseDefault as "on" | "off" | undefined),
+          verboseLevel: resolvedVerboseLevel,
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
         });

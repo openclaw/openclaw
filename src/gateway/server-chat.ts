@@ -1,4 +1,9 @@
-import type { AgentEventPayload } from "../infra/agent-events.js";
+import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import {
+  type AgentEventPayload,
+  getAgentRunContext,
+} from "../infra/agent-events.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatRunEntry = {
@@ -185,6 +190,24 @@ export function createAgentEventHandler({
     bridgeSendToSession(sessionKey, "chat", payload);
   };
 
+  const shouldEmitToolEvents = (runId: string, sessionKey?: string) => {
+    const runContext = getAgentRunContext(runId);
+    const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
+    if (runVerbose) return runVerbose === "on";
+    if (!sessionKey) return false;
+    try {
+      const { cfg, entry } = loadSessionEntry(sessionKey);
+      const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
+      if (sessionVerbose) return sessionVerbose === "on";
+      const defaultVerbose = normalizeVerboseLevel(
+        cfg.agents?.defaults?.verboseDefault,
+      );
+      return defaultVerbose === "on";
+    } catch {
+      return false;
+    }
+  };
+
   return (evt: AgentEventPayload) => {
     const chatLink = chatRunState.registry.peek(evt.runId);
     const sessionKey =
@@ -192,6 +215,10 @@ export function createAgentEventHandler({
     // Include sessionKey so Control UI can filter tool streams per session.
     const agentPayload = sessionKey ? { ...evt, sessionKey } : evt;
     const last = agentRunSeq.get(evt.runId) ?? 0;
+    if (evt.stream === "tool" && !shouldEmitToolEvents(evt.runId, sessionKey)) {
+      agentRunSeq.set(evt.runId, evt.seq);
+      return;
+    }
     if (evt.seq !== last + 1) {
       broadcast("agent", {
         runId: evt.runId,

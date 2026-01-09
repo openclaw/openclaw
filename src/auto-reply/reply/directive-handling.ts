@@ -37,6 +37,7 @@ import {
   saveSessionStore,
 } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { shortenHomePath } from "../../utils.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
@@ -853,7 +854,7 @@ export async function handleDirectiveOnly(params: {
       else sessionEntry.thinkingLevel = directives.thinkLevel;
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
-      sessionEntry.verboseLevel = directives.verboseLevel;
+      applyVerboseOverride(sessionEntry, directives.verboseLevel);
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {
       if (directives.reasoningLevel === "off")
@@ -1027,11 +1028,7 @@ export async function persistInlineDirectives(params: {
       updated = true;
     }
     if (directives.hasVerboseDirective && directives.verboseLevel) {
-      if (directives.verboseLevel === "off") {
-        delete sessionEntry.verboseLevel;
-      } else {
-        sessionEntry.verboseLevel = directives.verboseLevel;
-      }
+      applyVerboseOverride(sessionEntry, directives.verboseLevel);
       updated = true;
     }
     if (directives.hasReasoningDirective && directives.reasoningLevel) {

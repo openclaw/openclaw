@@ -785,7 +785,10 @@ describe("gateway server agent", () => {
       },
     });
 
-    registerAgentRunContext("run-tool-1", { sessionKey: "main" });
+    registerAgentRunContext("run-tool-1", {
+      sessionKey: "main",
+      verboseLevel: "on",
+    });
 
     const agentEvtP = onceMessage(
       ws,
@@ -808,6 +811,66 @@ describe("gateway server agent", () => {
         ? (evt.payload as Record<string, unknown>)
         : {};
     expect(payload.sessionKey).toBe("main");
+
+    ws.close();
+    await server.close();
+  });
+
+  test("suppresses tool stream events when verbose is off", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    await fs.writeFile(
+      testState.sessionStorePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            verboseLevel: "off",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws, {
+      client: {
+        name: "webchat",
+        version: "1.0.0",
+        platform: "test",
+        mode: "webchat",
+      },
+    });
+
+    registerAgentRunContext("run-tool-off", { sessionKey: "agent:main:main" });
+
+    emitAgentEvent({
+      runId: "run-tool-off",
+      stream: "tool",
+      data: { phase: "start", name: "read", toolCallId: "tool-1" },
+    });
+    emitAgentEvent({
+      runId: "run-tool-off",
+      stream: "assistant",
+      data: { text: "hello" },
+    });
+
+    const evt = await onceMessage(
+      ws,
+      (o) =>
+        o.type === "event" &&
+        o.event === "agent" &&
+        o.payload?.runId === "run-tool-off",
+      8000,
+    );
+    const payload =
+      evt.payload && typeof evt.payload === "object"
+        ? (evt.payload as Record<string, unknown>)
+        : {};
+    expect(payload.stream).toBe("assistant");
 
     ws.close();
     await server.close();

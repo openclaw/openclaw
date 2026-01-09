@@ -346,7 +346,10 @@ export async function runReplyAgent(params: {
   try {
     const runId = crypto.randomUUID();
     if (sessionKey) {
-      registerAgentRunContext(runId, { sessionKey });
+      registerAgentRunContext(runId, {
+        sessionKey,
+        verboseLevel: resolvedVerboseLevel,
+      });
     }
     let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
     let fallbackProvider = followupRun.run.provider;
