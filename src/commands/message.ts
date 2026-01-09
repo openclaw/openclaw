@@ -9,10 +9,10 @@ import {
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
 import {
-  sendMessage,
-  sendPoll,
   type MessagePollResult,
   type MessageSendResult,
+  sendMessage,
+  sendPoll,
 } from "../infra/outbound/message.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
@@ -49,7 +49,11 @@ function parseIntOption(value: unknown, label: string): number | undefined {
   return parsed;
 }
 
-function logSendDryRun(opts: MessageSendOpts, provider: string, runtime: RuntimeEnv) {
+function logSendDryRun(
+  opts: MessageSendOpts,
+  provider: string,
+  runtime: RuntimeEnv,
+) {
   runtime.log(
     `[dry-run] would send via ${provider} -> ${opts.to}: ${opts.message}${
       opts.media ? ` (media ${opts.media})` : ""
@@ -57,10 +61,7 @@ function logSendDryRun(opts: MessageSendOpts, provider: string, runtime: Runtime
   );
 }
 
-function logPollDryRun(
-  result: MessagePollResult,
-  runtime: RuntimeEnv,
-) {
+function logPollDryRun(result: MessagePollResult, runtime: RuntimeEnv) {
   runtime.log(
     `[dry-run] would send poll via ${result.provider} -> ${result.to}:\n  Question: ${result.question}\n  Options: ${result.options.join(
       ", ",

@@ -8,8 +8,8 @@ import {
 import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
-import { onboardCommand } from "../commands/onboard.js";
 import { messagePollCommand, messageSendCommand } from "../commands/message.js";
+import { onboardCommand } from "../commands/onboard.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
 import { statusCommand } from "../commands/status.js";

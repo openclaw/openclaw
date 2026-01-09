@@ -138,7 +138,9 @@ describe("gateway-cli coverage", () => {
     program.exitOverride();
     registerGatewayCli(program);
 
-    await program.parseAsync(["gateway", "discover", "--json"], { from: "user" });
+    await program.parseAsync(["gateway", "discover", "--json"], {
+      from: "user",
+    });
 
     expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"beacons"');

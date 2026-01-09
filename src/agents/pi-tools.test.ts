@@ -66,7 +66,14 @@ describe("createClawdbotCodingTools", () => {
 
   it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
-    const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
+    const toolNames = [
+      "browser",
+      "canvas",
+      "nodes",
+      "cron",
+      "gateway",
+      "message",
+    ];
 
     const collectActionValues = (
       schema: unknown,
