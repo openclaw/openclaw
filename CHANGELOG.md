@@ -7,6 +7,7 @@
 - Control UI: improve mobile responsiveness. (#558) — thanks @carlulsoe
 - CLI: add `sandbox list` and `sandbox recreate` commands for managing Docker sandbox containers after image/config updates. (#563) — thanks @pasogott
 - Docs: add Hetzner Docker VPS guide. (#556) — thanks @Iamadig
+- Docs: link Hetzner guide from install + platforms docs. (#592) — thanks @steipete
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
 - Discord: avoid category parent overrides for channel allowlists and refactor thread context helpers. (#588) — thanks @steipete
