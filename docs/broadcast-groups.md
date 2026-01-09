@@ -7,6 +7,8 @@
 
 Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group, DM, or channel - all using one phone number.
 
+Broadcast groups are evaluated after provider allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when Clawdbot would normally reply (for example: on mention, depending on your group settings).
+
 ## Use Cases
 
 ### 1. Specialized Agent Teams
@@ -52,19 +54,17 @@ Agents:
 
 ### Basic Setup
 
-Add a `broadcast` section to your routing config:
+Add a top-level `broadcast` section (next to `bindings`):
 
 ```json
 {
-  "routing": {
-    "broadcast": {
-      "120363403215116621@g.us": ["alfred", "baerbel", "assistant3"]
-    }
+  "broadcast": {
+    "120363403215116621@g.us": ["alfred", "baerbel", "assistant3"]
   }
 }
 ```
 
-**Result:** All three agents process every message in this WhatsApp group.
+**Result:** When Clawdbot would reply in this chat, it will run all three agents.
 
 ### Processing Strategy
 
@@ -74,11 +74,9 @@ Control how agents process messages:
 All agents process simultaneously:
 ```json
 {
-  "routing": {
-    "broadcast": {
-      "strategy": "parallel",
-      "120363403215116621@g.us": ["alfred", "baerbel"]
-    }
+  "broadcast": {
+    "strategy": "parallel",
+    "120363403215116621@g.us": ["alfred", "baerbel"]
   }
 }
 ```
@@ -87,11 +85,9 @@ All agents process simultaneously:
 Agents process in order (one waits for previous to finish):
 ```json
 {
-  "routing": {
-    "broadcast": {
-      "strategy": "sequential",
-      "120363403215116621@g.us": ["alfred", "baerbel"]
-    }
+  "broadcast": {
+    "strategy": "sequential",
+    "120363403215116621@g.us": ["alfred", "baerbel"]
   }
 }
 ```
@@ -100,31 +96,33 @@ Agents process in order (one waits for previous to finish):
 
 ```json
 {
-  "routing": {
-    "defaultAgentId": "main",
-    "broadcast": {
-      "strategy": "parallel",
-      "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"],
-      "120363424282127706@g.us": ["support-en", "support-de"],
-      "+15555550123": ["assistant", "logger"]
-    },
-    "agents": {
-      "code-reviewer": {
+  "agents": {
+    "list": [
+      {
+        "id": "code-reviewer",
         "name": "Code Reviewer",
         "workspace": "/path/to/code-reviewer",
         "sandbox": { "mode": "all" }
       },
-      "security-auditor": {
-        "name": "Security Auditor", 
+      {
+        "id": "security-auditor",
+        "name": "Security Auditor",
         "workspace": "/path/to/security-auditor",
         "sandbox": { "mode": "all" }
       },
-      "docs-generator": {
+      {
+        "id": "docs-generator",
         "name": "Documentation Generator",
         "workspace": "/path/to/docs-generator",
         "sandbox": { "mode": "all" }
       }
-    }
+    ]
+  },
+  "broadcast": {
+    "strategy": "parallel",
+    "120363403215116621@g.us": ["code-reviewer", "security-auditor", "docs-generator"],
+    "120363424282127706@g.us": ["support-en", "support-de"],
+    "+15555550123": ["assistant", "logger"]
   }
 }
 ```
@@ -134,13 +132,15 @@ Agents process in order (one waits for previous to finish):
 ### Message Flow
 
 1. **Incoming message** arrives in a WhatsApp group
-2. **Routing check**: System checks if peer ID is in `routing.broadcast`
+2. **Broadcast check**: System checks if peer ID is in `broadcast`
 3. **If in broadcast list**:
    - All listed agents process the message
    - Each agent has its own session key and isolated context
    - Agents process in parallel (default) or sequentially
 4. **If not in broadcast list**:
    - Normal routing applies (first matching binding)
+
+Note: broadcast groups do not bypass provider allowlists or group activation rules (mentions/commands/etc). They only change *which agents run* when a message is eligible for processing.
 
 ### Session Isolation
 
@@ -151,6 +151,7 @@ Each agent in a broadcast group maintains completely separate:
 - **Workspace** (separate sandboxes if configured)
 - **Tool access** (different allow/deny lists)
 - **Memory/context** (separate IDENTITY.md, SOUL.md, etc.)
+- **Group context buffer** (recent group messages used for context) is shared per peer, so all broadcast agents see the same context when triggered
 
 This allows each agent to have:
 - Different personalities
@@ -258,13 +259,11 @@ Broadcast groups work alongside existing routing:
 
 ```json
 {
-  "routing": {
-    "bindings": [
-      { "agentId": "alfred", "match": { "peer": { "id": "GROUP_A" } } }
-    ],
-    "broadcast": {
-      "GROUP_B": ["agent1", "agent2"]
-    }
+  "bindings": [
+    { "match": { "provider": "whatsapp", "peer": { "kind": "group", "id": "GROUP_A" } }, "agentId": "alfred" }
+  ],
+  "broadcast": {
+    "GROUP_B": ["agent1", "agent2"]
   }
 }
 ```
@@ -279,7 +278,7 @@ Broadcast groups work alongside existing routing:
 ### Agents Not Responding
 
 **Check:**
-1. Agent IDs exist in `routing.agents`
+1. Agent IDs exist in `agents.list`
 2. Peer ID format is correct (e.g., `120363403215116621@g.us`)
 3. Agents are not in deny lists
 
@@ -307,34 +306,22 @@ tail -f ~/.clawdbot/logs/gateway.log | grep broadcast
 
 ```json
 {
-  "routing": {
-    "broadcast": {
-      "strategy": "parallel",
-      "120363403215116621@g.us": [
-        "code-formatter",
-        "security-scanner", 
-        "test-coverage",
-        "docs-checker"
-      ]
-    },
-    "agents": {
-      "code-formatter": {
-        "workspace": "~/agents/formatter",
-        "tools": { "allow": ["read", "write"] }
-      },
-      "security-scanner": {
-        "workspace": "~/agents/security",
-        "tools": { "allow": ["read", "bash"] }
-      },
-      "test-coverage": {
-        "workspace": "~/agents/testing",
-        "tools": { "allow": ["read", "bash"] }
-      },
-      "docs-checker": {
-        "workspace": "~/agents/docs",
-        "tools": { "allow": ["read"] }
-      }
-    }
+  "broadcast": {
+    "strategy": "parallel",
+    "120363403215116621@g.us": [
+      "code-formatter",
+      "security-scanner",
+      "test-coverage",
+      "docs-checker"
+    ]
+  },
+  "agents": {
+    "list": [
+      { "id": "code-formatter", "workspace": "~/agents/formatter", "tools": { "allow": ["read", "write"] } },
+      { "id": "security-scanner", "workspace": "~/agents/security", "tools": { "allow": ["read", "bash"] } },
+      { "id": "test-coverage", "workspace": "~/agents/testing", "tools": { "allow": ["read", "bash"] } },
+      { "id": "docs-checker", "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
+    ]
   }
 }
 ```
@@ -350,22 +337,16 @@ tail -f ~/.clawdbot/logs/gateway.log | grep broadcast
 
 ```json
 {
-  "routing": {
-    "broadcast": {
-      "strategy": "sequential",
-      "+15555550123": ["detect-language", "translator-en", "translator-de"]
-    },
-    "agents": {
-      "detect-language": {
-        "workspace": "~/agents/lang-detect"
-      },
-      "translator-en": {
-        "workspace": "~/agents/translate-en"
-      },
-      "translator-de": {
-        "workspace": "~/agents/translate-de"
-      }
-    }
+  "broadcast": {
+    "strategy": "sequential",
+    "+15555550123": ["detect-language", "translator-en", "translator-de"]
+  },
+  "agents": {
+    "list": [
+      { "id": "detect-language", "workspace": "~/agents/lang-detect" },
+      { "id": "translator-en", "workspace": "~/agents/translate-en" },
+      { "id": "translator-de", "workspace": "~/agents/translate-de" }
+    ]
   }
 }
 ```
@@ -375,10 +356,10 @@ tail -f ~/.clawdbot/logs/gateway.log | grep broadcast
 ### Config Schema
 
 ```typescript
-interface RoutingConfig {
+interface ClawdbotConfig {
   broadcast?: {
     strategy?: "parallel" | "sequential";
-    [peerId: string]: string[] | "parallel" | "sequential";
+    [peerId: string]: string[];
   };
 }
 ```
@@ -409,6 +390,6 @@ Planned features:
 
 ## See Also
 
-- [Multi-Agent Configuration](multi-agent-sandbox-tools.md)
-- [Routing Configuration](routing.md)
-- [Session Management](sessions.md)
+- [Multi-Agent Configuration](/multi-agent-sandbox-tools)
+- [Routing Configuration](/concepts/provider-routing)
+- [Session Management](/concepts/sessions)
