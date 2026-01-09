@@ -124,6 +124,38 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("does not append configured primary when fallbacksOverride is set", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockImplementation(() =>
+        Promise.reject(Object.assign(new Error("nope"), { status: 401 })),
+      );
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        fallbacksOverride: ["anthropic/claude-haiku-3-5"],
+        run,
+      }),
+    ).rejects.toThrow("All models failed");
+
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-opus-4-5"],
+      ["anthropic", "claude-haiku-3-5"],
+    ]);
+  });
+
   it("falls back on missing API key errors", async () => {
     const cfg = makeCfg();
     const run = vi

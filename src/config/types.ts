@@ -1127,13 +1127,22 @@ export type ToolsConfig = {
   };
 };
 
+export type AgentModelConfig =
+  | string
+  | {
+      /** Primary model (provider/model). */
+      primary?: string;
+      /** Per-agent model fallbacks (provider/model). */
+      fallbacks?: string[];
+    };
+
 export type AgentConfig = {
   id: string;
   default?: boolean;
   name?: string;
   workspace?: string;
   agentDir?: string;
-  model?: string;
+  model?: AgentModelConfig;
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
