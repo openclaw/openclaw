@@ -6,7 +6,6 @@ export type ChatCommandDefinition = {
   description: string;
   textAliases: string[];
   acceptsArgs?: boolean;
-  supportsNative?: boolean;
 };
 
 export type NativeCommandSpec = {
@@ -141,9 +140,7 @@ export function listChatCommands(): ChatCommandDefinition[] {
 }
 
 export function listNativeCommandSpecs(): NativeCommandSpec[] {
-  return CHAT_COMMANDS.filter(
-    (command) => command.supportsNative !== false,
-  ).map((command) => ({
+  return CHAT_COMMANDS.map((command) => ({
     name: command.nativeName,
     description: command.description,
     acceptsArgs: Boolean(command.acceptsArgs),

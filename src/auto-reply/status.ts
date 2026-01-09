@@ -375,8 +375,7 @@ export function buildCommandsMessage(): string {
     const aliasLabel = aliases.length
       ? ` (aliases: ${aliases.join(", ")})`
       : "";
-    const scopeLabel = command.supportsNative === false ? " (text-only)" : "";
-    lines.push(`${primary}${aliasLabel}${scopeLabel} - ${command.description}`);
+    lines.push(`${primary}${aliasLabel} - ${command.description}`);
   }
   return lines.join("\n");
 }
