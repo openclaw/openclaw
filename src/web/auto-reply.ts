@@ -1170,9 +1170,15 @@ export async function monitorWebProvider(
       const textLimit = resolveTextChunkLimit(cfg, "whatsapp");
       let didLogHeartbeatStrip = false;
       let didSendReply = false;
+      // Derive responsePrefix from identity.name if not explicitly set
+      const responsePrefix =
+        cfg.messages?.responsePrefix ??
+        (cfg.identity?.name?.trim()
+          ? `[${cfg.identity.name.trim()}]`
+          : undefined);
       const { dispatcher, replyOptions, markDispatchIdle } =
         createReplyDispatcherWithTyping({
-          responsePrefix: cfg.messages?.responsePrefix,
+          responsePrefix,
           onHeartbeatStrip: () => {
             if (!didLogHeartbeatStrip) {
               didLogHeartbeatStrip = true;

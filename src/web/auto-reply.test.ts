@@ -2000,4 +2000,43 @@ describe("web auto-reply", () => {
     expect(resolverArg.Body).not.toContain("[clawdbot]");
     resetLoadConfigMock();
   });
+
+  it("uses identity.name for responsePrefix when set", async () => {
+    setLoadConfigMock(() => ({
+      identity: { name: "Richbot", emoji: "🦁" },
+      whatsapp: { allowFrom: ["*"] },
+    }));
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const reply = vi.fn();
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const resolver = vi.fn().mockResolvedValue({ text: "hello there" });
+
+    await monitorWebProvider(false, listenerFactory, false, resolver);
+    expect(capturedOnMessage).toBeDefined();
+
+    await capturedOnMessage?.({
+      body: "hi",
+      from: "+1555",
+      to: "+2666",
+      id: "msg1",
+      sendComposing: vi.fn(),
+      reply,
+      sendMedia: vi.fn(),
+    });
+
+    // Reply should have identity-based responsePrefix prepended
+    expect(reply).toHaveBeenCalledWith("[Richbot] hello there");
+    resetLoadConfigMock();
+  });
 });
