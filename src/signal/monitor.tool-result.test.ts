@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ClawdbotConfig } from "../config/config.js";
+import {
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
+import { resolveAgentRoute } from "../routing/resolve-route.js";
+import { normalizeE164 } from "../utils.js";
 import { monitorSignalProvider } from "./monitor.js";
 
 const sendMock = vi.fn();
@@ -68,6 +75,7 @@ beforeEach(() => {
   upsertPairingRequestMock
     .mockReset()
     .mockResolvedValue({ code: "PAIRCODE", created: true });
+  resetSystemEventsForTest();
 });
 
 describe("monitorSignalProvider tool results", () => {
@@ -187,6 +195,97 @@ describe("monitorSignalProvider tool results", () => {
     expect(replyMock).not.toHaveBeenCalled();
     expect(sendMock).not.toHaveBeenCalled();
     expect(updateLastRouteMock).not.toHaveBeenCalled();
+  });
+
+  it("enqueues system events for reaction notifications", async () => {
+    config = {
+      ...config,
+      signal: {
+        autoStart: false,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        reactionNotifications: "all",
+      },
+    };
+    const abortController = new AbortController();
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      const payload = {
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Ada",
+          timestamp: 1,
+          reactionMessage: {
+            emoji: "✅",
+            targetAuthor: "+15550002222",
+            targetSentTimestamp: 2,
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    const route = resolveAgentRoute({
+      cfg: config as ClawdbotConfig,
+      provider: "signal",
+      accountId: "default",
+      peer: { kind: "dm", id: normalizeE164("+15550001111") },
+    });
+    const events = peekSystemEvents(route.sessionKey);
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
+      true,
+    );
+  });
+
+  it("processes messages when reaction metadata is present", async () => {
+    const abortController = new AbortController();
+    replyMock.mockResolvedValue({ text: "pong" });
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      const payload = {
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Ada",
+          timestamp: 1,
+          reactionMessage: {
+            emoji: "👍",
+            targetAuthor: "+15550002222",
+            targetSentTimestamp: 2,
+          },
+          dataMessage: {
+            message: "ping",
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(updateLastRouteMock).toHaveBeenCalled();
   });
 
   it("does not resend pairing code when a request is already pending", async () => {

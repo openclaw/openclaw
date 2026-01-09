@@ -520,6 +520,12 @@ export type SlackChannelConfig = {
   systemPrompt?: string;
 };
 
+export type SignalReactionNotificationMode =
+  | "off"
+  | "own"
+  | "all"
+  | "allowlist";
+
 export type SlackReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
 export type SlackActionConfig = {
@@ -625,6 +631,10 @@ export type SignalAccountConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   mediaMaxMb?: number;
+  /** Reaction notification mode (off|own|all|allowlist). Default: own. */
+  reactionNotifications?: SignalReactionNotificationMode;
+  /** Allowlist for reaction notifications when mode is allowlist. */
+  reactionAllowlist?: Array<string | number>;
 };
 
 export type SignalConfig = {

@@ -413,6 +413,8 @@ const SignalAccountSchemaBase = z.object({
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   mediaMaxMb: z.number().int().positive().optional(),
+  reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
+  reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
 });
 
 const SignalAccountSchema = SignalAccountSchemaBase.superRefine(

@@ -846,6 +846,26 @@ Slack action groups (gate `slack` tool actions):
 | pins | enabled | Pin/unpin/list |
 | memberInfo | enabled | Member info |
 | emojiList | enabled | Custom emoji list |
+
+### `signal` (signal-cli)
+
+Signal reactions can emit system events (shared reaction tooling):
+
+```json5
+{
+  signal: {
+    reactionNotifications: "own", // off | own | all | allowlist
+    reactionAllowlist: ["+15551234567", "uuid:123e4567-e89b-12d3-a456-426614174000"]
+  }
+}
+```
+
+Reaction notification modes:
+- `off`: no reaction events.
+- `own`: reactions on the bot's own messages (default).
+- `all`: all reactions on all messages.
+- `allowlist`: reactions from `signal.reactionAllowlist` on all messages (empty list disables).
+
 ### `imessage` (imsg CLI)
 
 Clawdbot spawns `imsg rpc` (JSON-RPC over stdio). No daemon or port required.
