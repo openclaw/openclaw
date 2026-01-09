@@ -112,7 +112,9 @@ Create `.env` in the repository root.
 ```bash
 CLAWDBOT_IMAGE=clawdbot:latest
 CLAWDBOT_GATEWAY_TOKEN=change-me-now
+CLAWDBOT_GATEWAY_BIND=lan
 CLAWDBOT_GATEWAY_PORT=18789
+CLAWDBOT_BRIDGE_PORT=18790
 
 CLAWDBOT_CONFIG_DIR=/root/.clawdbot
 CLAWDBOT_WORKSPACE_DIR=/root/clawd
@@ -133,12 +135,17 @@ Create or update `docker-compose.yml`.
 services:
   clawdbot-gateway:
     image: ${CLAWDBOT_IMAGE}
+    build: .
     restart: unless-stopped
     env_file:
       - .env
     environment:
+      - HOME=/home/node
       - NODE_ENV=production
       - TERM=xterm-256color
+      - CLAWDBOT_GATEWAY_BIND=${CLAWDBOT_GATEWAY_BIND}
+      - CLAWDBOT_GATEWAY_PORT=${CLAWDBOT_GATEWAY_PORT}
+      - CLAWDBOT_BRIDGE_PORT=${CLAWDBOT_BRIDGE_PORT}
       - CLAWDBOT_GATEWAY_TOKEN=${CLAWDBOT_GATEWAY_TOKEN}
       - GOG_KEYRING_PASSWORD=${GOG_KEYRING_PASSWORD}
       - XDG_CONFIG_HOME=${XDG_CONFIG_HOME}
@@ -148,7 +155,18 @@ services:
       - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
     ports:
       - "${CLAWDBOT_GATEWAY_PORT}:18789"
+      - "${CLAWDBOT_BRIDGE_PORT}:18790"
       - "18793:18793"
+    command:
+      [
+        "node",
+        "dist/index.js",
+        "gateway-daemon",
+        "--bind",
+        "${CLAWDBOT_GATEWAY_BIND}",
+        "--port",
+        "${CLAWDBOT_GATEWAY_PORT}"
+      ]
 ```
 
 ---
@@ -210,16 +228,16 @@ CMD ["node","dist/index.js"]
 ## 8) Build and launch
 
 ```bash
-docker compose build clawdbot-gateway
-docker compose up -d
+docker compose build
+docker compose up -d clawdbot-gateway
 ```
 
 Verify binaries:
 
 ```bash
-docker exec clawdbot-clawdbot-gateway-1 which gog
-docker exec clawdbot-clawdbot-gateway-1 which goplaces
-docker exec clawdbot-clawdbot-gateway-1 which wacli
+docker compose exec clawdbot-gateway which gog
+docker compose exec clawdbot-gateway which goplaces
+docker compose exec clawdbot-gateway which wacli
 ```
 
 Expected output:
@@ -235,7 +253,7 @@ Expected output:
 ## 9) Verify Gateway
 
 ```bash
-docker logs -f clawdbot-clawdbot-gateway-1
+docker compose logs -f clawdbot-gateway
 ```
 
 Success:

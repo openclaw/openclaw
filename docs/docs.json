@@ -679,6 +679,7 @@
           "platforms/android",
           "platforms/windows",
           "platforms/linux",
+          "platforms/hetzner",
           "platforms/exe-dev"
         ]
       },
