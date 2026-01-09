@@ -10,6 +10,8 @@ import {
   buildWorkspaceSkillSnapshot,
   buildWorkspaceSkillsPrompt,
   loadWorkspaceSkillEntries,
+  resolveSkillsPromptForRun,
+  type SkillEntry,
   syncSkillsToWorkspace,
 } from "./skills.js";
 import { buildWorkspaceSkillStatus } from "./skills-status.js";
@@ -401,6 +403,35 @@ describe("buildWorkspaceSkillsPrompt", () => {
 
     expect(prompt).toContain("Workspace version");
     expect(prompt).not.toContain("peekaboo");
+  });
+});
+
+describe("resolveSkillsPromptForRun", () => {
+  it("prefers snapshot prompt when available", () => {
+    const prompt = resolveSkillsPromptForRun({
+      skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
+      workspaceDir: "/tmp/clawd",
+    });
+    expect(prompt).toBe("SNAPSHOT");
+  });
+
+  it("builds prompt from entries when snapshot is missing", () => {
+    const entry: SkillEntry = {
+      skill: {
+        name: "demo-skill",
+        description: "Demo",
+        filePath: "/app/skills/demo-skill/SKILL.md",
+        baseDir: "/app/skills/demo-skill",
+        source: "clawdbot-bundled",
+      },
+      frontmatter: {},
+    };
+    const prompt = resolveSkillsPromptForRun({
+      entries: [entry],
+      workspaceDir: "/tmp/clawd",
+    });
+    expect(prompt).toContain("<available_skills>");
+    expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
 });
 

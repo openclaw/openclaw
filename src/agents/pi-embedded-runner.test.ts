@@ -6,11 +6,9 @@ import {
   applyGoogleTurnOrderingFix,
   buildEmbeddedSandboxInfo,
   createSystemPromptOverride,
-  resolveSkillsPrompt,
   splitSdkTools,
 } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
-import type { SkillEntry } from "./skills.js";
 
 describe("buildEmbeddedSandboxInfo", () => {
   it("returns undefined when sandbox is missing", () => {
@@ -121,35 +119,6 @@ describe("createSystemPromptOverride", () => {
   it("returns an empty string for blank overrides", () => {
     const override = createSystemPromptOverride("  \n  ");
     expect(override("DEFAULT")).toBe("");
-  });
-});
-
-describe("resolveSkillsPrompt", () => {
-  it("prefers snapshot prompt when available", () => {
-    const prompt = resolveSkillsPrompt({
-      skillsSnapshot: { prompt: "SNAPSHOT", skills: [] },
-      workspaceDir: "/tmp/clawd",
-    });
-    expect(prompt).toBe("SNAPSHOT");
-  });
-
-  it("builds prompt from entries when snapshot is missing", () => {
-    const entry: SkillEntry = {
-      skill: {
-        name: "demo-skill",
-        description: "Demo",
-        filePath: "/app/skills/demo-skill/SKILL.md",
-        baseDir: "/app/skills/demo-skill",
-        source: "clawdbot-bundled",
-      },
-      frontmatter: {},
-    };
-    const prompt = resolveSkillsPrompt({
-      skillEntries: [entry],
-      workspaceDir: "/tmp/clawd",
-    });
-    expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain("/app/skills/demo-skill/SKILL.md");
   });
 });
 

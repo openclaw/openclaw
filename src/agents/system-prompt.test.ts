@@ -83,9 +83,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("update.run");
   });
 
-  it("includes skills guidance with workspace path", () => {
+  it("includes skills guidance when skills prompt is present", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
 
     expect(prompt).toContain("## Skills");
@@ -103,6 +105,15 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("<available_skills>");
     expect(prompt).toContain("<name>demo</name>");
+  });
+
+  it("omits skills section when no skills prompt is provided", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+    });
+
+    expect(prompt).not.toContain("## Skills");
+    expect(prompt).not.toContain("<available_skills>");
   });
 
   it("renders project context files when provided", () => {
