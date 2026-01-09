@@ -268,6 +268,10 @@ export type HooksGmailConfig = {
     mode?: HooksGmailTailscaleMode;
     path?: string;
   };
+  /** Optional model override for Gmail hook processing (provider/model or alias). */
+  model?: string;
+  /** Optional thinking level override for Gmail hook processing. */
+  thinking?: "off" | "minimal" | "low" | "medium" | "high";
 };
 
 export type HooksConfig = {

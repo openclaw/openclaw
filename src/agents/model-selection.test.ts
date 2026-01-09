@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
+import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
   buildAllowedModelSet,
   modelKey,
   parseModelRef,
+  resolveHooksGmailModel,
 } from "./model-selection.js";
 
 const catalog = [
@@ -67,6 +69,77 @@ describe("parseModelRef", () => {
     expect(ref).toEqual({
       provider: "anthropic",
       model: "claude-opus-4-5",
+    });
+  });
+});
+
+describe("resolveHooksGmailModel", () => {
+  it("returns null when hooks.gmail.model is not set", () => {
+    const cfg = {} satisfies ClawdbotConfig;
+    const result = resolveHooksGmailModel({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("returns null when hooks.gmail.model is empty", () => {
+    const cfg = {
+      hooks: { gmail: { model: "" } },
+    } satisfies ClawdbotConfig;
+    const result = resolveHooksGmailModel({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    expect(result).toBeNull();
+  });
+
+  it("parses provider/model from hooks.gmail.model", () => {
+    const cfg = {
+      hooks: { gmail: { model: "openrouter/meta-llama/llama-3.3-70b:free" } },
+    } satisfies ClawdbotConfig;
+    const result = resolveHooksGmailModel({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    expect(result).toEqual({
+      provider: "openrouter",
+      model: "meta-llama/llama-3.3-70b:free",
+    });
+  });
+
+  it("resolves alias from agent.models", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-1": { alias: "Sonnet" },
+          },
+        },
+      },
+      hooks: { gmail: { model: "Sonnet" } },
+    } satisfies ClawdbotConfig;
+    const result = resolveHooksGmailModel({
+      cfg,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    expect(result).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-1",
+    });
+  });
+
+  it("uses default provider when model omits provider", () => {
+    const cfg = {
+      hooks: { gmail: { model: "claude-haiku-3-5" } },
+    } satisfies ClawdbotConfig;
+    const result = resolveHooksGmailModel({
+      cfg,
+      defaultProvider: "anthropic",
+    });
+    expect(result).toEqual({
+      provider: "anthropic",
+      model: "claude-haiku-3-5",
     });
   });
 });

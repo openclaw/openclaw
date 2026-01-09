@@ -9,7 +9,12 @@ import {
   type ModelCatalogEntry,
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
-import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import {
+  buildAllowedModelSet,
+  modelKey,
+  resolveConfiguredModelRef,
+  resolveHooksGmailModel,
+} from "../agents/model-selection.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import {
@@ -1760,6 +1765,41 @@ export async function startGatewayServer(
       }
     } catch (err) {
       logHooks.error(`gmail watcher failed to start: ${String(err)}`);
+    }
+  }
+
+  // Validate hooks.gmail.model if configured.
+  if (cfgAtStart.hooks?.gmail?.model) {
+    const hooksModelRef = resolveHooksGmailModel({
+      cfg: cfgAtStart,
+      defaultProvider: DEFAULT_PROVIDER,
+    });
+    if (hooksModelRef) {
+      const { provider: defaultProvider, model: defaultModel } =
+        resolveConfiguredModelRef({
+          cfg: cfgAtStart,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
+      const catalog = await loadModelCatalog({ config: cfgAtStart });
+      const key = modelKey(hooksModelRef.provider, hooksModelRef.model);
+      const allowed = buildAllowedModelSet({
+        cfg: cfgAtStart,
+        catalog,
+        defaultProvider,
+        defaultModel,
+      });
+      if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
+        logHooks.warn(
+          `hooks.gmail.model "${key}" not in agents.defaults.models allowlist (will use primary instead)`,
+        );
+      }
+      const inCatalog = catalog.some((e) => modelKey(e.provider, e.id) === key);
+      if (!inCatalog) {
+        logHooks.warn(
+          `hooks.gmail.model "${key}" not in the model catalog (may fail at runtime)`,
+        );
+      }
     }
   }
 

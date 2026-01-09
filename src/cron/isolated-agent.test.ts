@@ -161,6 +161,107 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("uses hooks.gmail.model for Gmail hook sessions", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          hooks: {
+            gmail: {
+              model: "openrouter/meta-llama/llama-3.3-70b:free",
+            },
+          },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "hook:gmail:msg-1",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+        provider?: string;
+        model?: string;
+      };
+      expect(call?.provider).toBe("openrouter");
+      expect(call?.model).toBe("meta-llama/llama-3.3-70b:free");
+    });
+  });
+
+  it("ignores hooks.gmail.model when not in the allowlist", async () => {
+    await withTempHome(async (home) => {
+      const storePath = await writeSessionStore(home);
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+        {
+          id: "claude-opus-4-5",
+          name: "Opus 4.5",
+          provider: "anthropic",
+        },
+      ]);
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg: makeCfg(home, storePath, {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              models: {
+                "anthropic/claude-opus-4-5": { alias: "Opus" },
+              },
+            },
+          },
+          hooks: {
+            gmail: {
+              model: "openrouter/meta-llama/llama-3.3-70b:free",
+            },
+          },
+        }),
+        deps,
+        job: makeJob({ kind: "agentTurn", message: "do it", deliver: false }),
+        message: "do it",
+        sessionKey: "hook:gmail:msg-2",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
+        provider?: string;
+        model?: string;
+      };
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toBe("claude-opus-4-5");
+    });
+  });
+
   it("rejects invalid model override", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);

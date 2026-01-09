@@ -211,3 +211,28 @@ export function resolveThinkingDefault(params: {
   if (candidate?.reasoning) return "low";
   return "off";
 }
+
+/**
+ * Resolve the model configured for Gmail hook processing.
+ * Returns null if hooks.gmail.model is not set.
+ */
+export function resolveHooksGmailModel(params: {
+  cfg: ClawdbotConfig;
+  defaultProvider: string;
+}): ModelRef | null {
+  const hooksModel = params.cfg.hooks?.gmail?.model;
+  if (!hooksModel?.trim()) return null;
+
+  const aliasIndex = buildModelAliasIndex({
+    cfg: params.cfg,
+    defaultProvider: params.defaultProvider,
+  });
+
+  const resolved = resolveModelRefFromString({
+    raw: hooksModel,
+    defaultProvider: params.defaultProvider,
+    aliasIndex,
+  });
+
+  return resolved?.ref ?? null;
+}

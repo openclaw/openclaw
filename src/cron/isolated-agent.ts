@@ -13,6 +13,7 @@ import {
   buildModelAliasIndex,
   modelKey,
   resolveConfiguredModelRef,
+  resolveHooksGmailModel,
   resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
@@ -291,6 +292,27 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     return catalog;
   };
+  // Resolve model - prefer hooks.gmail.model for Gmail hooks.
+  const isGmailHook = params.sessionKey.startsWith("hook:gmail:");
+  const hooksGmailModelRef = isGmailHook
+    ? resolveHooksGmailModel({
+        cfg: params.cfg,
+        defaultProvider: DEFAULT_PROVIDER,
+      })
+    : null;
+  if (hooksGmailModelRef) {
+    const allowed = buildAllowedModelSet({
+      cfg: params.cfg,
+      catalog: await loadCatalog(),
+      defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
+    });
+    const key = modelKey(hooksGmailModelRef.provider, hooksGmailModelRef.model);
+    if (allowed.allowAny || allowed.allowedKeys.has(key)) {
+      provider = hooksGmailModelRef.provider;
+      model = hooksGmailModelRef.model;
+    }
+  }
   const modelOverrideRaw =
     params.job.payload.kind === "agentTurn"
       ? params.job.payload.model
@@ -340,13 +362,17 @@ export async function runCronIsolatedAgentTurn(params: {
   const isFirstTurnInSession =
     cronSession.isNewSession || !cronSession.systemSent;
 
+  // Resolve thinking level - job thinking > hooks.gmail.thinking > agent default
+  const hooksGmailThinking = isGmailHook
+    ? normalizeThinkLevel(params.cfg.hooks?.gmail?.thinking)
+    : undefined;
   const thinkOverride = normalizeThinkLevel(agentCfg?.thinkingDefault);
   const jobThink = normalizeThinkLevel(
     (params.job.payload.kind === "agentTurn"
       ? params.job.payload.thinking
       : undefined) ?? undefined,
   );
-  let thinkLevel = jobThink ?? thinkOverride;
+  let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
       cfg: params.cfg,
