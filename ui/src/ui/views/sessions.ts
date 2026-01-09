@@ -32,7 +32,11 @@ export type SessionsProps = {
 };
 
 const THINK_LEVELS = ["", "off", "minimal", "low", "medium", "high"] as const;
-const VERBOSE_LEVELS = ["", "off", "on"] as const;
+const VERBOSE_LEVELS = [
+  { value: "", label: "inherit" },
+  { value: "off", label: "off (explicit)" },
+  { value: "on", label: "on" },
+] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 
 export function renderSessions(props: SessionsProps) {
@@ -178,8 +182,8 @@ function renderRow(
             onPatch(row.key, { verboseLevel: value || null });
           }}
         >
-          ${VERBOSE_LEVELS.map((level) =>
-            html`<option value=${level}>${level || "inherit"}</option>`,
+          ${VERBOSE_LEVELS.map(
+            (level) => html`<option value=${level.value}>${level.label}</option>`,
           )}
         </select>
       </div>

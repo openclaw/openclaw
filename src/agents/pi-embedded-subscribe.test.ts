@@ -1,12 +1,7 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 
-import { emitAgentEvent } from "../infra/agent-events.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
-
-vi.mock("../infra/agent-events.js", () => ({
-  emitAgentEvent: vi.fn(),
-}));
 
 type StubSession = {
   subscribe: (fn: (evt: unknown) => void) => () => void;
@@ -15,8 +10,6 @@ type StubSession = {
 type SessionEventHandler = (evt: unknown) => void;
 
 describe("subscribeEmbeddedPiSession", () => {
-  const emitAgentEventMock = vi.mocked(emitAgentEvent);
-
   it("filters to <final> and falls back when tags are malformed", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
@@ -1472,48 +1465,6 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     expect(onToolResult).not.toHaveBeenCalled();
-  });
-
-  it("skips tool stream events when tool verbose is off", () => {
-    let handler: ((evt: unknown) => void) | undefined;
-    const session: StubSession = {
-      subscribe: (fn) => {
-        handler = fn;
-        return () => {};
-      },
-    };
-
-    emitAgentEventMock.mockReset();
-
-    subscribeEmbeddedPiSession({
-      session: session as unknown as Parameters<
-        typeof subscribeEmbeddedPiSession
-      >[0]["session"],
-      runId: "run-tool-events-off",
-      shouldEmitToolResult: () => false,
-    });
-
-    handler?.({
-      type: "tool_execution_start",
-      toolName: "read",
-      toolCallId: "tool-evt-1",
-      args: { path: "/tmp/off.txt" },
-    });
-    handler?.({
-      type: "tool_execution_update",
-      toolName: "read",
-      toolCallId: "tool-evt-1",
-      partialResult: "partial",
-    });
-    handler?.({
-      type: "tool_execution_end",
-      toolName: "read",
-      toolCallId: "tool-evt-1",
-      isError: false,
-      result: "ok",
-    });
-
-    expect(emitAgentEventMock).not.toHaveBeenCalled();
   });
 
   it("emits tool summaries when shouldEmitToolResult overrides verbose", () => {

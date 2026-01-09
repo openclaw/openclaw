@@ -119,7 +119,10 @@ export function createFollowupRunner(params: {
     try {
       const runId = crypto.randomUUID();
       if (queued.run.sessionKey) {
-        registerAgentRunContext(runId, { sessionKey: queued.run.sessionKey });
+        registerAgentRunContext(runId, {
+          sessionKey: queued.run.sessionKey,
+          verboseLevel: queued.run.verboseLevel,
+        });
       }
       let autoCompactionCompleted = false;
       let runResult: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
