@@ -53,16 +53,17 @@ const loadAuthProfiles = (agentId: string) => {
   return { authPath, store };
 };
 
-const pickAnthropicToken = (store: {
+const pickAnthropicTokens = (store: {
   profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
-}): { profileId: string; token: string } | null => {
+}): Array<{ profileId: string; token: string }> => {
   const profiles = store.profiles ?? {};
+  const found: Array<{ profileId: string; token: string }> = [];
   for (const [id, cred] of Object.entries(profiles)) {
     if (cred?.provider !== "anthropic") continue;
     const token = cred.type === "token" ? cred.token?.trim() : undefined;
-    if (token) return { profileId: id, token };
+    if (token) found.push({ profileId: id, token });
   }
-  return null;
+  return found;
 };
 
 const fetchAnthropicOAuthUsage = async (token: string) => {
@@ -77,6 +78,34 @@ const fetchAnthropicOAuthUsage = async (token: string) => {
   });
   const text = await res.text();
   return { status: res.status, contentType: res.headers.get("content-type"), text };
+};
+
+const readClaudeCliKeychain = (): {
+  accessToken: string;
+  expiresAt?: number;
+  scopes?: string[];
+} | null => {
+  if (process.platform !== "darwin") return null;
+  try {
+    const raw = execFileSync(
+      "security",
+      ["find-generic-password", "-s", "Claude Code-credentials", "-w"],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 5000 },
+    );
+    const parsed = JSON.parse(raw.trim()) as Record<string, unknown>;
+    const oauth = parsed?.claudeAiOauth as Record<string, unknown> | undefined;
+    if (!oauth || typeof oauth !== "object") return null;
+    const accessToken = oauth.accessToken;
+    if (typeof accessToken !== "string" || !accessToken.trim()) return null;
+    const expiresAt =
+      typeof oauth.expiresAt === "number" ? oauth.expiresAt : undefined;
+    const scopes = Array.isArray(oauth.scopes)
+      ? oauth.scopes.filter((v): v is string => typeof v === "string")
+      : undefined;
+    return { accessToken, expiresAt, scopes };
+  } catch {
+    return null;
+  }
 };
 
 const chromeServiceNameForPath = (cookiePath: string): string => {
@@ -251,19 +280,34 @@ const main = async () => {
   const { authPath, store } = loadAuthProfiles(opts.agentId);
   console.log(`Auth file: ${authPath}`);
 
-  const anthropic = pickAnthropicToken(store);
-  if (!anthropic) {
-    console.log("Anthropic: no token profiles found in auth-profiles.json");
+  const keychain = readClaudeCliKeychain();
+  if (keychain) {
+    console.log(
+      `Claude CLI keychain: accessToken=${opts.reveal ? keychain.accessToken : mask(keychain.accessToken)} scopes=${keychain.scopes?.join(",") ?? "(unknown)"}`,
+    );
+    const oauth = await fetchAnthropicOAuthUsage(keychain.accessToken);
+    console.log(
+      `OAuth usage (keychain): HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
+    );
+    console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
   } else {
-    console.log(
-      `Anthropic: ${anthropic.profileId} token=${opts.reveal ? anthropic.token : mask(anthropic.token)}`,
-    );
-    const oauth = await fetchAnthropicOAuthUsage(anthropic.token);
-    console.log(
-      `OAuth usage: HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
-    );
-    console.log(oauth.text.slice(0, 400).replace(/\s+/g, " ").trim());
-    console.log("");
+    console.log("Claude CLI keychain: missing/unreadable");
+  }
+
+  const anthropic = pickAnthropicTokens(store);
+  if (anthropic.length === 0) {
+    console.log("Auth profiles: no Anthropic token profiles found");
+  } else {
+    for (const entry of anthropic) {
+      console.log(
+        `Auth profiles: ${entry.profileId} token=${opts.reveal ? entry.token : mask(entry.token)}`,
+      );
+      const oauth = await fetchAnthropicOAuthUsage(entry.token);
+      console.log(
+        `OAuth usage (${entry.profileId}): HTTP ${oauth.status} (${oauth.contentType ?? "no content-type"})`,
+      );
+      console.log(oauth.text.slice(0, 200).replace(/\s+/g, " ").trim());
+    }
   }
 
   const sessionKey =
