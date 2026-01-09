@@ -1149,6 +1149,95 @@ export async function monitorWebProvider(
       status.lastMessageAt = Date.now();
       status.lastEventAt = status.lastMessageAt;
       emitStatus();
+
+      // Send ack reaction immediately upon message receipt
+      if (msg.id) {
+        const ackConfig = cfg.whatsapp?.ackReaction;
+        // Backward compatibility: support old messages.ackReaction format
+        const legacyEmoji = (cfg.messages as any)?.ackReaction;
+        const legacyScope = (cfg.messages as any)?.ackReactionScope;
+        let emoji = (ackConfig?.emoji ?? "").trim();
+        let directEnabled = ackConfig?.direct ?? true;
+        let groupMode = ackConfig?.group ?? "mentions";
+
+        // Fallback to legacy config if new config is not set
+        if (!emoji && typeof legacyEmoji === "string") {
+          emoji = legacyEmoji.trim();
+          if (legacyScope === "all") {
+            directEnabled = true;
+            groupMode = "always";
+          } else if (legacyScope === "direct") {
+            directEnabled = true;
+            groupMode = "never";
+          } else if (legacyScope === "group-all") {
+            directEnabled = false;
+            groupMode = "always";
+          } else if (legacyScope === "group-mentions") {
+            directEnabled = false;
+            groupMode = "mentions";
+          }
+        }
+
+        const conversationIdForCheck = msg.conversationId ?? msg.from;
+
+        const shouldSendReaction = () => {
+          if (!emoji) return false;
+
+          // Direct chat logic
+          if (msg.chatType === "direct") {
+            return directEnabled;
+          }
+
+          // Group chat logic
+          if (msg.chatType === "group") {
+            if (groupMode === "never") return false;
+            if (groupMode === "always") {
+              // Always react to group messages
+              return true;
+            }
+            if (groupMode === "mentions") {
+              // Check if group has requireMention setting
+              const activation = resolveGroupActivationFor({
+                agentId: route.agentId,
+                sessionKey: route.sessionKey,
+                conversationId: conversationIdForCheck,
+              });
+              // If group activation is "always" (requireMention=false), react to all
+              if (activation === "always") return true;
+              // Otherwise, only react if bot was mentioned
+              return msg.wasMentioned === true;
+            }
+          }
+
+          return false;
+        };
+
+        if (shouldSendReaction()) {
+          replyLogger.info(
+            { chatId: msg.chatId, messageId: msg.id, emoji },
+            "sending ack reaction",
+          );
+          sendReactionWhatsApp(msg.chatId, msg.id, emoji, {
+            verbose,
+            fromMe: false,
+            participant: msg.senderJid,
+            accountId: route.accountId,
+          }).catch((err) => {
+            replyLogger.warn(
+              {
+                error: formatError(err),
+                chatId: msg.chatId,
+                messageId: msg.id,
+              },
+              "failed to send ack reaction",
+            );
+            logVerbose(
+              `WhatsApp ack reaction failed for chat ${msg.chatId}: ${formatError(err)}`,
+            );
+          });
+        }
+      }
+
       const conversationId = msg.conversationId ?? msg.from;
       let combinedBody = buildLine(msg, route.agentId);
       let shouldClearGroupHistory = false;
@@ -1385,48 +1474,6 @@ export async function monitorWebProvider(
 
       if (shouldClearGroupHistory && didSendReply) {
         groupHistories.set(groupHistoryKey, []);
-      }
-
-      // Send ack reaction after successful reply
-      const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
-      const ackReactionScope =
-        cfg.messages?.ackReactionScope ?? "group-mentions";
-      const shouldAckReaction = () => {
-        if (!ackReaction) return false;
-        if (!msg.id) return false;
-        if (!didSendReply) return false;
-        if (ackReactionScope === "all") return true;
-        if (ackReactionScope === "direct") return msg.chatType === "direct";
-        if (ackReactionScope === "group-all") return msg.chatType === "group";
-        if (ackReactionScope === "group-mentions") {
-          if (msg.chatType !== "group") return false;
-          const activation = resolveGroupActivationFor({
-            agentId: route.agentId,
-            sessionKey: route.sessionKey,
-            conversationId,
-          });
-          const requireMention = activation !== "always";
-          // If mention is not required (activation === "always"), always react
-          if (!requireMention) return true;
-          // Otherwise, only react if bot was mentioned
-          return msg.wasMentioned === true;
-        }
-        return false;
-      };
-
-      if (shouldAckReaction() && msg.id) {
-        sendReactionWhatsApp(msg.chatId, msg.id, ackReaction, {
-          verbose,
-          fromMe: false,
-        }).catch((err) => {
-          replyLogger.warn(
-            { error: formatError(err), chatId: msg.chatId, messageId: msg.id },
-            "failed to send ack reaction",
-          );
-          logVerbose(
-            `WhatsApp ack reaction failed for chat ${msg.chatId}: ${formatError(err)}`,
-          );
-        });
       }
 
       return didSendReply;
