@@ -29,6 +29,7 @@
 - Heartbeat: resolve Telegram account IDs from config-only tokens; cron tool accepts canonical `jobId` and legacy `id` for job actions. (#516) — thanks @YuriNachos
 - Discord: stop provider when gateway reconnects are exhausted and surface errors. (#514) — thanks @joshp123
 - Agents: strip empty assistant text blocks from session history to avoid Claude API 400s. (#210)
+- Agents: scrub unsupported JSON Schema keywords from tool schemas for Cloud Code Assist API compatibility. (#567) — thanks @erikpr1994
 - Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
 - Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
