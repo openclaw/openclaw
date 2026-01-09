@@ -531,6 +531,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   const okText = (value: string) => colorize(rich, theme.success, value);
   const warnText = (value: string) => colorize(rich, theme.warn, value);
   const errorText = (value: string) => colorize(rich, theme.error, value);
+  const spacer = () => defaultRuntime.log("");
 
   const { service, rpc, legacyServices, extraServices } = status;
   const serviceStatus = service.loaded
@@ -564,6 +565,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
   if (daemonEnvLines.length > 0) {
     defaultRuntime.log(`${label("Daemon env:")} ${daemonEnvLines.join(" ")}`);
   }
+  spacer();
   if (service.configAudit?.issues.length) {
     defaultRuntime.error(
       warnText("Service config looks out of date or non-standard."),
@@ -613,6 +615,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
         ),
       );
     }
+    spacer();
   }
   if (status.gateway) {
     const bindHost = status.gateway.bindHost ?? "n/a";
@@ -645,6 +648,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
         ),
       );
     }
+    spacer();
   }
   const runtimeLine = formatRuntimeStatus(service.runtime);
   if (runtimeLine) {
@@ -685,6 +689,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
         defaultRuntime.error(`  ${errorText(line)}`);
       }
     }
+    spacer();
   }
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
@@ -701,6 +706,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     )) {
       defaultRuntime.error(errorText(hint));
     }
+    spacer();
   }
   if (service.runtime?.cachedLabel) {
     defaultRuntime.error(
@@ -709,6 +715,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       ),
     );
     defaultRuntime.error(errorText("Then reinstall: clawdbot daemon install"));
+    spacer();
   }
   if (status.port && shouldReportPortUsage(status.port.status, rpc?.ok)) {
     for (const line of formatPortDiagnostics({
@@ -766,6 +773,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       defaultRuntime.error(`${errorText("Logs:")} ${logs.stdoutPath}`);
       defaultRuntime.error(`${errorText("Errors:")} ${logs.stderrPath}`);
     }
+    spacer();
   }
 
   if (legacyServices.length > 0) {
@@ -774,6 +782,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       defaultRuntime.error(`- ${errorText(svc.label)} (${svc.detail})`);
     }
     defaultRuntime.error(errorText("Cleanup: clawdbot doctor"));
+    spacer();
   }
 
   if (extraServices.length > 0) {
@@ -788,6 +797,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     for (const hint of renderGatewayServiceCleanupHints()) {
       defaultRuntime.error(`${errorText("Cleanup hint:")} ${hint}`);
     }
+    spacer();
   }
 
   if (legacyServices.length > 0 || extraServices.length > 0) {
@@ -801,6 +811,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
         "If you need multiple gateways, isolate ports + config/state (see docs: /gateway#multiple-gateways-same-host).",
       ),
     );
+    spacer();
   }
   defaultRuntime.log(`${label("Troubles:")} run clawdbot status`);
   defaultRuntime.log(
