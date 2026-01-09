@@ -946,6 +946,19 @@ export type AgentBinding = {
   };
 };
 
+export type BroadcastStrategy = "parallel" | "sequential";
+
+export type BroadcastConfig = {
+  /** Default processing strategy for broadcast peers. */
+  strategy?: BroadcastStrategy;
+  /**
+   * Map peer IDs to arrays of agent IDs that should ALL process messages.
+   *
+   * Note: the index signature includes `undefined` so `strategy?: ...` remains type-safe.
+   */
+  [peerId: string]: string[] | BroadcastStrategy | undefined;
+};
+
 export type AudioConfig = {
   transcription?: {
     // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
@@ -1373,6 +1386,7 @@ export type ClawdbotConfig = {
   agents?: AgentsConfig;
   tools?: ToolsConfig;
   bindings?: AgentBinding[];
+  broadcast?: BroadcastConfig;
   audio?: AudioConfig;
   messages?: MessagesConfig;
   commands?: CommandsConfig;
