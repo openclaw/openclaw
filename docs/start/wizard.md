@@ -83,6 +83,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **MiniMax API (platform.minimax.io)**: config is auto‑written for the Anthropic-compatible `/anthropic` endpoint.
    - **MiniMax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
+   - Pick a default model from detected options (or enter provider/model manually).
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.
   - OAuth credentials live in `~/.clawdbot/credentials/oauth.json`; auth profiles live in `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json` (API keys + OAuth).
    - More detail: [/concepts/oauth](/concepts/oauth)

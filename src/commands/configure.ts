@@ -37,7 +37,10 @@ import {
   WizardCancelledError,
   type WizardPrompter,
 } from "../wizard/prompts.js";
-import { applyAuthChoice } from "./auth-choice.js";
+import {
+  applyAuthChoice,
+  resolvePreferredProviderForAuthChoice,
+} from "./auth-choice.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -46,6 +49,7 @@ import {
 } from "./daemon-runtime.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
+import { applyPrimaryModel, promptDefaultModel } from "./model-picker.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -310,56 +314,15 @@ async function promptAuthConfig(
     next = applied.config;
   }
 
-  const currentModel =
-    typeof next.agents?.defaults?.model === "string"
-      ? next.agents?.defaults?.model
-      : (next.agents?.defaults?.model?.primary ?? "");
-  const preferAnthropic =
-    authChoice === "claude-cli" ||
-    authChoice === "setup-token" ||
-    authChoice === "token" ||
-    authChoice === "oauth" ||
-    authChoice === "apiKey";
-  const modelInitialValue =
-    preferAnthropic && !currentModel.startsWith("anthropic/")
-      ? "anthropic/claude-opus-4-5"
-      : currentModel;
-
-  const modelInput = guardCancel(
-    await text({
-      message: "Default model (blank to keep)",
-      initialValue: modelInitialValue,
-    }),
-    runtime,
-  );
-  const model = String(modelInput ?? "").trim();
-  if (model) {
-    const existingDefaults = next.agents?.defaults;
-    const existingModel = existingDefaults?.model;
-    const existingModels = existingDefaults?.models;
-    next = {
-      ...next,
-      agents: {
-        ...next.agents,
-        defaults: {
-          ...existingDefaults,
-          model: {
-            ...(existingModel &&
-            "fallbacks" in (existingModel as Record<string, unknown>)
-              ? {
-                  fallbacks: (existingModel as { fallbacks?: string[] })
-                    .fallbacks,
-                }
-              : undefined),
-            primary: model,
-          },
-          models: {
-            ...existingModels,
-            [model]: existingModels?.[model] ?? {},
-          },
-        },
-      },
-    };
+  const modelSelection = await promptDefaultModel({
+    config: next,
+    prompter,
+    allowKeep: true,
+    ignoreAllowlist: true,
+    preferredProvider: resolvePreferredProviderForAuthChoice(authChoice),
+  });
+  if (modelSelection.model) {
+    next = applyPrimaryModel(next, modelSelection.model);
   }
 
   return next;

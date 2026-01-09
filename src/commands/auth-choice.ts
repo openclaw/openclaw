@@ -729,3 +729,32 @@ export async function applyAuthChoice(params: {
 
   return { config: nextConfig, agentModelOverride };
 }
+
+export function resolvePreferredProviderForAuthChoice(
+  choice: AuthChoice,
+): string | undefined {
+  switch (choice) {
+    case "oauth":
+    case "setup-token":
+    case "claude-cli":
+    case "token":
+    case "apiKey":
+      return "anthropic";
+    case "openai-codex":
+    case "codex-cli":
+      return "openai-codex";
+    case "openai-api-key":
+      return "openai";
+    case "gemini-api-key":
+      return "google";
+    case "antigravity":
+      return "google-antigravity";
+    case "minimax-cloud":
+    case "minimax-api":
+      return "minimax";
+    case "minimax":
+      return "lmstudio";
+    default:
+      return undefined;
+  }
+}
