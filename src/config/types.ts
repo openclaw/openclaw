@@ -843,6 +843,13 @@ export type QueueConfig = {
 export type AgentToolsConfig = {
   allow?: string[];
   deny?: string[];
+  /** Per-agent elevated bash gate (can only further restrict global tools.elevated). */
+  elevated?: {
+    /** Enable or disable elevated mode for this agent (default: true). */
+    enabled?: boolean;
+    /** Approved senders for /elevated (per-provider allowlists). */
+    allowFrom?: AgentElevatedAllowFromConfig;
+  };
   sandbox?: {
     tools?: {
       allow?: string[];

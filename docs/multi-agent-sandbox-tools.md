@@ -172,13 +172,14 @@ The filtering order is:
 Each level can further restrict tools, but cannot grant back denied tools from earlier levels.
 If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools` for that agent.
 
-### Elevated Mode (global)
-`tools.elevated` is **global** and **sender-based** (per-provider allowlist). It is **not** configurable per agent.
+### Elevated Mode
+`tools.elevated` is the global baseline (sender-based allowlist). `agents.list[].tools.elevated` can further restrict elevated for specific agents (both must allow).
 
 Mitigation patterns:
 - Deny `bash` for untrusted agents (`agents.list[].tools.deny: ["bash"]`)
 - Avoid allowlisting senders that route to restricted agents
 - Disable elevated globally (`tools.elevated.enabled: false`) if you only want sandboxed execution
+- Disable elevated per agent (`agents.list[].tools.elevated.enabled: false`) for sensitive profiles
 
 ---
 

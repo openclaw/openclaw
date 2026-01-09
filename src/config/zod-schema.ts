@@ -749,6 +749,12 @@ const AgentToolsSchema = z
   .object({
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
+    elevated: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowFrom: ElevatedAllowFromSchema,
+      })
+      .optional(),
     sandbox: z
       .object({
         tools: ToolPolicySchema,

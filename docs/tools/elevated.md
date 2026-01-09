@@ -12,7 +12,7 @@ read_when:
 - Only `on|off` are accepted; anything else returns a hint and does not change state.
 
 ## What it controls (and what it doesn’t)
-- **Global availability gate**: `tools.elevated` is global (not per-agent). If disabled or sender not allowlisted, elevated is unavailable everywhere.
+- **Availability gates**: `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can further restrict elevated per agent (both must allow).
 - **Per-session state**: `/elevated on|off` sets the elevated level for the current session key.
 - **Inline directive**: `/elevated on` inside a message applies to that message only.
 - **Groups**: In group chats, elevated directives are only honored when the agent is mentioned. Command-only messages that bypass mention requirements are treated as mentioned.
@@ -42,8 +42,10 @@ Note:
 ## Availability + allowlists
 - Feature gate: `tools.elevated.enabled` (default can be off via config even if the code supports it).
 - Sender allowlist: `tools.elevated.allowFrom` with per-provider allowlists (e.g. `discord`, `whatsapp`).
-- Both must pass; otherwise elevated is treated as unavailable.
-- Discord fallback: if `tools.elevated.allowFrom.discord` is omitted, the `discord.dm.allowFrom` list is used as a fallback. Set `tools.elevated.allowFrom.discord` (even `[]`) to override.
+- Per-agent gate: `agents.list[].tools.elevated.enabled` (optional; can only further restrict).
+- Per-agent allowlist: `agents.list[].tools.elevated.allowFrom` (optional; when set, the sender must match **both** global + per-agent allowlists).
+- Discord fallback: if `tools.elevated.allowFrom.discord` is omitted, the `discord.dm.allowFrom` list is used as a fallback. Set `tools.elevated.allowFrom.discord` (even `[]`) to override. Per-agent allowlists do **not** use the fallback.
+- All gates must pass; otherwise elevated is treated as unavailable.
 
 ## Logging + status
 - Elevated bash calls are logged at info level.

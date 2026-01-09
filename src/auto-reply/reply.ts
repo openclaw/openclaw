@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentIdFromSessionKey,
   resolveAgentWorkspaceDir,
@@ -205,6 +206,43 @@ function isApprovedElevatedSender(params: {
   return false;
 }
 
+function resolveElevatedPermissions(params: {
+  cfg: ClawdbotConfig;
+  agentId: string;
+  ctx: MsgContext;
+  provider: string;
+}): { enabled: boolean; allowed: boolean } {
+  const globalConfig = params.cfg.tools?.elevated;
+  const agentConfig = resolveAgentConfig(params.cfg, params.agentId)?.tools
+    ?.elevated;
+  const globalEnabled = globalConfig?.enabled !== false;
+  const agentEnabled = agentConfig?.enabled !== false;
+  const enabled = globalEnabled && agentEnabled;
+  if (!enabled) return { enabled, allowed: false };
+  if (!params.provider) return { enabled, allowed: false };
+
+  const discordFallback =
+    params.provider === "discord"
+      ? params.cfg.discord?.dm?.allowFrom
+      : undefined;
+  const globalAllowed = isApprovedElevatedSender({
+    provider: params.provider,
+    ctx: params.ctx,
+    allowFrom: globalConfig?.allowFrom,
+    discordFallback,
+  });
+  if (!globalAllowed) return { enabled, allowed: false };
+
+  const agentAllowed = agentConfig?.allowFrom
+    ? isApprovedElevatedSender({
+        provider: params.provider,
+        ctx: params.ctx,
+        allowFrom: agentConfig.allowFrom,
+      })
+    : true;
+  return { enabled, allowed: globalAllowed && agentAllowed };
+}
+
 export async function getReplyFromConfig(
   ctx: MsgContext,
   opts?: GetReplyOptions,
@@ -391,21 +429,13 @@ export async function getReplyFromConfig(
     sessionCtx.Provider?.trim().toLowerCase() ??
     ctx.Provider?.trim().toLowerCase() ??
     "";
-  const elevatedConfig = cfg.tools?.elevated;
-  const discordElevatedFallback =
-    messageProviderKey === "discord" ? cfg.discord?.dm?.allowFrom : undefined;
-  const elevatedEnabled = elevatedConfig?.enabled !== false;
-  const elevatedAllowed =
-    elevatedEnabled &&
-    Boolean(
-      messageProviderKey &&
-        isApprovedElevatedSender({
-          provider: messageProviderKey,
-          ctx,
-          allowFrom: elevatedConfig?.allowFrom,
-          discordFallback: discordElevatedFallback,
-        }),
-    );
+  const { enabled: elevatedEnabled, allowed: elevatedAllowed } =
+    resolveElevatedPermissions({
+      cfg,
+      agentId,
+      ctx,
+      provider: messageProviderKey,
+    });
   if (
     directives.hasElevatedDirective &&
     (!elevatedEnabled || !elevatedAllowed)
@@ -573,7 +603,7 @@ export async function getReplyFromConfig(
         resolvedVerboseLevel: (currentVerboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (currentReasoningLevel ??
           "off") as ReasoningLevel,
-        resolvedElevatedLevel: currentElevatedLevel,
+        resolvedElevatedLevel,
         resolveDefaultThinkingLevel: async () =>
           currentThinkLevel ??
           (agentCfg?.thinkingDefault as ThinkLevel | undefined),

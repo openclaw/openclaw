@@ -993,6 +993,39 @@ describe("legacy config detection", () => {
     expect((res.config as { agent?: unknown }).agent).toBeUndefined();
   });
 
+  it("accepts per-agent tools.elevated overrides", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      tools: {
+        elevated: {
+          allowFrom: { whatsapp: ["+15555550123"] },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "work",
+            workspace: "~/clawd-work",
+            tools: {
+              elevated: {
+                enabled: false,
+                allowFrom: { whatsapp: ["+15555550123"] },
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config?.agents?.list?.[0]?.tools?.elevated).toEqual({
+        enabled: false,
+        allowFrom: { whatsapp: ["+15555550123"] },
+      });
+    }
+  });
+
   it("rejects telegram.requireMention", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");

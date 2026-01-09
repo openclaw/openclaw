@@ -33,6 +33,40 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).not.toContain("Bash");
   });
 
+  it("should keep global tool policy when agent only sets tools.elevated", () => {
+    const cfg: ClawdbotConfig = {
+      tools: {
+        deny: ["write"],
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "~/clawd",
+            tools: {
+              elevated: {
+                enabled: true,
+                allowFrom: { whatsapp: ["+15555550123"] },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("Bash");
+    expect(toolNames).toContain("Read");
+    expect(toolNames).not.toContain("Write");
+  });
+
   it("should apply agent-specific tool policy", () => {
     const cfg: ClawdbotConfig = {
       tools: {

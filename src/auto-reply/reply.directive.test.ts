@@ -528,6 +528,145 @@ describe("directive behavior", () => {
     });
   });
 
+  it("rejects per-agent elevated when disabled", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          SessionKey: "agent:restricted:main",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+            list: [
+              {
+                id: "restricted",
+                tools: {
+                  elevated: { enabled: false },
+                },
+              },
+            ],
+          },
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("elevated is not available right now.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("requires per-agent allowlist in addition to global", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          SessionKey: "agent:work:main",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+            list: [
+              {
+                id: "work",
+                tools: {
+                  elevated: {
+                    allowFrom: { whatsapp: ["+1333"] },
+                  },
+                },
+              },
+            ],
+          },
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222", "+1333"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222", "+1333"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("elevated is not available right now.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("allows elevated when both global and per-agent allowlists match", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1333",
+          To: "+1333",
+          Provider: "whatsapp",
+          SenderE164: "+1333",
+          SessionKey: "agent:work:main",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+            list: [
+              {
+                id: "work",
+                tools: {
+                  elevated: {
+                    allowFrom: { whatsapp: ["+1333"] },
+                  },
+                },
+              },
+            ],
+          },
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222", "+1333"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222", "+1333"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode enabled");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("warns when elevated is used in direct runtime", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -672,6 +811,51 @@ describe("directive behavior", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Session: agent:main:main");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("shows elevated off in status when per-agent elevated is disabled", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          SessionKey: "agent:restricted:main",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+            list: [
+              {
+                id: "restricted",
+                tools: {
+                  elevated: { enabled: false },
+                },
+              },
+            ],
+          },
+          tools: {
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated: off");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

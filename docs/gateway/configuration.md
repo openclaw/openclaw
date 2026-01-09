@@ -1234,8 +1234,24 @@ Example:
 }
 ```
 
+Per-agent override (further restrict):
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "family",
+        tools: {
+          elevated: { enabled: false }
+        }
+      }
+    ]
+  }
+}
+```
+
 Notes:
-- `tools.elevated` is **global** (not per-agent). Availability is based on sender allowlists.
+- `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can only further restrict (both must allow).
 - `/elevated on|off` stores state per session key; inline directives apply to a single message.
 - Elevated `bash` runs on the host and bypasses sandboxing.
 - Tool policy still applies; if `bash` is denied, elevated cannot be used.

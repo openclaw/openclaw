@@ -348,11 +348,13 @@ function resolveEffectiveToolPolicy(params: {
     params.config && agentId
       ? resolveAgentConfig(params.config, agentId)
       : undefined;
-  const hasAgentTools = agentConfig?.tools !== undefined;
+  const agentTools = agentConfig?.tools;
+  const hasAgentToolPolicy =
+    Array.isArray(agentTools?.allow) || Array.isArray(agentTools?.deny);
   const globalTools = params.config?.tools;
   return {
     agentId,
-    policy: hasAgentTools ? agentConfig?.tools : globalTools,
+    policy: hasAgentToolPolicy ? agentTools : globalTools,
   };
 }
 
