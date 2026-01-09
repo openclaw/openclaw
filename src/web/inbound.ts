@@ -376,7 +376,11 @@ export async function monitorWebInbox(options: {
       try {
         const inboundMedia = await downloadInboundMedia(msg, sock);
         if (inboundMedia) {
-          const maxBytes = (options.mediaMaxMb ?? 50) * 1024 * 1024;
+          const maxMb =
+            typeof options.mediaMaxMb === "number" && options.mediaMaxMb > 0
+              ? options.mediaMaxMb
+              : 50;
+          const maxBytes = maxMb * 1024 * 1024;
           const saved = await saveMediaBuffer(
             inboundMedia.buffer,
             inboundMedia.mimetype,
