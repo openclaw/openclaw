@@ -732,6 +732,14 @@ export function extractText(
       candidate.documentMessage?.caption;
     if (caption?.trim()) return caption.trim();
   }
+  const contactPlaceholder =
+    extractContactPlaceholder(message) ??
+    (extracted && extracted !== message
+      ? extractContactPlaceholder(
+          extracted as proto.IMessage | undefined,
+        )
+      : undefined);
+  if (contactPlaceholder) return contactPlaceholder;
   return undefined;
 }
 
@@ -746,6 +754,98 @@ export function extractMediaPlaceholder(
   if (message.documentMessage) return "<media:document>";
   if (message.stickerMessage) return "<media:sticker>";
   return undefined;
+}
+
+function extractContactPlaceholder(
+  rawMessage: proto.IMessage | undefined,
+): string | undefined {
+  const message = unwrapMessage(rawMessage);
+  if (!message) return undefined;
+  const contact = message.contactMessage ?? undefined;
+  if (contact) {
+    const { name, phone } = describeContact({
+      displayName: contact.displayName,
+      vcard: contact.vcard,
+    });
+    return formatContactPlaceholder(name, phone);
+  }
+  const contactsArray = message.contactsArrayMessage?.contacts ?? undefined;
+  if (!contactsArray || contactsArray.length === 0) return undefined;
+  const labels = contactsArray
+    .map((entry) =>
+      describeContact({ displayName: entry.displayName, vcard: entry.vcard }),
+    )
+    .map((entry) => entry.name ?? entry.phone)
+    .filter((value): value is string => Boolean(value));
+  return formatContactsPlaceholder(labels, contactsArray.length);
+}
+
+function describeContact(input: {
+  displayName?: string | null;
+  vcard?: string | null;
+}): { name?: string; phone?: string } {
+  const displayName = (input.displayName ?? "").trim();
+  const parsed = parseVcard(input.vcard ?? undefined);
+  const name = displayName || parsed.name;
+  const phone = parsed.phones[0];
+  return { name, phone };
+}
+
+function parseVcard(
+  vcard?: string,
+): { name?: string; phones: string[] } {
+  if (!vcard) return { phones: [] };
+  const lines = vcard.split(/\r?\n/);
+  let name: string | undefined;
+  const phones: string[] = [];
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    const colonIndex = line.indexOf(":");
+    if (colonIndex === -1) continue;
+    const key = line.slice(0, colonIndex).toUpperCase();
+    const rawValue = line.slice(colonIndex + 1).trim();
+    if (!rawValue) continue;
+    const value = cleanVcardValue(rawValue);
+    if (!value) continue;
+    if ((key === "FN" || key === "N") && !name) {
+      name = normalizeVcardName(value);
+      continue;
+    }
+    if (key.startsWith("TEL") || key.includes(".TEL")) {
+      phones.push(value);
+    }
+  }
+  return { name, phones };
+}
+
+function cleanVcardValue(value: string): string {
+  return value
+    .replace(/\\n/gi, " ")
+    .replace(/\\,/g, ",")
+    .replace(/\\;/g, ";")
+    .trim();
+}
+
+function normalizeVcardName(value: string): string {
+  return value.replace(/;/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function formatContactPlaceholder(name?: string, phone?: string): string {
+  const parts = [name, phone].filter(
+    (value): value is string => Boolean(value),
+  );
+  if (parts.length === 0) return "<contact>";
+  return `<contact: ${parts.join(", ")}>`;
+}
+
+function formatContactsPlaceholder(labels: string[], total: number): string {
+  const cleaned = labels.map((label) => label.trim()).filter(Boolean);
+  if (cleaned.length === 0) return "<contacts>";
+  const shown = cleaned.slice(0, 3);
+  const remaining = Math.max(total - shown.length, 0);
+  const suffix = remaining > 0 ? ` +${remaining} more` : "";
+  return `<contacts: ${shown.join(", ")}${suffix}>`;
 }
 
 export function extractLocationData(
