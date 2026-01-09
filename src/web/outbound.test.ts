@@ -51,6 +51,19 @@ describe("web outbound", () => {
     );
   });
 
+  it("throws a helpful error when no active listener exists", async () => {
+    setActiveWebListener(null);
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
+    ).rejects.toThrow(/No active WhatsApp Web listener/);
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
+    ).rejects.toThrow(/providers login/);
+    await expect(
+      sendMessageWhatsApp("+1555", "hi", { verbose: false, accountId: "work" }),
+    ).rejects.toThrow(/account: work/);
+  });
+
   it("maps audio to PTT with opus mime when ogg", async () => {
     const buf = Buffer.from("audio");
     loadWebMediaMock.mockResolvedValueOnce({

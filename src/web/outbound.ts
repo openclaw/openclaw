@@ -13,6 +13,15 @@ const outboundLog = createSubsystemLogger("gateway/providers/whatsapp").child(
   "outbound",
 );
 
+function requireActiveListener(accountId?: string | null) {
+  const active = getActiveWebListener(accountId);
+  if (active) return active;
+  const id = (accountId ?? "").trim() || "default";
+  throw new Error(
+    `No active WhatsApp Web listener (account: ${id}). Start the gateway, then link WhatsApp with: clawdbot providers login --provider whatsapp --account ${id}.`,
+  );
+}
+
 export async function sendMessageWhatsApp(
   to: string,
   body: string,
@@ -26,12 +35,7 @@ export async function sendMessageWhatsApp(
   let text = body;
   const correlationId = randomUUID();
   const startedAt = Date.now();
-  const active = getActiveWebListener(options.accountId);
-  if (!active) {
-    throw new Error(
-      "No active gateway listener. Start the gateway before sending messages.",
-    );
-  }
+  const active = requireActiveListener(options.accountId);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
@@ -108,12 +112,7 @@ export async function sendReactionWhatsApp(
   },
 ): Promise<void> {
   const correlationId = randomUUID();
-  const active = getActiveWebListener(options.accountId);
-  if (!active) {
-    throw new Error(
-      "No active gateway listener. Start the gateway before sending reactions.",
-    );
-  }
+  const active = requireActiveListener(options.accountId);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,
@@ -149,12 +148,7 @@ export async function sendPollWhatsApp(
 ): Promise<{ messageId: string; toJid: string }> {
   const correlationId = randomUUID();
   const startedAt = Date.now();
-  const active = getActiveWebListener(options.accountId);
-  if (!active) {
-    throw new Error(
-      "No active gateway listener. Start the gateway before sending polls.",
-    );
-  }
+  const active = requireActiveListener(options.accountId);
   const logger = getChildLogger({
     module: "web-outbound",
     correlationId,

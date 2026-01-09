@@ -36,6 +36,7 @@
 - Hooks: default hook agent delivery to true. (#533) — thanks @mcinteerj
 - Hooks: normalize hook agent providers (aliases + msteams support).
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
+- WhatsApp: improve "no active web listener" errors (include account + relink hint). (#612) — thanks @YuriNachos
 - WhatsApp: add broadcast groups for multi-agent replies. (#547) — thanks @pasogott
 - WhatsApp: resolve @lid inbound senders via auth-dir mapping fallback + shared resolver. (#365)
 - iMessage: isolate group-ish threads by chat_id. (#535) — thanks @mdahmann
