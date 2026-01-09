@@ -37,7 +37,7 @@ import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
-  markAuthProfileCooldown,
+  markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "./auth-profiles.js";
@@ -55,17 +55,17 @@ import {
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
   buildBootstrapContextFiles,
+  classifyFailoverReason,
   type EmbeddedContextFile,
   ensureSessionHeader,
   formatAssistantErrorText,
   isAuthAssistantError,
-  isAuthErrorMessage,
-  isBillingAssistantError,
-  isBillingErrorMessage,
   isContextOverflowError,
+  isFailoverAssistantError,
+  isFailoverErrorMessage,
   isGoogleModelApi,
   isRateLimitAssistantError,
-  isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
   pickFallbackThinkingLevel,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
@@ -1438,10 +1438,22 @@ export async function runEmbeddedPiAgent(params: {
                 },
               };
             }
+            const promptFailoverReason = classifyFailoverReason(errorText);
             if (
-              (isAuthErrorMessage(errorText) ||
-                isRateLimitErrorMessage(errorText) ||
-                isBillingErrorMessage(errorText)) &&
+              promptFailoverReason &&
+              promptFailoverReason !== "timeout" &&
+              lastProfileId
+            ) {
+              await markAuthProfileFailure({
+                store: authStore,
+                profileId: lastProfileId,
+                reason: promptFailoverReason,
+                agentDir: params.agentDir,
+              });
+            }
+            if (
+              isFailoverErrorMessage(errorText) &&
+              promptFailoverReason !== "timeout" &&
               (await advanceAuthProfile())
             ) {
               continue;
@@ -1484,19 +1496,26 @@ export async function runEmbeddedPiAgent(params: {
             0;
           const authFailure = isAuthAssistantError(lastAssistant);
           const rateLimitFailure = isRateLimitAssistantError(lastAssistant);
-          const billingFailure = isBillingAssistantError(lastAssistant);
+          const failoverFailure = isFailoverAssistantError(lastAssistant);
+          const assistantFailoverReason = classifyFailoverReason(
+            lastAssistant?.errorMessage ?? "",
+          );
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate =
-            (!aborted && (authFailure || rateLimitFailure || billingFailure)) ||
-            timedOut;
+          const shouldRotate = (!aborted && failoverFailure) || timedOut;
 
           if (shouldRotate) {
             // Mark current profile for cooldown before rotating
             if (lastProfileId) {
-              await markAuthProfileCooldown({
+              const reason =
+                timedOut || assistantFailoverReason === "timeout"
+                  ? "timeout"
+                  : (assistantFailoverReason ?? "unknown");
+              await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
+                reason,
+                agentDir: params.agentDir,
               });
               if (timedOut) {
                 log.warn(
@@ -1518,10 +1537,25 @@ export async function runEmbeddedPiAgent(params: {
                   ? "LLM request timed out."
                   : rateLimitFailure
                     ? "LLM request rate limited."
-                    : billingFailure
-                      ? "LLM request payment required."
-                      : "LLM request unauthorized.");
-              throw new Error(message);
+                    : authFailure
+                      ? "LLM request unauthorized."
+                      : "LLM request failed.");
+              const err = new Error(message);
+              (err as { failoverReason?: string }).failoverReason =
+                assistantFailoverReason ?? undefined;
+              if (assistantFailoverReason === "billing") {
+                (err as { status?: number }).status = 402;
+              } else if (assistantFailoverReason === "rate_limit") {
+                (err as { status?: number }).status = 429;
+              } else if (assistantFailoverReason === "auth") {
+                (err as { status?: number }).status = 401;
+              } else if (
+                assistantFailoverReason === "timeout" ||
+                isTimeoutErrorMessage(message)
+              ) {
+                (err as { status?: number }).status = 408;
+              }
+              throw err;
             }
           }
 

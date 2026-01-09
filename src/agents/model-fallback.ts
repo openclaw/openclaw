@@ -7,11 +7,7 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import {
-  isAuthErrorMessage,
-  isBillingErrorMessage,
-  isRateLimitErrorMessage,
-} from "./pi-embedded-helpers.js";
+import { isFailoverErrorMessage } from "./pi-embedded-helpers.js";
 
 type ModelCandidate = {
   provider: string;
@@ -71,16 +67,6 @@ function getErrorMessage(err: unknown): string {
   return "";
 }
 
-function isTimeoutErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
-  return (
-    value.includes("timeout") ||
-    value.includes("timed out") ||
-    value.includes("deadline exceeded") ||
-    value.includes("context deadline exceeded")
-  );
-}
-
 function shouldFallbackForError(err: unknown): boolean {
   const statusCode = getStatusCode(err);
   if (statusCode && [401, 402, 403, 429].includes(statusCode)) return true;
@@ -94,12 +80,7 @@ function shouldFallbackForError(err: unknown): boolean {
   }
   const message = getErrorMessage(err);
   if (!message) return false;
-  return (
-    isAuthErrorMessage(message) ||
-    isRateLimitErrorMessage(message) ||
-    isBillingErrorMessage(message) ||
-    isTimeoutErrorMessage(message)
-  );
+  return isFailoverErrorMessage(message);
 }
 
 function buildAllowedModelKeys(

@@ -151,6 +151,49 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["anthropic:work", "anthropic:default"]);
   });
 
+  it("pushes disabled profiles to the end even with store order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      store: {
+        ...store,
+        order: { anthropic: ["anthropic:default", "anthropic:work"] },
+        usageStats: {
+          "anthropic:default": {
+            disabledUntil: now + 60_000,
+            disabledReason: "billing",
+          },
+          "anthropic:work": { lastUsed: 1 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+
+  it("pushes disabled profiles to the end even with configured order", () => {
+    const now = Date.now();
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: { anthropic: ["anthropic:default", "anthropic:work"] },
+          profiles: cfg.auth.profiles,
+        },
+      },
+      store: {
+        ...store,
+        usageStats: {
+          "anthropic:default": {
+            disabledUntil: now + 60_000,
+            disabledReason: "billing",
+          },
+          "anthropic:work": { lastUsed: 1 },
+        },
+      },
+      provider: "anthropic",
+    });
+    expect(order).toEqual(["anthropic:work", "anthropic:default"]);
+  });
+
   it("normalizes z.ai aliases in auth.order", () => {
     const order = resolveAuthProfileOrder({
       cfg: {

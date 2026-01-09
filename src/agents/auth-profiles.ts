@@ -72,11 +72,21 @@ export type AuthProfileCredential =
   | TokenCredential
   | OAuthCredential;
 
+export type AuthProfileFailureReason =
+  | "auth"
+  | "rate_limit"
+  | "billing"
+  | "timeout"
+  | "unknown";
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
   cooldownUntil?: number;
+  disabledUntil?: number;
+  disabledReason?: AuthProfileFailureReason;
   errorCount?: number;
+  failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
 };
 
 export type AuthProfileStore = {
@@ -772,8 +782,9 @@ export function isProfileInCooldown(
   profileId: string,
 ): boolean {
   const stats = store.usageStats?.[profileId];
-  if (!stats?.cooldownUntil) return false;
-  return Date.now() < stats.cooldownUntil;
+  if (!stats) return false;
+  const unusableUntil = resolveProfileUnusableUntil(stats);
+  return unusableUntil ? Date.now() < unusableUntil : false;
 }
 
 /**
@@ -796,6 +807,9 @@ export async function markAuthProfileUsed(params: {
         lastUsed: Date.now(),
         errorCount: 0,
         cooldownUntil: undefined,
+        disabledUntil: undefined,
+        disabledReason: undefined,
+        failureCounts: undefined,
       };
       return true;
     },
@@ -812,6 +826,9 @@ export async function markAuthProfileUsed(params: {
     lastUsed: Date.now(),
     errorCount: 0,
     cooldownUntil: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }
@@ -824,34 +841,74 @@ export function calculateAuthProfileCooldownMs(errorCount: number): number {
   );
 }
 
+function calculateAuthProfileBillingDisableMs(errorCount: number): number {
+  const normalized = Math.max(1, errorCount);
+  const steps = [
+    30 * 60 * 1000, // 30 min
+    2 * 60 * 60 * 1000, // 2 hours
+    8 * 60 * 60 * 1000, // 8 hours
+    24 * 60 * 60 * 1000, // 24 hours
+  ];
+  return steps[Math.min(normalized - 1, steps.length - 1)] as number;
+}
+
+function resolveProfileUnusableUntil(stats: ProfileUsageStats): number | null {
+  const values = [stats.cooldownUntil, stats.disabledUntil]
+    .filter((value): value is number => typeof value === "number")
+    .filter((value) => Number.isFinite(value) && value > 0);
+  if (values.length === 0) return null;
+  return Math.max(...values);
+}
+
+export function resolveProfileUnusableUntilForDisplay(
+  store: AuthProfileStore,
+  profileId: string,
+): number | null {
+  const stats = store.usageStats?.[profileId];
+  if (!stats) return null;
+  return resolveProfileUnusableUntil(stats);
+}
+
 /**
- * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
- * Cooldown times: 1min, 5min, 25min, max 1 hour.
- * Uses store lock to avoid overwriting concurrent usage updates.
+ * Mark a profile as failed for a specific reason. Billing failures are treated
+ * as "disabled" (longer backoff) vs the regular cooldown window.
  */
-export async function markAuthProfileCooldown(params: {
+export async function markAuthProfileFailure(params: {
   store: AuthProfileStore;
   profileId: string;
+  reason: AuthProfileFailureReason;
   agentDir?: string;
 }): Promise<void> {
-  const { store, profileId, agentDir } = params;
+  const { store, profileId, reason, agentDir } = params;
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
       if (!freshStore.profiles[profileId]) return false;
-
       freshStore.usageStats = freshStore.usageStats ?? {};
       const existing = freshStore.usageStats[profileId] ?? {};
-      const errorCount = (existing.errorCount ?? 0) + 1;
 
-      // Exponential backoff: 1min, 5min, 25min, capped at 1h
-      const backoffMs = calculateAuthProfileCooldownMs(errorCount);
+      const nextErrorCount = (existing.errorCount ?? 0) + 1;
+      const failureCounts = { ...existing.failureCounts };
+      failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
 
-      freshStore.usageStats[profileId] = {
+      const now = Date.now();
+      const updatedStats: ProfileUsageStats = {
         ...existing,
-        errorCount,
-        cooldownUntil: Date.now() + backoffMs,
+        errorCount: nextErrorCount,
+        failureCounts,
       };
+
+      if (reason === "billing") {
+        const billingCount = failureCounts.billing ?? 1;
+        const backoffMs = calculateAuthProfileBillingDisableMs(billingCount);
+        updatedStats.disabledUntil = now + backoffMs;
+        updatedStats.disabledReason = "billing";
+      } else {
+        const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+        updatedStats.cooldownUntil = now + backoffMs;
+      }
+
+      freshStore.usageStats[profileId] = updatedStats;
       return true;
     },
   });
@@ -863,17 +920,46 @@ export async function markAuthProfileCooldown(params: {
 
   store.usageStats = store.usageStats ?? {};
   const existing = store.usageStats[profileId] ?? {};
-  const errorCount = (existing.errorCount ?? 0) + 1;
+  const nextErrorCount = (existing.errorCount ?? 0) + 1;
+  const failureCounts = { ...existing.failureCounts };
+  failureCounts[reason] = (failureCounts[reason] ?? 0) + 1;
 
-  // Exponential backoff: 1min, 5min, 25min, capped at 1h
-  const backoffMs = calculateAuthProfileCooldownMs(errorCount);
-
-  store.usageStats[profileId] = {
+  const now = Date.now();
+  const updatedStats: ProfileUsageStats = {
     ...existing,
-    errorCount,
-    cooldownUntil: Date.now() + backoffMs,
+    errorCount: nextErrorCount,
+    failureCounts,
   };
+  if (reason === "billing") {
+    const billingCount = failureCounts.billing ?? 1;
+    const backoffMs = calculateAuthProfileBillingDisableMs(billingCount);
+    updatedStats.disabledUntil = now + backoffMs;
+    updatedStats.disabledReason = "billing";
+  } else {
+    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
+    updatedStats.cooldownUntil = now + backoffMs;
+  }
+
+  store.usageStats[profileId] = updatedStats;
   saveAuthProfileStore(store, agentDir);
+}
+
+/**
+ * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
+ * Cooldown times: 1min, 5min, 25min, max 1 hour.
+ * Uses store lock to avoid overwriting concurrent usage updates.
+ */
+export async function markAuthProfileCooldown(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+}): Promise<void> {
+  await markAuthProfileFailure({
+    store: params.store,
+    profileId: params.profileId,
+    reason: "unknown",
+    agentDir: params.agentDir,
+  });
 }
 
 /**
@@ -973,7 +1059,8 @@ export function resolveAuthProfileOrder(params: {
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
     for (const profileId of deduped) {
-      const cooldownUntil = store.usageStats?.[profileId]?.cooldownUntil;
+      const cooldownUntil =
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? 0;
       if (
         typeof cooldownUntil === "number" &&
         Number.isFinite(cooldownUntil) &&
@@ -1057,7 +1144,8 @@ function orderProfilesByMode(
   const cooldownSorted = inCooldown
     .map((profileId) => ({
       profileId,
-      cooldownUntil: store.usageStats?.[profileId]?.cooldownUntil ?? now,
+      cooldownUntil:
+        resolveProfileUnusableUntil(store.usageStats?.[profileId] ?? {}) ?? now,
     }))
     .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
     .map((entry) => entry.profileId);
