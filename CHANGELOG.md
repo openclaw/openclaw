@@ -55,6 +55,8 @@
 - Onboarding: QuickStart auto-installs the Gateway daemon with Node (no runtime picker).
 - Daemon runtime: remove Bun from selection options.
 - CLI: restore hidden `gateway-daemon` alias for legacy launchd configs.
+- Onboarding/Configure: add OpenAI API key flow that stores in shared `~/.clawdbot/.env` for launchd; simplify Anthropic token prompt order.
+- Configure/Onboarding: show Control UI docs with gateway reachability status and only offer to open when a gateway is detected; default model prompt now prefers Opus 4.5 for Anthropic auth.
 - Control UI: show skill install progress + per-skill results, hide install once binaries present. (#445) — thanks @pkrmf
 - Providers/Doctor: surface Discord privileged intent (Message Content) misconfiguration with actionable warnings.
 - Providers/Doctor: warn when Telegram config expects unmentioned group messages but Bot API privacy mode is likely enabled; surface WhatsApp login/disconnect hints.

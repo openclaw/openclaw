@@ -548,65 +548,66 @@ export async function runOnboardingWizard(
     "Optional apps",
   );
 
+  const links = resolveControlUiLinks({
+    bind,
+    port,
+    basePath: baseConfig.gateway?.controlUi?.basePath,
+  });
+  const tokenParam =
+    authMode === "token" && gatewayToken
+      ? `?token=${encodeURIComponent(gatewayToken)}`
+      : "";
+  const authedUrl = `${links.httpUrl}${tokenParam}`;
+  const gatewayProbe = await probeGatewayReachable({
+    url: links.wsUrl,
+    token: authMode === "token" ? gatewayToken : undefined,
+    password: authMode === "password" ? baseConfig.gateway?.auth?.password : "",
+  });
+  const gatewayStatusLine = gatewayProbe.ok
+    ? "Gateway: reachable"
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+
   await prompter.note(
-    (() => {
-      const links = resolveControlUiLinks({
-        bind,
-        port,
-        basePath: baseConfig.gateway?.controlUi?.basePath,
-      });
-      const tokenParam =
-        authMode === "token" && gatewayToken
-          ? `?token=${encodeURIComponent(gatewayToken)}`
-          : "";
-      const authedUrl = `${links.httpUrl}${tokenParam}`;
-      return [
-        `Web UI: ${links.httpUrl}`,
-        tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
-        `Gateway WS: ${links.wsUrl}`,
-        "Docs: https://docs.clawd.bot/web/control-ui",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    })(),
+    [
+      `Web UI: ${links.httpUrl}`,
+      tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
+      `Gateway WS: ${links.wsUrl}`,
+      gatewayStatusLine,
+      "Docs: https://docs.clawd.bot/web/control-ui",
+    ]
+      .filter(Boolean)
+      .join("\n"),
     "Control UI",
   );
 
   const browserSupport = await detectBrowserOpenSupport();
-  if (!browserSupport.ok) {
-    await prompter.note(
-      formatControlUiSshHint({
-        port,
-        basePath: baseConfig.gateway?.controlUi?.basePath,
-        token: authMode === "token" ? gatewayToken : undefined,
-      }),
-      "Open Control UI",
-    );
-  } else {
-    const wantsOpen = await prompter.confirm({
-      message: "Open Control UI now?",
-      initialValue: true,
-    });
-    if (wantsOpen) {
-      const links = resolveControlUiLinks({
-        bind,
-        port,
-        basePath: baseConfig.gateway?.controlUi?.basePath,
+  if (gatewayProbe.ok) {
+    if (!browserSupport.ok) {
+      await prompter.note(
+        formatControlUiSshHint({
+          port,
+          basePath: baseConfig.gateway?.controlUi?.basePath,
+          token: authMode === "token" ? gatewayToken : undefined,
+        }),
+        "Open Control UI",
+      );
+    } else {
+      const wantsOpen = await prompter.confirm({
+        message: "Open Control UI now?",
+        initialValue: true,
       });
-      const tokenParam =
-        authMode === "token" && gatewayToken
-          ? `?token=${encodeURIComponent(gatewayToken)}`
-          : "";
-      const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
-      if (!opened) {
-        await prompter.note(
-          formatControlUiSshHint({
-            port,
-            basePath: baseConfig.gateway?.controlUi?.basePath,
-            token: authMode === "token" ? gatewayToken : undefined,
-          }),
-          "Open Control UI",
-        );
+      if (wantsOpen) {
+        const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
+        if (!opened) {
+          await prompter.note(
+            formatControlUiSshHint({
+              port,
+              basePath: baseConfig.gateway?.controlUi?.basePath,
+              token: authMode === "token" ? gatewayToken : undefined,
+            }),
+            "Open Control UI",
+          );
+        }
       }
     }
   }

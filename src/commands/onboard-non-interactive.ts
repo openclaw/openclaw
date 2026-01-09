@@ -4,6 +4,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
 } from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
   type ClawdbotConfig,
   CONFIG_PATH_CLAWDBOT,
@@ -16,6 +17,7 @@ import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath, sleep } from "../utils.js";
@@ -135,6 +137,19 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
     nextConfig = applyGoogleGeminiModelDefault(nextConfig).next;
+  } else if (authChoice === "openai-api-key") {
+    const key = opts.openaiApiKey?.trim() || resolveEnvApiKey("openai")?.apiKey;
+    if (!key) {
+      runtime.error("Missing --openai-api-key (or OPENAI_API_KEY in env).");
+      runtime.exit(1);
+      return;
+    }
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: key,
+    });
+    process.env.OPENAI_API_KEY = key;
+    runtime.log(`Saved OPENAI_API_KEY to ${result.path}`);
   } else if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,

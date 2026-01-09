@@ -21,7 +21,6 @@ import {
   ensureAuthProfileStore,
   upsertAuthProfile,
 } from "../agents/auth-profiles.js";
-import { parseDurationMs } from "../cli/parse-duration.js";
 import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -65,6 +64,8 @@ import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
@@ -351,6 +352,7 @@ async function promptAuthConfig(
     | "claude-cli"
     | "token"
     | "openai-codex"
+    | "openai-api-key"
     | "codex-cli"
     | "antigravity"
     | "gemini-api-key"
@@ -398,14 +400,6 @@ async function promptAuthConfig(
       mode: "token",
     });
   } else if (authChoice === "token" || authChoice === "oauth") {
-    const profileNameRaw = guardCancel(
-      await text({
-        message: "Token name (blank = default)",
-        placeholder: "default",
-      }),
-      runtime,
-    );
-
     const provider = guardCancel(
       await select({
         message: "Token provider",
@@ -418,32 +412,6 @@ async function promptAuthConfig(
       }),
       runtime,
     ) as "anthropic";
-
-    const profileId = buildTokenProfileId({
-      provider,
-      name: String(profileNameRaw ?? ""),
-    });
-    const store = ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: false,
-    });
-    const existing = store.profiles[profileId];
-    if (existing?.type === "token") {
-      const useExisting = guardCancel(
-        await confirm({
-          message: `Use existing token "${profileId}"?`,
-          initialValue: true,
-        }),
-        runtime,
-      );
-      if (useExisting) {
-        next = applyAuthProfileConfig(next, {
-          profileId,
-          provider,
-          mode: "token",
-        });
-        return next;
-      }
-    }
 
     note(
       [
@@ -462,34 +430,17 @@ async function promptAuthConfig(
     );
     const token = String(tokenRaw).trim();
 
-    const wantsExpiry = guardCancel(
-      await confirm({
-        message: "Does this token expire?",
-        initialValue: false,
+    const profileNameRaw = guardCancel(
+      await text({
+        message: "Token name (blank = default)",
+        placeholder: "default",
       }),
       runtime,
     );
-    const expiresInRaw = wantsExpiry
-      ? guardCancel(
-          await text({
-            message: "Expires in (duration)",
-            initialValue: "365d",
-            validate: (value) => {
-              try {
-                parseDurationMs(String(value ?? ""), { defaultUnit: "d" });
-                return undefined;
-              } catch {
-                return "Invalid duration (e.g. 365d, 12h, 30m)";
-              }
-            },
-          }),
-          runtime,
-        )
-      : "";
-    const expiresIn = String(expiresInRaw).trim();
-    const expires = expiresIn
-      ? Date.now() + parseDurationMs(expiresIn, { defaultUnit: "d" })
-      : undefined;
+    const profileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
 
     upsertAuthProfile({
       profileId,
@@ -497,11 +448,52 @@ async function promptAuthConfig(
         type: "token",
         provider,
         token,
-        ...(expires ? { expires } : {}),
       },
     });
 
     next = applyAuthProfileConfig(next, { profileId, provider, mode: "token" });
+  } else if (authChoice === "openai-api-key") {
+    const envKey = resolveEnvApiKey("openai");
+    if (envKey) {
+      const useExisting = guardCancel(
+        await confirm({
+          message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (useExisting) {
+        const result = upsertSharedEnvVar({
+          key: "OPENAI_API_KEY",
+          value: envKey.apiKey,
+        });
+        if (!process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = envKey.apiKey;
+        }
+        note(
+          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+          "OpenAI API key",
+        );
+      }
+    }
+
+    const key = guardCancel(
+      await text({
+        message: "Enter OpenAI API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    const trimmed = String(key).trim();
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: trimmed,
+    });
+    process.env.OPENAI_API_KEY = trimmed;
+    note(
+      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+      "OpenAI API key",
+    );
   } else if (authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     note(
@@ -703,13 +695,24 @@ async function promptAuthConfig(
     next = applyMinimaxConfig(next);
   }
 
+  const currentModel =
+    typeof next.agent?.model === "string"
+      ? next.agent?.model
+      : (next.agent?.model?.primary ?? "");
+  const preferAnthropic =
+    authChoice === "claude-cli" ||
+    authChoice === "token" ||
+    authChoice === "oauth" ||
+    authChoice === "apiKey";
+  const modelInitialValue =
+    preferAnthropic && !currentModel.startsWith("anthropic/")
+      ? "anthropic/claude-opus-4-5"
+      : currentModel;
+
   const modelInput = guardCancel(
     await text({
       message: "Default model (blank to keep)",
-      initialValue:
-        typeof next.agent?.model === "string"
-          ? next.agent?.model
-          : (next.agent?.model?.primary ?? ""),
+      initialValue: modelInitialValue,
     }),
     runtime,
   );
@@ -1078,58 +1081,65 @@ export async function runConfigureWizard(
     runtime.error(controlUiAssets.message);
   }
 
+  const bind = nextConfig.gateway?.bind ?? "loopback";
+  const links = resolveControlUiLinks({
+    bind,
+    port: gatewayPort,
+    basePath: nextConfig.gateway?.controlUi?.basePath,
+  });
+  const gatewayProbe = await probeGatewayReachable({
+    url: links.wsUrl,
+    token:
+      nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    password:
+      nextConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD,
+  });
+  const gatewayStatusLine = gatewayProbe.ok
+    ? "Gateway: reachable"
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+
   note(
-    (() => {
-      const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({
-        bind,
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-      });
-      return [
-        `Web UI: ${links.httpUrl}`,
-        `Gateway WS: ${links.wsUrl}`,
-        "Docs: https://docs.clawd.bot/web/control-ui",
-      ].join("\n");
-    })(),
+    [
+      `Web UI: ${links.httpUrl}`,
+      `Gateway WS: ${links.wsUrl}`,
+      gatewayStatusLine,
+      "Docs: https://docs.clawd.bot/web/control-ui",
+    ].join("\n"),
     "Control UI",
   );
 
   const browserSupport = await detectBrowserOpenSupport();
-  if (!browserSupport.ok) {
-    note(
-      formatControlUiSshHint({
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-        token: gatewayToken,
-      }),
-      "Open Control UI",
-    );
-  } else {
-    const wantsOpen = guardCancel(
-      await confirm({
-        message: "Open Control UI now?",
-        initialValue: false,
-      }),
-      runtime,
-    );
-    if (wantsOpen) {
-      const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({
-        bind,
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-      });
-      const opened = await openUrl(links.httpUrl);
-      if (!opened) {
-        note(
-          formatControlUiSshHint({
-            port: gatewayPort,
-            basePath: nextConfig.gateway?.controlUi?.basePath,
-            token: gatewayToken,
-          }),
-          "Open Control UI",
-        );
+  if (gatewayProbe.ok) {
+    if (!browserSupport.ok) {
+      note(
+        formatControlUiSshHint({
+          port: gatewayPort,
+          basePath: nextConfig.gateway?.controlUi?.basePath,
+          token: gatewayToken,
+        }),
+        "Open Control UI",
+      );
+    } else {
+      const wantsOpen = guardCancel(
+        await confirm({
+          message: "Open Control UI now?",
+          initialValue: false,
+        }),
+        runtime,
+      );
+      if (wantsOpen) {
+        const opened = await openUrl(links.httpUrl);
+        if (!opened) {
+          note(
+            formatControlUiSshHint({
+              port: gatewayPort,
+              basePath: nextConfig.gateway?.controlUi?.basePath,
+              token: gatewayToken,
+            }),
+            "Open Control UI",
+          );
+        }
       }
     }
   }
