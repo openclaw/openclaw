@@ -2,13 +2,13 @@ import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { success } from "../globals.js";
+import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
 import {
   buildOutboundDeliveryJson,
   formatGatewaySummary,
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
-import type { OutboundDeliveryResult } from "../infra/outbound/deliver.js";
 import {
   type MessagePollResult,
   type MessageSendResult,

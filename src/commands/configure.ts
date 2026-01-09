@@ -21,7 +21,6 @@ import {
   ensureAuthProfileStore,
   upsertAuthProfile,
 } from "../agents/auth-profiles.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -47,6 +46,10 @@ import {
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -315,62 +318,7 @@ async function promptAuthConfig(
 
   let next = cfg;
 
-  if (authChoice === "oauth") {
-    note(
-      [
-        "This will run `claude setup-token` to create a long-lived Anthropic token.",
-        "Requires an interactive TTY and a Claude Pro/Max subscription.",
-      ].join("\n"),
-      "Anthropic token",
-    );
-
-    if (!process.stdin.isTTY) {
-      note(
-        "`claude setup-token` requires an interactive TTY.",
-        "Anthropic token",
-      );
-      return next;
-    }
-
-    const proceed = guardCancel(
-      await confirm({
-        message: "Run `claude setup-token` now?",
-        initialValue: true,
-      }),
-      runtime,
-    );
-    if (!proceed) return next;
-
-    const res = await (async () => {
-      const { spawnSync } = await import("node:child_process");
-      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
-    })();
-    if (res.error) {
-      note(`Failed to run claude: ${String(res.error)}`, "Anthropic token");
-      return next;
-    }
-    if (typeof res.status === "number" && res.status !== 0) {
-      note(`claude setup-token failed (exit ${res.status})`, "Anthropic token");
-      return next;
-    }
-
-    const store = ensureAuthProfileStore(undefined, {
-      allowKeychainPrompt: true,
-    });
-    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
-      note(
-        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
-        "Anthropic token",
-      );
-      return next;
-    }
-
-    next = applyAuthProfileConfig(next, {
-      profileId: CLAUDE_CLI_PROFILE_ID,
-      provider: "anthropic",
-      mode: "token",
-    });
-  } else if (authChoice === "claude-cli") {
+  if (authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(undefined, {
       allowKeychainPrompt: false,
     });
@@ -407,30 +355,66 @@ async function promptAuthConfig(
       provider: "anthropic",
       mode: "token",
     });
-  } else if (authChoice === "token") {
-    const providerRaw = guardCancel(
+  } else if (authChoice === "token" || authChoice === "oauth") {
+    const profileNameRaw = guardCancel(
       await text({
-        message: "Token provider id (e.g. anthropic)",
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        message: "Token name (blank = default)",
+        placeholder: "default",
       }),
       runtime,
     );
-    const provider = normalizeProviderId(String(providerRaw).trim());
-    const defaultProfileId = `${provider}:manual`;
-    const profileIdRaw = guardCancel(
-      await text({
-        message: "Auth profile id",
-        initialValue: defaultProfileId,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+
+    const provider = guardCancel(
+      await select({
+        message: "Token provider",
+        options: [
+          {
+            value: "anthropic",
+            label: "Anthropic (only supported)",
+          },
+        ],
       }),
       runtime,
+    ) as "anthropic";
+
+    const profileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
+    const existing = store.profiles[profileId];
+    if (existing?.type === "token") {
+      const useExisting = guardCancel(
+        await confirm({
+          message: `Use existing token "${profileId}"?`,
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (useExisting) {
+        next = applyAuthProfileConfig(next, {
+          profileId,
+          provider,
+          mode: "token",
+        });
+        return next;
+      }
+    }
+
+    note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
     );
-    const profileId = String(profileIdRaw).trim();
 
     const tokenRaw = guardCancel(
       await text({
-        message: `Paste token for ${provider}`,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
+        message: "Paste Anthropic setup-token",
+        validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
       }),
       runtime,
     );

@@ -76,9 +76,9 @@ export function buildAuthChoiceOptions(params: {
   }
 
   options.push({
-    value: "oauth",
-    label: "Anthropic token (setup-token)",
-    hint: "Runs `claude setup-token`",
+    value: "token",
+    label: "Anthropic token (paste setup-token)",
+    hint: "Run `claude setup-token`, then paste the token",
   });
 
   options.push({
@@ -91,11 +91,7 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
-  options.push({
-    value: "token",
-    label: "Paste token (advanced)",
-    hint: "Stores as a non-refreshable token profile",
-  });
+  // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });

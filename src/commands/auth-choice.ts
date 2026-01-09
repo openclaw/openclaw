@@ -17,10 +17,7 @@ import {
   resolveEnvApiKey,
 } from "../agents/model-auth.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
-import {
-  normalizeProviderId,
-  resolveConfiguredModelRef,
-} from "../agents/model-selection.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -29,6 +26,10 @@ import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
@@ -136,65 +137,7 @@ export async function applyAuthChoice(params: {
     );
   };
 
-  if (params.authChoice === "oauth") {
-    await params.prompter.note(
-      [
-        "This will run `claude setup-token` to create a long-lived Anthropic token.",
-        "Requires an interactive TTY and a Claude Pro/Max subscription.",
-      ].join("\n"),
-      "Anthropic token",
-    );
-
-    if (!process.stdin.isTTY) {
-      await params.prompter.note(
-        "`claude setup-token` requires an interactive TTY.",
-        "Anthropic token",
-      );
-      return { config: nextConfig, agentModelOverride };
-    }
-
-    const proceed = await params.prompter.confirm({
-      message: "Run `claude setup-token` now?",
-      initialValue: true,
-    });
-    if (!proceed) return { config: nextConfig, agentModelOverride };
-
-    const res = await (async () => {
-      const { spawnSync } = await import("node:child_process");
-      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
-    })();
-    if (res.error) {
-      await params.prompter.note(
-        `Failed to run claude: ${String(res.error)}`,
-        "Anthropic token",
-      );
-      return { config: nextConfig, agentModelOverride };
-    }
-    if (typeof res.status === "number" && res.status !== 0) {
-      await params.prompter.note(
-        `claude setup-token failed (exit ${res.status})`,
-        "Anthropic token",
-      );
-      return { config: nextConfig, agentModelOverride };
-    }
-
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: true,
-    });
-    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
-      await params.prompter.note(
-        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
-        "Anthropic token",
-      );
-      return { config: nextConfig, agentModelOverride };
-    }
-
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: CLAUDE_CLI_PROFILE_ID,
-      provider: "anthropic",
-      mode: "token",
-    });
-  } else if (params.authChoice === "claude-cli") {
+  if (params.authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
     });
@@ -266,24 +209,50 @@ export async function applyAuthChoice(params: {
       provider: "anthropic",
       mode: "token",
     });
-  } else if (params.authChoice === "token") {
-    const providerRaw = await params.prompter.text({
-      message: "Token provider id (e.g. anthropic)",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+  } else if (params.authChoice === "token" || params.authChoice === "oauth") {
+    const profileNameRaw = await params.prompter.text({
+      message: "Token name (blank = default)",
+      placeholder: "default",
     });
-    const provider = normalizeProviderId(String(providerRaw).trim());
-    const defaultProfileId = `${provider}:manual`;
+    const provider = (await params.prompter.select({
+      message: "Token provider",
+      options: [{ value: "anthropic", label: "Anthropic (only supported)" }],
+    })) as "anthropic";
+    const profileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
 
-    const profileIdRaw = await params.prompter.text({
-      message: "Auth profile id",
-      initialValue: defaultProfileId,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
     });
-    const profileId = String(profileIdRaw).trim();
+    const existing = store.profiles[profileId];
+    if (existing?.type === "token") {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing token "${profileId}"?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        nextConfig = applyAuthProfileConfig(nextConfig, {
+          profileId,
+          provider,
+          mode: "token",
+        });
+        return { config: nextConfig, agentModelOverride };
+      }
+    }
+
+    await params.prompter.note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
+    );
 
     const tokenRaw = await params.prompter.text({
-      message: `Paste token for ${provider}`,
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+      message: "Paste Anthropic setup-token",
+      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
     });
     const token = String(tokenRaw).trim();
 
