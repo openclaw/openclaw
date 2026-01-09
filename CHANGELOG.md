@@ -114,7 +114,7 @@
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
 - TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
-- TUI: stop overriding agent timeout so config defaults apply. (#549)
+- TUI: stop overriding agent timeout so config defaults apply; warn on invalid `--timeout-ms`. (#549)
 - Status: show Verbose/Elevated only when enabled.
 - Status: filter usage summary to the active model provider.
 - Status: map model providers to usage sources so unrelated usage doesn’t appear.

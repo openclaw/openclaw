@@ -98,6 +98,19 @@ describe("cli program", () => {
     );
   });
 
+  it("warns and ignores invalid tui timeout override", async () => {
+    const program = buildProgram();
+    await program.parseAsync(["tui", "--timeout-ms", "nope"], {
+      from: "user",
+    });
+    expect(runtime.error).toHaveBeenCalledWith(
+      'warning: invalid --timeout-ms "nope"; ignoring',
+    );
+    expect(runTui).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: undefined }),
+    );
+  });
+
   it("runs config alias as configure", async () => {
     const program = buildProgram();
     await program.parseAsync(["config"], { from: "user" });

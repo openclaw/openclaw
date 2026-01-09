@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { defaultRuntime } from "../runtime.js";
 import { runTui } from "../tui/tui.js";
+import { parseTimeoutMs } from "./parse-timeout.js";
 
 export function registerTuiCli(program: Command) {
   program
@@ -26,14 +27,12 @@ export function registerTuiCli(program: Command) {
     .option("--history-limit <n>", "History entries to load", "200")
     .action(async (opts) => {
       try {
-        const timeoutMs =
-          typeof opts.timeoutMs === "undefined"
-            ? undefined
-            : Number.parseInt(String(opts.timeoutMs), 10);
-        const normalizedTimeoutMs =
-          typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-            ? timeoutMs
-            : undefined;
+        const timeoutMs = parseTimeoutMs(opts.timeoutMs);
+        if (opts.timeoutMs !== undefined && timeoutMs === undefined) {
+          defaultRuntime.error(
+            `warning: invalid --timeout-ms "${String(opts.timeoutMs)}"; ignoring`,
+          );
+        }
         const historyLimit = Number.parseInt(
           String(opts.historyLimit ?? "200"),
           10,
@@ -46,7 +45,7 @@ export function registerTuiCli(program: Command) {
           deliver: Boolean(opts.deliver),
           thinking: opts.thinking as string | undefined,
           message: opts.message as string | undefined,
-          timeoutMs: normalizedTimeoutMs,
+          timeoutMs,
           historyLimit: Number.isNaN(historyLimit) ? undefined : historyLimit,
         });
       } catch (err) {

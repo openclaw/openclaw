@@ -109,7 +109,7 @@ Session lifecycle:
 - `--session <key>`: Session key (default: `main`, or `global` when scope is global)
 - `--deliver`: Deliver assistant replies to the provider (default off)
 - `--thinking <level>`: Override thinking level for sends
-- `--timeout-ms <ms>`: Agent timeout (defaults to `agents.defaults.timeoutSeconds`)
+- `--timeout-ms <ms>`: Agent timeout in ms (defaults to `agents.defaults.timeoutSeconds`)
 - `--history-limit <n>`: History entries to load (default 200)
 
 ## Troubleshooting
