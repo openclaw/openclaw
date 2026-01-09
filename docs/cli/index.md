@@ -290,6 +290,17 @@ Unified outbound messaging + provider actions.
 
 See: [/cli/message](/cli/message)
 
+Subcommands:
+- `message send|poll|react|reactions|read|edit|delete|pin|unpin|pins|permissions|search|timeout|kick|ban`
+- `message thread <create|list|reply>`
+- `message emoji <list|upload>`
+- `message sticker <send|upload>`
+- `message role <info|add|remove>`
+- `message channel <info|list>`
+- `message member info`
+- `message voice status`
+- `message event <list|create>`
+
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).
 
