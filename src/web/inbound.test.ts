@@ -74,6 +74,15 @@ describe("web inbound helpers", () => {
     expect(body).toBe("<contacts: Alice, Bob, Charlie +1 more>");
   });
 
+  it("summarizes empty WhatsApp contact cards with a count", () => {
+    const body = extractText({
+      contactsArrayMessage: {
+        contacts: [{}, {}],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(body).toBe("<contacts: 2 contacts>");
+  });
+
   it("unwraps view-once v2 extension messages", () => {
     const body = extractText({
       viewOnceMessageV2Extension: {
