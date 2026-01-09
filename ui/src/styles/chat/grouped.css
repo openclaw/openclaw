@@ -1,0 +1,143 @@
+/* =============================================
+   GROUPED CHAT LAYOUT (Slack-style)
+   ============================================= */
+
+/* Chat Group Layout - default (assistant/other on left) */
+.chat-group {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 16px;
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+/* User messages on right */
+.chat-group.user {
+  flex-direction: row-reverse;
+  justify-content: flex-start;
+}
+
+.chat-group-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: min(900px, calc(100% - 60px));
+}
+
+/* User messages align content right */
+.chat-group.user .chat-group-messages {
+  align-items: flex-end;
+}
+
+.chat-group.user .chat-group-footer {
+  justify-content: flex-end;
+}
+
+/* Footer at bottom of message group (role + time) */
+.chat-group-footer {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-top: 6px;
+}
+
+.chat-sender-name {
+  font-weight: 500;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.chat-group-timestamp {
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* Avatar Styles */
+.chat-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--panel-strong);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 14px;
+  flex-shrink: 0;
+  align-self: flex-end; /* Align with last message in group */
+  margin-bottom: 4px; /* Optical alignment */
+}
+
+.chat-avatar.user {
+  background: rgba(245, 159, 74, 0.2);
+  color: rgba(245, 159, 74, 1);
+}
+
+.chat-avatar.assistant {
+  background: rgba(52, 199, 183, 0.2);
+  color: rgba(52, 199, 183, 1);
+}
+
+.chat-avatar.other {
+  background: rgba(150, 150, 150, 0.2);
+  color: rgba(150, 150, 150, 1);
+}
+
+/* Minimal Bubble Design - dynamic width based on content */
+.chat-bubble {
+  display: inline-block;
+  border: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 12px;
+  padding: 10px 14px;
+  box-shadow: none;
+  transition: background 150ms ease-out, border-color 150ms ease-out;
+  max-width: 100%;
+  word-wrap: break-word;
+}
+
+.chat-bubble:hover {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+/* User bubbles have different styling */
+.chat-group.user .chat-bubble {
+  background: rgba(245, 159, 74, 0.15);
+  border-color: rgba(245, 159, 74, 0.3);
+}
+
+.chat-group.user .chat-bubble:hover {
+  background: rgba(245, 159, 74, 0.22);
+}
+
+/* Streaming animation */
+.chat-bubble.streaming {
+  animation: pulsing-border 1.5s ease-out infinite;
+}
+
+@keyframes pulsing-border {
+  0%, 100% {
+    border-color: var(--border);
+  }
+  50% {
+    border-color: var(--accent);
+  }
+}
+
+/* Fade-in animation for new messages */
+.chat-bubble.fade-in {
+  animation: fade-in 200ms ease-out;
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

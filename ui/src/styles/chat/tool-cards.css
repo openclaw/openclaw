@@ -1,0 +1,167 @@
+/* Tool Card Styles */
+.chat-tool-card {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-top: 8px;
+  transition: border-color 150ms ease-out, background 150ms ease-out;
+  /* Fixed max-height to ensure cards don't expand too much */
+  max-height: 120px;
+  overflow: hidden;
+}
+
+.chat-tool-card:hover {
+  border-color: var(--accent);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* First tool card in a group - no top margin */
+.chat-tool-card:first-child {
+  margin-top: 0;
+}
+
+.chat-tool-card--clickable {
+  cursor: pointer;
+}
+
+.chat-tool-card--clickable:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Header with title and chevron */
+.chat-tool-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.chat-tool-card__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.chat-tool-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+/* "View >" action link */
+.chat-tool-card__action {
+  font-size: 12px;
+  color: var(--accent);
+  opacity: 0.8;
+  transition: opacity 150ms ease-out;
+}
+
+.chat-tool-card--clickable:hover .chat-tool-card__action {
+  opacity: 1;
+}
+
+/* Status indicator for completed/empty results */
+.chat-tool-card__status {
+  font-size: 14px;
+  color: var(--ok);
+}
+
+.chat-tool-card__status-text {
+  font-size: 11px;
+  margin-top: 4px;
+}
+
+.chat-tool-card__detail {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+/* Collapsed preview - fixed height with truncation */
+.chat-tool-card__preview {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 8px;
+  padding: 8px 10px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow: hidden;
+  max-height: 44px;
+  line-height: 1.4;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.chat-tool-card--clickable:hover .chat-tool-card__preview {
+  background: rgba(0, 0, 0, 0.12);
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+/* Short inline output */
+.chat-tool-card__inline {
+  font-size: 11px;
+  color: var(--text);
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.06);
+  border-radius: 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Reading Indicator */
+.chat-reading-indicator {
+  background: transparent;
+  border: 1px solid var(--border);
+  padding: 12px;
+  display: inline-flex;
+}
+
+.chat-reading-indicator__dots {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.chat-reading-indicator__dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: reading-pulse 1.4s ease-in-out infinite;
+}
+
+.chat-reading-indicator__dots span:nth-child(1) {
+  animation-delay: 0s;
+}
+
+.chat-reading-indicator__dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.chat-reading-indicator__dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes reading-pulse {
+  0%, 60%, 100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  30% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+

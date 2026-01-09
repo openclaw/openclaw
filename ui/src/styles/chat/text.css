@@ -1,0 +1,72 @@
+/* =============================================
+   CHAT TEXT STYLING
+   ============================================= */
+
+.chat-text {
+  font-size: 14px;
+  line-height: 1.5;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.chat-text :where(p, ul, ol, pre, blockquote, table) {
+  margin: 0;
+}
+
+.chat-text :where(p + p, p + ul, p + ol, p + pre, p + blockquote) {
+  margin-top: 0.75em;
+}
+
+.chat-text :where(ul, ol) {
+  padding-left: 1.5em;
+}
+
+.chat-text :where(li + li) {
+  margin-top: 0.25em;
+}
+
+.chat-text :where(a) {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.chat-text :where(a:hover) {
+  opacity: 0.8;
+}
+
+.chat-text :where(code) {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+.chat-text :where(:not(pre) > code) {
+  background: rgba(0, 0, 0, 0.15);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+
+.chat-text :where(pre) {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.chat-text :where(pre code) {
+  background: none;
+  padding: 0;
+}
+
+.chat-text :where(blockquote) {
+  border-left: 3px solid var(--border);
+  padding-left: 12px;
+  color: var(--muted);
+}
+
+.chat-text :where(hr) {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1em 0;
+}
+
