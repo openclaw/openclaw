@@ -42,9 +42,9 @@ export async function loadChatHistory(state: ChatState) {
   }
 }
 
-export async function sendChat(state: ChatState): Promise<boolean> {
+export async function sendChatMessage(state: ChatState, message: string): Promise<boolean> {
   if (!state.client || !state.connected) return false;
-  const msg = state.chatMessage.trim();
+  const msg = message.trim();
   if (!msg) return false;
 
   const now = Date.now();
@@ -58,7 +58,6 @@ export async function sendChat(state: ChatState): Promise<boolean> {
   ];
 
   state.chatSending = true;
-  state.chatMessage = "";
   state.lastError = null;
   const runId = generateUUID();
   state.chatRunId = runId;
@@ -77,7 +76,6 @@ export async function sendChat(state: ChatState): Promise<boolean> {
     state.chatRunId = null;
     state.chatStream = null;
     state.chatStreamStartedAt = null;
-    state.chatMessage = msg;
     state.lastError = error;
     state.chatMessages = [
       ...state.chatMessages,
