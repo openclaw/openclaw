@@ -302,6 +302,31 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("parses message_thread_id from recipient string (telegram:group:...:topic:...)", async () => {
+    const chatId = "-1001234567890";
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 55,
+      chat: { id: chatId },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram(
+      `telegram:group:${chatId}:topic:271`,
+      "hello forum",
+      {
+        token: "tok",
+        api,
+      },
+    );
+
+    expect(sendMessage).toHaveBeenCalledWith(chatId, "hello forum", {
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+  });
+
   it("includes reply_to_message_id for threaded replies", async () => {
     const chatId = "123";
     const sendMessage = vi.fn().mockResolvedValue({

@@ -9,6 +9,7 @@ export type OutboundProvider =
   | "slack"
   | "signal"
   | "imessage"
+  | "msteams"
   | "none";
 
 export type HeartbeatTarget = OutboundProvider | "last";
@@ -31,6 +32,7 @@ export function resolveOutboundTarget(params: {
     | "slack"
     | "signal"
     | "imessage"
+    | "msteams"
     | "webchat";
   to?: string;
   allowFrom?: string[];
@@ -104,6 +106,17 @@ export function resolveOutboundTarget(params: {
     }
     return { ok: true, to: trimmed };
   }
+  if (params.provider === "msteams") {
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: new Error(
+          "Delivering to MS Teams requires --to <conversationId|user:ID|conversation:ID>",
+        ),
+      };
+    }
+    return { ok: true, to: trimmed };
+  }
   return {
     ok: false,
     error: new Error(
@@ -125,6 +138,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     rawTarget === "slack" ||
     rawTarget === "signal" ||
     rawTarget === "imessage" ||
+    rawTarget === "msteams" ||
     rawTarget === "none" ||
     rawTarget === "last"
       ? rawTarget
@@ -152,6 +166,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     | "slack"
     | "signal"
     | "imessage"
+    | "msteams"
     | undefined =
     target === "last"
       ? lastProvider
@@ -160,7 +175,8 @@ export function resolveHeartbeatDeliveryTarget(params: {
           target === "discord" ||
           target === "slack" ||
           target === "signal" ||
-          target === "imessage"
+          target === "imessage" ||
+          target === "msteams"
         ? target
         : undefined;
 

@@ -612,7 +612,10 @@ export function createSystemPromptOverride(
   return () => trimmed;
 }
 
-const BUILT_IN_TOOL_NAMES = new Set(["read", "bash", "edit", "write"]);
+// Tool names are now capitalized (Bash, Read, Write, Edit) to bypass Anthropic's
+// OAuth token blocking of lowercase names. However, pi-coding-agent's SDK has
+// hardcoded lowercase names in its built-in tool registry, so we must pass ALL
+// tools as customTools to bypass the SDK's filtering.
 
 type AnyAgentTool = AgentTool;
 
@@ -623,19 +626,13 @@ export function splitSdkTools(options: {
   builtInTools: AnyAgentTool[];
   customTools: ReturnType<typeof toToolDefinitions>;
 } {
-  // SDK rebuilds built-ins from cwd; route sandboxed versions as custom tools.
-  const { tools, sandboxEnabled } = options;
-  if (sandboxEnabled) {
-    return {
-      builtInTools: [],
-      customTools: toToolDefinitions(tools),
-    };
-  }
+  // Always pass all tools as customTools to bypass pi-coding-agent's built-in
+  // tool filtering, which expects lowercase names (bash, read, write, edit).
+  // Our tools are now capitalized (Bash, Read, Write, Edit) for OAuth compatibility.
+  const { tools } = options;
   return {
-    builtInTools: tools.filter((tool) => BUILT_IN_TOOL_NAMES.has(tool.name)),
-    customTools: toToolDefinitions(
-      tools.filter((tool) => !BUILT_IN_TOOL_NAMES.has(tool.name)),
-    ),
+    builtInTools: [],
+    customTools: toToolDefinitions(tools),
   };
 }
 

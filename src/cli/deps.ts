@@ -1,5 +1,6 @@
 import { sendMessageDiscord } from "../discord/send.js";
 import { sendMessageIMessage } from "../imessage/send.js";
+import { sendMessageMSTeams } from "../msteams/send.js";
 import { logWebSelfId, sendMessageWhatsApp } from "../providers/web/index.js";
 import { sendMessageSignal } from "../signal/send.js";
 import { sendMessageSlack } from "../slack/send.js";
@@ -12,6 +13,7 @@ export type CliDeps = {
   sendMessageSlack: typeof sendMessageSlack;
   sendMessageSignal: typeof sendMessageSignal;
   sendMessageIMessage: typeof sendMessageIMessage;
+  sendMessageMSTeams: typeof sendMessageMSTeams;
 };
 
 export function createDefaultDeps(): CliDeps {
@@ -22,6 +24,7 @@ export function createDefaultDeps(): CliDeps {
     sendMessageSlack,
     sendMessageSignal,
     sendMessageIMessage,
+    sendMessageMSTeams,
   };
 }
 

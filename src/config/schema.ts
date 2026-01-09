@@ -81,6 +81,8 @@ const GROUP_ORDER: Record<string, number> = {
 
 const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.url": "Remote Gateway URL",
+  "gateway.remote.sshTarget": "Remote Gateway SSH Target",
+  "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",
   "gateway.remote.token": "Remote Gateway Token",
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.auth.token": "Gateway Token",
@@ -98,6 +100,7 @@ const FIELD_LABELS: Record<string, string> = {
   "agent.imageModel.fallbacks": "Image Model Fallbacks",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
+  "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
   "ui.seamColor": "Accent Color",
   "browser.controlUrl": "Browser Control URL",
@@ -133,6 +136,10 @@ const FIELD_LABELS: Record<string, string> = {
 
 const FIELD_HELP: Record<string, string> = {
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
+  "gateway.remote.sshTarget":
+    "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
+  "gateway.remote.sshIdentity":
+    "Optional SSH identity file path (passed to ssh -i).",
   "gateway.auth.token":
     "Required for multi-machine access or non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
@@ -159,6 +166,8 @@ const FIELD_HELP: Record<string, string> = {
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
+  "commands.restart":
+    "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups":
     "Enforce access-group allowlists/policies for commands.",
   "session.agentToAgent.maxPingPongTurns":
@@ -205,6 +214,7 @@ const FIELD_HELP: Record<string, string> = {
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.remote.url": "ws://host:18789",
+  "gateway.remote.sshTarget": "user@host",
   "gateway.controlUi.basePath": "/clawdbot",
 };
 

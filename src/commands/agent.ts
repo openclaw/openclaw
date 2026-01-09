@@ -4,6 +4,7 @@ import {
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { runClaudeCliAgent } from "../agents/claude-cli-runner.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -336,6 +337,7 @@ export async function agentCommand(
       cfg,
       catalog: modelCatalog,
       defaultProvider,
+      defaultModel,
     });
     allowedModelKeys = allowed.allowedKeys;
     allowedModelCatalog = allowed.allowedCatalog;
@@ -347,7 +349,11 @@ export async function agentCommand(
     const overrideModel = sessionEntry.modelOverride?.trim();
     if (overrideModel) {
       const key = modelKey(overrideProvider, overrideModel);
-      if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+      if (
+        overrideProvider !== "claude-cli" &&
+        allowedModelKeys.size > 0 &&
+        !allowedModelKeys.has(key)
+      ) {
         delete sessionEntry.providerOverride;
         delete sessionEntry.modelOverride;
         sessionEntry.updatedAt = Date.now();
@@ -362,7 +368,11 @@ export async function agentCommand(
   if (storedModelOverride) {
     const candidateProvider = storedProviderOverride || defaultProvider;
     const key = modelKey(candidateProvider, storedModelOverride);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    if (
+      candidateProvider === "claude-cli" ||
+      allowedModelKeys.size === 0 ||
+      allowedModelKeys.has(key)
+    ) {
       provider = candidateProvider;
       model = storedModelOverride;
     }
@@ -401,6 +411,7 @@ export async function agentCommand(
   let result: Awaited<ReturnType<typeof runEmbeddedPiAgent>>;
   let fallbackProvider = provider;
   let fallbackModel = model;
+  const claudeSessionId = sessionEntry?.claudeCliSessionId?.trim();
   try {
     const messageProvider = resolveMessageProvider(
       opts.messageProvider,
@@ -410,8 +421,25 @@ export async function agentCommand(
       cfg,
       provider,
       model,
-      run: (providerOverride, modelOverride) =>
-        runEmbeddedPiAgent({
+      run: (providerOverride, modelOverride) => {
+        if (providerOverride === "claude-cli") {
+          return runClaudeCliAgent({
+            sessionId,
+            sessionKey,
+            sessionFile,
+            workspaceDir,
+            config: cfg,
+            prompt: body,
+            provider: providerOverride,
+            model: modelOverride,
+            thinkLevel: resolvedThinkLevel,
+            timeoutMs,
+            runId,
+            extraSystemPrompt: opts.extraSystemPrompt,
+            claudeSessionId,
+          });
+        }
+        return runEmbeddedPiAgent({
           sessionId,
           sessionKey,
           messageProvider,
@@ -445,7 +473,8 @@ export async function agentCommand(
               data: evt.data,
             });
           },
-        }),
+        });
+      },
     });
     result = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
@@ -501,6 +530,10 @@ export async function agentCommand(
       model: modelUsed,
       contextTokens,
     };
+    if (providerUsed === "claude-cli") {
+      const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
+      if (cliSessionId) next.claudeCliSessionId = cliSessionId;
+    }
     next.abortedLastRun = result.meta.aborted ?? false;
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;

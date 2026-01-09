@@ -33,6 +33,12 @@ function resolveSystemdUnitPath(
   return resolveSystemdUnitPathForName(env, GATEWAY_SYSTEMD_SERVICE_NAME);
 }
 
+export function resolveSystemdUserUnitPath(
+  env: Record<string, string | undefined>,
+): string {
+  return resolveSystemdUnitPath(env);
+}
+
 function resolveLoginctlUser(
   env: Record<string, string | undefined>,
 ): string | null {
@@ -148,6 +154,10 @@ function buildSystemdUnit({
     `ExecStart=${execStart}`,
     "Restart=always",
     "RestartSec=5",
+    // KillMode=process ensures systemd only waits for the main process to exit.
+    // Without this, podman's conmon (container monitor) processes block shutdown
+    // since they run as children of the gateway and stay in the same cgroup.
+    "KillMode=process",
     workingDirLine,
     ...envLines,
     "",

@@ -21,7 +21,7 @@ Goal: small, hard-to-misuse tool set so agents can list sessions, fetch history,
 - Hooks use `hook:<uuid>` unless explicitly set.
 - Node bridge uses `node-<nodeId>` unless explicitly set.
 
-`global` and `unknown` are internal-only and never listed. If `session.scope = "global"`, we alias it to `main` for all tools so callers never see `global`.
+`global` and `unknown` are reserved values and are never listed. If `session.scope = "global"`, we alias it to `main` for all tools so callers never see `global`.
 
 ## sessions_list
 List sessions as an array of rows.

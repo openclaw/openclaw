@@ -11,9 +11,6 @@ patchedDependencies:
   '@mariozechner/pi-agent-core':
     hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
     path: patches/@mariozechner__pi-agent-core.patch
-  '@mariozechner/pi-ai':
-    hash: 574a0ebc3772ef61f04b6dcffdcda31c7fe6384e6f44ce43dbd7adb3b24ec97a
-    path: patches/@mariozechner__pi-ai.patch
 
 importers:
 
@@ -35,17 +32,26 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.38.0
-        version: 0.38.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.41.0
+        version: 0.41.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
-        specifier: ^0.38.0
-        version: 0.38.0(patch_hash=574a0ebc3772ef61f04b6dcffdcda31c7fe6384e6f44ce43dbd7adb3b24ec97a)(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.41.0
+        version: 0.41.0(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.38.0
-        version: 0.38.0(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.41.0
+        version: 0.41.0(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.38.0
-        version: 0.38.0
+        specifier: ^0.41.0
+        version: 0.41.0
+      '@microsoft/agents-hosting':
+        specifier: ^1.1.1
+        version: 1.1.1
+      '@microsoft/agents-hosting-express':
+        specifier: ^1.1.1
+        version: 1.1.1
+      '@microsoft/agents-hosting-extensions-teams':
+        specifier: ^1.1.1
+        version: 1.1.1
       '@sinclair/typebox':
         specifier: 0.34.47
         version: 0.34.47
@@ -227,6 +233,9 @@ importers:
       marked:
         specifier: ^17.0.1
         version: 17.0.1
+      vite:
+        specifier: 7.3.1
+        version: 7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
     devDependencies:
       '@vitest/browser-playwright':
         specifier: 4.0.16
@@ -237,9 +246,6 @@ importers:
       typescript:
         specifier: ^5.9.3
         version: 5.9.3
-      vite:
-        specifier: 7.3.1
-        version: 7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
       vitest:
         specifier: 4.0.16
         version: 4.0.16(@types/node@25.0.3)(@vitest/browser-playwright@4.0.16)(@vitest/browser-preview@4.0.16)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2)
@@ -254,6 +260,26 @@ packages:
     peerDependenciesMeta:
       zod:
         optional: true
+
+  '@azure/abort-controller@2.1.2':
+    resolution: {integrity: sha512-nBrLsEWm4J2u5LpAPjxADTlq3trDgVZZXHNKabeXZtpq3d3AbN/KGO82R87rdDz5/lYB024rtEf10/q0urNgsA==}
+    engines: {node: '>=18.0.0'}
+
+  '@azure/core-auth@1.10.1':
+    resolution: {integrity: sha512-ykRMW8PjVAn+RS6ww5cmK9U2CyH9p4Q88YJwvUslfuMmN98w/2rdGRLPqJYObapBCdzBVeDgYWdJnFPFb7qzpg==}
+    engines: {node: '>=20.0.0'}
+
+  '@azure/core-util@1.13.1':
+    resolution: {integrity: sha512-XPArKLzsvl0Hf0CaGyKHUyVgF7oDnhKoP85Xv6M4StF/1AhfORhZudHtOyf2s+FcbuQ9dPRAjB8J2KvRRMUK2A==}
+    engines: {node: '>=20.0.0'}
+
+  '@azure/msal-common@15.13.3':
+    resolution: {integrity: sha512-shSDU7Ioecya+Aob5xliW9IGq1Ui8y4EVSdWGyI1Gbm4Vg61WpP95LuzcY214/wEjSn6w4PZYD4/iVldErHayQ==}
+    engines: {node: '>=0.8.0'}
+
+  '@azure/msal-node@3.8.4':
+    resolution: {integrity: sha512-lvuAwsDpPDE/jSuVQOBMpLbXuVuLsPNRwWCyK3/6bPlBk0fGWegqoZ0qjZclMWyQ2JNvIY3vHY7hoFmFmFQcOw==}
+    engines: {node: '>=16'}
 
   '@babel/code-frame@7.27.1':
     resolution: {integrity: sha512-cjQ7ZlQ0Mv3b47hABuTevyTuYN4i+loJKGeV9flcCgIK37cCXRh+L1bd3iBHlynerhQ7BhCkn2BPbQUL+rGqFg==}
@@ -744,8 +770,8 @@ packages:
   '@lit-labs/signals@0.2.0':
     resolution: {integrity: sha512-68plyIbciumbwKaiilhLNyhz4Vg6/+nJwDufG2xxWA9r/fUw58jxLHCAlKs+q1CE5Lmh3cZ3ShyYKnOCebEpVA==}
 
-  '@lit-labs/ssr-dom-shim@1.5.0':
-    resolution: {integrity: sha512-HLomZXMmrCFHSRKESF5vklAKsDY7/fsT/ZhqCu3V0UoW/Qbv8wxmO4W9bx4KnCCF2Zak4yuk+AGraK/bPmI4kA==}
+  '@lit-labs/ssr-dom-shim@1.5.1':
+    resolution: {integrity: sha512-Aou5UdlSpr5whQe8AA/bZG0jMj96CoJIWbGfZ91qieWu5AWUMKw8VR/pAkQkJYvBNhmCcWnZlyyk5oze8JIqYA==}
 
   '@lit/context@1.1.6':
     resolution: {integrity: sha512-M26qDE6UkQbZA2mQ3RjJ3Gzd8TxP+/0obMgE5HfkfLhEEyYE3Bui4A5XHiGPjy0MUGAyxB3QgVuw2ciS0kHn6A==}
@@ -815,22 +841,38 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.38.0':
-    resolution: {integrity: sha512-VtX2j0cSefdZ6X+osUZXLp8BRT2ZB6utxl7IWoebRq0iPpJScUGUNB+K0POUduW90MmraNUvFCrKhEZSWffs+g==}
+  '@mariozechner/pi-agent-core@0.41.0':
+    resolution: {integrity: sha512-eXmnMWCeRnSjvF5nbC8LbiOhdcSuUG/p+ZzfZqhfzkc5JMKGccGPnEHzXwfrVkJpyqL0rIWi9cG0yelVAat30A==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.38.0':
-    resolution: {integrity: sha512-AOH5LIsC6EgaTiYe0er9trZhuba/lk62xDlTxVNxskrF+wiNhuBWue7MQ9BQIyzWDh8sEVvNhnbXIKBX7LYdbw==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
-
-  '@mariozechner/pi-coding-agent@0.38.0':
-    resolution: {integrity: sha512-fBCgOUSrca/CpU+LPeEl0PJnOPAHlovbsEf3XbQ+MctreC5zMCvD61mdfdeHnuvu/jBer+WVjnGyNy0j0f0Z0Q==}
+  '@mariozechner/pi-ai@0.41.0':
+    resolution: {integrity: sha512-ZcI+lFMbf35kQvppHa4hy5tu34GiH5WYwWxPD7BHm7AiYxPcytdP+0NiaJdLIRGSLZqKklXDDejbb6/QvOwI3w==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.38.0':
-    resolution: {integrity: sha512-gMhvh0dQ40kjj7gOOWTkYaD2CTq/omh2bii0w8SUnrRERg/mIj03dCjay6sViG75WdMpoTuDlvQ4wXlG633rpA==}
+  '@mariozechner/pi-coding-agent@0.41.0':
+    resolution: {integrity: sha512-+x5tPGxjsT5d9u48xvTwayHW/v+w7L/zK1Oyyfhpu8qqSqkM5G5jeqK3tqQREG2YE+PwPSozmDtVzHYPrcNamA==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-tui@0.41.0':
+    resolution: {integrity: sha512-FxhNyQfsQvZJBbUIPbtvBzF8yJo2JjEXVksn5cUU8Qphw8z1Uf+bRXeleH7Q7VVvGnaH9zJR3r2cfkaWxC1Jig==}
+    engines: {node: '>=20.0.0'}
+
+  '@microsoft/agents-activity@1.1.1':
+    resolution: {integrity: sha512-L7PHEHKFge99aIxV9eA7uFY3n9goYKzxcWaqLXGmxq3wMsau8hdsPzZgpV77LOQWQynLO3M5cbD8AavcVZszlQ==}
+    engines: {node: '>=20.0.0'}
+
+  '@microsoft/agents-hosting-express@1.1.1':
+    resolution: {integrity: sha512-CDStIx23U2zyS/4nZoeVgrVlVbQ+EasoqR2dLq7IfU4rUyuUrKGPdlO55rcfS6Z/spLkhCnX35jbD6EBqrTkJg==}
+    engines: {node: '>=20.0.0'}
+
+  '@microsoft/agents-hosting-extensions-teams@1.1.1':
+    resolution: {integrity: sha512-ibwwEIJEKyx0VWMDPbvMRgbk97BXDij0qYIxsn1NNPrdzu6uY/33ZW0NF8eLKiJ/fVihIFGEFDeOwoE5R2bXZA==}
+    engines: {node: '>=20.0.0'}
+
+  '@microsoft/agents-hosting@1.1.1':
+    resolution: {integrity: sha512-ZO/BU0d/NxSlbg/W4SvtHDvwS4GDYrMG5CpBh+m2vnqkl6tphM0kkfbSYZFef0BoftrinOdPZcSvdvmVqpbM2w==}
     engines: {node: '>=20.0.0'}
 
   '@mistralai/mistralai@1.10.0':
@@ -1253,8 +1295,14 @@ packages:
   '@types/estree@1.0.8':
     resolution: {integrity: sha512-dWHzHa2WqEXI/O1E9OjrocMTKJl2mSrEolh1Iomrv6U+JuNwaHXsXx9bLu5gG7BUWFIN0skIQJQ/L1rIex4X6w==}
 
+  '@types/express-serve-static-core@4.19.7':
+    resolution: {integrity: sha512-FvPtiIf1LfhzsaIXhv/PHan/2FeQBbtBDtfX2QfvPxdUelMDEckK08SM6nqo1MIZY3RUlfA+HV8+hFUSio78qg==}
+
   '@types/express-serve-static-core@5.1.0':
     resolution: {integrity: sha512-jnHMsrd0Mwa9Cf4IdOzbz543y4XJepXrbia2T4b6+spXC2We3t1y6K44D3mR8XMFSXMCf3/l7rCgddfx7UNVBA==}
+
+  '@types/express@4.17.25':
+    resolution: {integrity: sha512-dVd04UKsfpINUnK0yBoYHDF3xu7xVH4BuDotC/xGuycx4CgbP48X/KF/586bcObxT0HENHXEU8Nqtu6NR+eKhw==}
 
   '@types/express@5.0.6':
     resolution: {integrity: sha512-sKYVuV7Sv9fbPIt/442koC7+IIwK5olP1KWeD88e/idgoJqDm3JV/YUiPwkoKK92ylff2MGxSz1CSjsXelx0YA==}
@@ -1279,6 +1327,9 @@ packages:
 
   '@types/mime-types@2.1.4':
     resolution: {integrity: sha512-lfU4b34HOri+kAY5UheuFMWPDOI+OPceBSHZKp69gEyTL/mmJ4cnU6Y/rlme3UL3GyOn6Y42hyIEw0/q8sWx5w==}
+
+  '@types/mime@1.3.5':
+    resolution: {integrity: sha512-/pyBZWSLD2n0dcHE3hq8s8ZvcETHtEuF+3E7XVt0Ig2nvsVQXdghHVcEkIWjy9A0wKfTn97a/PSDYohKIlnP/w==}
 
   '@types/ms@2.1.0':
     resolution: {integrity: sha512-GsCCIZDE/p3i96vtEqx+7dBUGXrc7zeSK3wwPHIaRThS+9OhWIXRqzs4d6k1SVU8g91DrNRWxWUGhp5KXQb2VA==}
@@ -1313,8 +1364,14 @@ packages:
   '@types/retry@0.12.5':
     resolution: {integrity: sha512-3xSjTp3v03X/lSQLkczaN9UIEwJMoMCA1+Nb5HfbJEQWogdeQIyVtTvxPXDQjZ5zws8rFQfVfRdz03ARihPJgw==}
 
+  '@types/send@0.17.6':
+    resolution: {integrity: sha512-Uqt8rPBE8SY0RK8JB1EzVOIZ32uqy8HwdxCnoCOsYrvnswqmFZ/k+9Ikidlk/ImhsdvBsloHbAlewb2IEBV/Og==}
+
   '@types/send@1.2.1':
     resolution: {integrity: sha512-arsCikDvlU99zl1g69TcAB3mzZPpxgw0UQnaHeC1Nwb015xp8bknZv5rIfri9xTOcMuaVgvabfIRA7PSZVuZIQ==}
+
+  '@types/serve-static@1.15.10':
+    resolution: {integrity: sha512-tRs1dB+g8Itk72rlSI2ZrW6vZg0YrLI81iQSTkMmOqnqCaNr/8Ek4VwWcN5vZgCYWbg/JJSGBlUaYGAOP73qBw==}
 
   '@types/serve-static@2.2.0':
     resolution: {integrity: sha512-8mam4H1NHLtu7nmtalF7eyBH14QyOASmcxHhSfEoRyr0nP/YdoesEtU+uSRvMe96TW/HPTtkoKqQLl53N7UXMQ==}
@@ -1324,6 +1381,10 @@ packages:
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+
+  '@typespec/ts-http-runtime@0.3.2':
+    resolution: {integrity: sha512-IlqQ/Gv22xUC1r/WQm4StLkYQmaaTsXAhUVsNE0+xiyf0yRFiH5++q78U3bw6bLKDCTmh0uqKB9eG9+Bt75Dkg==}
+    engines: {node: '>=20.0.0'}
 
   '@vitest/browser-playwright@4.0.16':
     resolution: {integrity: sha512-I2Fy/ANdphi1yI46d15o0M1M4M0UJrUiVKkH5oKeRZZCdPg0fw/cfTKZzv9Ge9eobtJYp4BGblMzXdXH0vcl5g==}
@@ -2003,12 +2064,16 @@ packages:
     resolution: {integrity: sha512-4FbRdAX+bSdmo4AUFuS0WNiPz8NgFt+r8ThgNWmlrjQjt1Q7ZR9+zTlce2859x4KSXrwIsaeTqDoKQmtP8pLmQ==}
     engines: {node: '>= 0.8'}
 
+  http-proxy-agent@7.0.2:
+    resolution: {integrity: sha512-T1gkAiYYDWYx3V5Bmyu7HcfcvL7mUrTWiM6yOfa3PIphViJ/gFPbvidQ+veqSOHci/PxBcDabeUNCzpOODJZig==}
+    engines: {node: '>= 14'}
+
   https-proxy-agent@7.0.6:
     resolution: {integrity: sha512-vK9P5/iUfdl95AI+JVyUuIcVtd4ofvtrOr3HNtM2yxC9bnMbEdp3x01OhQNnjb8IJYi38VlTE3mBXwcfvywuSw==}
     engines: {node: '>= 14'}
 
-  iconv-lite@0.7.1:
-    resolution: {integrity: sha512-2Tth85cXwGFHfvRgZWszZSvdo+0Xsqmw8k8ZwxScfcBneNUraK+dxRxRm24nszx80Y0TVio8kKLt5sLE7ZCLlw==}
+  iconv-lite@0.7.2:
+    resolution: {integrity: sha512-im9DjEDQ55s9fL4EYzOAv0yMqmMBSZp6G0VvFyTMPKWxiSBHUj9NW/qqLmXUwXrrM7AvqSlTCfvqRb0cM8yYqw==}
     engines: {node: '>=0.10.0'}
 
   ieee754@1.2.1:
@@ -2090,6 +2155,9 @@ packages:
     resolution: {integrity: sha512-ekilCSN1jwRvIbgeg/57YFh8qQDNbwDb9xT/qu2DAHbFFZUicIl4ygVaAvzveMhMVr3LnpSKTNnwt8PoOfmKhQ==}
     hasBin: true
 
+  jose@4.15.9:
+    resolution: {integrity: sha512-1vUQX+IdDMVPj4k8kOxgUqlcK518yluMuGZwqlr44FS1ppZB/5GWh4rZG89erpOBOJjU/OBsnCVFfapsRz6nEA==}
+
   js-base64@3.7.8:
     resolution: {integrity: sha512-hNngCeKxIUQiEUN3GPJOkz4wF/YvdUdbNL9hsBcMQTkKzboD7T/q3OYOuuPZLUE6dBxSGpwhk5mwuDud7JVAow==}
 
@@ -2126,6 +2194,10 @@ packages:
 
   jwa@2.0.1:
     resolution: {integrity: sha512-hRF04fqJIP8Abbkq5NKGN0Bbr3JxlQ+qhZufXVr0DvujKy93ZCbXZMHDL4EOtodSbCWxOqR8MS1tXA5hwqCXDg==}
+
+  jwks-rsa@3.2.0:
+    resolution: {integrity: sha512-PwchfHcQK/5PSydeKCs1ylNym0w/SSv8a62DgHJ//7x2ZclCoinlsjAfDxAAbpoTPybOum/Jgy+vkvMmKz89Ww==}
+    engines: {node: '>=14'}
 
   jws@4.0.1:
     resolution: {integrity: sha512-EKI/M/yqPncGUUh44xz0PxSidXFr/+r0pA70+gIYhjv+et7yxM+s29Y+VGDkovRofQem0fs7Uvf4+YmAdyRduA==}
@@ -2210,6 +2282,9 @@ packages:
     resolution: {integrity: sha512-utfs7Pr5uJyyvDETitgsaqSyjCb2qNRAtuqUeWIAKztsOYdcACf2KtARYXg2pSvhkt+9NfoaNY7fxjl6nuMjIQ==}
     engines: {node: '>= 12.0.0'}
 
+  limiter@1.1.5:
+    resolution: {integrity: sha512-FWWMIEOxz3GwUI4Ts/IvgVy6LPvoMPgjMdQ185nN6psJyBJ4yOpzqm695/h5umdLJg2vW3GR5iG11MAkR2AzJA==}
+
   linkify-it@5.0.0:
     resolution: {integrity: sha512-5aHCbzQRADcdP+ATqnDuhhJ/MRIqDkZX5pyjFHRRysS8vZ5AbqGEoFIb6pYHPZ+L/OC2Lc+xT8uHVVR5CAK/wQ==}
 
@@ -2221,6 +2296,9 @@ packages:
 
   lit@3.3.2:
     resolution: {integrity: sha512-NF9zbsP79l4ao2SNrH3NkfmFgN/hBYSQo90saIVI1o5GpjAdCPVstVzO1MrLOakHoEhYkrtRjPK6Ob521aoYWQ==}
+
+  lodash.clonedeep@4.5.0:
+    resolution: {integrity: sha512-H5ZhCF25riFd9uB5UCkVKo61m3S/xZk1x4wA6yp/L3RFP6Z/eHH1ymQcGLo7J3GMPfm0V/7m1tryHuGVxpqEBQ==}
 
   lodash.includes@4.3.0:
     resolution: {integrity: sha512-W3Bx6mdkRTGtlJISOvVD/lbqjTlPPUDTMnlXZFnVwi9NKJ6tiAk6LVdlhZMm17VZisqhKcgzpO5Wz91PCt5b0w==}
@@ -2258,6 +2336,13 @@ packages:
   lru-cache@11.2.4:
     resolution: {integrity: sha512-B5Y16Jr9LB9dHVkh6ZevG+vAbOsNOYCX+sXvFWFu7B3Iz5mijW3zdbMyhsh8ANd2mSWBYdJgnqi+mL7/LrOPYg==}
     engines: {node: 20 || >=22}
+
+  lru-cache@6.0.0:
+    resolution: {integrity: sha512-Jo6dJ04CmSjuznwJSS3pUeWmd/H0ffTlkXXgwZi+eq1UCmqQwCh+eLsYOYCwY991i2Fah4h1BEMCx4qThGbsiA==}
+    engines: {node: '>=10'}
+
+  lru-memoizer@2.3.0:
+    resolution: {integrity: sha512-GXn7gyHAMhO13WSKrIiNfztwxodVsP8IoZ3XfrJV4yH2x0/OeTO/FIaAHTY5YekdGgW94njfuKmyyt1E0mR6Ug==}
 
   lucide@0.544.0:
     resolution: {integrity: sha512-U5ORwr5z9Sx7bNTDFaW55RbjVdQEnAcT3vws9uz3vRT1G4XXJUDAhRZdxhFoIyHEvjmTkzzlEhjSLYM5n4mb5w==}
@@ -2411,6 +2496,10 @@ packages:
   object-inspect@1.13.4:
     resolution: {integrity: sha512-W67iLl4J2EXEGTbfeHCffrjDfitvLANg0UlX3wFUUSTx92KXRFegMHUVgSqE+wvhAbi4WqjGg9czysTV2Epbew==}
     engines: {node: '>= 0.4'}
+
+  object-path@0.11.8:
+    resolution: {integrity: sha512-YJjNZrlXJFM42wTBn6zgOJVar9KFJvzx6sTWDte8sWZF//cnjl0BxHNpfZx+ZffXX63A9q0b1zsFiBX4g4X5KA==}
+    engines: {node: '>= 10.12.0'}
 
   obug@2.1.1:
     resolution: {integrity: sha512-uTqF9MuPraAQ+IsnPf366RG4cP9RtUi7MLO1N3KEc+wb0a6yKpeL0lmk2IB1jY5KHPAlTc6T/JRdC/YqxHNwkQ==}
@@ -2986,6 +3075,14 @@ packages:
   util-deprecate@1.0.2:
     resolution: {integrity: sha512-EPD5q1uXyFxJpCrLnCc1nHnq3gOa6DZBocAIiI2TaSCA7VCJ1UJDMagCzIkXNsUYfD1daK//LTEQ8xiIbrHtcw==}
 
+  uuid@11.1.0:
+    resolution: {integrity: sha512-0/A9rDy9P7cJ+8w1c9WD9V//9Wj15Ce2MPz8Ri6032usz+NfePxx5AcN3bN+r6ZL6jEo066/yNYB3tn4pQEx+A==}
+    hasBin: true
+
+  uuid@8.3.2:
+    resolution: {integrity: sha512-+NYs2QeMWy+GWFOEm9xnn6HCDp0l7QBD7ml8zLUmJ+93Q5NF0NocErnwkTkXVFNiX3/fpC6afS8Dhb/gz7R7eg==}
+    hasBin: true
+
   vary@1.1.2:
     resolution: {integrity: sha512-BNGbWLfd0eUPabhkXUVm0j8uuvREyTh5ovRa/dyow/BqAbZJyC+5fU+IzQOzmAKzYqYRAISoRhdQr3eIZ/PXqg==}
     engines: {node: '>= 0.8'}
@@ -3134,6 +3231,9 @@ packages:
     resolution: {integrity: sha512-0pfFzegeDWJHJIAmTLRP2DwHjdF5s7jo9tuztdQxAhINCdvS+3nGINqPd00AphqJR/0LhANUS6/+7SCb98YOfA==}
     engines: {node: '>=10'}
 
+  yallist@4.0.0:
+    resolution: {integrity: sha512-3wdGidZyq5PB084XLES5TpOSRA3wjXAlIWMhum2kRcv/41Sn2emQ0dycQW4uZXLejwKvg6EsvbdlVL+FYEct7A==}
+
   yaml@2.8.2:
     resolution: {integrity: sha512-mplynKqc1C2hTVYxd0PU2xQAc22TI1vShAYGksCCfxbn/dFwnHTNi1bvYsBTkhdUNtGIf5xNOg938rrSSYvS9A==}
     engines: {node: '>= 14.6'}
@@ -3152,6 +3252,9 @@ packages:
     peerDependencies:
       zod: ^3.25 || ^4
 
+  zod@3.25.75:
+    resolution: {integrity: sha512-OhpzAmVzabPOL6C3A3gpAifqr9MqihV/Msx3gor2b2kviCgcb+HM9SEOpMWwwNp9MRunWnhtAKUoo0AHhjyPPg==}
+
   zod@3.25.76:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
@@ -3165,6 +3268,34 @@ snapshots:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
       zod: 4.3.5
+
+  '@azure/abort-controller@2.1.2':
+    dependencies:
+      tslib: 2.8.1
+
+  '@azure/core-auth@1.10.1':
+    dependencies:
+      '@azure/abort-controller': 2.1.2
+      '@azure/core-util': 1.13.1
+      tslib: 2.8.1
+    transitivePeerDependencies:
+      - supports-color
+
+  '@azure/core-util@1.13.1':
+    dependencies:
+      '@azure/abort-controller': 2.1.2
+      '@typespec/ts-http-runtime': 0.3.2
+      tslib: 2.8.1
+    transitivePeerDependencies:
+      - supports-color
+
+  '@azure/msal-common@15.13.3': {}
+
+  '@azure/msal-node@3.8.4':
+    dependencies:
+      '@azure/msal-common': 15.13.3
+      jsonwebtoken: 9.0.3
+      uuid: 8.3.2
 
   '@babel/code-frame@7.27.1':
     dependencies:
@@ -3548,7 +3679,7 @@ snapshots:
       lit: 3.3.2
       signal-polyfill: 0.2.2
 
-  '@lit-labs/ssr-dom-shim@1.5.0': {}
+  '@lit-labs/ssr-dom-shim@1.5.1': {}
 
   '@lit/context@1.1.6':
     dependencies:
@@ -3556,7 +3687,7 @@ snapshots:
 
   '@lit/reactive-element@2.1.2':
     dependencies:
-      '@lit-labs/ssr-dom-shim': 1.5.0
+      '@lit-labs/ssr-dom-shim': 1.5.1
 
   '@mariozechner/clipboard-darwin-arm64@0.3.0':
     optional: true
@@ -3614,10 +3745,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.38.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-agent-core@0.41.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.38.0(patch_hash=574a0ebc3772ef61f04b6dcffdcda31c7fe6384e6f44ce43dbd7adb3b24ec97a)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.38.0
+      '@mariozechner/pi-ai': 0.41.0(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.41.0
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3626,7 +3757,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.38.0(patch_hash=574a0ebc3772ef61f04b6dcffdcda31c7fe6384e6f44ce43dbd7adb3b24ec97a)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.41.0(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@google/genai': 1.34.0
@@ -3646,12 +3777,12 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.38.0(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-coding-agent@0.41.0(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@mariozechner/clipboard': 0.3.0
-      '@mariozechner/pi-agent-core': 0.38.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.38.0(patch_hash=574a0ebc3772ef61f04b6dcffdcda31c7fe6384e6f44ce43dbd7adb3b24ec97a)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.38.0
+      '@mariozechner/pi-agent-core': 0.41.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.41.0(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.41.0
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.2
@@ -3670,13 +3801,49 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.38.0':
+  '@mariozechner/pi-tui@0.41.0':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
       get-east-asian-width: 1.4.0
       marked: 15.0.12
       mime-types: 3.0.2
+
+  '@microsoft/agents-activity@1.1.1':
+    dependencies:
+      debug: 4.4.3
+      uuid: 11.1.0
+      zod: 3.25.75
+    transitivePeerDependencies:
+      - supports-color
+
+  '@microsoft/agents-hosting-express@1.1.1':
+    dependencies:
+      '@microsoft/agents-hosting': 1.1.1
+      express: 5.2.1
+    transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  '@microsoft/agents-hosting-extensions-teams@1.1.1':
+    dependencies:
+      '@microsoft/agents-hosting': 1.1.1
+    transitivePeerDependencies:
+      - debug
+      - supports-color
+
+  '@microsoft/agents-hosting@1.1.1':
+    dependencies:
+      '@azure/core-auth': 1.10.1
+      '@azure/msal-node': 3.8.4
+      '@microsoft/agents-activity': 1.1.1
+      axios: 1.13.2
+      jsonwebtoken: 9.0.3
+      jwks-rsa: 3.2.0
+      object-path: 0.11.8
+    transitivePeerDependencies:
+      - debug
+      - supports-color
 
   '@mistralai/mistralai@1.10.0':
     dependencies:
@@ -4032,12 +4199,26 @@ snapshots:
 
   '@types/estree@1.0.8': {}
 
+  '@types/express-serve-static-core@4.19.7':
+    dependencies:
+      '@types/node': 25.0.3
+      '@types/qs': 6.14.0
+      '@types/range-parser': 1.2.7
+      '@types/send': 1.2.1
+
   '@types/express-serve-static-core@5.1.0':
     dependencies:
       '@types/node': 25.0.3
       '@types/qs': 6.14.0
       '@types/range-parser': 1.2.7
       '@types/send': 1.2.1
+
+  '@types/express@4.17.25':
+    dependencies:
+      '@types/body-parser': 1.19.6
+      '@types/express-serve-static-core': 4.19.7
+      '@types/qs': 6.14.0
+      '@types/serve-static': 1.15.10
 
   '@types/express@5.0.6':
     dependencies:
@@ -4064,6 +4245,8 @@ snapshots:
   '@types/mdurl@2.0.0': {}
 
   '@types/mime-types@2.1.4': {}
+
+  '@types/mime@1.3.5': {}
 
   '@types/ms@2.1.0': {}
 
@@ -4096,9 +4279,20 @@ snapshots:
 
   '@types/retry@0.12.5': {}
 
+  '@types/send@0.17.6':
+    dependencies:
+      '@types/mime': 1.3.5
+      '@types/node': 25.0.3
+
   '@types/send@1.2.1':
     dependencies:
       '@types/node': 25.0.3
+
+  '@types/serve-static@1.15.10':
+    dependencies:
+      '@types/http-errors': 2.0.5
+      '@types/node': 25.0.3
+      '@types/send': 0.17.6
 
   '@types/serve-static@2.2.0':
     dependencies:
@@ -4110,6 +4304,14 @@ snapshots:
   '@types/ws@8.18.1':
     dependencies:
       '@types/node': 25.0.3
+
+  '@typespec/ts-http-runtime@0.3.2':
+    dependencies:
+      http-proxy-agent: 7.0.2
+      https-proxy-agent: 7.0.6
+      tslib: 2.8.1
+    transitivePeerDependencies:
+      - supports-color
 
   '@vitest/browser-playwright@4.0.16(playwright@1.57.0)(vite@7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2))(vitest@4.0.16)':
     dependencies:
@@ -4373,7 +4575,7 @@ snapshots:
       content-type: 1.0.5
       debug: 4.4.3
       http-errors: 2.0.1
-      iconv-lite: 0.7.1
+      iconv-lite: 0.7.2
       on-finished: 2.4.1
       qs: 6.14.1
       raw-body: 3.0.2
@@ -4908,6 +5110,13 @@ snapshots:
       statuses: 2.0.2
       toidentifier: 1.0.1
 
+  http-proxy-agent@7.0.2:
+    dependencies:
+      agent-base: 7.1.4
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
+
   https-proxy-agent@7.0.6:
     dependencies:
       agent-base: 7.1.4
@@ -4915,7 +5124,7 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  iconv-lite@0.7.1:
+  iconv-lite@0.7.2:
     dependencies:
       safer-buffer: 2.1.2
 
@@ -4986,6 +5195,8 @@ snapshots:
 
   jiti@2.6.1: {}
 
+  jose@4.15.9: {}
+
   js-base64@3.7.8: {}
 
   js-tokens@4.0.0:
@@ -5033,6 +5244,17 @@ snapshots:
       buffer-equal-constant-time: 1.0.1
       ecdsa-sig-formatter: 1.0.11
       safe-buffer: 5.2.1
+
+  jwks-rsa@3.2.0:
+    dependencies:
+      '@types/express': 4.17.25
+      '@types/jsonwebtoken': 9.0.10
+      debug: 4.4.3
+      jose: 4.15.9
+      limiter: 1.1.5
+      lru-memoizer: 2.3.0
+    transitivePeerDependencies:
+      - supports-color
 
   jws@4.0.1:
     dependencies:
@@ -5101,13 +5323,15 @@ snapshots:
       lightningcss-win32-x64-msvc: 1.30.2
     optional: true
 
+  limiter@1.1.5: {}
+
   linkify-it@5.0.0:
     dependencies:
       uc.micro: 2.1.0
 
   lit-element@4.2.2:
     dependencies:
-      '@lit-labs/ssr-dom-shim': 1.5.0
+      '@lit-labs/ssr-dom-shim': 1.5.1
       '@lit/reactive-element': 2.1.2
       lit-html: 3.3.2
 
@@ -5120,6 +5344,8 @@ snapshots:
       '@lit/reactive-element': 2.1.2
       lit-element: 4.2.2
       lit-html: 3.3.2
+
+  lodash.clonedeep@4.5.0: {}
 
   lodash.includes@4.3.0: {}
 
@@ -5144,6 +5370,15 @@ snapshots:
   lru-cache@10.4.3: {}
 
   lru-cache@11.2.4: {}
+
+  lru-cache@6.0.0:
+    dependencies:
+      yallist: 4.0.0
+
+  lru-memoizer@2.3.0:
+    dependencies:
+      lodash.clonedeep: 4.5.0
+      lru-cache: 6.0.0
 
   lucide@0.544.0: {}
 
@@ -5273,6 +5508,8 @@ snapshots:
   object-assign@4.1.1: {}
 
   object-inspect@1.13.4: {}
+
+  object-path@0.11.8: {}
 
   obug@2.1.1: {}
 
@@ -5539,7 +5776,7 @@ snapshots:
     dependencies:
       bytes: 3.1.2
       http-errors: 2.0.1
-      iconv-lite: 0.7.1
+      iconv-lite: 0.7.2
       unpipe: 1.0.0
 
   react-is@17.0.2:
@@ -5939,6 +6176,10 @@ snapshots:
 
   util-deprecate@1.0.2: {}
 
+  uuid@11.1.0: {}
+
+  uuid@8.3.2: {}
+
   vary@1.1.2: {}
 
   vite@7.3.1(@types/node@25.0.3)(jiti@2.6.1)(lightningcss@1.30.2)(tsx@4.21.0)(yaml@2.8.2):
@@ -6047,6 +6288,8 @@ snapshots:
 
   y18n@5.0.8: {}
 
+  yallist@4.0.0: {}
+
   yaml@2.8.2: {}
 
   yargs-parser@20.2.9: {}
@@ -6068,6 +6311,8 @@ snapshots:
   zod-to-json-schema@3.25.1(zod@4.3.5):
     dependencies:
       zod: 4.3.5
+
+  zod@3.25.75: {}
 
   zod@3.25.76: {}
 

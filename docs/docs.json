@@ -98,6 +98,14 @@
       "destination": "/install/bun"
     },
     {
+      "source": "/auth-monitoring",
+      "destination": "/automation/auth-monitoring"
+    },
+    {
+      "source": "/scripts",
+      "destination": "/scripts"
+    },
+    {
       "source": "/camera",
       "destination": "/nodes/camera"
     },
@@ -474,8 +482,8 @@
       "destination": "/gateway/troubleshooting"
     },
     {
-      "source": "/tui",
-      "destination": "/web/tui"
+      "source": "/web/tui",
+      "destination": "/tui"
     },
     {
       "source": "/typebox",
@@ -542,12 +550,21 @@
         ]
       },
       {
+        "group": "CLI",
+        "pages": [
+          "cli/index",
+          "cli/gateway",
+          "cli/sandbox"
+        ]
+      },
+      {
         "group": "Core Concepts",
         "pages": [
           "concepts/architecture",
           "concepts/agent",
           "concepts/agent-loop",
           "concepts/system-prompt",
+          "token-use",
           "concepts/oauth",
           "concepts/agent-workspace",
           "concepts/multi-agent",
@@ -576,6 +593,7 @@
           "gateway/gateway-lock",
           "gateway/configuration",
           "gateway/configuration-examples",
+          "gateway/authentication",
           "gateway/background-process",
           "gateway/health",
           "gateway/heartbeat",
@@ -597,7 +615,7 @@
           "web/control-ui",
           "web/dashboard",
           "web/webchat",
-          "web/tui"
+          "tui"
         ]
       },
       {
@@ -616,6 +634,7 @@
       {
         "group": "Automation & Hooks",
         "pages": [
+          "automation/auth-monitoring",
           "automation/webhook",
           "automation/gmail-pubsub",
           "automation/cron-jobs",
@@ -689,6 +708,7 @@
       {
         "group": "Reference & Templates",
         "pages": [
+          "scripts",
           "reference/rpc",
           "reference/device-models",
           "reference/test",

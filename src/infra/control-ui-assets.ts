@@ -76,7 +76,7 @@ export async function ensureControlUiAssetsBuilt(
     return {
       ok: false,
       built: false,
-      message: `${hint}. Build them with \`bun run ui:build\`.`,
+      message: `${hint}. Build them with \`pnpm ui:build\` (auto-installs UI deps).`,
     };
   }
 
@@ -94,27 +94,9 @@ export async function ensureControlUiAssetsBuilt(
     };
   }
 
-  runtime.log("Control UI assets missing; building (ui:build)…");
-
-  const ensureInstalled = !fs.existsSync(
-    path.join(repoRoot, "ui", "node_modules"),
+  runtime.log(
+    "Control UI assets missing; building (ui:build, auto-installs UI deps)…",
   );
-  if (ensureInstalled) {
-    const install = await runCommandWithTimeout(
-      [process.execPath, uiScript, "install"],
-      {
-        cwd: repoRoot,
-        timeoutMs: opts?.timeoutMs ?? 10 * 60_000,
-      },
-    );
-    if (install.code !== 0) {
-      return {
-        ok: false,
-        built: false,
-        message: `Control UI install failed: ${summarizeCommandOutput(install.stderr) ?? `exit ${install.code}`}`,
-      };
-    }
-  }
 
   const build = await runCommandWithTimeout(
     [process.execPath, uiScript, "build"],

@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { runClaudeCliAgent } from "../agents/claude-cli-runner.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -46,44 +47,21 @@ import {
   saveSessionStore,
 } from "../config/sessions.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
+import { parseTelegramTarget } from "../telegram/targets.js";
 import { resolveTelegramToken } from "../telegram/token.js";
 import { normalizeE164 } from "../utils.js";
 import type { CronJob } from "./types.js";
-
-/**
- * Parse a Telegram delivery target into chatId and optional topicId.
- * Supports formats:
- * - `chatId` (plain chat ID or @username)
- * - `chatId:topicId` (chat ID with topic/thread ID)
- * - `chatId:topic:topicId` (alternative format with explicit "topic" marker)
- */
-export function parseTelegramTarget(to: string): {
-  chatId: string;
-  topicId: number | undefined;
-} {
-  const trimmed = to.trim();
-
-  // Try format: chatId:topic:topicId
-  const topicMatch = /^(.+?):topic:(\d+)$/.exec(trimmed);
-  if (topicMatch) {
-    return { chatId: topicMatch[1], topicId: parseInt(topicMatch[2], 10) };
-  }
-
-  // Try format: chatId:topicId (where topicId is numeric)
-  // Be careful not to match @username or other non-numeric suffixes
-  const colonMatch = /^(.+):(\d+)$/.exec(trimmed);
-  if (colonMatch) {
-    return { chatId: colonMatch[1], topicId: parseInt(colonMatch[2], 10) };
-  }
-
-  // Plain chatId, no topic
-  return { chatId: trimmed, topicId: undefined };
-}
 
 export type RunCronAgentTurnResult = {
   status: "ok" | "error" | "skipped";
   summary?: string;
   error?: string;
+};
+
+type DeliveryPayload = {
+  text?: string;
+  mediaUrl?: string;
+  mediaUrls?: string[];
 };
 
 function pickSummaryFromOutput(text: string | undefined) {
@@ -108,7 +86,7 @@ function pickSummaryFromPayloads(
  * Returns true if delivery should be skipped because there's no real content.
  */
 function isHeartbeatOnlyResponse(
-  payloads: Array<{ text?: string; mediaUrl?: string; mediaUrls?: string[] }>,
+  payloads: DeliveryPayload[],
   ackMaxChars: number,
 ) {
   if (payloads.length === 0) return true;
@@ -125,6 +103,53 @@ function isHeartbeatOnlyResponse(
     return result.shouldSkip;
   });
 }
+
+function getMediaList(payload: DeliveryPayload) {
+  return payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
+}
+
+async function deliverPayloadsWithMedia(params: {
+  payloads: DeliveryPayload[];
+  sendText: (text: string) => Promise<unknown>;
+  sendMedia: (caption: string, mediaUrl: string) => Promise<unknown>;
+}) {
+  for (const payload of params.payloads) {
+    const mediaList = getMediaList(payload);
+    if (mediaList.length === 0) {
+      await params.sendText(payload.text ?? "");
+      continue;
+    }
+    let first = true;
+    for (const url of mediaList) {
+      const caption = first ? (payload.text ?? "") : "";
+      first = false;
+      await params.sendMedia(caption, url);
+    }
+  }
+}
+
+async function deliverChunkedPayloads(params: {
+  payloads: DeliveryPayload[];
+  chunkText: (text: string) => string[];
+  sendText: (text: string) => Promise<unknown>;
+  sendMedia: (caption: string, mediaUrl: string) => Promise<unknown>;
+}) {
+  for (const payload of params.payloads) {
+    const mediaList = getMediaList(payload);
+    if (mediaList.length === 0) {
+      for (const chunk of params.chunkText(payload.text ?? "")) {
+        await params.sendText(chunk);
+      }
+      continue;
+    }
+    let first = true;
+    for (const url of mediaList) {
+      const caption = first ? (payload.text ?? "") : "";
+      first = false;
+      await params.sendMedia(caption, url);
+    }
+  }
+}
 function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
   jobPayload: {
@@ -135,7 +160,8 @@ function resolveDeliveryTarget(
       | "discord"
       | "slack"
       | "signal"
-      | "imessage";
+      | "imessage"
+      | "msteams";
     to?: string;
   },
 ) {
@@ -172,28 +198,34 @@ function resolveDeliveryTarget(
     return lastProvider ?? "whatsapp";
   })();
 
-  const to = (() => {
-    if (explicitTo) return explicitTo;
-    return lastTo || undefined;
-  })();
+  const rawTo = explicitTo ?? (lastTo || undefined);
+  const telegramTarget =
+    provider === "telegram" && rawTo ? parseTelegramTarget(rawTo) : undefined;
 
   const sanitizedWhatsappTo = (() => {
-    if (provider !== "whatsapp") return to;
+    if (provider !== "whatsapp") return rawTo;
     const rawAllow = cfg.whatsapp?.allowFrom ?? [];
-    if (rawAllow.includes("*")) return to;
+    if (rawAllow.includes("*")) return rawTo;
     const allowFrom = rawAllow
       .map((val) => normalizeE164(val))
       .filter((val) => val.length > 1);
-    if (allowFrom.length === 0) return to;
-    if (!to) return allowFrom[0];
-    const normalized = normalizeE164(to);
+    if (allowFrom.length === 0) return rawTo;
+    if (!rawTo) return allowFrom[0];
+    const normalized = normalizeE164(rawTo);
     if (allowFrom.includes(normalized)) return normalized;
     return allowFrom[0];
   })();
 
+  const to = (() => {
+    if (provider === "telegram" && telegramTarget) return telegramTarget.chatId;
+    if (provider === "whatsapp") return sanitizedWhatsappTo;
+    return rawTo;
+  })();
+
   return {
     provider,
-    to: provider === "whatsapp" ? sanitizedWhatsappTo : to,
+    to,
+    messageThreadId: telegramTarget?.messageThreadId,
   };
 }
 
@@ -288,6 +320,7 @@ export async function runCronIsolatedAgentTurn(params: {
       cfg: params.cfg,
       catalog: await loadCatalog(),
       defaultProvider: resolvedDefault.provider,
+      defaultModel: resolvedDefault.model,
     });
     const key = modelKey(
       resolvedOverride.ref.provider,
@@ -392,12 +425,29 @@ export async function runCronIsolatedAgentTurn(params: {
       sessionKey: params.sessionKey,
     });
     const messageProvider = resolvedDelivery.provider;
+    const claudeSessionId = cronSession.sessionEntry.claudeCliSessionId?.trim();
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfg,
       provider,
       model,
-      run: (providerOverride, modelOverride) =>
-        runEmbeddedPiAgent({
+      run: (providerOverride, modelOverride) => {
+        if (providerOverride === "claude-cli") {
+          return runClaudeCliAgent({
+            sessionId: cronSession.sessionEntry.sessionId,
+            sessionKey: params.sessionKey,
+            sessionFile,
+            workspaceDir,
+            config: params.cfg,
+            prompt: commandBody,
+            provider: providerOverride,
+            model: modelOverride,
+            thinkLevel,
+            timeoutMs,
+            runId: cronSession.sessionEntry.sessionId,
+            claudeSessionId,
+          });
+        }
+        return runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
           sessionKey: params.sessionKey,
           messageProvider,
@@ -418,7 +468,8 @@ export async function runCronIsolatedAgentTurn(params: {
             (agentCfg?.verboseDefault as "on" | "off" | undefined),
           timeoutMs,
           runId: cronSession.sessionEntry.sessionId,
-        }),
+        });
+      },
     });
     runResult = fallbackResult.result;
     fallbackProvider = fallbackResult.provider;
@@ -443,6 +494,12 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
+    if (providerUsed === "claude-cli") {
+      const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
+      if (cliSessionId) {
+        cronSession.sessionEntry.claudeCliSessionId = cliSessionId;
+      }
+    }
     if (hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
       const output = usage.output ?? 0;
@@ -484,21 +541,16 @@ export async function runCronIsolatedAgentTurn(params: {
       }
       const to = normalizeE164(resolvedDelivery.to);
       try {
-        for (const payload of payloads) {
-          const mediaList =
-            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          const primaryMedia = mediaList[0];
-          await params.deps.sendMessageWhatsApp(to, payload.text ?? "", {
-            verbose: false,
-            mediaUrl: primaryMedia,
-          });
-          for (const extra of mediaList.slice(1)) {
-            await params.deps.sendMessageWhatsApp(to, "", {
+        await deliverPayloadsWithMedia({
+          payloads,
+          sendText: (text) =>
+            params.deps.sendMessageWhatsApp(to, text, { verbose: false }),
+          sendMedia: (caption, mediaUrl) =>
+            params.deps.sendMessageWhatsApp(to, caption, {
               verbose: false,
-              mediaUrl: extra,
-            });
-          }
-        }
+              mediaUrl,
+            }),
+        });
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };
@@ -517,37 +569,27 @@ export async function runCronIsolatedAgentTurn(params: {
           summary: "Delivery skipped (no Telegram chatId).",
         };
       }
-      const { chatId, topicId } = parseTelegramTarget(resolvedDelivery.to);
+      const chatId = resolvedDelivery.to;
+      const messageThreadId = resolvedDelivery.messageThreadId;
       const textLimit = resolveTextChunkLimit(params.cfg, "telegram");
       try {
-        for (const payload of payloads) {
-          const mediaList =
-            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          if (mediaList.length === 0) {
-            for (const chunk of chunkMarkdownText(
-              payload.text ?? "",
-              textLimit,
-            )) {
-              await params.deps.sendMessageTelegram(chatId, chunk, {
-                verbose: false,
-                token: telegramToken || undefined,
-                messageThreadId: topicId,
-              });
-            }
-          } else {
-            let first = true;
-            for (const url of mediaList) {
-              const caption = first ? (payload.text ?? "") : "";
-              first = false;
-              await params.deps.sendMessageTelegram(chatId, caption, {
-                verbose: false,
-                mediaUrl: url,
-                token: telegramToken || undefined,
-                messageThreadId: topicId,
-              });
-            }
-          }
-        }
+        await deliverChunkedPayloads({
+          payloads,
+          chunkText: (text) => chunkMarkdownText(text, textLimit),
+          sendText: (text) =>
+            params.deps.sendMessageTelegram(chatId, text, {
+              verbose: false,
+              token: telegramToken || undefined,
+              messageThreadId,
+            }),
+          sendMedia: (caption, mediaUrl) =>
+            params.deps.sendMessageTelegram(chatId, caption, {
+              verbose: false,
+              mediaUrl,
+              token: telegramToken || undefined,
+              messageThreadId,
+            }),
+        });
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };
@@ -569,29 +611,18 @@ export async function runCronIsolatedAgentTurn(params: {
       }
       const discordTarget = resolvedDelivery.to;
       try {
-        for (const payload of payloads) {
-          const mediaList =
-            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          if (mediaList.length === 0) {
-            await params.deps.sendMessageDiscord(
-              discordTarget,
-              payload.text ?? "",
-              {
-                token: process.env.DISCORD_BOT_TOKEN,
-              },
-            );
-          } else {
-            let first = true;
-            for (const url of mediaList) {
-              const caption = first ? (payload.text ?? "") : "";
-              first = false;
-              await params.deps.sendMessageDiscord(discordTarget, caption, {
-                token: process.env.DISCORD_BOT_TOKEN,
-                mediaUrl: url,
-              });
-            }
-          }
-        }
+        await deliverPayloadsWithMedia({
+          payloads,
+          sendText: (text) =>
+            params.deps.sendMessageDiscord(discordTarget, text, {
+              token: process.env.DISCORD_BOT_TOKEN,
+            }),
+          sendMedia: (caption, mediaUrl) =>
+            params.deps.sendMessageDiscord(discordTarget, caption, {
+              token: process.env.DISCORD_BOT_TOKEN,
+              mediaUrl,
+            }),
+        });
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };
@@ -614,27 +645,13 @@ export async function runCronIsolatedAgentTurn(params: {
       const slackTarget = resolvedDelivery.to;
       const textLimit = resolveTextChunkLimit(params.cfg, "slack");
       try {
-        for (const payload of payloads) {
-          const mediaList =
-            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          if (mediaList.length === 0) {
-            for (const chunk of chunkMarkdownText(
-              payload.text ?? "",
-              textLimit,
-            )) {
-              await params.deps.sendMessageSlack(slackTarget, chunk);
-            }
-          } else {
-            let first = true;
-            for (const url of mediaList) {
-              const caption = first ? (payload.text ?? "") : "";
-              first = false;
-              await params.deps.sendMessageSlack(slackTarget, caption, {
-                mediaUrl: url,
-              });
-            }
-          }
-        }
+        await deliverChunkedPayloads({
+          payloads,
+          chunkText: (text) => chunkMarkdownText(text, textLimit),
+          sendText: (text) => params.deps.sendMessageSlack(slackTarget, text),
+          sendMedia: (caption, mediaUrl) =>
+            params.deps.sendMessageSlack(slackTarget, caption, { mediaUrl }),
+        });
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };
@@ -656,24 +673,13 @@ export async function runCronIsolatedAgentTurn(params: {
       const to = resolvedDelivery.to;
       const textLimit = resolveTextChunkLimit(params.cfg, "signal");
       try {
-        for (const payload of payloads) {
-          const mediaList =
-            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          if (mediaList.length === 0) {
-            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
-              await params.deps.sendMessageSignal(to, chunk);
-            }
-          } else {
-            let first = true;
-            for (const url of mediaList) {
-              const caption = first ? (payload.text ?? "") : "";
-              first = false;
-              await params.deps.sendMessageSignal(to, caption, {
-                mediaUrl: url,
-              });
-            }
-          }
-        }
+        await deliverChunkedPayloads({
+          payloads,
+          chunkText: (text) => chunkText(text, textLimit),
+          sendText: (text) => params.deps.sendMessageSignal(to, text),
+          sendMedia: (caption, mediaUrl) =>
+            params.deps.sendMessageSignal(to, caption, { mediaUrl }),
+        });
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };
@@ -695,24 +701,13 @@ export async function runCronIsolatedAgentTurn(params: {
       const to = resolvedDelivery.to;
       const textLimit = resolveTextChunkLimit(params.cfg, "imessage");
       try {
-        for (const payload of payloads) {
-          const mediaList =
-            payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
-          if (mediaList.length === 0) {
-            for (const chunk of chunkText(payload.text ?? "", textLimit)) {
-              await params.deps.sendMessageIMessage(to, chunk);
-            }
-          } else {
-            let first = true;
-            for (const url of mediaList) {
-              const caption = first ? (payload.text ?? "") : "";
-              first = false;
-              await params.deps.sendMessageIMessage(to, caption, {
-                mediaUrl: url,
-              });
-            }
-          }
-        }
+        await deliverChunkedPayloads({
+          payloads,
+          chunkText: (text) => chunkText(text, textLimit),
+          sendText: (text) => params.deps.sendMessageIMessage(to, text),
+          sendMedia: (caption, mediaUrl) =>
+            params.deps.sendMessageIMessage(to, caption, { mediaUrl }),
+        });
       } catch (err) {
         if (!bestEffortDeliver)
           return { status: "error", summary, error: String(err) };

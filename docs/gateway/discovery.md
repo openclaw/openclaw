@@ -44,7 +44,7 @@ Target direction:
 
 Troubleshooting and beacon details: [`docs/bonjour.md`](/gateway/bonjour).
 
-#### Current implementation
+#### Service beacon details
 
 - Service types:
   - `_clawdbot-bridge._tcp` (bridge transport beacon)
@@ -98,15 +98,8 @@ The gateway is the source of truth for node/client admission.
   - scopes/ACLs (bridge is not a raw proxy to every gateway method)
   - rate limits
 
-## Where the code lives (target architecture)
+## Responsibilities by component
 
-- Node gateway:
-  - advertises discovery beacons (Bonjour)
-  - owns pairing storage + decisions
-  - runs the bridge listener (direct transport)
-- macOS app:
-  - UI for picking a gateway, showing pairing prompts, and troubleshooting
-  - SSH tunneling only for the fallback path
-- iOS node:
-  - browses Bonjour (LAN) as a convenience only
-  - uses direct transport + pairing to connect to the gateway
+- **Gateway**: advertises discovery beacons, owns pairing decisions, runs the bridge listener.
+- **macOS app**: helps you pick a gateway, shows pairing prompts, and uses SSH only as a fallback.
+- **iOS/Android nodes**: browse Bonjour as a convenience and connect via the paired bridge.

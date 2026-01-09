@@ -8,6 +8,12 @@ export type TelegramForm = {
   webhookPath: string;
 };
 
+export type ChatQueueItem = {
+  id: string;
+  text: string;
+  createdAt: number;
+};
+
 export type DiscordForm = {
   enabled: boolean;
   token: string;

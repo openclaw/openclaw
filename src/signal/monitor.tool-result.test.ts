@@ -147,6 +147,9 @@ describe("monitorSignalProvider tool results", () => {
     expect(upsertPairingRequestMock).toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      "Your Signal number: +15550001111",
+    );
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
       "Pairing code: PAIRCODE",
     );
   });
@@ -195,6 +198,51 @@ describe("monitorSignalProvider tool results", () => {
     await flush();
 
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("pairs uuid-only senders with a uuid allowlist entry", async () => {
+    config = {
+      ...config,
+      signal: { autoStart: false, dmPolicy: "pairing", allowFrom: [] },
+    };
+    const abortController = new AbortController();
+    const uuid = "123e4567-e89b-12d3-a456-426614174000";
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      const payload = {
+        envelope: {
+          sourceUuid: uuid,
+          sourceName: "Ada",
+          timestamp: 1,
+          dataMessage: {
+            message: "hello",
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    expect(replyMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "signal", id: `uuid:${uuid}` }),
+    );
+    expect(sendMock).toHaveBeenCalledTimes(1);
+    expect(sendMock.mock.calls[0]?.[0]).toBe(`signal:${uuid}`);
+    expect(String(sendMock.mock.calls[0]?.[1] ?? "")).toContain(
+      `Your Signal sender id: uuid:${uuid}`,
+    );
   });
 
   it("reconnects after stream errors until aborted", async () => {

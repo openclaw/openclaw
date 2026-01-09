@@ -27,6 +27,15 @@ export function normalizeProviderId(provider: string): string {
   return normalized;
 }
 
+function normalizeAnthropicModelId(model: string): string {
+  const trimmed = model.trim();
+  if (!trimmed) return trimmed;
+  const lower = trimmed.toLowerCase();
+  if (lower === "opus-4.5") return "claude-opus-4-5";
+  if (lower === "sonnet-4.5") return "claude-sonnet-4-5";
+  return trimmed;
+}
+
 export function parseModelRef(
   raw: string,
   defaultProvider: string,
@@ -35,13 +44,18 @@ export function parseModelRef(
   if (!trimmed) return null;
   const slash = trimmed.indexOf("/");
   if (slash === -1) {
-    return { provider: normalizeProviderId(defaultProvider), model: trimmed };
+    const provider = normalizeProviderId(defaultProvider);
+    const model =
+      provider === "anthropic" ? normalizeAnthropicModelId(trimmed) : trimmed;
+    return { provider, model };
   }
   const providerRaw = trimmed.slice(0, slash).trim();
   const provider = normalizeProviderId(providerRaw);
   const model = trimmed.slice(slash + 1).trim();
   if (!provider || !model) return null;
-  return { provider, model };
+  const normalizedModel =
+    provider === "anthropic" ? normalizeAnthropicModelId(model) : model;
+  return { provider, model: normalizedModel };
 }
 
 export function buildModelAliasIndex(params: {
@@ -124,6 +138,7 @@ export function buildAllowedModelSet(params: {
   cfg: ClawdbotConfig;
   catalog: ModelCatalogEntry[];
   defaultProvider: string;
+  defaultModel?: string;
 }): {
   allowAny: boolean;
   allowedCatalog: ModelCatalogEntry[];
@@ -134,11 +149,17 @@ export function buildAllowedModelSet(params: {
     return Object.keys(modelMap);
   })();
   const allowAny = rawAllowlist.length === 0;
+  const defaultModel = params.defaultModel?.trim();
+  const defaultKey =
+    defaultModel && params.defaultProvider
+      ? modelKey(params.defaultProvider, defaultModel)
+      : undefined;
   const catalogKeys = new Set(
     params.catalog.map((entry) => modelKey(entry.provider, entry.id)),
   );
 
   if (allowAny) {
+    if (defaultKey) catalogKeys.add(defaultKey);
     return {
       allowAny: true,
       allowedCatalog: params.catalog,
@@ -156,11 +177,16 @@ export function buildAllowedModelSet(params: {
     }
   }
 
+  if (defaultKey) {
+    allowedKeys.add(defaultKey);
+  }
+
   const allowedCatalog = params.catalog.filter((entry) =>
     allowedKeys.has(modelKey(entry.provider, entry.id)),
   );
 
   if (allowedCatalog.length === 0) {
+    if (defaultKey) catalogKeys.add(defaultKey);
     return {
       allowAny: true,
       allowedCatalog: params.catalog,

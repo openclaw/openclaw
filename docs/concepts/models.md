@@ -1,157 +1,151 @@
 ---
-summary: "Plan for models CLI: scan, list, aliases, fallbacks, status"
+summary: "Models CLI: list, set, aliases, fallbacks, scan, status"
 read_when:
   - Adding or modifying models CLI (models list/set/scan/aliases/fallbacks)
   - Changing model fallback behavior or selection UX
   - Updating model scan probes (tools/images)
 ---
-# Models CLI plan
+# Models CLI
 
-See [`docs/model-failover.md`](/concepts/model-failover) for how auth profiles rotate (OAuth vs API keys), cooldowns, and how that interacts with model fallbacks.
+See [/concepts/model-failover](/concepts/model-failover) for auth profile
+rotation, cooldowns, and how that interacts with fallbacks.
 
-Goal: give clear model visibility + control (configured vs available), plus scan tooling
-that prefers tool-call + image-capable models and maintains ordered fallbacks.
-
-## How Clawdbot models work (quick explainer)
+## How model selection works
 
 Clawdbot selects models in this order:
-1) The configured **primary** model (`agent.model.primary`).
-2) If it fails, fallbacks in `agent.model.fallbacks` (in order).
-3) Auth failover happens **inside** the provider first (see [/concepts/model-failover](/concepts/model-failover)).
 
-Key pieces:
-- `provider/model` is the canonical model id (e.g. `anthropic/claude-opus-4-5`).
-- `agent.models` is the **allowlist/catalog** of models Clawdbot can use, with optional aliases and provider params.
-- `agent.imageModel` is only used when the primary model **can’t** accept images.
-- `models.providers` lets you add custom providers + models (written to `models.json`).
-- `/model <id>` switches the active model for the current session; `/model list` shows what’s allowed.
+1) **Primary** model (`agent.model.primary` or `agent.model`).
+2) **Fallbacks** in `agent.model.fallbacks` (in order).
+3) **Provider auth failover** happens inside a provider before moving to the
+   next model.
 
 Related:
-- Context limits are model-specific; long sessions may trigger compaction. See [/concepts/compaction](/concepts/compaction).
+- `agent.models` is the allowlist/catalog of models Clawdbot can use (plus aliases).
+- `agent.imageModel` is used **only when** the primary model can’t accept images.
 
-## Model recommendations
+## Config keys (overview)
 
-- [Claude Opus 4.5](https://www.anthropic.com/claude/opus): default primary for assistant + general work. It’s pricey and cap-prone, so consider the [Claude Max $200 subscription](https://www.anthropic.com/pricing/) if you live here.
-- [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): default fallback when Opus caps out. Similar behavior with fewer limit headaches.
-- [GPT-5.2-Codex](https://developers.openai.com/codex/models): recommended for coding and sub-agents. Prefer the [Codex CLI](https://developers.openai.com/codex/cli) if you want the strongest feel.
+- `agent.model.primary` and `agent.model.fallbacks`
+- `agent.imageModel.primary` and `agent.imageModel.fallbacks`
+- `agent.models` (allowlist + aliases + provider params)
+- `models.providers` (custom providers written into `models.json`)
 
-Suggested stacks:
-- Assistant-first: Opus 4.5 primary → Sonnet 4.5 fallback.
-- Agentic coding: Opus 4.5 primary → GPT-5.2-Codex for sub-agents → Sonnet 4.5 fallback.
+Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
+to `zai/*`.
 
-## Model discussions (community notes)
+## “Model is not allowed” (and why replies stop)
 
-Anecdotal notes from the Discord thread on January 4–5, 2026. Treat as “reported by users,” not a benchmark.
+If `agent.models` is set, it becomes the **allowlist** for `/model` and for
+session overrides. When a user selects a model that isn’t in that allowlist,
+Clawdbot returns:
 
-**Reported working well**
-- [Claude Opus 4.5](https://www.anthropic.com/claude/opus): best overall quality in Clawdbot, especially for “assistant” work. Tradeoff is cost and hitting usage limits quickly.
-- [Claude Sonnet 4.5](https://www.anthropic.com/claude/sonnet): common fallback when Opus caps out. Similar behavior with fewer limit headaches.
-- [Gemini 3 Pro](https://deepmind.google/en/models/gemini/pro/): some users felt it maps well to Clawdbot’s structure. Vibe was “fits the framework” more than “best at everything.”
-- [GLM](https://www.zhipuai.cn/en/): used successfully as a worker model under orchestration. Seen as strong for delegated/secondary tasks, not the primary brain.
-- [MiniMax M2.1](https://platform.minimax.io/docs/guides/models-intro): “good enough” for grunt work or a cheap fallback. Community nickname was “Temu-Sonnet,” i.e. usable but not Sonnet-level polish.
+```
+Model "provider/model" is not allowed. Use /model to list available models.
+```
 
-**Mixed / unclear**
-- [Antigravity](https://blog.google/technology/ai/google-ai-updates-november-2025/) (Claude Opus access): some reported extra Opus quota. Pricing/limits were unclear, so the value is hard to predict.
+This happens **before** a normal reply is generated, so the message can feel
+like it “didn’t respond.” The fix is to either:
 
-**Reported weak in Clawdbot**
-- [GPT-5.2-Codex](https://developers.openai.com/codex/models) inside Clawdbot: reported as rough for conversation/assistant tasks when embedded. Same notes said Codex felt stronger via the [Codex CLI](https://developers.openai.com/codex/cli) than embedded use.
-- [Grok](https://docs.x.ai/docs/models/grok-4): people tried it and then abandoned it. No strong upside showed up in the notes.
+- Add the model to `agent.models`, or
+- Clear the allowlist (remove `agent.models`), or
+- Pick a model from `/model list`.
 
-**Theme**
-- Token burn feels higher than expected in long sessions; people suspect context buildup + tool outputs. Pruning/compaction helps. Check session logs before blaming providers. See [/concepts/session](/concepts/session) and [/concepts/model-failover](/concepts/model-failover).
+Example allowlist config:
 
-Want a tailored stack? Share whether you’re using Clawdbot or Clawdis and your main workload (agentic coding vs “assistant” work), and we can suggest a primary + fallback set based on these reports.
+```json5
+{
+  agent: {
+    model: { primary: "anthropic/claude-sonnet-4-5" },
+    models: {
+      "anthropic/claude-sonnet-4-5": { alias: "Sonnet" },
+      "anthropic/claude-opus-4-5": { alias: "Opus" }
+    }
+  }
+}
+```
 
-## Models CLI
+## CLI commands
 
-See [/cli](/cli) for the full command tree and CLI flags.
+```bash
+clawdbot models list
+clawdbot models status
+clawdbot models set <provider/model>
+clawdbot models set-image <provider/model>
 
-### CLI output (list + status)
+clawdbot models aliases list
+clawdbot models aliases add <alias> <provider/model>
+clawdbot models aliases remove <alias>
 
-`clawdbot models list` (default) prints a table with these columns:
-- `Model`: `provider/model` key (truncated in TTY).
-- `Input`: `text` or `text+image`.
-- `Ctx`: context window in K tokens (from the model registry).
-- `Local`: `yes/no` when the provider base URL is local.
-- `Auth`: `yes/no` when the provider has usable auth.
-- `Tags`: origin + role hints.
+clawdbot models fallbacks list
+clawdbot models fallbacks add <provider/model>
+clawdbot models fallbacks remove <provider/model>
+clawdbot models fallbacks clear
 
-Common tags:
-- `default` — resolved default model.
-- `fallback#N` — `agent.model.fallbacks` order.
-- `image` — `agent.imageModel.primary`.
-- `img-fallback#N` — `agent.imageModel.fallbacks` order.
-- `configured` — present in `agent.models`.
-- `alias:<name>` — alias from `agent.models.*.alias`.
-- `missing` — referenced in config but not found in the registry.
+clawdbot models image-fallbacks list
+clawdbot models image-fallbacks add <provider/model>
+clawdbot models image-fallbacks remove <provider/model>
+clawdbot models image-fallbacks clear
+```
 
-Output formats:
-- `--plain`: prints only `provider/model` keys (one per line).
-- `--json`: `{ count, models: [{ key, name, input, contextWindow, local, available, tags, missing }] }`.
+`clawdbot models` (no subcommand) is a shortcut for `models status`.
 
-`clawdbot models status` prints the resolved defaults, fallbacks, image model, aliases,
-and an **Auth overview** section showing which providers have profiles/env/models.json keys.
-`--plain` prints the resolved default model only; `--json` returns a structured object for tooling.
+### `models list`
 
-## Config changes
+Shows configured models by default. Useful flags:
 
-- `agent.models` (configured model catalog + aliases).
-- `agent.models.*.params` (provider-specific API params passed through to requests).
-- `agent.model.primary` + `agent.model.fallbacks`.
-- `agent.imageModel.primary` + `agent.imageModel.fallbacks` (optional).
-- `auth.profiles` + `auth.order` for per-provider auth failover.
+- `--all`: full catalog
+- `--local`: local providers only
+- `--provider <name>`: filter by provider
+- `--plain`: one model per line
+- `--json`: machine‑readable output
 
-## Scan behavior (models scan)
+### `models status`
+
+Shows the resolved primary model, fallbacks, image model, and an auth overview
+of configured providers. It also surfaces OAuth expiry status for profiles found
+in the auth store (warns within 24h by default). `--plain` prints only the
+resolved primary model.
+OAuth status is always shown (and included in `--json` output). If a configured
+provider has no credentials, `models status` prints a **Missing auth** section.
+JSON includes `auth.oauth` (warn window + profiles) and `auth.providers`
+(effective auth per provider).
+Use `--check` for automation (exit `1` when missing/expired, `2` when expiring).
+
+## Scanning (OpenRouter free models)
+
+`clawdbot models scan` inspects OpenRouter’s **free model catalog** and can
+optionally probe models for tool and image support.
+
+Key flags:
+
+- `--no-probe`: skip live probes (metadata only)
+- `--min-params <b>`: minimum parameter size (billions)
+- `--max-age-days <days>`: skip older models
+- `--provider <name>`: provider prefix filter
+- `--max-candidates <n>`: fallback list size
+- `--set-default`: set `agent.model.primary` to the first selection
+- `--set-image`: set `agent.imageModel.primary` to the first image selection
+
+Probing requires an OpenRouter API key (from auth profiles or
+`OPENROUTER_API_KEY`). Without a key, use `--no-probe` to list candidates only.
+
+Scan results are ranked by:
+1) Image support
+2) Tool latency
+3) Context size
+4) Parameter count
 
 Input
 - OpenRouter `/models` list (filter `:free`)
-- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY`
+- Requires OpenRouter API key from auth profiles or `OPENROUTER_API_KEY` (see [/environment](/environment))
 - Optional filters: `--max-age-days`, `--min-params`, `--provider`, `--max-candidates`
 - Probe controls: `--timeout`, `--concurrency`
 
-Probes (direct pi-ai complete)
-- Tool-call probe (required):
-  - Provide a dummy tool, verify tool call emitted.
-- Image probe (preferred):
-  - Prompt includes 1x1 PNG; success if no "unsupported image" error.
+When run in a TTY, you can select fallbacks interactively. In non‑interactive
+mode, pass `--yes` to accept defaults.
 
-Scoring/selection
-- Prefer models passing tool + image for text/tool fallbacks.
-- Prefer image-only models for image tool fallback (even if tool probe fails).
-- Rank by: image ok, then lower tool latency, then larger context, then params.
+## Models registry (`models.json`)
 
-Interactive selection (TTY)
-- Multiselect list with per-model stats:
-  - model id, tool ok, image ok, median latency, context, inferred params.
-- Pre-select top N (default 6).
-- Non-TTY: auto-select; require `--yes`/`--no-input` to apply.
-
-Output
-- Writes `agent.model.fallbacks` ordered.
-- Writes `agent.imageModel.fallbacks` ordered (image-capable models).
-- Ensures `agent.models` entries exist for selected models.
-- Optional `--set-default` to set `agent.model.primary`.
-- Optional `--set-image` to set `agent.imageModel.primary`.
-
-## Runtime fallback
-
-- On model failure: try `agent.model.fallbacks` in order.
-- Per-provider auth failover uses `auth.order` (or stored profile order) **before**
-  moving to the next model.
-- Image routing uses `agent.imageModel` **only when configured** and the primary
-  model lacks image input.
-- Persist last successful provider/model to session entry; auth profile success is global.
-- See [`docs/model-failover.md`](/concepts/model-failover) for auth profile rotation, cooldowns, and timeout handling.
-
-## Tests
-
-- Unit: scan selection ordering + probe classification.
-- CLI: list/aliases/fallbacks add/remove + scan writes config.
-- Status: shows last used model + fallbacks.
-
-## Docs
-
-- Update [`docs/configuration.md`](/gateway/configuration) with `agent.models` + `agent.model` + `agent.imageModel`.
-- Keep this doc current when CLI surface or scan logic changes.
-- Note provider aliases like `z.ai/*` -> `zai/*` when relevant.
-- Provider ids in model refs are normalized to lowercase.
+Custom providers in `models.providers` are written into `models.json` under the
+agent directory (default `~/.clawdbot/agents/<agentId>/models.json`). This file
+is merged by default unless `models.mode` is set to `replace`.

@@ -159,6 +159,9 @@ describe("directive behavior", () => {
       expect(text).toContain(
         "Current queue settings: mode=collect, debounce=1500ms, cap=9, drop=summarize.",
       );
+      expect(text).toContain(
+        "Options: modes steer, followup, collect, steer+backlog, interrupt; debounce:<ms|s|m>, cap:<n>, drop:old|new|summarize.",
+      );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -182,6 +185,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: high");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -204,6 +208,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: off");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -358,6 +363,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: high");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -380,6 +386,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current thinking level: off");
+      expect(text).toContain("Options: off, minimal, low, medium, high.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -403,6 +410,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current verbose level: on");
+      expect(text).toContain("Options: on, off.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -425,6 +433,7 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current reasoning level: off");
+      expect(text).toContain("Options: on, off, stream.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -458,6 +467,41 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Current elevated level: on");
+      expect(text).toContain("Options: on, off.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("warns when elevated is used in direct runtime", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated off",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+            sandbox: { mode: "off" },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode disabled.");
+      expect(text).toContain("Runtime is direct; sandboxing does not apply.");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -490,6 +534,72 @@ describe("directive behavior", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Unrecognized elevated level");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("handles multiple directives in a single message", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated off\n/verbose on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode disabled.");
+      expect(text).toContain("Verbose logging enabled.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("returns status alongside directive-only acks", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated off\n/status",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+        },
+        {},
+        {
+          agent: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: path.join(home, "clawd"),
+            elevated: {
+              allowFrom: { whatsapp: ["+1222"] },
+            },
+          },
+          whatsapp: { allowFrom: ["+1222"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode disabled.");
+      expect(text).toContain("Session: agent:main:main");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -819,6 +929,36 @@ describe("directive behavior", () => {
       expect(text).toContain("anthropic/claude-opus-4-5");
       expect(text).toContain("openai/gpt-4.1-mini");
       expect(text).toContain("auth:");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("falls back to configured models when catalog is unavailable", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model", From: "+1222", To: "+1222" },
+        {},
+        {
+          agent: {
+            model: { primary: "anthropic/claude-opus-4-5" },
+            workspace: path.join(home, "clawd"),
+            models: {
+              "anthropic/claude-opus-4-5": {},
+              "openai/gpt-4.1-mini": {},
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model catalog unavailable");
+      expect(text).toContain("anthropic/claude-opus-4-5");
+      expect(text).toContain("openai/gpt-4.1-mini");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

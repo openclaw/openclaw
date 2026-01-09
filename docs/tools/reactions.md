@@ -1,3 +1,8 @@
+---
+summary: "Reaction semantics shared across providers"
+read_when:
+  - Working on reactions in any provider
+---
 # Reaction tooling
 
 Shared reaction semantics across providers:

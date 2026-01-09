@@ -17,7 +17,15 @@ An **agent** is a fully scoped brain with its own:
 - **State directory** (`agentDir`) for auth profiles, model registry, and per-agent config.
 - **Session store** (chat history + routing state) under `~/.clawdbot/agents/<agentId>/sessions`.
 
+Skills are per-agent via each workspace’s `skills/` folder, with shared skills
+available from `~/.clawdbot/skills`. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills).
+
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
+
+**Workspace note:** each agent’s workspace is the **default cwd**, not a hard
+sandbox. Relative paths resolve inside the workspace, but absolute paths can
+reach other host locations unless sandboxing is enabled. See
+[Sandboxing](/gateway/sandboxing).
 
 ## Paths (quick map)
 
@@ -185,5 +193,9 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
 - **Security isolation**: Restrict tools for untrusted agents
 - **Resource control**: Sandbox specific agents while keeping others on host
 - **Flexible policies**: Different permissions per agent
+
+Note: `agent.elevated` is **global** and sender-based; it is not configurable per agent.
+If you need per-agent boundaries, use `routing.agents[id].tools` to deny `bash`.
+For group targeting, you can set `routing.agents[id].mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.

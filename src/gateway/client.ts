@@ -32,6 +32,7 @@ export type GatewayClientOptions = {
   maxProtocol?: number;
   onEvent?: (evt: EventFrame) => void;
   onHelloOk?: (hello: HelloOk) => void;
+  onConnectError?: (err: Error) => void;
   onClose?: (code: number, reason: string) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
@@ -130,6 +131,9 @@ export class GatewayClient {
         this.opts.onHelloOk?.(helloOk);
       })
       .catch((err) => {
+        this.opts.onConnectError?.(
+          err instanceof Error ? err : new Error(String(err)),
+        );
         const msg = `gateway connect failed: ${String(err)}`;
         if (this.opts.mode === "probe") logDebug(msg);
         else logError(msg);

@@ -100,6 +100,7 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
+export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const applied = new Set(getShellEnvAppliedKeys());
@@ -142,6 +143,41 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const envVar = envMap[provider];
   if (!envVar) return null;
   return pick(envVar);
+}
+
+export function resolveModelAuthMode(
+  provider?: string,
+  cfg?: ClawdbotConfig,
+  store?: AuthProfileStore,
+): ModelAuthMode | undefined {
+  const resolved = provider?.trim();
+  if (!resolved) return undefined;
+
+  const authStore = store ?? ensureAuthProfileStore();
+  const profiles = listProfilesForProvider(authStore, resolved);
+  if (profiles.length > 0) {
+    const modes = new Set(
+      profiles
+        .map((id) => authStore.profiles[id]?.type)
+        .filter((mode): mode is "api_key" | "oauth" | "token" => Boolean(mode)),
+    );
+    const distinct = ["oauth", "token", "api_key"].filter((k) =>
+      modes.has(k as "oauth" | "token" | "api_key"),
+    );
+    if (distinct.length >= 2) return "mixed";
+    if (modes.has("oauth")) return "oauth";
+    if (modes.has("token")) return "token";
+    if (modes.has("api_key")) return "api-key";
+  }
+
+  const envKey = resolveEnvApiKey(resolved);
+  if (envKey?.apiKey) {
+    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+  }
+
+  if (getCustomProviderApiKey(cfg, resolved)) return "api-key";
+
+  return "unknown";
 }
 
 export async function getApiKeyForModel(params: {

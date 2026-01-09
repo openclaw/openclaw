@@ -82,6 +82,12 @@ const hoisted = vi.hoisted(() => {
         dbPath: null,
       },
       imessageAccounts: {},
+      msteams: {
+        running: false,
+        lastStartAt: null,
+        lastStopAt: null,
+        lastError: null,
+      },
     })),
     startProviders: vi.fn(async () => {}),
     startWhatsAppProvider: vi.fn(async () => {}),
@@ -96,6 +102,8 @@ const hoisted = vi.hoisted(() => {
     stopSignalProvider: vi.fn(async () => {}),
     startIMessageProvider: vi.fn(async () => {}),
     stopIMessageProvider: vi.fn(async () => {}),
+    startMSTeamsProvider: vi.fn(async () => {}),
+    stopMSTeamsProvider: vi.fn(async () => {}),
     markWhatsAppLoggedOut: vi.fn(),
   };
 

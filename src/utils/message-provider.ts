@@ -3,7 +3,9 @@ export function normalizeMessageProvider(
 ): string | undefined {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) return undefined;
-  return normalized === "imsg" ? "imessage" : normalized;
+  if (normalized === "imsg") return "imessage";
+  if (normalized === "teams") return "msteams";
+  return normalized;
 }
 
 export function resolveMessageProvider(

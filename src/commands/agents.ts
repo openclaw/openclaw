@@ -955,12 +955,15 @@ export async function agentsAddCommand(
       initialValue: false,
     });
     if (wantsAuth) {
-      const authStore = ensureAuthProfileStore(agentDir);
+      const authStore = ensureAuthProfileStore(agentDir, {
+        allowKeychainPrompt: false,
+      });
       const authChoice = (await prompter.select({
         message: "Model/auth choice",
         options: buildAuthChoiceOptions({
           store: authStore,
           includeSkip: true,
+          includeClaudeCliIfMissing: true,
         }),
       })) as AuthChoice;
 

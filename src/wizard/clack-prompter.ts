@@ -12,13 +12,18 @@ import {
   text,
 } from "@clack/prompts";
 import { createCliProgress } from "../cli/progress.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
 function guardCancel<T>(value: T | symbol): T {
   if (isCancel(value)) {
-    cancel("Setup cancelled.");
+    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     throw new WizardCancelledError();
   }
   return value as T;
@@ -27,21 +32,23 @@ function guardCancel<T>(value: T | symbol): T {
 export function createClackPrompter(): WizardPrompter {
   return {
     intro: async (title) => {
-      intro(title);
+      intro(stylePromptTitle(title) ?? title);
     },
     outro: async (message) => {
-      outro(message);
+      outro(stylePromptTitle(message) ?? message);
     },
     note: async (message, title) => {
-      note(message, title);
+      note(message, stylePromptTitle(title));
     },
     select: async (params) =>
       guardCancel(
         await select({
-          message: params.message,
+          message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
             const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: opt.hint };
+            return opt.hint === undefined
+              ? base
+              : { ...base, hint: stylePromptHint(opt.hint) };
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValue: params.initialValue,
         }),
@@ -49,10 +56,12 @@ export function createClackPrompter(): WizardPrompter {
     multiselect: async (params) =>
       guardCancel(
         await multiselect({
-          message: params.message,
+          message: stylePromptMessage(params.message),
           options: params.options.map((opt) => {
             const base = { value: opt.value, label: opt.label };
-            return opt.hint === undefined ? base : { ...base, hint: opt.hint };
+            return opt.hint === undefined
+              ? base
+              : { ...base, hint: stylePromptHint(opt.hint) };
           }) as Option<(typeof params.options)[number]["value"]>[],
           initialValues: params.initialValues,
         }),
@@ -60,7 +69,7 @@ export function createClackPrompter(): WizardPrompter {
     text: async (params) =>
       guardCancel(
         await text({
-          message: params.message,
+          message: stylePromptMessage(params.message),
           initialValue: params.initialValue,
           placeholder: params.placeholder,
           validate: params.validate,
@@ -69,7 +78,7 @@ export function createClackPrompter(): WizardPrompter {
     confirm: async (params) =>
       guardCancel(
         await confirm({
-          message: params.message,
+          message: stylePromptMessage(params.message),
           initialValue: params.initialValue,
         }),
       ),

@@ -399,6 +399,28 @@ function normalizeToolNames(list?: string[]) {
   return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 }
 
+/**
+ * Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
+ * Renaming to capitalized versions bypasses the block while maintaining compatibility
+ * with regular API keys.
+ */
+const OAUTH_BLOCKED_TOOL_NAMES: Record<string, string> = {
+  bash: "Bash",
+  read: "Read",
+  write: "Write",
+  edit: "Edit",
+};
+
+function renameBlockedToolsForOAuth(tools: AnyAgentTool[]): AnyAgentTool[] {
+  return tools.map((tool) => {
+    const newName = OAUTH_BLOCKED_TOOL_NAMES[tool.name];
+    if (newName) {
+      return { ...tool, name: newName };
+    }
+    return tool;
+  });
+}
+
 const DEFAULT_SUBAGENT_TOOL_DENY = [
   "sessions_list",
   "sessions_history",
@@ -591,37 +613,6 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   };
 }
 
-function normalizeMessageProvider(
-  messageProvider?: string,
-): string | undefined {
-  const trimmed = messageProvider?.trim().toLowerCase();
-  return trimmed ? trimmed : undefined;
-}
-
-function shouldIncludeDiscordTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "discord" || normalized.startsWith("discord:");
-}
-
-function shouldIncludeSlackTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "slack" || normalized.startsWith("slack:");
-}
-
-function shouldIncludeTelegramTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "telegram" || normalized.startsWith("telegram:");
-}
-
-function shouldIncludeWhatsAppTool(messageProvider?: string): boolean {
-  const normalized = normalizeMessageProvider(messageProvider);
-  if (!normalized) return false;
-  return normalized === "whatsapp" || normalized.startsWith("whatsapp:");
-}
-
 export function createClawdbotCodingTools(options?: {
   bash?: BashToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
@@ -702,20 +693,9 @@ export function createClawdbotCodingTools(options?: {
       config: options?.config,
     }),
   ];
-  const allowDiscord = shouldIncludeDiscordTool(options?.messageProvider);
-  const allowSlack = shouldIncludeSlackTool(options?.messageProvider);
-  const allowTelegram = shouldIncludeTelegramTool(options?.messageProvider);
-  const allowWhatsApp = shouldIncludeWhatsAppTool(options?.messageProvider);
-  const filtered = tools.filter((tool) => {
-    if (tool.name === "discord") return allowDiscord;
-    if (tool.name === "slack") return allowSlack;
-    if (tool.name === "telegram") return allowTelegram;
-    if (tool.name === "whatsapp") return allowWhatsApp;
-    return true;
-  });
   const toolsFiltered = effectiveToolsPolicy
-    ? filterToolsByPolicy(filtered, effectiveToolsPolicy)
-    : filtered;
+    ? filterToolsByPolicy(tools, effectiveToolsPolicy)
+    : tools;
   const sandboxed = sandbox
     ? filterToolsByPolicy(toolsFiltered, sandbox.tools)
     : toolsFiltered;
@@ -724,5 +704,9 @@ export function createClawdbotCodingTools(options?: {
     : sandboxed;
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
-  return subagentFiltered.map(normalizeToolParameters);
+  const normalized = subagentFiltered.map(normalizeToolParameters);
+
+  // Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
+  // Always use capitalized versions for compatibility with both OAuth and regular API keys.
+  return renameBlockedToolsForOAuth(normalized);
 }

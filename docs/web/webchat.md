@@ -5,7 +5,6 @@ read_when:
 ---
 # WebChat (Gateway WebSocket UI)
 
-Updated: 2026-01-06
 
 Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 

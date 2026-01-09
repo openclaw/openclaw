@@ -1,5 +1,4 @@
 import {
-  loginAnthropic,
   loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
@@ -10,6 +9,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -19,12 +19,21 @@ import {
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   isRemoteEnvironment,
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
+import {
+  applyGoogleGeminiModelDefault,
+  GOOGLE_GEMINI_DEFAULT_MODEL,
+} from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
@@ -33,6 +42,7 @@ import {
   applyMinimaxProviderConfig,
   MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
+  setGeminiApiKey,
   setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
@@ -131,60 +141,158 @@ export async function applyAuthChoice(params: {
     );
   };
 
-  if (params.authChoice === "oauth") {
-    await params.prompter.note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
-    );
-    const spin = params.prompter.progress("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          params.runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = await params.prompter.text({
-            message: "Paste authorization code (code#state)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
+  if (params.authChoice === "claude-cli") {
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
+    });
+    const hasClaudeCli = Boolean(store.profiles[CLAUDE_CLI_PROFILE_ID]);
+    if (!hasClaudeCli && process.platform === "darwin") {
+      await params.prompter.note(
+        [
+          "macOS will show a Keychain prompt next.",
+          'Choose "Always Allow" so the launchd gateway can start without prompts.',
+          'If you choose "Allow" or "Deny", each restart will block on a Keychain alert.',
+        ].join("\n"),
+        "Claude CLI Keychain",
       );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds, params.agentDir);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
+      const proceed = await params.prompter.confirm({
+        message: "Check Keychain for Claude CLI credentials now?",
+        initialValue: true,
+      });
+      if (!proceed) {
+        return { config: nextConfig, agentModelOverride };
       }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      params.runtime.error(String(err));
-      await params.prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
-      );
     }
-  } else if (params.authChoice === "claude-cli") {
-    const store = ensureAuthProfileStore(params.agentDir);
-    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
-      await params.prompter.note(
-        "No Claude CLI credentials found at ~/.claude/.credentials.json.",
-        "Claude CLI OAuth",
-      );
-      return { config: nextConfig, agentModelOverride };
+
+    const storeWithKeychain = hasClaudeCli
+      ? store
+      : ensureAuthProfileStore(params.agentDir, {
+          allowKeychainPrompt: true,
+        });
+
+    if (!storeWithKeychain.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      if (process.stdin.isTTY) {
+        const runNow = await params.prompter.confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        });
+        if (runNow) {
+          const res = await (async () => {
+            const { spawnSync } = await import("node:child_process");
+            return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+          })();
+          if (res.error) {
+            await params.prompter.note(
+              `Failed to run claude: ${String(res.error)}`,
+              "Claude setup-token",
+            );
+          }
+        }
+      } else {
+        await params.prompter.note(
+          "`claude setup-token` requires an interactive TTY.",
+          "Claude setup-token",
+        );
+      }
+
+      const refreshed = ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: true,
+      });
+      if (!refreshed.profiles[CLAUDE_CLI_PROFILE_ID]) {
+        await params.prompter.note(
+          process.platform === "darwin"
+            ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
+            : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
+          "Claude CLI OAuth",
+        );
+        return { config: nextConfig, agentModelOverride };
+      }
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
     });
+  } else if (params.authChoice === "token" || params.authChoice === "oauth") {
+    const provider = (await params.prompter.select({
+      message: "Token provider",
+      options: [{ value: "anthropic", label: "Anthropic (only supported)" }],
+    })) as "anthropic";
+    await params.prompter.note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
+    );
+
+    const tokenRaw = await params.prompter.text({
+      message: "Paste Anthropic setup-token",
+      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+    });
+    const token = String(tokenRaw).trim();
+
+    const profileNameRaw = await params.prompter.text({
+      message: "Token name (blank = default)",
+      placeholder: "default",
+    });
+    const namedProfileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
+
+    upsertAuthProfile({
+      profileId: namedProfileId,
+      agentDir: params.agentDir,
+      credential: {
+        type: "token",
+        provider,
+        token,
+      },
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: namedProfileId,
+      provider,
+      mode: "token",
+    });
+  } else if (params.authChoice === "openai-api-key") {
+    const envKey = resolveEnvApiKey("openai");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        const result = upsertSharedEnvVar({
+          key: "OPENAI_API_KEY",
+          value: envKey.apiKey,
+        });
+        if (!process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = envKey.apiKey;
+        }
+        await params.prompter.note(
+          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+          "OpenAI API key",
+        );
+        return { config: nextConfig, agentModelOverride };
+      }
+    }
+
+    const key = await params.prompter.text({
+      message: "Enter OpenAI API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    const trimmed = String(key).trim();
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: trimmed,
+    });
+    process.env.OPENAI_API_KEY = trimmed;
+    await params.prompter.note(
+      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+      "OpenAI API key",
+    );
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(
@@ -389,6 +497,30 @@ export async function applyAuthChoice(params: {
         "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
         "OAuth help",
       );
+    }
+  } else if (params.authChoice === "gemini-api-key") {
+    const key = await params.prompter.text({
+      message: "Enter Gemini API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setGeminiApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "google:default",
+      provider: "google",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      const applied = applyGoogleGeminiModelDefault(nextConfig);
+      nextConfig = applied.next;
+      if (applied.changed) {
+        await params.prompter.note(
+          `Default model set to ${GOOGLE_GEMINI_DEFAULT_MODEL}`,
+          "Model configured",
+        );
+      }
+    } else {
+      agentModelOverride = GOOGLE_GEMINI_DEFAULT_MODEL;
+      await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
     }
   } else if (params.authChoice === "apiKey") {
     const key = await params.prompter.text({

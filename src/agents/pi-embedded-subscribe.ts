@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
+import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -21,8 +24,34 @@ const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
 const THINKING_OPEN_GLOBAL_RE = /<\s*think(?:ing)?\s*>/gi;
 const THINKING_CLOSE_GLOBAL_RE = /<\s*\/\s*think(?:ing)?\s*>/gi;
+const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*think(?:ing)?\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
+const RAW_STREAM_ENABLED = process.env.CLAWDBOT_RAW_STREAM === "1";
+const RAW_STREAM_PATH =
+  process.env.CLAWDBOT_RAW_STREAM_PATH?.trim() ||
+  path.join(resolveStateDir(), "logs", "raw-stream.jsonl");
+let rawStreamReady = false;
+
+const appendRawStream = (payload: Record<string, unknown>) => {
+  if (!RAW_STREAM_ENABLED) return;
+  if (!rawStreamReady) {
+    rawStreamReady = true;
+    try {
+      fs.mkdirSync(path.dirname(RAW_STREAM_PATH), { recursive: true });
+    } catch {
+      // ignore raw stream mkdir failures
+    }
+  }
+  try {
+    void fs.promises.appendFile(
+      RAW_STREAM_PATH,
+      `${JSON.stringify(payload)}\n`,
+    );
+  } catch {
+    // ignore raw stream write failures
+  }
+};
 
 export type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 
@@ -91,6 +120,96 @@ function stripUnpairedThinkingTags(text: string): string {
   if (!hasOpen) return text.replace(THINKING_CLOSE_RE, "");
   if (!hasClose) return text.replace(THINKING_OPEN_RE, "");
   return text;
+}
+
+type ThinkTaggedSplitBlock =
+  | { type: "thinking"; thinking: string }
+  | { type: "text"; text: string };
+
+function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
+  const trimmedStart = text.trimStart();
+  // Avoid false positives: only treat it as structured thinking when it begins
+  // with a think tag (common for local/OpenAI-compat providers that emulate
+  // reasoning blocks via tags).
+  if (!trimmedStart.startsWith("<")) return null;
+  if (!THINKING_OPEN_RE.test(trimmedStart)) return null;
+  if (!THINKING_CLOSE_RE.test(text)) return null;
+
+  THINKING_TAG_SCAN_RE.lastIndex = 0;
+  let inThinking = false;
+  let cursor = 0;
+  let thinkingStart = 0;
+  const blocks: ThinkTaggedSplitBlock[] = [];
+
+  const pushText = (value: string) => {
+    if (!value) return;
+    blocks.push({ type: "text", text: value });
+  };
+  const pushThinking = (value: string) => {
+    const cleaned = value.trim();
+    if (!cleaned) return;
+    blocks.push({ type: "thinking", thinking: cleaned });
+  };
+
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
+    const index = match.index ?? 0;
+    const isClose = Boolean(match[1]?.includes("/"));
+
+    if (!inThinking && !isClose) {
+      pushText(text.slice(cursor, index));
+      thinkingStart = index + match[0].length;
+      inThinking = true;
+      continue;
+    }
+
+    if (inThinking && isClose) {
+      pushThinking(text.slice(thinkingStart, index));
+      cursor = index + match[0].length;
+      inThinking = false;
+    }
+  }
+
+  if (inThinking) return null;
+  pushText(text.slice(cursor));
+
+  const hasThinking = blocks.some((b) => b.type === "thinking");
+  if (!hasThinking) return null;
+  return blocks;
+}
+
+function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
+  if (!Array.isArray(message.content)) return;
+  const hasThinkingBlock = message.content.some(
+    (block) => block.type === "thinking",
+  );
+  if (hasThinkingBlock) return;
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of message.content) {
+    if (block.type !== "text") {
+      next.push(block);
+      continue;
+    }
+    const split = splitThinkingTaggedText(block.text);
+    if (!split) {
+      next.push(block);
+      continue;
+    }
+    changed = true;
+    for (const part of split) {
+      if (part.type === "thinking") {
+        next.push({ type: "thinking", thinking: part.thinking });
+      } else if (part.type === "text") {
+        const cleaned = part.text.trimStart();
+        if (cleaned) next.push({ type: "text", text: cleaned });
+      }
+    }
+  }
+
+  if (!changed) return;
+  message.content = next;
 }
 
 function normalizeSlackTarget(raw: string): string | undefined {
@@ -664,6 +783,15 @@ export function subscribeEmbeddedPiSession(params: {
               typeof assistantRecord?.content === "string"
                 ? assistantRecord.content
                 : "";
+            appendRawStream({
+              ts: Date.now(),
+              event: "assistant_text_stream",
+              runId: params.runId,
+              sessionId: (params.session as { id?: string }).id,
+              evtType,
+              delta,
+              content,
+            });
             let chunk = "";
             if (evtType === "text_delta") {
               chunk = delta;
@@ -755,7 +883,16 @@ export function subscribeEmbeddedPiSession(params: {
         const msg = (evt as AgentEvent & { message: AgentMessage }).message;
         if (msg?.role === "assistant") {
           const assistantMessage = msg as AssistantMessage;
+          promoteThinkingTagsToBlocks(assistantMessage);
           const rawText = extractAssistantText(assistantMessage);
+          appendRawStream({
+            ts: Date.now(),
+            event: "assistant_message_end",
+            runId: params.runId,
+            sessionId: (params.session as { id?: string }).id,
+            rawText,
+            rawThinking: extractAssistantThinking(assistantMessage),
+          });
           const cleaned = params.enforceFinalTag
             ? stripThinkingSegments(stripUnpairedThinkingTags(rawText))
             : stripThinkingSegments(rawText);

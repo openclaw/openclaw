@@ -1,5 +1,6 @@
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import { agentHandlers } from "./server-methods/agent.js";
+import { agentsHandlers } from "./server-methods/agents.js";
 import { chatHandlers } from "./server-methods/chat.js";
 import { configHandlers } from "./server-methods/config.js";
 import { connectHandlers } from "./server-methods/connect.js";
@@ -45,6 +46,7 @@ const handlers: GatewayRequestHandlers = {
   ...sendHandlers,
   ...usageHandlers,
   ...agentHandlers,
+  ...agentsHandlers,
 };
 
 export async function handleGatewayRequest(

@@ -7,6 +7,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
+import { sendMessageMSTeams } from "../../msteams/send.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
@@ -28,6 +29,11 @@ export type OutboundSendDeps = {
   sendSlack?: typeof sendMessageSlack;
   sendSignal?: typeof sendMessageSignal;
   sendIMessage?: typeof sendMessageIMessage;
+  sendMSTeams?: (
+    to: string,
+    text: string,
+    opts?: { mediaUrl?: string },
+  ) => Promise<{ messageId: string; conversationId: string }>;
 };
 
 export type OutboundDeliveryResult =
@@ -36,7 +42,8 @@ export type OutboundDeliveryResult =
   | { provider: "discord"; messageId: string; channelId: string }
   | { provider: "slack"; messageId: string; channelId: string }
   | { provider: "signal"; messageId: string; timestamp?: number }
-  | { provider: "imessage"; messageId: string };
+  | { provider: "imessage"; messageId: string }
+  | { provider: "msteams"; messageId: string; conversationId: string };
 
 type Chunker = (text: string, limit: number) => string[];
 
@@ -50,6 +57,7 @@ const providerCaps: Record<
   slack: { chunker: null },
   signal: { chunker: chunkText },
   imessage: { chunker: chunkText },
+  msteams: { chunker: chunkMarkdownText },
 };
 
 type ProviderHandler = {
@@ -204,6 +212,17 @@ function createProviderHandler(params: {
         })),
       }),
     },
+    msteams: {
+      chunker: providerCaps.msteams.chunker,
+      sendText: async (text) => ({
+        provider: "msteams",
+        ...(await deps.sendMSTeams(to, text)),
+      }),
+      sendMedia: async (caption, mediaUrl) => ({
+        provider: "msteams",
+        ...(await deps.sendMSTeams(to, caption, { mediaUrl })),
+      }),
+    },
   };
 
   return handlers[params.provider];
@@ -222,6 +241,11 @@ export async function deliverOutboundPayloads(params: {
 }): Promise<OutboundDeliveryResult[]> {
   const { cfg, provider, to, payloads } = params;
   const accountId = params.accountId;
+  const defaultSendMSTeams = async (
+    to: string,
+    text: string,
+    opts?: { mediaUrl?: string },
+  ) => sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl });
   const deps = {
     sendWhatsApp: params.deps?.sendWhatsApp ?? sendMessageWhatsApp,
     sendTelegram: params.deps?.sendTelegram ?? sendMessageTelegram,
@@ -229,6 +253,7 @@ export async function deliverOutboundPayloads(params: {
     sendSlack: params.deps?.sendSlack ?? sendMessageSlack,
     sendSignal: params.deps?.sendSignal ?? sendMessageSignal,
     sendIMessage: params.deps?.sendIMessage ?? sendMessageIMessage,
+    sendMSTeams: params.deps?.sendMSTeams ?? defaultSendMSTeams,
   };
   const results: OutboundDeliveryResult[] = [];
   const handler = createProviderHandler({

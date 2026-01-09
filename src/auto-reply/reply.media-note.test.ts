@@ -30,12 +30,19 @@ function makeResult(text: string) {
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   const base = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-media-note-"));
   const previousHome = process.env.HOME;
+  const previousBundledSkills = process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
   process.env.HOME = base;
+  process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = path.join(base, "bundled-skills");
   try {
     vi.mocked(runEmbeddedPiAgent).mockReset();
     return await fn(base);
   } finally {
     process.env.HOME = previousHome;
+    if (previousBundledSkills === undefined) {
+      delete process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
+    } else {
+      process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = previousBundledSkills;
+    }
     try {
       await fs.rm(base, { recursive: true, force: true });
     } catch {

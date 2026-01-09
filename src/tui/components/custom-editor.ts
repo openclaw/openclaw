@@ -4,6 +4,7 @@ export class CustomEditor extends Editor {
   onEscape?: () => void;
   onCtrlC?: () => void;
   onCtrlD?: () => void;
+  onCtrlG?: () => void;
   onCtrlL?: () => void;
   onCtrlO?: () => void;
   onCtrlP?: () => void;
@@ -26,6 +27,10 @@ export class CustomEditor extends Editor {
     }
     if (matchesKey(data, Key.ctrl("p")) && this.onCtrlP) {
       this.onCtrlP();
+      return;
+    }
+    if (matchesKey(data, Key.ctrl("g")) && this.onCtrlG) {
+      this.onCtrlG();
       return;
     }
     if (matchesKey(data, Key.ctrl("t")) && this.onCtrlT) {

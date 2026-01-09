@@ -43,6 +43,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
+import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
   readProviderAllowFromStore,
   upsertProviderPairingRequest,
@@ -508,7 +509,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     opts.slashCommand ?? slackCfg.slashCommand,
   );
   const textLimit = resolveTextChunkLimit(cfg, "slack", account.accountId);
-  const mentionRegexes = buildMentionRegexes(cfg);
   const ackReaction = (cfg.messages?.ackReaction ?? "").trim();
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
@@ -825,14 +825,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               try {
                 await sendMessageSlack(
                   message.channel,
-                  [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider slack <code>",
-                  ].join("\n"),
+                  buildPairingReply({
+                    provider: "slack",
+                    idLine: `Your Slack user id: ${directUserId}`,
+                    code,
+                  }),
                   {
                     token: botToken,
                     client: app.client,
@@ -855,6 +852,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
     }
 
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "slack",
+      accountId: account.accountId,
+      teamId: teamId || undefined,
+      peer: {
+        kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
+        id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
+      },
+    });
+    const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
     const wasMentioned =
       opts.wasMentioned ??
       (!isDirectMessage &&
@@ -905,6 +913,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       !hasAnyMention &&
       commandAuthorized &&
       hasControlCommand(message.text ?? "");
+    const effectiveWasMentioned = wasMentioned || shouldBypassMention;
     const canDetectMention = Boolean(botUserId) || mentionRegexes.length > 0;
     if (
       isRoom &&
@@ -963,16 +972,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       : isRoom
         ? `slack:channel:${message.channel}`
         : `slack:group:${message.channel}`;
-    const route = resolveAgentRoute({
-      cfg,
-      provider: "slack",
-      accountId: account.accountId,
-      teamId: teamId || undefined,
-      peer: {
-        kind: isDirectMessage ? "dm" : isRoom ? "channel" : "group",
-        id: isDirectMessage ? (message.user ?? "unknown") : message.channel,
-      },
-    });
     const baseSessionKey = route.sessionKey;
     const threadTs = message.thread_ts;
     const hasThreadTs = typeof threadTs === "string" && threadTs.length > 0;
@@ -1060,7 +1059,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       ThreadStarterBody: threadStarterBody,
       ThreadLabel: threadLabel,
       Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-      WasMentioned: isRoomish ? wasMentioned : undefined,
+      WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
       MediaPath: media?.path,
       MediaType: media?.contentType,
       MediaUrl: media?.path,
@@ -1717,14 +1716,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
               });
               if (created) {
                 await respond({
-                  text: [
-                    "Clawdbot: access not configured.",
-                    "",
-                    `Pairing code: ${code}`,
-                    "",
-                    "Ask the bot owner to approve with:",
-                    "clawdbot pairing approve --provider slack <code>",
-                  ].join("\n"),
+                  text: buildPairingReply({
+                    provider: "slack",
+                    idLine: `Your Slack user id: ${command.user_id}`,
+                    code,
+                  }),
                   response_type: "ephemeral",
                 });
               }

@@ -1,7 +1,9 @@
 import { runCommandWithTimeout } from "../process/exec.js";
+import { WIDE_AREA_DISCOVERY_DOMAIN } from "./widearea-dns.js";
 
 export type GatewayBonjourBeacon = {
   instanceName: string;
+  domain?: string;
   displayName?: string;
   host?: string;
   port?: number;
@@ -16,9 +18,14 @@ export type GatewayBonjourBeacon = {
 
 export type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
+  domains?: string[];
+  platform?: NodeJS.Platform;
+  run?: typeof runCommandWithTimeout;
 };
 
 const DEFAULT_TIMEOUT_MS = 2000;
+
+const DEFAULT_DOMAINS = ["local.", WIDE_AREA_DISCOVERY_DOMAIN] as const;
 
 function parseIntOrNull(value: string | undefined): number | undefined {
   if (!value) return undefined;
@@ -94,21 +101,22 @@ function parseDnsSdResolve(
 }
 
 async function discoverViaDnsSd(
+  domain: string,
   timeoutMs: number,
+  run: typeof runCommandWithTimeout,
 ): Promise<GatewayBonjourBeacon[]> {
-  const browse = await runCommandWithTimeout(
-    ["dns-sd", "-B", "_clawdbot-bridge._tcp", "local."],
-    { timeoutMs },
-  );
+  const browse = await run(["dns-sd", "-B", "_clawdbot-bridge._tcp", domain], {
+    timeoutMs,
+  });
   const instances = parseDnsSdBrowse(browse.stdout);
   const results: GatewayBonjourBeacon[] = [];
   for (const instance of instances) {
-    const resolved = await runCommandWithTimeout(
-      ["dns-sd", "-L", instance, "_clawdbot-bridge._tcp", "local."],
+    const resolved = await run(
+      ["dns-sd", "-L", instance, "_clawdbot-bridge._tcp", domain],
       { timeoutMs },
     );
     const parsed = parseDnsSdResolve(resolved.stdout, instance);
-    if (parsed) results.push(parsed);
+    if (parsed) results.push({ ...parsed, domain });
   }
   return results;
 }
@@ -168,25 +176,54 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
 }
 
 async function discoverViaAvahi(
+  domain: string,
   timeoutMs: number,
+  run: typeof runCommandWithTimeout,
 ): Promise<GatewayBonjourBeacon[]> {
-  const browse = await runCommandWithTimeout(
-    ["avahi-browse", "-rt", "_clawdbot-bridge._tcp"],
-    { timeoutMs },
-  );
-  return parseAvahiBrowse(browse.stdout);
+  const args = ["avahi-browse", "-rt", "_clawdbot-bridge._tcp"];
+  if (domain && domain !== "local.") {
+    // avahi-browse wants a plain domain (no trailing dot)
+    args.push("-d", domain.replace(/\.$/, ""));
+  }
+  const browse = await run(args, { timeoutMs });
+  return parseAvahiBrowse(browse.stdout).map((beacon) => ({
+    ...beacon,
+    domain,
+  }));
 }
 
 export async function discoverGatewayBeacons(
   opts: GatewayBonjourDiscoverOpts = {},
 ): Promise<GatewayBonjourBeacon[]> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const platform = opts.platform ?? process.platform;
+  const run = opts.run ?? runCommandWithTimeout;
+  const domainsRaw = Array.isArray(opts.domains) ? opts.domains : [];
+  const domains = (domainsRaw.length > 0 ? domainsRaw : [...DEFAULT_DOMAINS])
+    .map((d) => String(d).trim())
+    .filter(Boolean)
+    .map((d) => (d.endsWith(".") ? d : `${d}.`));
+
   try {
-    if (process.platform === "darwin") {
-      return await discoverViaDnsSd(timeoutMs);
+    if (platform === "darwin") {
+      const perDomain = await Promise.allSettled(
+        domains.map(
+          async (domain) => await discoverViaDnsSd(domain, timeoutMs, run),
+        ),
+      );
+      return perDomain.flatMap((r) =>
+        r.status === "fulfilled" ? r.value : [],
+      );
     }
-    if (process.platform === "linux") {
-      return await discoverViaAvahi(timeoutMs);
+    if (platform === "linux") {
+      const perDomain = await Promise.allSettled(
+        domains.map(
+          async (domain) => await discoverViaAvahi(domain, timeoutMs, run),
+        ),
+      );
+      return perDomain.flatMap((r) =>
+        r.status === "fulfilled" ? r.value : [],
+      );
     }
   } catch {
     return [];
