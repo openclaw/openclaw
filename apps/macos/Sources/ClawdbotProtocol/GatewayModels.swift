@@ -703,6 +703,39 @@ public struct SessionsListParams: Codable, Sendable {
     }
 }
 
+public struct SessionsResolveParams: Codable, Sendable {
+    public let key: String?
+    public let label: String?
+    public let agentid: String?
+    public let spawnedby: String?
+    public let includeglobal: Bool?
+    public let includeunknown: Bool?
+
+    public init(
+        key: String?,
+        label: String?,
+        agentid: String?,
+        spawnedby: String?,
+        includeglobal: Bool?,
+        includeunknown: Bool?
+    ) {
+        self.key = key
+        self.label = label
+        self.agentid = agentid
+        self.spawnedby = spawnedby
+        self.includeglobal = includeglobal
+        self.includeunknown = includeunknown
+    }
+    private enum CodingKeys: String, CodingKey {
+        case key
+        case label
+        case agentid = "agentId"
+        case spawnedby = "spawnedBy"
+        case includeglobal = "includeGlobal"
+        case includeunknown = "includeUnknown"
+    }
+}
+
 public struct SessionsPatchParams: Codable, Sendable {
     public let key: String
     public let label: AnyCodable?
