@@ -112,24 +112,19 @@ public final class ClawdbotChatViewModel {
             recent.append(entry)
         }
 
-        let mainKey = "main"
         var result: [ClawdbotChatSessionEntry] = []
         var included = Set<String>()
-        if let main = sorted.first(where: { $0.key == mainKey }) {
-            result.append(main)
-            included.insert(mainKey)
-        } else if self.sessionKey == mainKey {
-            result.append(self.placeholderSession(key: mainKey))
-            included.insert(mainKey)
-        }
-
         for entry in recent where !included.contains(entry.key) {
             result.append(entry)
             included.insert(entry.key)
         }
 
         if !included.contains(self.sessionKey) {
-            result.append(self.placeholderSession(key: self.sessionKey))
+            if let current = sorted.first(where: { $0.key == self.sessionKey }) {
+                result.append(current)
+            } else {
+                result.append(self.placeholderSession(key: self.sessionKey))
+            }
         }
 
         return result
