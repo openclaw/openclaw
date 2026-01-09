@@ -38,17 +38,17 @@ importers:
         specifier: ^1.3.4
         version: 1.3.4
       '@mariozechner/pi-agent-core':
-        specifier: ^0.41.0
-        version: 0.41.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.42.1
+        version: 0.42.1(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-ai':
-        specifier: ^0.41.0
-        version: 0.41.0(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.42.1
+        version: 0.42.1(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-coding-agent':
-        specifier: ^0.41.0
-        version: 0.41.0(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)
+        specifier: ^0.42.1
+        version: 0.42.1(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)
       '@mariozechner/pi-tui':
-        specifier: ^0.41.0
-        version: 0.41.0
+        specifier: ^0.42.1
+        version: 0.42.1
       '@microsoft/agents-hosting':
         specifier: ^1.1.1
         version: 1.1.1
@@ -202,10 +202,10 @@ importers:
         version: 0.6.3
       oxlint:
         specifier: ^1.38.0
-        version: 1.38.0(oxlint-tsgolint@0.10.1)
+        version: 1.38.0(oxlint-tsgolint@0.11.0)
       oxlint-tsgolint:
-        specifier: ^0.10.1
-        version: 0.10.1
+        specifier: ^0.11.0
+        version: 0.11.0
       quicktype-core:
         specifier: ^23.2.6
         version: 23.2.6
@@ -851,22 +851,22 @@ packages:
     peerDependencies:
       lit: ^3.3.1
 
-  '@mariozechner/pi-agent-core@0.41.0':
-    resolution: {integrity: sha512-eXmnMWCeRnSjvF5nbC8LbiOhdcSuUG/p+ZzfZqhfzkc5JMKGccGPnEHzXwfrVkJpyqL0rIWi9cG0yelVAat30A==}
+  '@mariozechner/pi-agent-core@0.42.1':
+    resolution: {integrity: sha512-sIRB1jHheQSGONoVorrQ3X9vc1JFLoAe+48k7UJmpLAhJXnQmRtq1+CtzvKOVe5qVRyNBNuNdXipH+seicbwvQ==}
     engines: {node: '>=20.0.0'}
 
-  '@mariozechner/pi-ai@0.41.0':
-    resolution: {integrity: sha512-ZcI+lFMbf35kQvppHa4hy5tu34GiH5WYwWxPD7BHm7AiYxPcytdP+0NiaJdLIRGSLZqKklXDDejbb6/QvOwI3w==}
-    engines: {node: '>=20.0.0'}
-    hasBin: true
-
-  '@mariozechner/pi-coding-agent@0.41.0':
-    resolution: {integrity: sha512-+x5tPGxjsT5d9u48xvTwayHW/v+w7L/zK1Oyyfhpu8qqSqkM5G5jeqK3tqQREG2YE+PwPSozmDtVzHYPrcNamA==}
+  '@mariozechner/pi-ai@0.42.1':
+    resolution: {integrity: sha512-uRiH+s7EPDz9Q7hjQJ4Mm8lU4e4/C8pB4rnqGds73B5/0rqZb8DeSBukKU6uOwMNkXol/tYgnkEqXy7qEoHLJQ==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
-  '@mariozechner/pi-tui@0.41.0':
-    resolution: {integrity: sha512-FxhNyQfsQvZJBbUIPbtvBzF8yJo2JjEXVksn5cUU8Qphw8z1Uf+bRXeleH7Q7VVvGnaH9zJR3r2cfkaWxC1Jig==}
+  '@mariozechner/pi-coding-agent@0.42.1':
+    resolution: {integrity: sha512-BsLgFBC//98EdQCCoNYPfxKi2TEJ64a9w/CQC8/DyeAVhjrdJELUd+3EoRV6iiodbpUspUASW9w3ELoqQGAtoA==}
+    engines: {node: '>=20.0.0'}
+    hasBin: true
+
+  '@mariozechner/pi-tui@0.42.1':
+    resolution: {integrity: sha512-dsmzcOjD+9MNgqnJ6/BJ255Sc9KQWN4Asyh1ron7bMA4Q9lqSWl6q8dk78DBp2QcVeWHtvqbwdZwNnDwWyxw3g==}
     engines: {node: '>=20.0.0'}
 
   '@microsoft/agents-activity@1.1.1':
@@ -906,33 +906,33 @@ packages:
   '@oxc-project/types@0.107.0':
     resolution: {integrity: sha512-QFDRbYfV2LVx8tyqtyiah3jQPUj1mK2+RYwxyFWyGoys6XJnwTdlzO6rdNNHOPorHAu5Uo34oWRKcvNpbJarmQ==}
 
-  '@oxlint-tsgolint/darwin-arm64@0.10.1':
-    resolution: {integrity: sha512-KGC4++BeEqrIcmDHiJt/e6/860PWJmUJjjp0mE+smpBmRXMjmOFFjrPmN+ZyCyVgf1WdmhPkQXsRSPeTR+2omw==}
+  '@oxlint-tsgolint/darwin-arm64@0.11.0':
+    resolution: {integrity: sha512-F67T8dXgYIrgv6wpd52fKQFdmieSOHaxBkscgso64YdtEHrV3s52ASiZGNzw62TKihn9Ox9ek3PYx9XsxIJDUw==}
     cpu: [arm64]
     os: [darwin]
 
-  '@oxlint-tsgolint/darwin-x64@0.10.1':
-    resolution: {integrity: sha512-tvmrDgj3Q0tdc+zMWfCVLVq8EQDEUqasm1zaWgSMYIszpID6qdgqbT+OpWWXV9fLZgtvrkoXGwxkHAUJzdVZXQ==}
+  '@oxlint-tsgolint/darwin-x64@0.11.0':
+    resolution: {integrity: sha512-z44LO7+3z2mtcBxA9T66yEy/otp/2r5ypbkx7EYlPwbEqBAIDRt/8hqQ9/BUC//1qE549P1cBU6NjhgeyuXjYQ==}
     cpu: [x64]
     os: [darwin]
 
-  '@oxlint-tsgolint/linux-arm64@0.10.1':
-    resolution: {integrity: sha512-7kD28z6/ykGx8WetKTPRZt30pd+ziassxg/8cM24lhjUI+hNXyRHVtHes73dh9D6glJKno+1ut+3amUdZBZcpQ==}
+  '@oxlint-tsgolint/linux-arm64@0.11.0':
+    resolution: {integrity: sha512-IeIjmpPi2j2Dn1CRizGikysyLp9B0q3jqiAalv9ewRyb8hqQW5YeMlsswo8pHd0Hz3KyFfone0NkvBt77Ex2pg==}
     cpu: [arm64]
     os: [linux]
 
-  '@oxlint-tsgolint/linux-x64@0.10.1':
-    resolution: {integrity: sha512-NmJmiqdzYUTHIxteSTyX6IFFgnIsOAjRWXfrS6Jbo5xlB3g39WHniSF3asB/khLJNtwSg4InUS34NprYM7zrEw==}
+  '@oxlint-tsgolint/linux-x64@0.11.0':
+    resolution: {integrity: sha512-fpYGYU2pXjaXYnKgWrihFXE8zJiTRjYKSHAaBaVI056oqKjKGEoU2BfFbddpBrKgz9TmSOX/NGftrJnyMn1wXQ==}
     cpu: [x64]
     os: [linux]
 
-  '@oxlint-tsgolint/win32-arm64@0.10.1':
-    resolution: {integrity: sha512-3KrT80vl3nXUkjuJI/z8dF6xWsKx0t9Tz4ZQHgQw3fYw+CoihBRWGklrdlmCz+EGfMyVaQLqBV9PZckhSqLe2A==}
+  '@oxlint-tsgolint/win32-arm64@0.11.0':
+    resolution: {integrity: sha512-37nzks9eqBt7NYE6okquu51vaqMruF5voX475L16Y8asJVCGpO/2VSy3ulYAXhZ+5Kdc8ZgrljVViJOjfPEPaA==}
     cpu: [arm64]
     os: [win32]
 
-  '@oxlint-tsgolint/win32-x64@0.10.1':
-    resolution: {integrity: sha512-hW1fSJZVxG51sLdGq1sQjOzb1tsQ23z/BquJfUwL7CqBobxr7TJvGmoINL+9KryOJt0jCoaiMfWe4yoYw5XfIA==}
+  '@oxlint-tsgolint/win32-x64@0.11.0':
+    resolution: {integrity: sha512-TsK4C61+mjmbkUJ3Q3E9Ev3VFbeI6prPEAm9FAOq8VsfUGEiIUBBjrZ8ysGoQXNiU3dCKpmu012ptVUZTk5/eg==}
     cpu: [x64]
     os: [win32]
 
@@ -2542,8 +2542,8 @@ packages:
     resolution: {integrity: sha512-GJR9XnS8dQ+sAdbhX90RA4WbmEyrso7X9aHMws4MaQ2GRpfEjnOUSZIdOXJQfnIfBoy9oCc7US/MNFCyuJQzjg==}
     engines: {node: '>=20'}
 
-  oxlint-tsgolint@0.10.1:
-    resolution: {integrity: sha512-EEHNdo5cW2w1xwYdBQ7d3IXDqWAtMkfVFrh+9gQ4kYbYJwygY4QXSh1eH80/xVipZdVKujAwBgg/nNNHk56kxQ==}
+  oxlint-tsgolint@0.11.0:
+    resolution: {integrity: sha512-fGYb7z/cljC0Rjtbxh7mIe8vtF/M9TShLvniwc2rdcqNG3Z9g3nM01cr2kWRb1DZdbY4/kItvIsrV4uhaMifyQ==}
     hasBin: true
 
   oxlint@1.38.0:
@@ -3781,10 +3781,10 @@ snapshots:
     transitivePeerDependencies:
       - tailwindcss
 
-  '@mariozechner/pi-agent-core@0.41.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-agent-core@0.42.1(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
-      '@mariozechner/pi-ai': 0.41.0(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.41.0
+      '@mariozechner/pi-ai': 0.42.1(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.42.1
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - bufferutil
@@ -3793,7 +3793,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-ai@0.41.0(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-ai@0.42.1(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.71.2(zod@4.3.5)
       '@google/genai': 1.34.0
@@ -3813,12 +3813,12 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-coding-agent@0.41.0(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)':
+  '@mariozechner/pi-coding-agent@0.42.1(patch_hash=58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e)(ws@8.19.0)(zod@4.3.5)':
     dependencies:
       '@mariozechner/clipboard': 0.3.0
-      '@mariozechner/pi-agent-core': 0.41.0(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-ai': 0.41.0(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)
-      '@mariozechner/pi-tui': 0.41.0
+      '@mariozechner/pi-agent-core': 0.42.1(patch_hash=01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-ai': 0.42.1(patch_hash=3f4c1f943c57dbe2980bf21b1768dc780355f9124eeffbc30b5d5e42d2ea4b7c)(ws@8.19.0)(zod@4.3.5)
+      '@mariozechner/pi-tui': 0.42.1
       chalk: 5.6.2
       cli-highlight: 2.1.11
       diff: 8.0.2
@@ -3837,7 +3837,7 @@ snapshots:
       - ws
       - zod
 
-  '@mariozechner/pi-tui@0.41.0':
+  '@mariozechner/pi-tui@0.42.1':
     dependencies:
       '@types/mime-types': 2.1.4
       chalk: 5.6.2
@@ -3907,22 +3907,22 @@ snapshots:
 
   '@oxc-project/types@0.107.0': {}
 
-  '@oxlint-tsgolint/darwin-arm64@0.10.1':
+  '@oxlint-tsgolint/darwin-arm64@0.11.0':
     optional: true
 
-  '@oxlint-tsgolint/darwin-x64@0.10.1':
+  '@oxlint-tsgolint/darwin-x64@0.11.0':
     optional: true
 
-  '@oxlint-tsgolint/linux-arm64@0.10.1':
+  '@oxlint-tsgolint/linux-arm64@0.11.0':
     optional: true
 
-  '@oxlint-tsgolint/linux-x64@0.10.1':
+  '@oxlint-tsgolint/linux-x64@0.11.0':
     optional: true
 
-  '@oxlint-tsgolint/win32-arm64@0.10.1':
+  '@oxlint-tsgolint/win32-arm64@0.11.0':
     optional: true
 
-  '@oxlint-tsgolint/win32-x64@0.10.1':
+  '@oxlint-tsgolint/win32-x64@0.11.0':
     optional: true
 
   '@oxlint/darwin-arm64@1.38.0':
@@ -5572,16 +5572,16 @@ snapshots:
 
   osc-progress@0.2.0: {}
 
-  oxlint-tsgolint@0.10.1:
+  oxlint-tsgolint@0.11.0:
     optionalDependencies:
-      '@oxlint-tsgolint/darwin-arm64': 0.10.1
-      '@oxlint-tsgolint/darwin-x64': 0.10.1
-      '@oxlint-tsgolint/linux-arm64': 0.10.1
-      '@oxlint-tsgolint/linux-x64': 0.10.1
-      '@oxlint-tsgolint/win32-arm64': 0.10.1
-      '@oxlint-tsgolint/win32-x64': 0.10.1
+      '@oxlint-tsgolint/darwin-arm64': 0.11.0
+      '@oxlint-tsgolint/darwin-x64': 0.11.0
+      '@oxlint-tsgolint/linux-arm64': 0.11.0
+      '@oxlint-tsgolint/linux-x64': 0.11.0
+      '@oxlint-tsgolint/win32-arm64': 0.11.0
+      '@oxlint-tsgolint/win32-x64': 0.11.0
 
-  oxlint@1.38.0(oxlint-tsgolint@0.10.1):
+  oxlint@1.38.0(oxlint-tsgolint@0.11.0):
     optionalDependencies:
       '@oxlint/darwin-arm64': 1.38.0
       '@oxlint/darwin-x64': 1.38.0
@@ -5591,7 +5591,7 @@ snapshots:
       '@oxlint/linux-x64-musl': 1.38.0
       '@oxlint/win32-arm64': 1.38.0
       '@oxlint/win32-x64': 1.38.0
-      oxlint-tsgolint: 0.10.1
+      oxlint-tsgolint: 0.11.0
 
   p-finally@1.0.0: {}
 
