@@ -193,7 +193,7 @@ Notes:
 - Use `delayMs` (defaults to 2000) to avoid interrupting an in-flight reply.
 - `restart` is disabled by default; enable with `commands.restart: true`.
 
-### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn`
+### `sessions_list` / `sessions_history` / `sessions_send` / `sessions_spawn` / `session_status`
 List sessions, inspect transcript history, or send to another session.
 
 Core parameters:
@@ -201,6 +201,7 @@ Core parameters:
 - `sessions_history`: `sessionKey`, `limit?`, `includeTools?`
 - `sessions_send`: `sessionKey`, `message`, `timeoutSeconds?` (0 = fire-and-forget)
 - `sessions_spawn`: `task`, `label?`, `agentId?`, `model?`, `runTimeoutSeconds?`, `cleanup?`
+- `session_status`: `sessionKey?` (default current), `model?` (`default` clears override)
 
 Notes:
 - `main` is the canonical direct-chat key; global/unknown are hidden.

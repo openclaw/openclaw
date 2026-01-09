@@ -141,6 +141,7 @@ const DEFAULT_TOOL_ALLOW = [
   "sessions_history",
   "sessions_send",
   "sessions_spawn",
+  "session_status",
 ];
 const DEFAULT_TOOL_DENY = [
   "browser",
