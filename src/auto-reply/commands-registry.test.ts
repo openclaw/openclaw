@@ -26,6 +26,8 @@ describe("commands registry", () => {
     expect(detection.regex.test("/status:")).toBe(true);
     expect(detection.regex.test("/stop")).toBe(true);
     expect(detection.regex.test("/send:")).toBe(true);
+    expect(detection.regex.test("/models")).toBe(true);
+    expect(detection.regex.test("/models list")).toBe(true);
     expect(detection.regex.test("try /status")).toBe(false);
   });
 

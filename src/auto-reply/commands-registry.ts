@@ -104,7 +104,7 @@ const CHAT_COMMANDS: ChatCommandDefinition[] = [
     key: "model",
     nativeName: "model",
     description: "Show or set the model.",
-    textAliases: ["/model"],
+    textAliases: ["/model", "/models"],
     acceptsArgs: true,
   },
   {
