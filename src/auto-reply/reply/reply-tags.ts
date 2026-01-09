@@ -11,18 +11,18 @@ export function extractReplyToTag(
   let replyToId: string | undefined;
   let hasTag = false;
 
-  const currentMatch = cleaned.match(/\[\[reply_to_current\]\]/i);
+  const currentMatch = cleaned.match(/\[\[\s*reply_to_current\s*\]\]/i);
   if (currentMatch) {
-    cleaned = cleaned.replace(/\[\[reply_to_current\]\]/gi, " ");
+    cleaned = cleaned.replace(/\[\[\s*reply_to_current\s*\]\]/gi, " ");
     hasTag = true;
     if (currentMessageId?.trim()) {
       replyToId = currentMessageId.trim();
     }
   }
 
-  const idMatch = cleaned.match(/\[\[reply_to:([^\]\n]+)\]\]/i);
+  const idMatch = cleaned.match(/\[\[\s*reply_to\s*:\s*([^\]\n]+)\s*\]\]/i);
   if (idMatch?.[1]) {
-    cleaned = cleaned.replace(/\[\[reply_to:[^\]\n]+\]\]/gi, " ");
+    cleaned = cleaned.replace(/\[\[\s*reply_to\s*:[^\]\n]+\]\]/gi, " ");
     replyToId = idMatch[1].trim();
     hasTag = true;
   }
