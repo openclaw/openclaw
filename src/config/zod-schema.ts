@@ -842,6 +842,15 @@ const BindingsSchema = z
   )
   .optional();
 
+const BroadcastStrategySchema = z.enum(["parallel", "sequential"]);
+
+const BroadcastSchema = z
+  .object({
+    strategy: BroadcastStrategySchema.optional(),
+  })
+  .catchall(z.array(z.string()))
+  .optional();
+
 const AudioSchema = z
   .object({
     transcription: TranscribeAudioSchema,
@@ -1188,6 +1197,7 @@ export const ClawdbotSchema = z.object({
   agents: AgentsSchema,
   tools: ToolsSchema,
   bindings: BindingsSchema,
+  broadcast: BroadcastSchema,
   audio: AudioSchema,
   messages: MessagesSchema,
   commands: CommandsSchema,
