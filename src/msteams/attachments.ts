@@ -46,6 +46,25 @@ const IMAGE_EXT_RE = /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i;
 const IMG_SRC_RE = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
 const ATTACHMENT_TAG_RE = /<attachment[^>]+id=["']([^"']+)["'][^>]*>/gi;
 
+const DEFAULT_MEDIA_HOST_ALLOWLIST = [
+  "graph.microsoft.com",
+  "graph.microsoft.us",
+  "graph.microsoft.de",
+  "graph.microsoft.cn",
+  "sharepoint.com",
+  "sharepoint.us",
+  "sharepoint.de",
+  "sharepoint.cn",
+  "sharepoint-df.com",
+  "1drv.ms",
+  "onedrive.com",
+  "teams.microsoft.com",
+  "teams.cdn.office.net",
+  "statics.teams.cdn.office.net",
+  "office.com",
+  "office.net",
+];
+
 export type MSTeamsHtmlAttachmentSummary = {
   htmlAttachments: number;
   imgTags: number;
@@ -219,6 +238,40 @@ function safeHostForUrl(url: string): string {
     return new URL(url).hostname.toLowerCase();
   } catch {
     return "invalid-url";
+  }
+}
+
+function normalizeAllowHost(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) return "";
+  if (trimmed === "*") return "*";
+  return trimmed.replace(/^\*\.?/, "");
+}
+
+function resolveAllowedHosts(input?: string[]): string[] {
+  if (!Array.isArray(input) || input.length === 0) {
+    return DEFAULT_MEDIA_HOST_ALLOWLIST.slice();
+  }
+  const normalized = input.map(normalizeAllowHost).filter(Boolean);
+  if (normalized.includes("*")) return ["*"];
+  return normalized;
+}
+
+function isHostAllowed(host: string, allowlist: string[]): boolean {
+  if (allowlist.includes("*")) return true;
+  const normalized = host.toLowerCase();
+  return allowlist.some(
+    (entry) => normalized === entry || normalized.endsWith(`.${entry}`),
+  );
+}
+
+function isUrlAllowed(url: string, allowlist: string[]): boolean {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:") return false;
+    return isHostAllowed(parsed.hostname, allowlist);
+  } catch {
+    return false;
   }
 }
 
@@ -456,11 +509,13 @@ export async function downloadMSTeamsGraphMedia(params: {
   messageUrl?: string | null;
   tokenProvider?: MSTeamsAccessTokenProvider;
   maxBytes: number;
+  allowHosts?: string[];
   fetchFn?: typeof fetch;
 }): Promise<MSTeamsGraphMediaResult> {
   if (!params.messageUrl || !params.tokenProvider) {
     return { media: [] };
   }
+  const allowHosts = resolveAllowedHosts(params.allowHosts);
   const messageUrl = params.messageUrl;
   let accessToken: string;
   try {
@@ -489,6 +544,7 @@ export async function downloadMSTeamsGraphMedia(params: {
     attachments: normalizedAttachments,
     maxBytes: params.maxBytes,
     tokenProvider: params.tokenProvider,
+    allowHosts,
     fetchFn: params.fetchFn,
   });
 
@@ -629,10 +685,12 @@ export async function downloadMSTeamsImageAttachments(params: {
   attachments: MSTeamsAttachmentLike[] | undefined;
   maxBytes: number;
   tokenProvider?: MSTeamsAccessTokenProvider;
+  allowHosts?: string[];
   fetchFn?: typeof fetch;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
   if (list.length === 0) return [];
+  const allowHosts = resolveAllowedHosts(params.allowHosts);
 
   const candidates: DownloadCandidate[] = list
     .filter(isLikelyImageAttachment)
@@ -643,6 +701,9 @@ export async function downloadMSTeamsImageAttachments(params: {
   const seenUrls = new Set<string>();
   for (const inline of inlineCandidates) {
     if (inline.kind === "url") {
+      if (!isUrlAllowed(inline.url, allowHosts)) {
+        continue;
+      }
       if (seenUrls.has(inline.url)) continue;
       seenUrls.add(inline.url);
       candidates.push({
@@ -677,6 +738,7 @@ export async function downloadMSTeamsImageAttachments(params: {
     }
   }
   for (const candidate of candidates) {
+    if (!isUrlAllowed(candidate.url, allowHosts)) continue;
     try {
       const res = await fetchWithAuthFallback({
         url: candidate.url,

@@ -130,7 +130,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     label: "Message",
     name: "message",
     description:
-      "Send messages and provider-specific actions (Discord/Slack/Telegram/WhatsApp/Signal/iMessage).",
+      "Send messages and provider-specific actions (Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams).",
     parameters: MessageToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;

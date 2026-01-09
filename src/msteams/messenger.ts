@@ -9,7 +9,7 @@ type SendContext = {
   sendActivity: (textOrActivity: string | object) => Promise<unknown>;
 };
 
-type ConversationReference = {
+export type MSTeamsConversationReference = {
   activityId?: string;
   user?: { id?: string; name?: string; aadObjectId?: string };
   agent?: { id?: string; name?: string; aadObjectId?: string } | null;
@@ -22,7 +22,7 @@ type ConversationReference = {
 export type MSTeamsAdapter = {
   continueConversation: (
     appId: string,
-    reference: ConversationReference,
+    reference: MSTeamsConversationReference,
     logic: (context: SendContext) => Promise<void>,
   ) => Promise<void>;
 };
@@ -52,9 +52,9 @@ function normalizeConversationId(rawId: string): string {
   return rawId.split(";")[0] ?? rawId;
 }
 
-function buildConversationReference(
+export function buildConversationReference(
   ref: StoredConversationReference,
-): ConversationReference {
+): MSTeamsConversationReference {
   const conversationId = ref.conversation?.id?.trim();
   if (!conversationId) {
     throw new Error("Invalid stored reference: missing conversation.id");
@@ -275,7 +275,7 @@ export async function sendMSTeamsMessages(params: {
   }
 
   const baseRef = buildConversationReference(params.conversationRef);
-  const proactiveRef: ConversationReference = {
+  const proactiveRef: MSTeamsConversationReference = {
     ...baseRef,
     activityId: undefined,
   };

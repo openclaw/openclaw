@@ -10,7 +10,7 @@ read_when:
 
 Updated: 2026-01-08
 
-Status: text + DM attachments are supported; channel/group attachments require Microsoft Graph permissions.
+Status: text + DM attachments are supported; channel/group attachments require Microsoft Graph permissions. Polls are sent via Adaptive Cards.
 
 ## Goals
 - Talk to Clawdbot via Teams DMs, group chats, or channels.
@@ -288,7 +288,7 @@ Clawdbot handles this by returning quickly and sending replies proactively, but 
 Teams markdown is more limited than Slack or Discord:
 - Basic formatting works: **bold**, *italic*, `code`, links
 - Complex markdown (tables, nested lists) may not render correctly
-- Adaptive Cards are not yet supported (plain text + links for now)
+- Adaptive Cards are used for polls; other card types are not yet supported
 
 ## Configuration
 Key settings (see `/gateway/configuration` for shared provider patterns):
@@ -300,6 +300,7 @@ Key settings (see `/gateway/configuration` for shared provider patterns):
 - `msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing)
 - `msteams.allowFrom`: allowlist for DMs (AAD object IDs or UPNs).
 - `msteams.textChunkLimit`: outbound text chunk size.
+- `msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
 - `msteams.requireMention`: require @mention in channels/groups (default true).
 - `msteams.replyStyle`: `thread | top-level` (see [Reply Style](#reply-style-threads-vs-posts)).
 - `msteams.teams.<teamId>.replyStyle`: per-team override.
@@ -352,6 +353,15 @@ Teams recently introduced two channel UI styles over the same underlying data mo
 - **Channels/groups:** Attachments live in M365 storage (SharePoint/OneDrive). The webhook payload only includes an HTML stub, not the actual file bytes. **Graph API permissions are required** to download channel attachments.
 
 Without Graph permissions, channel messages with images will be received as text-only (the image content is not accessible to the bot).
+By default, Clawdbot only downloads media from Microsoft/Teams hostnames. Override with `msteams.mediaAllowHosts` (use `["*"]` to allow any host).
+
+## Polls (Adaptive Cards)
+Clawdbot sends Teams polls as Adaptive Cards (there is no native Teams poll API).
+
+- CLI: `clawdbot message poll --provider msteams --to conversation:<id> ...`
+- Votes are recorded by the gateway in `~/.clawdbot/msteams-polls.json`.
+- The gateway must stay online to record votes.
+- Polls do not auto-post result summaries yet (inspect the store file if needed).
 
 ## Proactive messaging
 - Proactive messages are only possible **after** a user has interacted, because we store conversation references at that point.

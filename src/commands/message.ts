@@ -477,6 +477,10 @@ export async function messageCommand(
         }),
       ),
     );
+    const pollId = (result.result as { pollId?: string } | undefined)?.pollId;
+    if (pollId) {
+      runtime.log(success(`Poll id: ${pollId}`));
+    }
     if (opts.json) {
       runtime.log(
         JSON.stringify(
@@ -494,6 +498,7 @@ export async function messageCommand(
             options: result.options,
             maxSelections: result.maxSelections,
             durationHours: result.durationHours,
+            pollId,
           },
           null,
           2,

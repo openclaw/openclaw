@@ -70,6 +70,8 @@ export type MessagePollResult = {
     messageId: string;
     toJid?: string;
     channelId?: string;
+    conversationId?: string;
+    pollId?: string;
   };
   dryRun?: boolean;
 };
@@ -108,7 +110,8 @@ export async function sendMessage(
     provider === "discord" ||
     provider === "slack" ||
     provider === "signal" ||
-    provider === "imessage"
+    provider === "imessage" ||
+    provider === "msteams"
   ) {
     const resolvedTarget = resolveOutboundTarget({
       provider,
@@ -167,7 +170,11 @@ export async function sendPoll(
   params: MessagePollParams,
 ): Promise<MessagePollResult> {
   const provider = (params.provider ?? "whatsapp").toLowerCase();
-  if (provider !== "whatsapp" && provider !== "discord") {
+  if (
+    provider !== "whatsapp" &&
+    provider !== "discord" &&
+    provider !== "msteams"
+  ) {
     throw new Error(`Unsupported poll provider: ${provider}`);
   }
 

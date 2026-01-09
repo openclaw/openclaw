@@ -48,6 +48,11 @@ import {
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
+import {
+  createMSTeamsPollStoreFs,
+  extractMSTeamsPollVote,
+  type MSTeamsPollStore,
+} from "./polls.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -58,6 +63,7 @@ export type MonitorMSTeamsOpts = {
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
+  pollStore?: MSTeamsPollStore;
 };
 
 export type MonitorMSTeamsResult = {
@@ -99,6 +105,7 @@ export async function monitorMSTeamsProvider(
       : 8 * MB;
   const conversationStore =
     opts.conversationStore ?? createMSTeamsConversationStoreFs();
+  const pollStore = opts.pollStore ?? createMSTeamsPollStoreFs();
 
   log.info(`starting provider (port ${port})`);
 
@@ -157,10 +164,6 @@ export async function monitorMSTeamsProvider(
       log.debug("html attachment summary", htmlSummary);
     }
 
-    if (!rawBody) {
-      log.debug("skipping empty message after stripping mentions");
-      return;
-    }
     if (!from?.id) {
       log.debug("skipping message without from.id");
       return;
@@ -179,63 +182,6 @@ export async function monitorMSTeamsProvider(
 
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
-
-    // Save conversation reference for proactive messaging
-    const agent = activity.recipient
-      ? {
-          id: activity.recipient.id,
-          name: activity.recipient.name,
-          aadObjectId: activity.recipient.aadObjectId,
-        }
-      : undefined;
-    const conversationRef: StoredConversationReference = {
-      activityId: activity.id,
-      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
-      agent,
-      bot: agent ? { id: agent.id, name: agent.name } : undefined,
-      conversation: {
-        id: conversationId,
-        conversationType,
-        tenantId: conversation?.tenantId,
-      },
-      channelId: activity.channelId,
-      serviceUrl: activity.serviceUrl,
-    };
-    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
-      log.debug("failed to save conversation reference", {
-        error: formatUnknownError(err),
-      });
-    });
-
-    // Build Teams-specific identifiers
-    const teamsFrom = isDirectMessage
-      ? `msteams:${senderId}`
-      : isChannel
-        ? `msteams:channel:${conversationId}`
-        : `msteams:group:${conversationId}`;
-    const teamsTo = isDirectMessage
-      ? `user:${senderId}`
-      : `conversation:${conversationId}`;
-
-    // Resolve routing
-    const route = resolveAgentRoute({
-      cfg,
-      provider: "msteams",
-      peer: {
-        kind: isDirectMessage ? "dm" : isChannel ? "channel" : "group",
-        id: isDirectMessage ? senderId : conversationId,
-      },
-    });
-
-    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
-    const inboundLabel = isDirectMessage
-      ? `Teams DM from ${senderName}`
-      : `Teams message in ${conversationType} from ${senderName}`;
-
-    enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
-      sessionKey: route.sessionKey,
-      contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
-    });
 
     // Check DM policy for direct messages
     if (isDirectMessage && msteamsCfg) {
@@ -280,8 +226,99 @@ export async function monitorMSTeamsProvider(
       }
     }
 
-    // Resolve team/channel config for channels and group chats
+    // Save conversation reference for proactive messaging
+    const agent = activity.recipient
+      ? {
+          id: activity.recipient.id,
+          name: activity.recipient.name,
+          aadObjectId: activity.recipient.aadObjectId,
+        }
+      : undefined;
     const teamId = activity.channelData?.team?.id;
+    const conversationRef: StoredConversationReference = {
+      activityId: activity.id,
+      user: { id: from.id, name: from.name, aadObjectId: from.aadObjectId },
+      agent,
+      bot: agent ? { id: agent.id, name: agent.name } : undefined,
+      conversation: {
+        id: conversationId,
+        conversationType,
+        tenantId: conversation?.tenantId,
+      },
+      teamId,
+      channelId: activity.channelId,
+      serviceUrl: activity.serviceUrl,
+    };
+    conversationStore.upsert(conversationId, conversationRef).catch((err) => {
+      log.debug("failed to save conversation reference", {
+        error: formatUnknownError(err),
+      });
+    });
+
+    const pollVote = extractMSTeamsPollVote(activity);
+    if (pollVote) {
+      try {
+        const poll = await pollStore.recordVote({
+          pollId: pollVote.pollId,
+          voterId: senderId,
+          selections: pollVote.selections,
+        });
+        if (!poll) {
+          log.debug("poll vote ignored (poll not found)", {
+            pollId: pollVote.pollId,
+          });
+        } else {
+          log.info("recorded poll vote", {
+            pollId: pollVote.pollId,
+            voter: senderId,
+            selections: pollVote.selections,
+          });
+        }
+      } catch (err) {
+        log.error("failed to record poll vote", {
+          pollId: pollVote.pollId,
+          error: formatUnknownError(err),
+        });
+      }
+      return;
+    }
+
+    if (!rawBody) {
+      log.debug("skipping empty message after stripping mentions");
+      return;
+    }
+
+    // Build Teams-specific identifiers
+    const teamsFrom = isDirectMessage
+      ? `msteams:${senderId}`
+      : isChannel
+        ? `msteams:channel:${conversationId}`
+        : `msteams:group:${conversationId}`;
+    const teamsTo = isDirectMessage
+      ? `user:${senderId}`
+      : `conversation:${conversationId}`;
+
+    // Resolve routing
+    const route = resolveAgentRoute({
+      cfg,
+      provider: "msteams",
+      peer: {
+        kind: isDirectMessage ? "dm" : isChannel ? "channel" : "group",
+        id: isDirectMessage ? senderId : conversationId,
+      },
+    });
+
+    const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
+    const inboundLabel = isDirectMessage
+      ? `Teams DM from ${senderName}`
+      : `Teams message in ${conversationType} from ${senderName}`;
+
+    enqueueSystemEvent(`${inboundLabel}: ${preview}`, {
+      sessionKey: route.sessionKey,
+      contextKey: `msteams:message:${conversationId}:${activity.id ?? "unknown"}`,
+    });
+
+    // Resolve team/channel config for channels and group chats
     const channelId = conversationId;
     const { teamConfig, channelConfig } = resolveMSTeamsRouteConfig({
       cfg: msteamsCfg,
@@ -318,6 +355,7 @@ export async function monitorMSTeamsProvider(
       tokenProvider: {
         getAccessToken: (scope) => tokenProvider.getAccessToken(scope),
       },
+      allowHosts: msteamsCfg?.mediaAllowHosts,
     });
     if (mediaList.length === 0) {
       const onlyHtmlAttachments =
@@ -357,6 +395,7 @@ export async function monitorMSTeamsProvider(
                 getAccessToken: (scope) => tokenProvider.getAccessToken(scope),
               },
               maxBytes: mediaMaxBytes,
+              allowHosts: msteamsCfg?.mediaAllowHosts,
             });
             attempts.push({
               url: messageUrl,
