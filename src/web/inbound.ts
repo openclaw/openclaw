@@ -735,9 +735,7 @@ export function extractText(
   const contactPlaceholder =
     extractContactPlaceholder(message) ??
     (extracted && extracted !== message
-      ? extractContactPlaceholder(
-          extracted as proto.IMessage | undefined,
-        )
+      ? extractContactPlaceholder(extracted as proto.IMessage | undefined)
       : undefined);
   if (contactPlaceholder) return contactPlaceholder;
   return undefined;
@@ -791,12 +789,11 @@ function describeContact(input: {
   return { name, phone };
 }
 
-function parseVcard(
-  vcard?: string,
-): { name?: string; phones: string[] } {
+function parseVcard(vcard?: string): { name?: string; phones: string[] } {
   if (!vcard) return { phones: [] };
   const lines = vcard.split(/\r?\n/);
-  let name: string | undefined;
+  let nameFromN: string | undefined;
+  let nameFromFn: string | undefined;
   const phones: string[] = [];
   for (const rawLine of lines) {
     const line = rawLine.trim();
@@ -808,15 +805,19 @@ function parseVcard(
     if (!rawValue) continue;
     const value = cleanVcardValue(rawValue);
     if (!value) continue;
-    if ((key === "FN" || key === "N") && !name) {
-      name = normalizeVcardName(value);
+    if (key === "FN" && !nameFromFn) {
+      nameFromFn = normalizeVcardName(value);
+      continue;
+    }
+    if (key === "N" && !nameFromN) {
+      nameFromN = normalizeVcardName(value);
       continue;
     }
     if (key.startsWith("TEL") || key.includes(".TEL")) {
       phones.push(value);
     }
   }
-  return { name, phones };
+  return { name: nameFromFn ?? nameFromN, phones };
 }
 
 function cleanVcardValue(value: string): string {
@@ -832,8 +833,8 @@ function normalizeVcardName(value: string): string {
 }
 
 function formatContactPlaceholder(name?: string, phone?: string): string {
-  const parts = [name, phone].filter(
-    (value): value is string => Boolean(value),
+  const parts = [name, phone].filter((value): value is string =>
+    Boolean(value),
   );
   if (parts.length === 0) return "<contact>";
   return `<contact: ${parts.join(", ")}>`;
