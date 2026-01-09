@@ -301,6 +301,10 @@ Subcommands:
 - `message voice status`
 - `message event <list|create>`
 
+Examples:
+- `clawdbot message send --to +15555550123 --message "Hi"`
+- `clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
+
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).
 
