@@ -1,0 +1,37 @@
+/* =============================================
+   LEGACY CHAT LINE LAYOUT (non-grouped)
+   ============================================= */
+
+.chat-line {
+  display: flex;
+  margin-bottom: 12px;
+}
+
+.chat-line.user {
+  justify-content: flex-end;
+}
+
+.chat-line.assistant,
+.chat-line.other {
+  justify-content: flex-start;
+}
+
+.chat-msg {
+  display: grid;
+  gap: 6px;
+  max-width: min(900px, 95%);
+}
+
+.chat-line.user .chat-msg {
+  justify-items: end;
+}
+
+.chat-stamp {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.chat-line.user .chat-stamp {
+  text-align: right;
+}
+

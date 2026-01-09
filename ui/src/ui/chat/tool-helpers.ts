@@ -27,10 +27,11 @@ export function formatToolOutputForSidebar(text: string): string {
  * Truncates to first N lines or first N characters, whichever is shorter.
  */
 export function getTruncatedPreview(text: string): string {
-  const lines = text.split("\n").slice(0, PREVIEW_MAX_LINES);
+  const allLines = text.split("\n");
+  const lines = allLines.slice(0, PREVIEW_MAX_LINES);
   const preview = lines.join("\n");
   if (preview.length > PREVIEW_MAX_CHARS) {
     return preview.slice(0, PREVIEW_MAX_CHARS) + "…";
   }
-  return lines.length < text.split("\n").length ? preview + "…" : preview;
+  return lines.length < allLines.length ? preview + "…" : preview;
 }
