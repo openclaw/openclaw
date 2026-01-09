@@ -46,6 +46,7 @@ import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
 import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { registerProvidersCli } from "./providers-cli.js";
+import { registerSandboxCli } from "./sandbox-cli.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
 
@@ -1038,6 +1039,7 @@ Examples:
   registerLogsCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
+  registerSandboxCli(program);
   registerTuiCli(program);
   registerCronCli(program);
   registerDnsCli(program);
