@@ -10,6 +10,9 @@ describe("createReplyDispatcher", () => {
     expect(dispatcher.sendFinalReply({})).toBe(false);
     expect(dispatcher.sendFinalReply({ text: " " })).toBe(false);
     expect(dispatcher.sendFinalReply({ text: SILENT_REPLY_TOKEN })).toBe(false);
+    expect(
+      dispatcher.sendFinalReply({ text: `${SILENT_REPLY_TOKEN} -- nope` }),
+    ).toBe(false);
 
     await dispatcher.waitForIdle();
     expect(deliver).not.toHaveBeenCalled();
@@ -54,12 +57,19 @@ describe("createReplyDispatcher", () => {
         mediaUrl: "file:///tmp/photo.jpg",
       }),
     ).toBe(true);
+    expect(
+      dispatcher.sendFinalReply({
+        text: `${SILENT_REPLY_TOKEN} -- explanation`,
+        mediaUrl: "file:///tmp/photo.jpg",
+      }),
+    ).toBe(true);
 
     await dispatcher.waitForIdle();
 
-    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver).toHaveBeenCalledTimes(3);
     expect(deliver.mock.calls[0][0].text).toBe("PFX already");
     expect(deliver.mock.calls[1][0].text).toBe("");
+    expect(deliver.mock.calls[2][0].text).toBe("");
   });
 
   it("preserves ordering across tool, block, and final replies", async () => {

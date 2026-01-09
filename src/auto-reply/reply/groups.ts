@@ -215,7 +215,7 @@ export function buildGroupIntro(params: {
       : "Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included).";
   const silenceLine =
     activation === "always"
-      ? `If no response is needed, reply with exactly "${params.silentToken}" (no other text) so Clawdbot stays silent.`
+      ? `If no response is needed, reply with exactly "${params.silentToken}" (and nothing else) so Clawdbot stays silent. Do not add any other words, punctuation, tags, markdown/code blocks, or explanations.`
       : undefined;
   const cautionLine =
     activation === "always"

@@ -32,7 +32,7 @@ import {
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { extractAudioTag } from "./audio-tags.js";
 import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
@@ -536,7 +536,10 @@ export async function runReplyAgent(params: {
                       Boolean(taggedPayload.mediaUrl) ||
                       (taggedPayload.mediaUrls?.length ?? 0) > 0;
                     if (!cleaned && !hasMedia) return;
-                    if (cleaned?.trim() === SILENT_REPLY_TOKEN && !hasMedia)
+                    if (
+                      isSilentReplyText(cleaned, SILENT_REPLY_TOKEN) &&
+                      !hasMedia
+                    )
                       return;
                     const blockPayload: ReplyPayload = applyReplyToMode({
                       ...taggedPayload,
@@ -745,7 +748,8 @@ export async function runReplyAgent(params: {
 
     const shouldSignalTyping = replyPayloads.some((payload) => {
       const trimmed = payload.text?.trim();
-      if (trimmed && trimmed !== SILENT_REPLY_TOKEN) return true;
+      if (trimmed && !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN))
+        return true;
       if (payload.mediaUrl) return true;
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;

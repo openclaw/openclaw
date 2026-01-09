@@ -29,7 +29,7 @@ import {
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type {
   ClawdbotConfig,
@@ -1934,7 +1934,8 @@ async function deliverReplies(params: {
     if (mediaList.length === 0) {
       for (const chunk of chunkMarkdownText(text, chunkLimit)) {
         const trimmed = chunk.trim();
-        if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
+        if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN))
+          continue;
         await sendMessageSlack(params.target, trimmed, {
           token: params.token,
           threadTs,
@@ -2013,7 +2014,9 @@ async function deliverSlackSlashReplies(params: {
   for (const payload of params.replies) {
     const textRaw = payload.text?.trim() ?? "";
     const text =
-      textRaw && textRaw !== SILENT_REPLY_TOKEN ? textRaw : undefined;
+      textRaw && !isSilentReplyText(textRaw, SILENT_REPLY_TOKEN)
+        ? textRaw
+        : undefined;
     const mediaList =
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const combined = [

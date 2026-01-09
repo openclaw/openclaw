@@ -1,5 +1,5 @@
 import { chunkMarkdownText } from "../auto-reply/chunk.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { MSTeamsReplyStyle } from "../config/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -107,14 +107,14 @@ function pushTextMessages(
   if (opts.chunkText) {
     for (const chunk of chunkMarkdownText(text, opts.chunkLimit)) {
       const trimmed = chunk.trim();
-      if (!trimmed || trimmed === SILENT_REPLY_TOKEN) continue;
+      if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) continue;
       out.push(trimmed);
     }
     return;
   }
 
   const trimmed = text.trim();
-  if (!trimmed || trimmed === SILENT_REPLY_TOKEN) return;
+  if (!trimmed || isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) return;
   out.push(trimmed);
 }
 
