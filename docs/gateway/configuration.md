@@ -921,6 +921,7 @@ message envelopes). If unset, Clawdbot uses the host timezone at runtime.
 ### `messages`
 
 Controls inbound/outbound prefixes and optional ack reactions.
+See [Messages](/concepts/messages) for queueing, sessions, and streaming context.
 
 ```json5
 {

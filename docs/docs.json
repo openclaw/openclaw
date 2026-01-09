@@ -38,6 +38,14 @@
       "destination": "/models"
     },
     {
+      "source": "/messages",
+      "destination": "/concepts/messages"
+    },
+    {
+      "source": "/messages/",
+      "destination": "/concepts/messages"
+    },
+    {
       "source": "/AGENTS.default",
       "destination": "/reference/AGENTS.default"
     },
@@ -575,6 +583,7 @@
           "concepts/session-tool",
           "concepts/presence",
           "concepts/provider-routing",
+          "concepts/messages",
           "concepts/groups",
           "concepts/group-messages",
           "concepts/typing-indicators",
