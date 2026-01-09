@@ -103,12 +103,14 @@ export async function sanitizeSessionMessagesImages(
         content as ContentBlock[],
         label,
       )) as unknown as typeof toolMsg.content;
-      // Sanitize tool call IDs for Google Cloud Code Assist compatibility
+      const sanitizedToolCallId = toolMsg.toolCallId
+        ? sanitizeToolCallId(toolMsg.toolCallId)
+        : undefined;
       const sanitizedMsg = {
         ...toolMsg,
         content: nextContent,
-        ...(toolMsg.toolCallId && {
-          toolCallId: sanitizeToolCallId(toolMsg.toolCallId),
+        ...(sanitizedToolCallId && {
+          toolCallId: sanitizedToolCallId,
         }),
       };
       out.push(sanitizedMsg);
@@ -283,7 +285,10 @@ export function isRateLimitErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   return (
     /rate[_ ]limit|too many requests|429/.test(value) ||
-    value.includes("exceeded your current quota")
+    value.includes("exceeded your current quota") ||
+    value.includes("resource has been exhausted") ||
+    value.includes("quota exceeded") ||
+    value.includes("resource_exhausted")
   );
 }
 
@@ -333,8 +338,23 @@ export function isAuthErrorMessage(raw: string): boolean {
     value.includes("unauthorized") ||
     value.includes("forbidden") ||
     value.includes("access denied") ||
+    value.includes("expired") ||
+    value.includes("token has expired") ||
     /\b401\b/.test(value) ||
     /\b403\b/.test(value)
+  );
+}
+
+export function isCloudCodeAssistFormatError(raw: string): boolean {
+  const value = raw.toLowerCase();
+  if (!value) return false;
+  return (
+    value.includes("invalid_request_error") ||
+    value.includes("string should match pattern") ||
+    value.includes("tool_use.id") ||
+    value.includes("tool_use_id") ||
+    value.includes("messages.1.content.1.tool_use.id") ||
+    value.includes("invalid request format")
   );
 }
 
@@ -515,7 +535,22 @@ export function normalizeTextForComparison(text: string): string {
 // This function sanitizes tool call IDs by replacing invalid characters with underscores.
 
 export function sanitizeToolCallId(id: string): string {
-  return id.replace(/[^a-zA-Z0-9_-]/g, "_");
+  if (!id || typeof id !== "string") return "default_tool_id";
+
+  const cloudCodeAssistPatternReplacement = id.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const trimmedInvalidStartChars = cloudCodeAssistPatternReplacement.replace(
+    /^[^a-zA-Z0-9_-]+/,
+    "",
+  );
+
+  return trimmedInvalidStartChars.length > 0
+    ? trimmedInvalidStartChars
+    : "sanitized_tool_id";
+}
+
+export function isValidCloudCodeAssistToolId(id: string): boolean {
+  if (!id || typeof id !== "string") return false;
+  return /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
 export function isMessagingToolDuplicate(
