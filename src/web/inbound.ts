@@ -820,8 +820,7 @@ function formatContactLabel(
 }
 
 function formatPhoneList(phones?: string[]): string | undefined {
-  const cleaned =
-    phones?.map((phone) => phone.trim()).filter(Boolean) ?? [];
+  const cleaned = phones?.map((phone) => phone.trim()).filter(Boolean) ?? [];
   if (cleaned.length === 0) return undefined;
   const [primary, ...rest] = cleaned;
   if (!primary) return undefined;
