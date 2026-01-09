@@ -789,6 +789,8 @@ export type CommandsConfig = {
   native?: boolean;
   /** Enable text command parsing (default: true). */
   text?: boolean;
+  /** Allow restart commands/tools (default: false). */
+  restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */
   useAccessGroups?: boolean;
 };

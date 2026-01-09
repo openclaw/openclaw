@@ -43,7 +43,10 @@ export function createClawdbotTools(options?: {
     }),
     createTelegramTool(),
     createWhatsAppTool(),
-    createGatewayTool({ agentSessionKey: options?.agentSessionKey }),
+    createGatewayTool({
+      agentSessionKey: options?.agentSessionKey,
+      config: options?.config,
+    }),
     createAgentsListTool({ agentSessionKey: options?.agentSessionKey }),
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
