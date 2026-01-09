@@ -5,6 +5,7 @@ import path from "node:path";
 
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { pollUntil } from "../../../test/helpers/poll.js";
 import { approveNodePairing, listNodePairing } from "../node-pairing.js";
 import { configureNodeBridgeSocket, startNodeBridgeServer } from "./server.js";
 
@@ -169,19 +170,16 @@ describe("node bridge server", () => {
     sendLine(socket, { type: "pair-request", nodeId: "n2", platform: "ios" });
 
     // Approve the pending request from the gateway side.
-    let reqId: string | undefined;
-    for (let i = 0; i < 40; i += 1) {
-      const list = await listNodePairing(baseDir);
-      const req = list.pending.find((p) => p.nodeId === "n2");
-      if (req) {
-        reqId = req.requestId;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(reqId).toBeTruthy();
-    if (!reqId) throw new Error("expected a pending requestId");
-    await approveNodePairing(reqId, baseDir);
+    const pending = await pollUntil(
+      async () => {
+        const list = await listNodePairing(baseDir);
+        return list.pending.find((p) => p.nodeId === "n2");
+      },
+      { timeoutMs: 3000 },
+    );
+    expect(pending).toBeTruthy();
+    if (!pending) throw new Error("expected a pending request");
+    await approveNodePairing(pending.requestId, baseDir);
 
     const line1 = JSON.parse(await readLine()) as {
       type: string;
@@ -220,12 +218,10 @@ describe("node bridge server", () => {
     });
 
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket);
     sendLine(socket, { type: "pair-request", nodeId: "n3", platform: "ios" });
 
-    for (let i = 0; i < 40; i += 1) {
-      if (requested) break;
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await pollUntil(async () => requested, { timeoutMs: 3000 });
 
     expect(requested?.nodeId).toBe("n3");
     expect(typeof requested?.requestId).toBe("string");
@@ -258,19 +254,16 @@ describe("node bridge server", () => {
     });
 
     // Approve the pending request from the gateway side.
-    let reqId: string | undefined;
-    for (let i = 0; i < 120; i += 1) {
-      const list = await listNodePairing(baseDir);
-      const req = list.pending.find((p) => p.nodeId === "n3-rpc");
-      if (req) {
-        reqId = req.requestId;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(reqId).toBeTruthy();
-    if (!reqId) throw new Error("expected a pending requestId");
-    await approveNodePairing(reqId, baseDir);
+    const pending = await pollUntil(
+      async () => {
+        const list = await listNodePairing(baseDir);
+        return list.pending.find((p) => p.nodeId === "n3-rpc");
+      },
+      { timeoutMs: 3000 },
+    );
+    expect(pending).toBeTruthy();
+    if (!pending) throw new Error("expected a pending request");
+    await approveNodePairing(pending.requestId, baseDir);
 
     const line1 = JSON.parse(await readLine()) as { type: string };
     expect(line1.type).toBe("pair-ok");
@@ -343,6 +336,7 @@ describe("node bridge server", () => {
     });
 
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket);
     const readLine = createLineReader(socket);
     sendLine(socket, {
       type: "pair-request",
@@ -356,19 +350,16 @@ describe("node bridge server", () => {
     });
 
     // Approve the pending request from the gateway side.
-    let reqId: string | undefined;
-    for (let i = 0; i < 40; i += 1) {
-      const list = await listNodePairing(baseDir);
-      const req = list.pending.find((p) => p.nodeId === "n4");
-      if (req) {
-        reqId = req.requestId;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(reqId).toBeTruthy();
-    if (!reqId) throw new Error("expected a pending requestId");
-    const approved = await approveNodePairing(reqId, baseDir);
+    const pending = await pollUntil(
+      async () => {
+        const list = await listNodePairing(baseDir);
+        return list.pending.find((p) => p.nodeId === "n4");
+      },
+      { timeoutMs: 3000 },
+    );
+    expect(pending).toBeTruthy();
+    if (!pending) throw new Error("expected a pending request");
+    const approved = await approveNodePairing(pending.requestId, baseDir);
     const token = approved?.node?.token ?? "";
     expect(token.length).toBeGreaterThan(0);
 
@@ -379,6 +370,7 @@ describe("node bridge server", () => {
     socket.destroy();
 
     const socket2 = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket2);
     const readLine2 = createLineReader(socket2);
     sendLine(socket2, {
       type: "hello",
@@ -394,10 +386,10 @@ describe("node bridge server", () => {
     const line3 = JSON.parse(await readLine2()) as { type: string };
     expect(line3.type).toBe("hello-ok");
 
-    for (let i = 0; i < 40; i += 1) {
-      if (lastAuthed?.nodeId === "n4") break;
-      await new Promise((r) => setTimeout(r, 25));
-    }
+    await pollUntil(
+      async () => (lastAuthed?.nodeId === "n4" ? lastAuthed : null),
+      { timeoutMs: 3000 },
+    );
 
     expect(lastAuthed?.nodeId).toBe("n4");
     // Prefer paired metadata over hello payload (token verifies the stored node record).
@@ -428,23 +420,21 @@ describe("node bridge server", () => {
     });
 
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket);
     const readLine = createLineReader(socket);
     sendLine(socket, { type: "pair-request", nodeId: "n5", platform: "ios" });
 
     // Approve the pending request from the gateway side.
-    let reqId: string | undefined;
-    for (let i = 0; i < 40; i += 1) {
-      const list = await listNodePairing(baseDir);
-      const req = list.pending.find((p) => p.nodeId === "n5");
-      if (req) {
-        reqId = req.requestId;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(reqId).toBeTruthy();
-    if (!reqId) throw new Error("expected a pending requestId");
-    await approveNodePairing(reqId, baseDir);
+    const pending = await pollUntil(
+      async () => {
+        const list = await listNodePairing(baseDir);
+        return list.pending.find((p) => p.nodeId === "n5");
+      },
+      { timeoutMs: 3000 },
+    );
+    expect(pending).toBeTruthy();
+    if (!pending) throw new Error("expected a pending request");
+    await approveNodePairing(pending.requestId, baseDir);
 
     const pairOk = JSON.parse(await readLine()) as {
       type: string;
@@ -494,6 +484,7 @@ describe("node bridge server", () => {
 
     // Ensure invoke works only for connected nodes (hello with token on a new socket).
     const socket2 = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket2);
     const readLine2 = createLineReader(socket2);
     sendLine(socket2, { type: "hello", nodeId: "n5", token });
     const hello2 = JSON.parse(await readLine2()) as { type: string };
@@ -511,6 +502,7 @@ describe("node bridge server", () => {
     });
 
     const socket = net.connect({ host: "127.0.0.1", port: server.port });
+    await waitForSocketConnect(socket);
     const readLine = createLineReader(socket);
     sendLine(socket, {
       type: "pair-request",
@@ -526,19 +518,16 @@ describe("node bridge server", () => {
     });
 
     // Approve the pending request from the gateway side.
-    let reqId: string | undefined;
-    for (let i = 0; i < 40; i += 1) {
-      const list = await listNodePairing(baseDir);
-      const req = list.pending.find((p) => p.nodeId === "n-caps");
-      if (req) {
-        reqId = req.requestId;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 25));
-    }
-    expect(reqId).toBeTruthy();
-    if (!reqId) throw new Error("expected a pending requestId");
-    await approveNodePairing(reqId, baseDir);
+    const pending = await pollUntil(
+      async () => {
+        const list = await listNodePairing(baseDir);
+        return list.pending.find((p) => p.nodeId === "n-caps");
+      },
+      { timeoutMs: 3000 },
+    );
+    expect(pending).toBeTruthy();
+    if (!pending) throw new Error("expected a pending request");
+    await approveNodePairing(pending.requestId, baseDir);
 
     const pairOk = JSON.parse(await readLine()) as { type: string };
     expect(pairOk.type).toBe("pair-ok");

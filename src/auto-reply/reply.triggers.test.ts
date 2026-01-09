@@ -55,22 +55,9 @@ vi.mock("../web/session.js", () => webMocks);
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-      const previousClawdisStateDir = process.env.CLAWDIS_STATE_DIR;
-      process.env.CLAWDBOT_STATE_DIR = join(home, ".clawdbot");
-      process.env.CLAWDIS_STATE_DIR = join(home, ".clawdbot");
-      try {
-        vi.mocked(runEmbeddedPiAgent).mockClear();
-        vi.mocked(abortEmbeddedPiRun).mockClear();
-        return await fn(home);
-      } finally {
-        if (previousStateDir === undefined)
-          delete process.env.CLAWDBOT_STATE_DIR;
-        else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
-        if (previousClawdisStateDir === undefined)
-          delete process.env.CLAWDIS_STATE_DIR;
-        else process.env.CLAWDIS_STATE_DIR = previousClawdisStateDir;
-      }
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      vi.mocked(abortEmbeddedPiRun).mockClear();
+      return await fn(home);
     },
     { prefix: "clawdbot-triggers-" },
   );
