@@ -15,6 +15,9 @@ LOCK_DIR="${TMPDIR:-/tmp}/clawdbot-restart-${LOCK_KEY}"
 LOCK_PID_FILE="${LOCK_DIR}/pid"
 WAIT_FOR_LOCK=0
 LOG_PATH="${CLAWDBOT_RESTART_LOG:-/tmp/clawdbot-restart.log}"
+NO_SIGN=0
+SIGN=0
+AUTO_DETECT_SIGNING=1
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -64,13 +67,31 @@ acquire_lock() {
   done
 }
 
+check_signing_keys() {
+  local available_identities
+  available_identities="$(security find-identity -p codesigning -v 2>/dev/null | grep -E '(Developer ID Application|Apple Distribution|Apple Development)' || true)"
+  
+  if [ -n "$available_identities" ]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
 trap cleanup EXIT INT TERM
 
 for arg in "$@"; do
   case "${arg}" in
     --wait|-w) WAIT_FOR_LOCK=1 ;;
+    --no-sign) NO_SIGN=1; AUTO_DETECT_SIGNING=0 ;;
+    --sign) SIGN=1; AUTO_DETECT_SIGNING=0 ;;
     --help|-h)
-      log "Usage: $(basename "$0") [--wait]"
+      log "Usage: $(basename "$0") [--wait] [--no-sign] [--sign]"
+      log "  --wait    Wait for other restart to complete instead of exiting"
+      log "  --no-sign Force no code signing (fastest for development)"
+      log "  --sign    Force code signing (will fail if no signing key available)"
+      log ""
+      log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
       exit 0
       ;;
     *) ;;
@@ -117,6 +138,24 @@ run_step "bundle canvas a2ui" bash -lc "cd '${ROOT_DIR}' && pnpm canvas:a2ui:bun
 # 2) Rebuild into the same path the packager consumes (.build).
 run_step "clean build cache" bash -lc "cd '${ROOT_DIR}/apps/macos' && rm -rf .build .build-swift .swiftpm 2>/dev/null || true"
 run_step "swift build" bash -lc "cd '${ROOT_DIR}/apps/macos' && swift build -q --product Clawdbot"
+
+if [ "$AUTO_DETECT_SIGNING" -eq 1 ]; then
+  if check_signing_keys; then
+    log "==> Signing keys detected, will code sign"
+    SIGN=1
+  else
+    log "==> No signing keys found, will skip code signing (--no-sign)"
+    NO_SIGN=1
+  fi
+fi
+
+if [ "$NO_SIGN" -eq 1 ]; then
+  export ALLOW_ADHOC_SIGNING=1
+  export SIGN_IDENTITY="-"
+elif [ "$SIGN" -eq 1 ]; then
+  unset ALLOW_ADHOC_SIGNING
+  unset SIGN_IDENTITY
+fi
 
 # 3) Package app (default to bundling the embedded gateway + CLI).
 run_step "package app" bash -lc "cd '${ROOT_DIR}' && SKIP_TSC=${SKIP_TSC:-1} SKIP_GATEWAY_PACKAGE=${SKIP_GATEWAY_PACKAGE:-0} '${ROOT_DIR}/scripts/package-mac-app.sh'"
