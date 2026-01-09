@@ -212,6 +212,11 @@
       "title": "Sub-agent",
       "detailKeys": ["label", "agentId", "runTimeoutSeconds", "cleanup"]
     },
+    "session_status": {
+      "emoji": "📊",
+      "title": "Session Status",
+      "detailKeys": ["sessionKey", "model"]
+    },
     "whatsapp_login": {
       "emoji": "🟢",
       "title": "WhatsApp Login",

@@ -53,6 +53,8 @@ export function buildAgentSystemPrompt(params: {
     sessions_history: "Fetch history for another session/sub-agent",
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
+    session_status:
+      "Show a /status-equivalent status card (includes usage + cost when available); optional per-session model override",
     image: "Analyze an image with the configured image model",
   };
 
@@ -76,6 +78,7 @@ export function buildAgentSystemPrompt(params: {
     "sessions_list",
     "sessions_history",
     "sessions_send",
+    "session_status",
     "image",
   ];
 

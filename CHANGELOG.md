@@ -51,6 +51,7 @@
 - Agents: strip empty assistant text blocks from session history to avoid Claude API 400s. (#210)
 - Agents: scrub unsupported JSON Schema keywords from tool schemas for Cloud Code Assist API compatibility. (#567) — thanks @erikpr1994
 - Agents: simplify session tool schemas for Gemini compatibility. (#599) — thanks @mcinteerj
+- Agents: add `session_status` agent tool for `/status`-equivalent status (incl. usage/cost) + per-session model overrides. — thanks @steipete
 - Auto-reply: preserve block reply ordering with timeout fallback for streaming. (#503) — thanks @joshp123
 - Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
