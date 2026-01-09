@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
@@ -100,7 +100,7 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("📊 Usage: Claude 80% left");
+      expect(normalizeTestText(text ?? "")).toContain("Usage: Claude 80% left");
       expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
         expect.objectContaining({ providers: ["anthropic"] }),
       );

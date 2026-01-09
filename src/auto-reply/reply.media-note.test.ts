@@ -29,23 +29,16 @@ function makeResult(text: string) {
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(
     async (home) => {
-      const previousBundledSkills = process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
-      process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = path.join(
-        home,
-        "bundled-skills",
-      );
-      try {
-        vi.mocked(runEmbeddedPiAgent).mockReset();
-        return await fn(home);
-      } finally {
-        if (previousBundledSkills === undefined) {
-          delete process.env.CLAWDBOT_BUNDLED_SKILLS_DIR;
-        } else {
-          process.env.CLAWDBOT_BUNDLED_SKILLS_DIR = previousBundledSkills;
-        }
-      }
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      return await fn(home);
     },
-    { prefix: "clawdbot-media-note-" },
+    {
+      env: {
+        CLAWDBOT_BUNDLED_SKILLS_DIR: (home) =>
+          path.join(home, "bundled-skills"),
+      },
+      prefix: "clawdbot-media-note-",
+    },
   );
 }
 
