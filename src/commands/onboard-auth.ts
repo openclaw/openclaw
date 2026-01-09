@@ -10,6 +10,12 @@ const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
 const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
+export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
+const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
+const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
+export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
+
 export async function writeOAuthCredentials(
   provider: OAuthProvider,
   creds: OAuthCredentials,
