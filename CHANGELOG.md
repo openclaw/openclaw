@@ -39,6 +39,7 @@
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
 - Control UI: link sessions list to chat view. (#471) — thanks @HazAT
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
+- Control UI: drop explicit `ui:install` step; `ui:build` now auto-installs UI deps (docs + update flow).
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)

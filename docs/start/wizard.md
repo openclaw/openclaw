@@ -120,7 +120,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 9) **Finish**
    - Summary + next steps, including iOS/Android/macOS apps for extra features.
   - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
-  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:install && pnpm ui:build`.
+  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 
 ## Remote mode
 
