@@ -129,7 +129,7 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(payload.text).toBe("Hello block");
   });
 
-  it("prepends reasoning before text when enabled", () => {
+  it("emits reasoning as a separate message when enabled", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -160,11 +160,11 @@ describe("subscribeEmbeddedPiSession", () => {
 
     handler?.({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
-    const payload = onBlockReply.mock.calls[0][0];
-    expect(payload.text).toBe(
-      "_Reasoning:_\n_Because it helps_\n\nFinal answer",
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
+    expect(onBlockReply.mock.calls[0][0].text).toBe(
+      "Reasoning:\nBecause it helps",
     );
+    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
   });
 
   it("promotes <think> tags to thinking blocks at write-time", () => {
@@ -200,10 +200,11 @@ describe("subscribeEmbeddedPiSession", () => {
 
     handler?.({ type: "message_end", message: assistantMessage });
 
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(onBlockReply.mock.calls[0][0].text).toBe(
-      "_Reasoning:_\n_Because it helps_\n\nFinal answer",
+      "Reasoning:\nBecause it helps",
     );
+    expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
 
     expect(assistantMessage.content).toEqual([
       { type: "thinking", thinking: "Because it helps" },

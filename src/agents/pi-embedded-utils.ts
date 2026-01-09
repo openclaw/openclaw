@@ -37,12 +37,7 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
 export function formatReasoningMarkdown(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return "";
-  const lines = trimmed.split(/\r?\n/);
-  const wrapped = lines
-    .map((line) => line.trim())
-    .map((line) => (line ? `_${line}_` : ""))
-    .filter((line) => line.length > 0);
-  return wrapped.length > 0 ? [`_Reasoning:_`, ...wrapped].join("\n") : "";
+  return `Reasoning:\n${trimmed}`;
 }
 
 export function inferToolMetaFromArgs(

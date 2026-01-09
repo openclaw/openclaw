@@ -936,11 +936,7 @@ export function subscribeEmbeddedPiSession(params: {
           const formattedReasoning = rawThinking
             ? formatReasoningMarkdown(rawThinking)
             : "";
-          const text = includeReasoning
-            ? baseText && formattedReasoning
-              ? `${formattedReasoning}\n\n${baseText}`
-              : formattedReasoning || baseText
-            : baseText;
+          const text = baseText;
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
@@ -953,13 +949,28 @@ export function subscribeEmbeddedPiSession(params: {
           }
           assistantTextBaseline = assistantTexts.length;
 
+          const onBlockReply = params.onBlockReply;
+          const shouldEmitReasoning =
+            includeReasoning &&
+            Boolean(formattedReasoning) &&
+            Boolean(onBlockReply) &&
+            formattedReasoning !== lastReasoningSent;
+          const shouldEmitReasoningBeforeAnswer =
+            shouldEmitReasoning &&
+            blockReplyBreak === "message_end" &&
+            !addedDuringMessage;
+          if (shouldEmitReasoningBeforeAnswer && formattedReasoning) {
+            lastReasoningSent = formattedReasoning;
+            void onBlockReply?.({ text: formattedReasoning });
+          }
+
           if (
             (blockReplyBreak === "message_end" ||
               (blockChunker
                 ? blockChunker.hasBuffered()
                 : blockBuffer.length > 0)) &&
             text &&
-            params.onBlockReply
+            onBlockReply
           ) {
             if (blockChunker?.hasBuffered()) {
               blockChunker.drain({ force: true, emit: emitBlockChunk });
@@ -975,7 +986,7 @@ export function subscribeEmbeddedPiSession(params: {
                 const { text: cleanedText, mediaUrls } =
                   splitMediaFromOutput(text);
                 if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
-                  void params.onBlockReply({
+                  void onBlockReply({
                     text: cleanedText,
                     mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
                   });
@@ -983,16 +994,13 @@ export function subscribeEmbeddedPiSession(params: {
               }
             }
           }
-          const onBlockReply = params.onBlockReply;
-          const shouldEmitReasoningBlock =
-            includeReasoning &&
-            Boolean(formattedReasoning) &&
-            Boolean(onBlockReply) &&
-            formattedReasoning !== lastReasoningSent &&
-            (blockReplyBreak === "text_end" || Boolean(blockChunker));
-          if (shouldEmitReasoningBlock && formattedReasoning && onBlockReply) {
+          if (
+            shouldEmitReasoning &&
+            !shouldEmitReasoningBeforeAnswer &&
+            formattedReasoning
+          ) {
             lastReasoningSent = formattedReasoning;
-            void onBlockReply({ text: formattedReasoning });
+            void onBlockReply?.({ text: formattedReasoning });
           }
           if (streamReasoning && rawThinking) {
             emitReasoningStream(rawThinking);
