@@ -33,9 +33,11 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { resolveDefaultAgentId } from "./agent-scope.js";
 import {
   markAuthProfileFailure,
   markAuthProfileGood,
@@ -882,15 +884,21 @@ export async function compactEmbeddedPiSession(params: {
           params.config?.agents?.defaults?.userTimezone,
         );
         const userTime = formatUserTime(new Date(), userTimezone);
+        // Only include heartbeat prompt for the default agent
+        const sessionAgentId = resolveAgentIdFromSessionKey(params.sessionKey);
+        const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+        const isDefaultAgent = sessionAgentId === defaultAgentId;
         const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
           extraSystemPrompt: params.extraSystemPrompt,
           ownerNumbers: params.ownerNumbers,
           reasoningTagHint,
-          heartbeatPrompt: resolveHeartbeatPrompt(
-            params.config?.agents?.defaults?.heartbeat?.prompt,
-          ),
+          heartbeatPrompt: isDefaultAgent
+            ? resolveHeartbeatPrompt(
+                params.config?.agents?.defaults?.heartbeat?.prompt,
+              )
+            : undefined,
           skillsPrompt,
           runtimeInfo,
           sandboxInfo,
@@ -1245,15 +1253,23 @@ export async function runEmbeddedPiAgent(params: {
             params.config?.agents?.defaults?.userTimezone,
           );
           const userTime = formatUserTime(new Date(), userTimezone);
+          // Only include heartbeat prompt for the default agent
+          const sessionAgentId = resolveAgentIdFromSessionKey(
+            params.sessionKey,
+          );
+          const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+          const isDefaultAgent = sessionAgentId === defaultAgentId;
           const appendPrompt = buildEmbeddedSystemPrompt({
             workspaceDir: effectiveWorkspace,
             defaultThinkLevel: thinkLevel,
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
-            heartbeatPrompt: resolveHeartbeatPrompt(
-              params.config?.agents?.defaults?.heartbeat?.prompt,
-            ),
+            heartbeatPrompt: isDefaultAgent
+              ? resolveHeartbeatPrompt(
+                  params.config?.agents?.defaults?.heartbeat?.prompt,
+                )
+              : undefined,
             skillsPrompt,
             runtimeInfo,
             sandboxInfo,
