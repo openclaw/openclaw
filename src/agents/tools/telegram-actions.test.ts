@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
-import { handleTelegramAction } from "./telegram-actions.js";
+import {
+  handleTelegramAction,
+  readTelegramButtons,
+} from "./telegram-actions.js";
 
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
 const sendMessageTelegram = vi.fn(async () => ({
@@ -41,10 +44,12 @@ describe("handleTelegramAction", () => {
       },
       cfg,
     );
-    expect(reactMessageTelegram).toHaveBeenCalledWith("123", 456, "✅", {
-      token: "tok",
-      remove: false,
-    });
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "✅",
+      expect.objectContaining({ token: "tok", remove: false }),
+    );
   });
 
   it("removes reactions on empty emoji", async () => {
@@ -58,10 +63,12 @@ describe("handleTelegramAction", () => {
       },
       cfg,
     );
-    expect(reactMessageTelegram).toHaveBeenCalledWith("123", 456, "", {
-      token: "tok",
-      remove: false,
-    });
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "",
+      expect.objectContaining({ token: "tok", remove: false }),
+    );
   });
 
   it("removes reactions when remove flag set", async () => {
@@ -76,10 +83,12 @@ describe("handleTelegramAction", () => {
       },
       cfg,
     );
-    expect(reactMessageTelegram).toHaveBeenCalledWith("123", 456, "✅", {
-      token: "tok",
-      remove: true,
-    });
+    expect(reactMessageTelegram).toHaveBeenCalledWith(
+      "123",
+      456,
+      "✅",
+      expect.objectContaining({ token: "tok", remove: true }),
+    );
   });
 
   it("respects reaction gating", async () => {
@@ -112,7 +121,7 @@ describe("handleTelegramAction", () => {
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "@testchannel",
       "Hello, Telegram!",
-      { token: "tok", mediaUrl: undefined },
+      expect.objectContaining({ token: "tok", mediaUrl: undefined }),
     );
     expect(result.content).toContainEqual({
       type: "text",
@@ -134,7 +143,10 @@ describe("handleTelegramAction", () => {
     expect(sendMessageTelegram).toHaveBeenCalledWith(
       "123456",
       "Check this image!",
-      { token: "tok", mediaUrl: "https://example.com/image.jpg" },
+      expect.objectContaining({
+        token: "tok",
+        mediaUrl: "https://example.com/image.jpg",
+      }),
     );
   });
 
@@ -167,5 +179,51 @@ describe("handleTelegramAction", () => {
         cfg,
       ),
     ).rejects.toThrow(/Telegram bot token missing/);
+  });
+
+  it("requires inlineButtons capability when buttons are provided", async () => {
+    const cfg = { telegram: { botToken: "tok" } } as ClawdbotConfig;
+    await expect(
+      handleTelegramAction(
+        {
+          action: "sendMessage",
+          to: "@testchannel",
+          content: "Choose",
+          buttons: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+        },
+        cfg,
+      ),
+    ).rejects.toThrow(/inlineButtons/i);
+  });
+
+  it("sends messages with inline keyboard buttons when enabled", async () => {
+    const cfg = {
+      telegram: { botToken: "tok", capabilities: ["inlineButtons"] },
+    } as ClawdbotConfig;
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Choose",
+        buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
+      },
+      cfg,
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Choose",
+      expect.objectContaining({
+        buttons: [[{ text: "Option A", callback_data: "cmd:a" }]],
+      }),
+    );
+  });
+});
+
+describe("readTelegramButtons", () => {
+  it("returns trimmed button rows for valid input", () => {
+    const result = readTelegramButtons({
+      buttons: [[{ text: "  Option A ", callback_data: " cmd:a " }]],
+    });
+    expect(result).toEqual([[{ text: "Option A", callback_data: "cmd:a" }]]);
   });
 });

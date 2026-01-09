@@ -19,6 +19,8 @@ export function buildAgentSystemPrompt(params: {
     arch?: string;
     node?: string;
     model?: string;
+    provider?: string;
+    capabilities?: string[];
   };
   sandboxInfo?: {
     enabled: boolean;
@@ -43,6 +45,7 @@ export function buildAgentSystemPrompt(params: {
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events",
+    message: "Send messages and provider actions",
     gateway:
       "Restart, apply config, or run updates on the running Clawdbot process",
     agents_list: "List agent ids allowed for sessions_spawn",
@@ -51,10 +54,6 @@ export function buildAgentSystemPrompt(params: {
     sessions_send: "Send a message to another session/sub-agent",
     sessions_spawn: "Spawn a sub-agent session",
     image: "Analyze an image with the configured image model",
-    discord: "Send Discord reactions/messages and manage threads",
-    slack: "Send Slack messages and manage channels",
-    telegram: "Send Telegram reactions",
-    whatsapp: "Send WhatsApp reactions",
   };
 
   const toolOrder = [
@@ -71,16 +70,13 @@ export function buildAgentSystemPrompt(params: {
     "canvas",
     "nodes",
     "cron",
+    "message",
     "gateway",
     "agents_list",
     "sessions_list",
     "sessions_history",
     "sessions_send",
     "image",
-    "discord",
-    "slack",
-    "telegram",
-    "whatsapp",
   ];
 
   const normalizedTools = (params.toolNames ?? [])
@@ -127,6 +123,16 @@ export function buildAgentSystemPrompt(params: {
     ? `Heartbeat prompt: ${heartbeatPrompt}`
     : "Heartbeat prompt: (configured)";
   const runtimeInfo = params.runtimeInfo;
+  const runtimeProvider = runtimeInfo?.provider?.trim().toLowerCase();
+  const runtimeCapabilities = (runtimeInfo?.capabilities ?? [])
+    .map((cap) => String(cap).trim())
+    .filter(Boolean);
+  const runtimeCapabilitiesLower = new Set(
+    runtimeCapabilities.map((cap) => cap.toLowerCase()),
+  );
+  const telegramInlineButtonsEnabled =
+    runtimeProvider === "telegram" &&
+    runtimeCapabilitiesLower.has("inlinebuttons");
 
   const lines = [
     "You are a personal assistant running inside Clawdbot.",
@@ -229,6 +235,21 @@ export function buildAgentSystemPrompt(params: {
     "- Reply in current session → automatically routes to the source provider (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     "- Never use bash/curl for provider messaging; Clawdbot handles all routing internally.",
+    availableTools.has("message")
+      ? [
+          "",
+          "### message tool",
+          "- Use `message` for proactive sends + provider actions (polls, reactions, etc.).",
+          "- If multiple providers are configured, pass `provider` (whatsapp|telegram|discord|slack|signal|imessage|msteams).",
+          telegramInlineButtonsEnabled
+            ? "- Telegram: inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
+            : runtimeProvider === "telegram"
+              ? '- Telegram: inline buttons NOT enabled. If you need them, ask to add "inlineButtons" to telegram.capabilities or telegram.accounts.<id>.capabilities.'
+              : "",
+        ]
+          .filter(Boolean)
+          .join("\n")
+      : "",
     "",
   ];
 
@@ -270,6 +291,14 @@ export function buildAgentSystemPrompt(params: {
           : "",
       runtimeInfo?.node ? `node=${runtimeInfo.node}` : "",
       runtimeInfo?.model ? `model=${runtimeInfo.model}` : "",
+      runtimeProvider ? `provider=${runtimeProvider}` : "",
+      runtimeProvider
+        ? `capabilities=${
+            runtimeCapabilities.length > 0
+              ? runtimeCapabilities.join(",")
+              : "none"
+          }`
+        : "",
       `thinking=${params.defaultThinkLevel ?? "off"}`,
     ]
       .filter(Boolean)

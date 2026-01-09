@@ -25,6 +25,7 @@ import type {
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { isCacheEnabled, resolveCacheTtlMs } from "../config/cache-utils.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveProviderCapabilities } from "../config/provider-capabilities.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
@@ -32,6 +33,7 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
@@ -580,6 +582,8 @@ function buildEmbeddedSystemPrompt(params: {
     arch: string;
     node: string;
     model: string;
+    provider?: string;
+    capabilities?: string[];
   };
   sandboxInfo?: EmbeddedSandboxInfo;
   tools: AgentTool[];
@@ -855,12 +859,24 @@ export async function compactEmbeddedPiSession(params: {
           config: params.config,
         });
         const machineName = await getMachineDisplayName();
+        const runtimeProvider = normalizeMessageProvider(
+          params.messageProvider,
+        );
+        const runtimeCapabilities = runtimeProvider
+          ? (resolveProviderCapabilities({
+              cfg: params.config,
+              provider: runtimeProvider,
+              accountId: params.agentAccountId,
+            }) ?? [])
+          : undefined;
         const runtimeInfo = {
           host: machineName,
           os: `${os.type()} ${os.release()}`,
           arch: os.arch(),
           node: process.version,
           model: `${provider}/${modelId}`,
+          provider: runtimeProvider,
+          capabilities: runtimeCapabilities,
         };
         const sandboxInfo = buildEmbeddedSandboxInfo(sandbox);
         const reasoningTagHint = provider === "ollama";

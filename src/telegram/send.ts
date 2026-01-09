@@ -1,4 +1,9 @@
-import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
+import type {
+  InlineKeyboardButton,
+  InlineKeyboardMarkup,
+  ReactionType,
+  ReactionTypeEmoji,
+} from "@grammyjs/types";
 import { type ApiClientOptions, Bot, InputFile } from "grammy";
 import { loadConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -30,6 +35,8 @@ type TelegramSendOpts = {
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
   messageThreadId?: number;
+  /** Inline keyboard buttons (reply markup). */
+  buttons?: Array<Array<{ text: string; callback_data: string }>>;
 };
 
 type TelegramSendResult = {
@@ -103,6 +110,26 @@ function normalizeMessageId(raw: string | number): number {
   throw new Error("Message id is required for Telegram reactions");
 }
 
+export function buildInlineKeyboard(
+  buttons?: TelegramSendOpts["buttons"],
+): InlineKeyboardMarkup | undefined {
+  if (!buttons?.length) return undefined;
+  const rows = buttons
+    .map((row) =>
+      row
+        .filter((button) => button?.text && button?.callback_data)
+        .map(
+          (button): InlineKeyboardButton => ({
+            text: button.text,
+            callback_data: button.callback_data,
+          }),
+        ),
+    )
+    .filter((row) => row.length > 0);
+  if (rows.length === 0) return undefined;
+  return { inline_keyboard: rows };
+}
+
 export async function sendMessageTelegram(
   to: string,
   text: string,
@@ -124,6 +151,7 @@ export async function sendMessageTelegram(
     : undefined;
   const api = opts.api ?? new Bot(token, client ? { client } : undefined).api;
   const mediaUrl = opts.mediaUrl?.trim();
+  const replyMarkup = buildInlineKeyboard(opts.buttons);
 
   // Build optional params for forum topics and reply threading.
   // Only include these if actually provided to keep API calls clean.
@@ -171,8 +199,15 @@ export async function sendMessageTelegram(
     const file = new InputFile(media.buffer, fileName);
     const caption = text?.trim() || undefined;
     const mediaParams = hasThreadParams
-      ? { caption, ...threadParams }
-      : { caption };
+      ? {
+          caption,
+          ...threadParams,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }
+      : {
+          caption,
+          ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+        };
     let result:
       | Awaited<ReturnType<typeof api.sendPhoto>>
       | Awaited<ReturnType<typeof api.sendVideo>>
@@ -240,8 +275,15 @@ export async function sendMessageTelegram(
   }
   const htmlText = markdownToTelegramHtml(text);
   const textParams = hasThreadParams
-    ? { parse_mode: "HTML" as const, ...threadParams }
-    : { parse_mode: "HTML" as const };
+    ? {
+        parse_mode: "HTML" as const,
+        ...threadParams,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      }
+    : {
+        parse_mode: "HTML" as const,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      };
   const res = await request(
     () => api.sendMessage(chatId, htmlText, textParams),
     "message",
@@ -255,10 +297,17 @@ export async function sendMessageTelegram(
           `telegram HTML parse failed, retrying as plain text: ${errText}`,
         );
       }
+      const plainParams =
+        hasThreadParams || replyMarkup
+          ? {
+              ...threadParams,
+              ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+            }
+          : undefined;
       return await request(
         () =>
-          hasThreadParams
-            ? api.sendMessage(chatId, text, threadParams)
+          plainParams
+            ? api.sendMessage(chatId, text, plainParams)
             : api.sendMessage(chatId, text),
         "message-plain",
       ).catch((err2) => {

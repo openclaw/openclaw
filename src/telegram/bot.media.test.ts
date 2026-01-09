@@ -85,9 +85,10 @@ describe("telegram inbound media", () => {
         },
       },
     });
-    const handler = onSpy.mock.calls[0]?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     const fetchSpy = vi
       .spyOn(globalThis, "fetch" as never)
@@ -153,9 +154,10 @@ describe("telegram inbound media", () => {
         },
       },
     });
-    const handler = onSpy.mock.calls[0]?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     await handler({
       message: {
@@ -199,9 +201,10 @@ describe("telegram inbound media", () => {
         },
       },
     });
-    const handler = onSpy.mock.calls[0]?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     await handler({
       message: {
@@ -263,9 +266,10 @@ describe("telegram media groups", () => {
         },
       },
     });
-    const handler = onSpy.mock.calls[0][1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     await handler({
       message: {
@@ -323,9 +327,10 @@ describe("telegram media groups", () => {
     } as Response);
 
     createTelegramBot({ token: "tok" });
-    const handler = onSpy.mock.calls[0][1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     await handler({
       message: {
@@ -374,9 +379,10 @@ describe("telegram location parsing", () => {
     replySpy.mockReset();
 
     createTelegramBot({ token: "tok" });
-    const handler = onSpy.mock.calls[0]?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     await handler({
       message: {
@@ -415,9 +421,10 @@ describe("telegram location parsing", () => {
     replySpy.mockReset();
 
     createTelegramBot({ token: "tok" });
-    const handler = onSpy.mock.calls[0]?.[1] as (
-      ctx: Record<string, unknown>,
-    ) => Promise<void>;
+    const handler = onSpy.mock.calls.find(
+      (call) => call[0] === "message",
+    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+    expect(handler).toBeDefined();
 
     await handler({
       message: {

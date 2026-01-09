@@ -2,6 +2,7 @@ import { Type } from "@sinclair/typebox";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
+import { listEnabledDiscordAccounts } from "../../discord/accounts.js";
 import {
   type MessagePollResult,
   type MessageSendResult,
@@ -9,9 +10,13 @@ import {
   sendPoll,
 } from "../../infra/outbound/message.js";
 import { resolveMessageProviderSelection } from "../../infra/outbound/provider-selection.js";
+import { resolveMSTeamsCredentials } from "../../msteams/token.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
+import { listEnabledSlackAccounts } from "../../slack/accounts.js";
+import { listEnabledTelegramAccounts } from "../../telegram/accounts.js";
 import type { AnyAgentTool } from "./common.js";
 import {
+  createActionGate,
   jsonResult,
   readNumberParam,
   readStringArrayParam,
@@ -62,6 +67,19 @@ const MessageToolSchema = Type.Object({
   to: Type.Optional(Type.String()),
   message: Type.Optional(Type.String()),
   media: Type.Optional(Type.String()),
+  buttons: Type.Optional(
+    Type.Array(
+      Type.Array(
+        Type.Object({
+          text: Type.String(),
+          callback_data: Type.String(),
+        }),
+      ),
+      {
+        description: "Telegram inline keyboard buttons (array of button rows)",
+      },
+    ),
+  ),
   messageId: Type.Optional(Type.String()),
   replyTo: Type.Optional(Type.String()),
   threadId: Type.Optional(Type.String()),
@@ -118,6 +136,164 @@ type MessageToolOptions = {
   config?: ClawdbotConfig;
 };
 
+function hasTelegramInlineButtons(cfg: ClawdbotConfig): boolean {
+  const caps = new Set<string>();
+  for (const entry of cfg.telegram?.capabilities ?? []) {
+    const trimmed = String(entry).trim();
+    if (trimmed) caps.add(trimmed.toLowerCase());
+  }
+  const accounts = cfg.telegram?.accounts;
+  if (accounts && typeof accounts === "object") {
+    for (const account of Object.values(accounts)) {
+      const accountCaps = (account as { capabilities?: unknown })?.capabilities;
+      if (!Array.isArray(accountCaps)) continue;
+      for (const entry of accountCaps) {
+        const trimmed = String(entry).trim();
+        if (trimmed) caps.add(trimmed.toLowerCase());
+      }
+    }
+  }
+  return caps.has("inlinebuttons");
+}
+
+function buildMessageActionSchema(cfg: ClawdbotConfig) {
+  const actions = new Set<string>(["send"]);
+
+  const discordAccounts = listEnabledDiscordAccounts(cfg).filter(
+    (account) => account.tokenSource !== "none",
+  );
+  const discordEnabled = discordAccounts.length > 0;
+  const discordGate = createActionGate(cfg.discord?.actions);
+
+  const slackAccounts = listEnabledSlackAccounts(cfg).filter(
+    (account) => account.botTokenSource !== "none",
+  );
+  const slackEnabled = slackAccounts.length > 0;
+  const isSlackActionEnabled = (key: string, defaultValue = true) => {
+    if (!slackEnabled) return false;
+    for (const account of slackAccounts) {
+      const gate = createActionGate(
+        (account.actions ?? cfg.slack?.actions) as Record<
+          string,
+          boolean | undefined
+        >,
+      );
+      if (gate(key, defaultValue)) return true;
+    }
+    return false;
+  };
+
+  const telegramAccounts = listEnabledTelegramAccounts(cfg).filter(
+    (account) => account.tokenSource !== "none",
+  );
+  const telegramEnabled = telegramAccounts.length > 0;
+  const telegramGate = createActionGate(cfg.telegram?.actions);
+
+  const whatsappGate = createActionGate(cfg.whatsapp?.actions);
+
+  const canDiscordReactions = discordEnabled && discordGate("reactions");
+  const canSlackReactions = isSlackActionEnabled("reactions");
+  const canTelegramReactions = telegramEnabled && telegramGate("reactions");
+  const canWhatsAppReactions = cfg.whatsapp ? whatsappGate("reactions") : false;
+  const canAnyReactions =
+    canDiscordReactions ||
+    canSlackReactions ||
+    canTelegramReactions ||
+    canWhatsAppReactions;
+  if (canAnyReactions) actions.add("react");
+  if (canDiscordReactions || canSlackReactions) actions.add("reactions");
+
+  const canDiscordMessages = discordEnabled && discordGate("messages");
+  const canSlackMessages = isSlackActionEnabled("messages");
+  if (canDiscordMessages || canSlackMessages) {
+    actions.add("read");
+    actions.add("edit");
+    actions.add("delete");
+  }
+
+  const canDiscordPins = discordEnabled && discordGate("pins");
+  const canSlackPins = isSlackActionEnabled("pins");
+  if (canDiscordPins || canSlackPins) {
+    actions.add("pin");
+    actions.add("unpin");
+    actions.add("list-pins");
+  }
+
+  const msteamsEnabled =
+    cfg.msteams?.enabled !== false &&
+    Boolean(cfg.msteams && resolveMSTeamsCredentials(cfg.msteams));
+  const canDiscordPolls = discordEnabled && discordGate("polls");
+  const canWhatsAppPolls = cfg.whatsapp ? whatsappGate("polls") : false;
+  if (canDiscordPolls || canWhatsAppPolls || msteamsEnabled)
+    actions.add("poll");
+  if (discordEnabled && discordGate("permissions")) actions.add("permissions");
+  if (discordEnabled && discordGate("threads")) {
+    actions.add("thread-create");
+    actions.add("thread-list");
+    actions.add("thread-reply");
+  }
+  if (discordEnabled && discordGate("search")) actions.add("search");
+  if (discordEnabled && discordGate("stickers")) actions.add("sticker");
+  if (
+    (discordEnabled && discordGate("memberInfo")) ||
+    isSlackActionEnabled("memberInfo")
+  ) {
+    actions.add("member-info");
+  }
+  if (discordEnabled && discordGate("roleInfo")) actions.add("role-info");
+  if (
+    (discordEnabled && discordGate("reactions")) ||
+    isSlackActionEnabled("emojiList")
+  ) {
+    actions.add("emoji-list");
+  }
+  if (discordEnabled && discordGate("emojiUploads"))
+    actions.add("emoji-upload");
+  if (discordEnabled && discordGate("stickerUploads"))
+    actions.add("sticker-upload");
+
+  const canDiscordRoles = discordEnabled && discordGate("roles", false);
+  if (canDiscordRoles) {
+    actions.add("role-add");
+    actions.add("role-remove");
+  }
+
+  if (discordEnabled && discordGate("channelInfo")) {
+    actions.add("channel-info");
+    actions.add("channel-list");
+  }
+  if (discordEnabled && discordGate("voiceStatus")) actions.add("voice-status");
+  if (discordEnabled && discordGate("events")) {
+    actions.add("event-list");
+    actions.add("event-create");
+  }
+  if (discordEnabled && discordGate("moderation", false)) {
+    actions.add("timeout");
+    actions.add("kick");
+    actions.add("ban");
+  }
+
+  return Type.Union(Array.from(actions).map((action) => Type.Literal(action)));
+}
+
+function buildMessageToolSchema(cfg: ClawdbotConfig) {
+  const base = MessageToolSchema as unknown as Record<string, unknown>;
+  const baseProps = (base.properties ?? {}) as Record<string, unknown>;
+  const props: Record<string, unknown> = {
+    ...baseProps,
+    action: buildMessageActionSchema(cfg),
+  };
+
+  const telegramEnabled = listEnabledTelegramAccounts(cfg).some(
+    (account) => account.tokenSource !== "none",
+  );
+  if (!telegramEnabled || !hasTelegramInlineButtons(cfg)) {
+    delete props.buttons;
+  }
+
+  return { ...base, properties: props };
+}
+
 function resolveAgentAccountId(value?: string): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) return undefined;
@@ -126,12 +302,15 @@ function resolveAgentAccountId(value?: string): string | undefined {
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
+  const schema = options?.config
+    ? buildMessageToolSchema(options.config)
+    : MessageToolSchema;
   return {
     label: "Message",
     name: "message",
     description:
       "Send messages and provider-specific actions (Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams).",
-    parameters: MessageToolSchema,
+    parameters: schema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = options?.config ?? loadConfig();
@@ -160,6 +339,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         const mediaUrl = readStringParam(params, "media", { trim: false });
         const replyTo = readStringParam(params, "replyTo");
         const threadId = readStringParam(params, "threadId");
+        const buttons = params.buttons;
         const gifPlayback =
           typeof params.gifPlayback === "boolean" ? params.gifPlayback : false;
         const bestEffort =
@@ -216,6 +396,8 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               mediaUrl: mediaUrl ?? undefined,
               replyToMessageId: replyTo ?? undefined,
               messageThreadId: threadId ?? undefined,
+              accountId: accountId ?? undefined,
+              buttons,
             },
             cfg,
           );
@@ -344,6 +526,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
               messageId,
               emoji,
               remove,
+              accountId: accountId ?? undefined,
             },
             cfg,
           );

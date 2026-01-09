@@ -77,6 +77,7 @@
 - Control UI: drop explicit `ui:install` step; `ui:build` now auto-installs UI deps (docs + update flow).
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
+- Telegram: add inline keyboard buttons (capability-gated) and route callback query payloads as messages. (#491) — thanks @azade-c
 - WhatsApp: resolve @lid JIDs via Baileys mapping to unblock inbound messages. (#415)
 - Pairing: replies now include sender ids for Discord/Slack/Signal/iMessage/WhatsApp; pairing list labels them explicitly.
 - Messages: default inbound/outbound prefixes from the routed agent’s `identity.name` when set. (#578) — thanks @p6l-richard

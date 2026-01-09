@@ -106,11 +106,14 @@ export type IdentityConfig = {
 export type WhatsAppActionConfig = {
   reactions?: boolean;
   sendMessage?: boolean;
+  polls?: boolean;
 };
 
 export type WhatsAppConfig = {
   /** Optional per-account WhatsApp configuration (multi-account). */
   accounts?: Record<string, WhatsAppAccountConfig>;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /**
    * Inbound message prefix (WhatsApp only).
    * Default: `[{agents.list[].identity.name}]` (or `[clawdbot]`) when allowFrom is empty, else `""`.
@@ -155,6 +158,8 @@ export type WhatsAppConfig = {
 export type WhatsAppAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /** If false, do not start this WhatsApp account provider. Default: true. */
   enabled?: boolean;
   /** Inbound message prefix override for this account (WhatsApp only). */
@@ -300,6 +305,8 @@ export type TelegramActionConfig = {
 export type TelegramAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /**
    * Controls how Telegram direct chats (DMs) are handled:
    * - "pairing" (default): unknown senders get a pairing code; owner must approve
@@ -441,6 +448,8 @@ export type DiscordActionConfig = {
 export type DiscordAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
@@ -538,6 +547,8 @@ export type SlackSlashCommandConfig = {
 export type SlackAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /** If false, do not start this Slack account. Default: true. */
   enabled?: boolean;
   botToken?: string;
@@ -576,6 +587,8 @@ export type SlackConfig = {
 export type SignalAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /** If false, do not start this Signal account. Default: true. */
   enabled?: boolean;
   /** Optional explicit E.164 account for signal-cli. */
@@ -650,6 +663,8 @@ export type MSTeamsTeamConfig = {
 export type MSTeamsConfig = {
   /** If false, do not start the MS Teams provider. Default: true. */
   enabled?: boolean;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /** Azure Bot App ID (from Azure Bot registration). */
   appId?: string;
   /** Azure Bot App Password / Client Secret. */
@@ -682,6 +697,8 @@ export type MSTeamsConfig = {
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
+  /** Optional provider capability tags used for agent/runtime guidance. */
+  capabilities?: string[];
   /** If false, do not start this iMessage account. Default: true. */
   enabled?: boolean;
   /** imsg CLI binary path (default: imsg). */

@@ -187,6 +187,7 @@ const TelegramGroupSchema = z.object({
 
 const TelegramAccountSchemaBase = z.object({
   name: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   botToken: z.string().optional(),
@@ -279,6 +280,7 @@ const DiscordGuildSchema = z.object({
 
 const DiscordAccountSchema = z.object({
   name: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   token: z.string().optional(),
   groupPolicy: GroupPolicySchema.optional().default("open"),
@@ -348,6 +350,7 @@ const SlackChannelSchema = z.object({
 
 const SlackAccountSchema = z.object({
   name: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   botToken: z.string().optional(),
   appToken: z.string().optional(),
@@ -390,6 +393,7 @@ const SlackConfigSchema = SlackAccountSchema.extend({
 
 const SignalAccountSchemaBase = z.object({
   name: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   account: z.string().optional(),
   httpUrl: z.string().optional(),
@@ -438,6 +442,7 @@ const SignalConfigSchema = SignalAccountSchemaBase.extend({
 
 const IMessageAccountSchemaBase = z.object({
   name: z.string().optional(),
+  capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   cliPath: z.string().optional(),
   dbPath: z.string().optional(),
@@ -506,6 +511,7 @@ const MSTeamsTeamSchema = z.object({
 const MSTeamsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    capabilities: z.array(z.string()).optional(),
     appId: z.string().optional(),
     appPassword: z.string().optional(),
     tenantId: z.string().optional(),
@@ -1228,6 +1234,7 @@ export const ClawdbotSchema = z.object({
           z
             .object({
               name: z.string().optional(),
+              capabilities: z.array(z.string()).optional(),
               enabled: z.boolean().optional(),
               messagePrefix: z.string().optional(),
               /** Override auth directory for this WhatsApp account (Baileys multi-file auth state). */
@@ -1268,6 +1275,7 @@ export const ClawdbotSchema = z.object({
             .optional(),
         )
         .optional(),
+      capabilities: z.array(z.string()).optional(),
       dmPolicy: DmPolicySchema.optional().default("pairing"),
       messagePrefix: z.string().optional(),
       selfChatMode: z.boolean().optional(),
@@ -1281,6 +1289,8 @@ export const ClawdbotSchema = z.object({
       actions: z
         .object({
           reactions: z.boolean().optional(),
+          sendMessage: z.boolean().optional(),
+          polls: z.boolean().optional(),
         })
         .optional(),
       groups: z

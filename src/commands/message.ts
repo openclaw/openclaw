@@ -65,6 +65,7 @@ type MessageCommandOpts = {
   to?: string;
   message?: string;
   media?: string;
+  buttonsJson?: string;
   messageId?: string;
   replyTo?: string;
   threadId?: string;
@@ -354,6 +355,15 @@ export async function messageCommand(
     }
 
     if (provider === "telegram") {
+      const buttonsJson = optionalString(opts.buttonsJson);
+      let buttons: unknown;
+      if (buttonsJson) {
+        try {
+          buttons = JSON.parse(buttonsJson);
+        } catch {
+          throw new Error("buttons-json must be valid JSON");
+        }
+      }
       const result = await handleTelegramAction(
         {
           action: "sendMessage",
@@ -362,6 +372,8 @@ export async function messageCommand(
           mediaUrl: optionalString(opts.media),
           replyToMessageId: optionalString(opts.replyTo),
           messageThreadId: optionalString(opts.threadId),
+          accountId: optionalString(opts.account),
+          buttons,
         },
         cfg,
       );
@@ -550,6 +562,7 @@ export async function messageCommand(
           messageId,
           emoji,
           remove: opts.remove,
+          accountId: optionalString(opts.account),
         },
         cfg,
       );

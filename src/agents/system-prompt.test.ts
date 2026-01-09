@@ -109,4 +109,27 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## IDENTITY.md");
     expect(prompt).toContain("Bravo");
   });
+
+  it("summarizes the message tool when available", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["message"],
+    });
+
+    expect(prompt).toContain("message: Send messages and provider actions");
+    expect(prompt).toContain("### message tool");
+  });
+
+  it("includes runtime provider capabilities when present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      runtimeInfo: {
+        provider: "telegram",
+        capabilities: ["inlineButtons"],
+      },
+    });
+
+    expect(prompt).toContain("provider=telegram");
+    expect(prompt).toContain("capabilities=inlineButtons");
+  });
 });

@@ -44,6 +44,7 @@ Target formats (`--to`):
 - `send`
   - Required: `--to`, `--message`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
+  - Telegram only: `--buttons-json` (requires `"inlineButtons"` in `telegram.capabilities` or `telegram.accounts.<id>.capabilities`)
 
 - `poll`
   - Required: `--to`, `--poll-question`, `--poll-option` (repeat)
@@ -173,4 +174,10 @@ React in Slack:
 ```
 clawdbot message react --provider slack \
   --to C123 --message-id 456 --emoji "✅"
+```
+
+Send Telegram inline buttons:
+```
+clawdbot message send --provider telegram --to @mychat --message "Choose:" \
+  --buttons-json '[ [{"text":"Yes","callback_data":"cmd:yes"}], [{"text":"No","callback_data":"cmd:no"}] ]'
 ```

@@ -29,7 +29,51 @@ vi.mock("grammy", () => ({
   InputFile: class {},
 }));
 
-import { reactMessageTelegram, sendMessageTelegram } from "./send.js";
+import {
+  buildInlineKeyboard,
+  reactMessageTelegram,
+  sendMessageTelegram,
+} from "./send.js";
+
+describe("buildInlineKeyboard", () => {
+  it("returns undefined for empty input", () => {
+    expect(buildInlineKeyboard()).toBeUndefined();
+    expect(buildInlineKeyboard([])).toBeUndefined();
+  });
+
+  it("builds inline keyboards for valid input", () => {
+    const result = buildInlineKeyboard([
+      [{ text: "Option A", callback_data: "cmd:a" }],
+      [
+        { text: "Option B", callback_data: "cmd:b" },
+        { text: "Option C", callback_data: "cmd:c" },
+      ],
+    ]);
+    expect(result).toEqual({
+      inline_keyboard: [
+        [{ text: "Option A", callback_data: "cmd:a" }],
+        [
+          { text: "Option B", callback_data: "cmd:b" },
+          { text: "Option C", callback_data: "cmd:c" },
+        ],
+      ],
+    });
+  });
+
+  it("filters invalid buttons and empty rows", () => {
+    const result = buildInlineKeyboard([
+      [
+        { text: "", callback_data: "cmd:skip" },
+        { text: "Ok", callback_data: "cmd:ok" },
+      ],
+      [{ text: "Missing data", callback_data: "" }],
+      [],
+    ]);
+    expect(result).toEqual({
+      inline_keyboard: [[{ text: "Ok", callback_data: "cmd:ok" }]],
+    });
+  });
+});
 
 describe("sendMessageTelegram", () => {
   beforeEach(() => {

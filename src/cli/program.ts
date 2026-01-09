@@ -509,6 +509,10 @@ Examples:
         "--media <path-or-url>",
         "Attach media (image/audio/video/document). Accepts local paths or URLs.",
       )
+      .option(
+        "--buttons-json <json>",
+        "Telegram inline keyboard buttons as JSON (array of button rows)",
+      )
       .option("--reply-to <id>", "Reply-to message id")
       .option("--thread-id <id>", "Thread id (Telegram forum thread)")
       .option(

@@ -307,6 +307,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     primaryCtx: TelegramContext,
     allMedia: Array<{ path: string; contentType?: string }>,
     storeAllowFrom: string[],
+    options?: { forceWasMentioned?: boolean },
   ) => {
     const msg = primaryCtx.message;
     recordProviderActivity({
@@ -468,9 +469,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       senderId,
       senderUsername,
     });
-    const wasMentioned =
+    const computedWasMentioned =
       (Boolean(botUsername) && hasBotMention(msg, botUsername)) ||
       matchesMentionPatterns(msg.text ?? msg.caption ?? "", mentionRegexes);
+    const wasMentioned =
+      options?.forceWasMentioned === true ? true : computedWasMentioned;
     const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
       (ent) => ent.type === "mention",
     );
@@ -990,6 +993,40 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       runtime.error?.(danger(`telegram clear commands failed: ${String(err)}`));
     });
   }
+
+  bot.on("callback_query", async (ctx) => {
+    const callback = ctx.callbackQuery;
+    if (!callback) return;
+    try {
+      const data = (callback.data ?? "").trim();
+      const callbackMessage = callback.message;
+      if (!data || !callbackMessage) return;
+
+      const syntheticMessage: TelegramMessage = {
+        ...callbackMessage,
+        from: callback.from,
+        text: data,
+        caption: undefined,
+        caption_entities: undefined,
+        entities: undefined,
+      };
+      const storeAllowFrom = await readTelegramAllowFromStore().catch(() => []);
+      const getFile =
+        typeof ctx.getFile === "function"
+          ? ctx.getFile.bind(ctx)
+          : async () => ({});
+      await processMessage(
+        { message: syntheticMessage, me: ctx.me, getFile },
+        [],
+        storeAllowFrom,
+        { forceWasMentioned: true },
+      );
+    } catch (err) {
+      runtime.error?.(danger(`callback handler failed: ${String(err)}`));
+    } finally {
+      await bot.api.answerCallbackQuery(callback.id).catch(() => {});
+    }
+  });
 
   bot.on("message", async (ctx) => {
     try {
