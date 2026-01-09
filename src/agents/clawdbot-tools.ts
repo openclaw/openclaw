@@ -22,6 +22,14 @@ export function createClawdbotTools(options?: {
   agentDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
+  /** Current channel ID for auto-threading (Slack). */
+  currentChannelId?: string;
+  /** Current thread timestamp for auto-threading (Slack). */
+  currentThreadTs?: string;
+  /** Reply-to mode for Slack auto-threading. */
+  replyToMode?: "off" | "first" | "all";
+  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  hasRepliedRef?: { value: boolean };
 }): AnyAgentTool[] {
   const imageTool = createImageTool({
     config: options?.config,
@@ -35,6 +43,10 @@ export function createClawdbotTools(options?: {
     createMessageTool({
       agentAccountId: options?.agentAccountId,
       config: options?.config,
+      currentChannelId: options?.currentChannelId,
+      currentThreadTs: options?.currentThreadTs,
+      replyToMode: options?.replyToMode,
+      hasRepliedRef: options?.hasRepliedRef,
     }),
     createGatewayTool({
       agentSessionKey: options?.agentSessionKey,
