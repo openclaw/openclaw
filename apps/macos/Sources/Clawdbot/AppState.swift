@@ -29,7 +29,10 @@ final class AppState {
     }
 
     var launchAtLogin: Bool {
-        didSet { self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } } }
+        didSet {
+            guard !self.isInitializing else { return }
+            self.ifNotPreview { Task { AppStateStore.updateLaunchAtLogin(enabled: self.launchAtLogin) } }
+        }
     }
 
     var onboardingSeen: Bool {
