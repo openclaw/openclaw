@@ -3,6 +3,7 @@
 ## Unreleased
 
 - macOS: avoid clearing Launch at Login during app initialization. (#607) — thanks @wes-davis
+- Onboarding: skip systemd checks/daemon installs when systemd user services are unavailable; add onboarding flags to skip flow steps and stabilize Docker E2E. (#573) — thanks @steipete
 - macOS: add node bridge heartbeat pings to detect half-open sockets and reconnect cleanly. (#572) — thanks @ngutman
 - Node bridge: harden keepalive + heartbeat handling (TCP keepalive, better disconnects, and keepalive config tests). (#577) — thanks @steipete
 - Control UI: improve mobile responsiveness. (#558) — thanks @carlulsoe

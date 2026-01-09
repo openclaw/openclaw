@@ -27,6 +27,7 @@ export type ProviderChoice = ChatProviderId;
 
 export type OnboardOptions = {
   mode?: OnboardMode;
+  flow?: "quickstart" | "advanced";
   workspace?: string;
   nonInteractive?: boolean;
   authChoice?: AuthChoice;
@@ -51,8 +52,10 @@ export type OnboardOptions = {
   tailscaleResetOnExit?: boolean;
   installDaemon?: boolean;
   daemonRuntime?: GatewayDaemonRuntime;
+  skipProviders?: boolean;
   skipSkills?: boolean;
   skipHealth?: boolean;
+  skipUi?: boolean;
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;
   remoteToken?: string;
