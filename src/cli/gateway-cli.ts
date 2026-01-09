@@ -86,7 +86,10 @@ const DEV_TEMPLATE_DIR = path.resolve(
   "../../docs/reference/templates",
 );
 
-async function loadDevTemplate(name: string, fallback: string): Promise<string> {
+async function loadDevTemplate(
+  name: string,
+  fallback: string,
+): Promise<string> {
   try {
     const raw = await fs.promises.readFile(
       path.join(DEV_TEMPLATE_DIR, name),
@@ -525,8 +528,8 @@ async function runGatewayCommand(
   opts: GatewayRunOpts,
   params: GatewayRunParams = {},
 ) {
-  const isDevProfile = process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() ===
-    "dev";
+  const isDevProfile =
+    process.env.CLAWDBOT_PROFILE?.trim().toLowerCase() === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
     defaultRuntime.error("Use --reset with --dev.");

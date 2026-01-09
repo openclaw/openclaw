@@ -52,11 +52,11 @@ describe("Agent-specific sandbox config", () => {
     spawnCalls.length = 0;
   });
 
-	  it(
-	    "should use global sandbox config when no agent-specific config exists",
-	    { timeout: 15_000 },
-	    async () => {
-	      const { resolveSandboxContext } = await import("./sandbox.js");
+  it(
+    "should use global sandbox config when no agent-specific config exists",
+    { timeout: 15_000 },
+    async () => {
+      const { resolveSandboxContext } = await import("./sandbox.js");
 
       const cfg: ClawdbotConfig = {
         agents: {
@@ -75,19 +75,19 @@ describe("Agent-specific sandbox config", () => {
         },
       };
 
-	      const context = await resolveSandboxContext({
-	        config: cfg,
-	        sessionKey: "agent:main:main",
-	        workspaceDir: "/tmp/test",
-	      });
+      const context = await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test",
+      });
 
-	      expect(context).toBeDefined();
-	      expect(context?.enabled).toBe(true);
-	    },
-	  );
+      expect(context).toBeDefined();
+      expect(context?.enabled).toBe(true);
+    },
+  );
 
-	  it("should allow agent-specific docker setupCommand overrides", async () => {
-	    const { resolveSandboxContext } = await import("./sandbox.js");
+  it("should allow agent-specific docker setupCommand overrides", async () => {
+    const { resolveSandboxContext } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
       agents: {

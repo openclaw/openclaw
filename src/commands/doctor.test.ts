@@ -276,28 +276,28 @@ describe("doctor", () => {
         exit: vi.fn(),
       };
 
-	      migrateLegacyConfig.mockReturnValue({
-	        config: { whatsapp: { allowFrom: ["+15555550123"] } },
-	        changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
-	      });
+      migrateLegacyConfig.mockReturnValue({
+        config: { whatsapp: { allowFrom: ["+15555550123"] } },
+        changes: ["Moved routing.allowFrom → whatsapp.allowFrom."],
+      });
 
-	      await doctorCommand(runtime, { nonInteractive: true });
+      await doctorCommand(runtime, { nonInteractive: true });
 
-	      expect(writeConfigFile).toHaveBeenCalledTimes(1);
-	      const written = writeConfigFile.mock.calls[0]?.[0] as Record<
-	        string,
-	        unknown
-	      >;
-	      expect((written.whatsapp as Record<string, unknown>)?.allowFrom).toEqual([
-	        "+15555550123",
-	      ]);
-	      expect(written.routing).toBeUndefined();
-	    },
-	  );
+      expect(writeConfigFile).toHaveBeenCalledTimes(1);
+      const written = writeConfigFile.mock.calls[0]?.[0] as Record<
+        string,
+        unknown
+      >;
+      expect((written.whatsapp as Record<string, unknown>)?.allowFrom).toEqual([
+        "+15555550123",
+      ]);
+      expect(written.routing).toBeUndefined();
+    },
+  );
 
-	  it("migrates legacy Clawdis services", async () => {
-	    readConfigFileSnapshot.mockResolvedValue({
-	      path: "/tmp/clawdbot.json",
+  it("migrates legacy Clawdis services", async () => {
+    readConfigFileSnapshot.mockResolvedValue({
+      path: "/tmp/clawdbot.json",
       exists: true,
       raw: "{}",
       parsed: {},
