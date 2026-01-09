@@ -37,6 +37,7 @@ import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
+import { listChatProviders } from "../providers/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
@@ -104,6 +105,8 @@ type WizardSection =
   | "workspace"
   | "skills"
   | "health";
+
+type ProvidersWizardMode = "configure" | "remove";
 
 type ConfigureWizardParams = {
   command: "configure" | "update";
@@ -862,6 +865,74 @@ async function maybeInstallDaemon(params: {
   }
 }
 
+async function removeProviderConfigWizard(
+  cfg: ClawdbotConfig,
+  runtime: RuntimeEnv,
+): Promise<ClawdbotConfig> {
+  let next = { ...cfg };
+
+  const listConfiguredProviders = () =>
+    listChatProviders().filter((meta) => {
+      const value = (next as Record<string, unknown>)[meta.id];
+      return value !== undefined;
+    });
+
+  while (true) {
+    const configured = listConfiguredProviders();
+    if (configured.length === 0) {
+      note(
+        [
+          "No provider config found in clawdbot.json.",
+          "Tip: `clawdbot providers status` shows what is configured and enabled.",
+        ].join("\n"),
+        "Remove provider",
+      );
+      return next;
+    }
+
+    const provider = guardCancel(
+      await select({
+        message: "Remove which provider config?",
+        options: [
+          ...configured.map((meta) => ({
+            value: meta.id,
+            label: meta.label,
+            hint: "Deletes tokens + settings from config (credentials stay on disk)",
+          })),
+          { value: "done", label: "Done" },
+        ],
+      }),
+      runtime,
+    ) as string;
+
+    if (provider === "done") return next;
+
+    const label =
+      listChatProviders().find((meta) => meta.id === provider)?.label ??
+      provider;
+    const confirmed = guardCancel(
+      await confirm({
+        message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
+        initialValue: false,
+      }),
+      runtime,
+    );
+    if (!confirmed) continue;
+
+    const clone = { ...next } as Record<string, unknown>;
+    delete clone[provider];
+    next = clone as ClawdbotConfig;
+
+    note(
+      [
+        `${label} removed from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
+      "Provider removed",
+    );
+  }
+}
+
 export async function runConfigureWizard(
   opts: ConfigureWizardParams,
   runtime: RuntimeEnv = defaultRuntime,
@@ -1051,10 +1122,34 @@ export async function runConfigureWizard(
   }
 
   if (selected.includes("providers")) {
-    nextConfig = await setupProviders(nextConfig, runtime, prompter, {
-      allowDisable: true,
-      allowSignalInstall: true,
-    });
+    const providerMode = guardCancel(
+      await select({
+        message: "Providers",
+        options: [
+          {
+            value: "configure",
+            label: "Configure/link",
+            hint: "Add/update providers; disable unselected accounts",
+          },
+          {
+            value: "remove",
+            label: "Remove provider config",
+            hint: "Delete provider tokens/settings from clawdbot.json",
+          },
+        ],
+        initialValue: "configure",
+      }),
+      runtime,
+    ) as ProvidersWizardMode;
+
+    if (providerMode === "configure") {
+      nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+        allowDisable: true,
+        allowSignalInstall: true,
+      });
+    } else {
+      nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+    }
   }
 
   if (selected.includes("skills")) {

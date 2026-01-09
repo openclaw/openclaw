@@ -106,6 +106,7 @@
 - CLI: centralize lobster palette + apply it to onboarding/config prompts. — thanks @steipete
 - Gateway/CLI: add `clawdbot gateway --dev/--reset` to auto-create a dev config/workspace with a robot identity (no BOOTSTRAP.md), and reset wipes config/creds/sessions/workspace (subcommand --dev no longer collides with global --dev profile). — thanks @steipete
 - Configure: stop prompting to open the Control UI (still shown in onboarding). — thanks @steipete
+- Configure: add wizard mode to remove a provider config block. — thanks @steipete
 - Onboarding/TUI: prompt to start TUI (best option) when BOOTSTRAP.md exists and add `tui --message` to auto-send the first prompt. — thanks @steipete
 - Telegram: suppress grammY getUpdates stack traces; log concise retry message instead. — thanks @steipete
 - Gateway/CLI: allow dev profile (`clawdbot --dev`) to auto-create the dev config + workspace. — thanks @steipete
