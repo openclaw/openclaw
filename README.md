@@ -62,7 +62,7 @@ clawdbot onboard --install-daemon
 clawdbot gateway --port 18789 --verbose
 
 # Send a message
-clawdbot message --to +1234567890 --message "Hello from Clawdbot"
+clawdbot message send --to +1234567890 --message "Hello from Clawdbot"
 
 # Talk to the assistant (optionally deliver back to WhatsApp/Telegram/Slack/Discord)
 clawdbot agent --message "Ship checklist" --thinking high

@@ -408,128 +408,472 @@ export function buildProgram() {
       }
     });
 
-  program
+  const message = program
     .command("message")
     .description("Send messages and provider actions")
-    .option(
-      "-a, --action <action>",
-      "Action: send|poll|react|reactions|read|edit|delete|pin|unpin|list-pins|permissions|thread-create|thread-list|thread-reply|search|sticker|member-info|role-info|emoji-list|emoji-upload|sticker-upload|role-add|role-remove|channel-info|channel-list|voice-status|event-list|event-create|timeout|kick|ban",
-      "send",
-    )
-    .option(
-      "-t, --to <dest>",
-      "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
-    )
-    .option("-m, --message <text>", "Message body")
-    .option(
-      "--media <path-or-url>",
-      "Attach media (image/audio/video/document). Accepts local paths or URLs.",
-    )
-    .option("--message-id <id>", "Message id (edit/delete/react/pin)")
-    .option("--reply-to <id>", "Reply-to message id")
-    .option("--thread-id <id>", "Thread id (Telegram forum thread)")
-    .option("--account <id>", "Provider account id")
-    .option(
-      "--provider <provider>",
-      "Provider: whatsapp|telegram|discord|slack|signal|imessage",
-    )
-    .option("--emoji <emoji>", "Emoji for reactions")
-    .option("--remove", "Remove reaction", false)
-    .option("--limit <n>", "Result limit for read/reactions/search")
-    .option("--before <id>", "Read/search before id")
-    .option("--after <id>", "Read/search after id")
-    .option("--around <id>", "Read around id (Discord)")
-    .option("--poll-question <text>", "Poll question")
-    .option(
-      "--poll-option <choice>",
-      "Poll option (repeat 2-12 times)",
-      (value: string, previous: string[]) => previous.concat([value]),
-      [] as string[],
-    )
-    .option("--poll-multi", "Allow multiple selections", false)
-    .option("--poll-duration-hours <n>", "Poll duration (Discord)")
-    .option("--channel-id <id>", "Channel id")
-    .option(
-      "--channel-ids <id>",
-      "Channel id (repeat)",
-      (value: string, previous: string[]) => previous.concat([value]),
-      [] as string[],
-    )
-    .option("--guild-id <id>", "Guild id")
-    .option("--user-id <id>", "User id")
-    .option("--author-id <id>", "Author id")
-    .option(
-      "--author-ids <id>",
-      "Author id (repeat)",
-      (value: string, previous: string[]) => previous.concat([value]),
-      [] as string[],
-    )
-    .option("--role-id <id>", "Role id")
-    .option(
-      "--role-ids <id>",
-      "Role id (repeat)",
-      (value: string, previous: string[]) => previous.concat([value]),
-      [] as string[],
-    )
-    .option("--emoji-name <name>", "Emoji name")
-    .option(
-      "--sticker-id <id>",
-      "Sticker id (repeat)",
-      (value: string, previous: string[]) => previous.concat([value]),
-      [] as string[],
-    )
-    .option("--sticker-name <name>", "Sticker name")
-    .option("--sticker-desc <text>", "Sticker description")
-    .option("--sticker-tags <tags>", "Sticker tags")
-    .option("--thread-name <name>", "Thread name")
-    .option("--auto-archive-min <n>", "Thread auto-archive minutes")
-    .option("--query <text>", "Search query")
-    .option("--event-name <name>", "Event name")
-    .option("--event-type <stage|external|voice>", "Event type")
-    .option("--start-time <iso>", "Event start time")
-    .option("--end-time <iso>", "Event end time")
-    .option("--desc <text>", "Event description")
-    .option("--location <text>", "Event location")
-    .option("--duration-min <n>", "Timeout duration minutes")
-    .option("--until <iso>", "Timeout until")
-    .option("--reason <text>", "Moderation reason")
-    .option("--delete-days <n>", "Ban delete message days")
-    .option("--include-archived", "Include archived threads", false)
-    .option("--participant <id>", "WhatsApp reaction participant")
-    .option("--from-me", "WhatsApp reaction fromMe", false)
-    .option(
-      "--gif-playback",
-      "Treat video media as GIF playback (WhatsApp only).",
-      false,
-    )
-    .option("--dry-run", "Print payload and skip sending", false)
-    .option("--json", "Output result as JSON", false)
-    .option("--verbose", "Verbose logging", false)
     .addHelpText(
       "after",
       `
 Examples:
-  clawdbot message --to +15555550123 --message "Hi"
-  clawdbot message --action send --to +15555550123 --message "Hi" --media photo.jpg
-  clawdbot message --action poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
-  clawdbot message --action react --provider discord --to 123 --message-id 456 --emoji "✅"`,
+  clawdbot message send --to +15555550123 --message "Hi"
+  clawdbot message send --to +15555550123 --message "Hi" --media photo.jpg
+  clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
+  clawdbot message react --provider discord --to 123 --message-id 456 --emoji "✅"`,
+    )
+    .action(() => {
+      message.help({ error: true });
+    });
+
+  const withMessageBase = (command: Command) =>
+    command
+      .option(
+        "--provider <provider>",
+        "Provider: whatsapp|telegram|discord|slack|signal|imessage",
+      )
+      .option("--account <id>", "Provider account id")
+      .option("--json", "Output result as JSON", false)
+      .option("--dry-run", "Print payload and skip sending", false)
+      .option("--verbose", "Verbose logging", false);
+
+  const withMessageTarget = (command: Command) =>
+    command.option(
+      "-t, --to <dest>",
+      "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
+    );
+  const withRequiredMessageTarget = (command: Command) =>
+    command.requiredOption(
+      "-t, --to <dest>",
+      "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
+    );
+
+  const runMessageAction = async (
+    action: string,
+    opts: Record<string, unknown>,
+  ) => {
+    setVerbose(Boolean(opts.verbose));
+    const deps = createDefaultDeps();
+    try {
+      await messageCommand(
+        {
+          ...opts,
+          action,
+          account: opts.account as string | undefined,
+        },
+        deps,
+        defaultRuntime,
+      );
+    } catch (err) {
+      defaultRuntime.error(String(err));
+      defaultRuntime.exit(1);
+    }
+  };
+
+  withMessageBase(
+    withRequiredMessageTarget(
+      message
+        .command("send")
+        .description("Send a message")
+        .requiredOption("-m, --message <text>", "Message body"),
+    )
+      .option(
+        "--media <path-or-url>",
+        "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+      )
+      .option("--reply-to <id>", "Reply-to message id")
+      .option("--thread-id <id>", "Thread id (Telegram forum thread)")
+      .option(
+        "--gif-playback",
+        "Treat video media as GIF playback (WhatsApp only).",
+        false,
+      ),
+  ).action(async (opts) => {
+    await runMessageAction("send", opts);
+  });
+
+  withMessageBase(
+    withRequiredMessageTarget(
+      message.command("poll").description("Send a poll"),
+    ),
+  )
+    .requiredOption("--poll-question <text>", "Poll question")
+    .option(
+      "--poll-option <choice>",
+      "Poll option (repeat 2-12 times)",
+      collectOption,
+      [] as string[],
+    )
+    .option("--poll-multi", "Allow multiple selections", false)
+    .option("--poll-duration-hours <n>", "Poll duration (Discord)")
+    .option("-m, --message <text>", "Optional message body")
+    .action(async (opts) => {
+      await runMessageAction("poll", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("react").description("Add or remove a reaction"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--emoji <emoji>", "Emoji for reactions")
+    .option("--remove", "Remove reaction", false)
+    .option("--participant <id>", "WhatsApp reaction participant")
+    .option("--from-me", "WhatsApp reaction fromMe", false)
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("react", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("reactions").description("List reactions on a message"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--limit <n>", "Result limit")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("reactions", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("read").description("Read recent messages"),
+    ),
+  )
+    .option("--limit <n>", "Result limit")
+    .option("--before <id>", "Read/search before id")
+    .option("--after <id>", "Read/search after id")
+    .option("--around <id>", "Read around id (Discord)")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("read", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message
+        .command("edit")
+        .description("Edit a message")
+        .requiredOption("-m, --message <text>", "Message body"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("edit", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("delete").description("Delete a message"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("delete", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(message.command("pin").description("Pin a message")),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("pin", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(message.command("unpin").description("Unpin a message")),
+  )
+    .option("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("unpin", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("pins").description("List pinned messages"),
+    ),
+  )
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("list-pins", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("permissions").description("Fetch channel permissions"),
+    ),
+  )
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("permissions", opts);
+    });
+
+  withMessageBase(
+    message.command("search").description("Search Discord messages"),
+  )
+    .requiredOption("--guild-id <id>", "Guild id")
+    .requiredOption("--query <text>", "Search query")
+    .option("--channel-id <id>", "Channel id")
+    .option(
+      "--channel-ids <id>",
+      "Channel id (repeat)",
+      collectOption,
+      [] as string[],
+    )
+    .option("--author-id <id>", "Author id")
+    .option(
+      "--author-ids <id>",
+      "Author id (repeat)",
+      collectOption,
+      [] as string[],
+    )
+    .option("--limit <n>", "Result limit")
+    .action(async (opts) => {
+      await runMessageAction("search", opts);
+    });
+
+  const thread = message.command("thread").description("Thread actions");
+
+  withMessageBase(
+    withMessageTarget(
+      thread
+        .command("create")
+        .description("Create a thread")
+        .requiredOption("--thread-name <name>", "Thread name"),
+    ),
+  )
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .option("--message-id <id>", "Message id (optional)")
+    .option("--auto-archive-min <n>", "Thread auto-archive minutes")
+    .action(async (opts) => {
+      await runMessageAction("thread-create", opts);
+    });
+
+  withMessageBase(
+    thread
+      .command("list")
+      .description("List threads")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  )
+    .option("--channel-id <id>", "Channel id")
+    .option("--include-archived", "Include archived threads", false)
+    .option("--before <id>", "Read/search before id")
+    .option("--limit <n>", "Result limit")
+    .action(async (opts) => {
+      await runMessageAction("thread-list", opts);
+    });
+
+  withMessageBase(
+    withRequiredMessageTarget(
+      thread
+        .command("reply")
+        .description("Reply in a thread")
+        .requiredOption("-m, --message <text>", "Message body"),
+    ),
+  )
+    .option(
+      "--media <path-or-url>",
+      "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+    )
+    .option("--reply-to <id>", "Reply-to message id")
+    .action(async (opts) => {
+      await runMessageAction("thread-reply", opts);
+    });
+
+  const emoji = message.command("emoji").description("Emoji actions");
+  withMessageBase(emoji.command("list").description("List emojis"))
+    .option("--guild-id <id>", "Guild id (Discord)")
+    .action(async (opts) => {
+      await runMessageAction("emoji-list", opts);
+    });
+
+  withMessageBase(
+    emoji
+      .command("upload")
+      .description("Upload an emoji")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  )
+    .requiredOption("--emoji-name <name>", "Emoji name")
+    .requiredOption("--media <path-or-url>", "Emoji media (path or URL)")
+    .option(
+      "--role-ids <id>",
+      "Role id (repeat)",
+      collectOption,
+      [] as string[],
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      const deps = createDefaultDeps();
-      try {
-        await messageCommand(
-          {
-            ...opts,
-            account: opts.account as string | undefined,
-          },
-          deps,
-          defaultRuntime,
-        );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      await runMessageAction("emoji-upload", opts);
+    });
+
+  const sticker = message.command("sticker").description("Sticker actions");
+  withMessageBase(
+    withRequiredMessageTarget(
+      sticker.command("send").description("Send stickers"),
+    ),
+  )
+    .requiredOption("--sticker-id <id>", "Sticker id (repeat)", collectOption)
+    .option("-m, --message <text>", "Optional message body")
+    .action(async (opts) => {
+      await runMessageAction("sticker", opts);
+    });
+
+  withMessageBase(
+    sticker
+      .command("upload")
+      .description("Upload a sticker")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  )
+    .requiredOption("--sticker-name <name>", "Sticker name")
+    .requiredOption("--sticker-desc <text>", "Sticker description")
+    .requiredOption("--sticker-tags <tags>", "Sticker tags")
+    .requiredOption("--media <path-or-url>", "Sticker media (path or URL)")
+    .action(async (opts) => {
+      await runMessageAction("sticker-upload", opts);
+    });
+
+  const role = message.command("role").description("Role actions");
+  withMessageBase(
+    role
+      .command("info")
+      .description("List roles")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  ).action(async (opts) => {
+    await runMessageAction("role-info", opts);
+  });
+
+  withMessageBase(
+    role
+      .command("add")
+      .description("Add role to a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id")
+      .requiredOption("--role-id <id>", "Role id"),
+  ).action(async (opts) => {
+    await runMessageAction("role-add", opts);
+  });
+
+  withMessageBase(
+    role
+      .command("remove")
+      .description("Remove role from a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id")
+      .requiredOption("--role-id <id>", "Role id"),
+  ).action(async (opts) => {
+    await runMessageAction("role-remove", opts);
+  });
+
+  const channel = message.command("channel").description("Channel actions");
+  withMessageBase(
+    channel
+      .command("info")
+      .description("Fetch channel info")
+      .requiredOption("--channel-id <id>", "Channel id"),
+  ).action(async (opts) => {
+    await runMessageAction("channel-info", opts);
+  });
+
+  withMessageBase(
+    channel
+      .command("list")
+      .description("List channels")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  ).action(async (opts) => {
+    await runMessageAction("channel-list", opts);
+  });
+
+  const member = message.command("member").description("Member actions");
+  withMessageBase(
+    member
+      .command("info")
+      .description("Fetch member info")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--guild-id <id>", "Guild id (Discord)")
+    .action(async (opts) => {
+      await runMessageAction("member-info", opts);
+    });
+
+  const voice = message.command("voice").description("Voice actions");
+  withMessageBase(
+    voice
+      .command("status")
+      .description("Fetch voice status")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  ).action(async (opts) => {
+    await runMessageAction("voice-status", opts);
+  });
+
+  const event = message.command("event").description("Event actions");
+  withMessageBase(
+    event
+      .command("list")
+      .description("List scheduled events")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  ).action(async (opts) => {
+    await runMessageAction("event-list", opts);
+  });
+
+  withMessageBase(
+    event
+      .command("create")
+      .description("Create a scheduled event")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--event-name <name>", "Event name")
+      .requiredOption("--start-time <iso>", "Event start time"),
+  )
+    .option("--end-time <iso>", "Event end time")
+    .option("--desc <text>", "Event description")
+    .option("--channel-id <id>", "Channel id")
+    .option("--location <text>", "Event location")
+    .option("--event-type <stage|external|voice>", "Event type")
+    .action(async (opts) => {
+      await runMessageAction("event-create", opts);
+    });
+
+  withMessageBase(
+    message
+      .command("timeout")
+      .description("Timeout a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--duration-min <n>", "Timeout duration minutes")
+    .option("--until <iso>", "Timeout until")
+    .option("--reason <text>", "Moderation reason")
+    .action(async (opts) => {
+      await runMessageAction("timeout", opts);
+    });
+
+  withMessageBase(
+    message
+      .command("kick")
+      .description("Kick a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--reason <text>", "Moderation reason")
+    .action(async (opts) => {
+      await runMessageAction("kick", opts);
+    });
+
+  withMessageBase(
+    message
+      .command("ban")
+      .description("Ban a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--reason <text>", "Moderation reason")
+    .option("--delete-days <n>", "Ban delete message days")
+    .action(async (opts) => {
+      await runMessageAction("ban", opts);
     });
 
   program

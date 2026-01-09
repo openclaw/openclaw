@@ -5,7 +5,7 @@
 - Commands: accept /models as an alias for /model.
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Agent: add claude-cli/opus-4.5 runner via Claude CLI with resume support (tools disabled).
-- CLI: replace `message send`/`message poll` with `message --action ...`, and fold Discord/Slack/Telegram/WhatsApp tools into `message` (provider required unless only one configured).
+- CLI: move `clawdbot message` to subcommands (`message send|poll|…`), fold Discord/Slack/Telegram/WhatsApp tools into `message`, and require `--provider` unless only one provider is configured.
 - CLI: improve `logs` output (pretty/plain/JSONL), add gateway unreachable hint, and document logging.
 - WhatsApp: route queued replies to the original sender instead of the bot's own number. (#534) — thanks @mcinteerj
 - Models: add OAuth expiry checks in doctor, expanded `models status` auth output (missing auth + `--check` exit codes). (#538) — thanks @latitudeki5223

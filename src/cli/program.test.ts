@@ -47,9 +47,12 @@ describe("cli program", () => {
 
   it("runs message with required options", async () => {
     const program = buildProgram();
-    await program.parseAsync(["message", "--to", "+1", "--message", "hi"], {
-      from: "user",
-    });
+    await program.parseAsync(
+      ["message", "send", "--to", "+1", "--message", "hi"],
+      {
+        from: "user",
+      },
+    );
     expect(messageCommand).toHaveBeenCalled();
   });
 

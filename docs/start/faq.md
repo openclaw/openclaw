@@ -560,7 +560,7 @@ Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (o
 CLI sending:
 
 ```bash
-clawdbot message --to +15555550123 --message "Here you go" --media /path/to/file.png
+clawdbot message send --to +15555550123 --message "Here you go" --media /path/to/file.png
 ```
 
 Note: images are resized/recompressed (max side 2048px) to hit size limits. See [Images](/nodes/images).

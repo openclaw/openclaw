@@ -134,7 +134,7 @@ clawdbot gateway --port 19001
 Send a test message (requires a running Gateway):
 
 ```bash
-clawdbot message --to +15555550123 --message "Hello from CLAWDBOT"
+clawdbot message send --to +15555550123 --message "Hello from CLAWDBOT"
 ```
 
 ## Configuration (optional)

@@ -15,15 +15,15 @@ read_when:
 
 ```bash
 # WhatsApp
-clawdbot message --action poll --to +15555550123 \
+clawdbot message poll --to +15555550123 \
   --poll-question "Lunch today?" --poll-option "Yes" --poll-option "No" --poll-option "Maybe"
-clawdbot message --action poll --to 123456789@g.us \
+clawdbot message poll --to 123456789@g.us \
   --poll-question "Meeting time?" --poll-option "10am" --poll-option "2pm" --poll-option "4pm" --poll-multi
 
 # Discord
-clawdbot message --action poll --provider discord --to channel:123456789 \
+clawdbot message poll --provider discord --to channel:123456789 \
   --poll-question "Snack?" --poll-option "Pizza" --poll-option "Sushi"
-clawdbot message --action poll --provider discord --to channel:123456789 \
+clawdbot message poll --provider discord --to channel:123456789 \
   --poll-question "Plan?" --poll-option "A" --poll-option "B" --poll-duration-hours 48
 ```
 

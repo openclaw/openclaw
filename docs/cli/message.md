@@ -13,11 +13,8 @@ Single outbound command for sending messages and provider actions
 ## Usage
 
 ```
-clawdbot message --action <action> [--provider <name>] [flags]
+clawdbot message <subcommand> [flags]
 ```
-
-Defaults:
-- `--action send`
 
 Provider selection:
 - `--provider` required if more than one provider is configured.
@@ -33,170 +30,124 @@ Target formats (`--to`):
 
 ## Common flags
 
-- `--to <dest>`
-- `--message <text>`
-- `--media <url>`
-- `--message-id <id>`
-- `--reply-to <id>`
-- `--thread-id <id>` (Telegram forum thread)
-- `--account <id>` (multi-account providers)
-- `--dry-run`
+- `--provider <name>`
+- `--account <id>`
 - `--json`
+- `--dry-run`
 - `--verbose`
 
 ## Actions
 
-### `send`
-Providers: whatsapp, telegram, discord, slack, signal, imessage  
-Required: `--to`, `--message`  
-Optional: `--media`, `--reply-to`, `--thread-id`, `--account`, `--gif-playback`
+### Core
 
-### `react`
-Providers: discord, slack, telegram, whatsapp  
-Required: `--to`, `--message-id`  
-Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--account`
+- `send`
+  - Required: `--to`, `--message`
+  - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
 
-### `reactions`
-Providers: discord, slack  
-Required: `--to`, `--message-id`  
-Optional: `--limit`
+- `poll`
+  - Required: `--to`, `--poll-question`, `--poll-option` (repeat)
+  - Optional: `--poll-multi`, `--poll-duration-hours`, `--message`
 
-### `read`
-Providers: discord, slack  
-Required: `--to`  
-Optional: `--limit`, `--before`, `--after`, `--around`
+- `react`
+  - Required: `--to`, `--message-id`
+  - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--channel-id`
 
-### `edit`
-Providers: discord, slack  
-Required: `--to`, `--message-id`, `--message`
+- `reactions`
+  - Required: `--to`, `--message-id`
+  - Optional: `--limit`, `--channel-id`
 
-### `delete`
-Providers: discord, slack  
-Required: `--to`, `--message-id`
+- `read`
+  - Required: `--to`
+  - Optional: `--limit`, `--before`, `--after`, `--around`, `--channel-id`
 
-### `pin`
-Providers: discord, slack  
-Required: `--to`, `--message-id`
+- `edit`
+  - Required: `--to`, `--message-id`, `--message`
+  - Optional: `--channel-id`
 
-### `unpin`
-Providers: discord, slack  
-Required: `--to`, `--message-id`
+- `delete`
+  - Required: `--to`, `--message-id`
+  - Optional: `--channel-id`
 
-### `list-pins`
-Providers: discord, slack  
-Required: `--to`
+- `pin` / `unpin`
+  - Required: `--to`, `--message-id`
+  - Optional: `--channel-id`
 
-### `poll`
-Providers: whatsapp, discord  
-Required: `--to`, `--poll-question`, `--poll-option` (repeat)  
-Optional: `--poll-multi`, `--poll-duration-hours`, `--message`
+- `pins` (list)
+  - Required: `--to`
+  - Optional: `--channel-id`
 
-### `sticker`
-Providers: discord  
-Required: `--to`, `--sticker-id` (repeat)  
-Optional: `--message`
+- `permissions`
+  - Required: `--to`
+  - Optional: `--channel-id`
 
-### `permissions`
-Providers: discord  
-Required: `--to` (channel id)
+- `search`
+  - Required: `--guild-id`, `--query`
+  - Optional: `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`
 
-### `thread-create`
-Providers: discord  
-Required: `--to` (channel id), `--thread-name`  
-Optional: `--message-id`, `--auto-archive-min`
+### Threads
 
-### `thread-list`
-Providers: discord  
-Required: `--guild-id`  
-Optional: `--channel-id`, `--include-archived`, `--before`, `--limit`
+- `thread create`
+  - Required: `--thread-name`, `--to` (channel id) or `--channel-id`
+  - Optional: `--message-id`, `--auto-archive-min`
 
-### `thread-reply`
-Providers: discord  
-Required: `--to` (thread id), `--message`  
-Optional: `--media`, `--reply-to`
+- `thread list`
+  - Required: `--guild-id`
+  - Optional: `--channel-id`, `--include-archived`, `--before`, `--limit`
 
-### `search`
-Providers: discord  
-Required: `--guild-id`, `--query`  
-Optional: `--channel-id`, `--channel-ids`, `--author-id`, `--author-ids`, `--limit`
+- `thread reply`
+  - Required: `--to` (thread id), `--message`
+  - Optional: `--media`, `--reply-to`
 
-### `member-info`
-Providers: discord, slack  
-Required: `--user-id`  
-Discord only: also `--guild-id`
+### Emojis
 
-### `role-info`
-Providers: discord  
-Required: `--guild-id`
+- `emoji list`
+  - Discord: `--guild-id`
 
-### `emoji-list`
-Providers: discord, slack  
-Discord only: `--guild-id`
+- `emoji upload`
+  - Required: `--guild-id`, `--emoji-name`, `--media`
+  - Optional: `--role-ids` (repeat)
 
-### `emoji-upload`
-Providers: discord  
-Required: `--guild-id`, `--emoji-name`, `--media`  
-Optional: `--role-ids` (repeat)
+### Stickers
 
-### `sticker-upload`
-Providers: discord  
-Required: `--guild-id`, `--sticker-name`, `--sticker-desc`, `--sticker-tags`, `--media`
+- `sticker send`
+  - Required: `--to`, `--sticker-id` (repeat)
+  - Optional: `--message`
 
-### `role-add`
-Providers: discord  
-Required: `--guild-id`, `--user-id`, `--role-id`
+- `sticker upload`
+  - Required: `--guild-id`, `--sticker-name`, `--sticker-desc`, `--sticker-tags`, `--media`
 
-### `role-remove`
-Providers: discord  
-Required: `--guild-id`, `--user-id`, `--role-id`
+### Roles / Channels / Members / Voice
 
-### `channel-info`
-Providers: discord  
-Required: `--channel-id`
+- `role info` (Discord): `--guild-id`
+- `role add` / `role remove` (Discord): `--guild-id`, `--user-id`, `--role-id`
+- `channel info` (Discord): `--channel-id`
+- `channel list` (Discord): `--guild-id`
+- `member info` (Discord/Slack): `--user-id` (+ `--guild-id` for Discord)
+- `voice status` (Discord): `--guild-id`, `--user-id`
 
-### `channel-list`
-Providers: discord  
-Required: `--guild-id`
+### Events
 
-### `voice-status`
-Providers: discord  
-Required: `--guild-id`, `--user-id`
+- `event list` (Discord): `--guild-id`
+- `event create` (Discord): `--guild-id`, `--event-name`, `--start-time`
+  - Optional: `--end-time`, `--desc`, `--channel-id`, `--location`, `--event-type`
 
-### `event-list`
-Providers: discord  
-Required: `--guild-id`
+### Moderation (Discord)
 
-### `event-create`
-Providers: discord  
-Required: `--guild-id`, `--event-name`, `--start-time`  
-Optional: `--end-time`, `--desc`, `--channel-id`, `--location`, `--event-type`
-
-### `timeout`
-Providers: discord  
-Required: `--guild-id`, `--user-id`  
-Optional: `--duration-min`, `--until`, `--reason`
-
-### `kick`
-Providers: discord  
-Required: `--guild-id`, `--user-id`  
-Optional: `--reason`
-
-### `ban`
-Providers: discord  
-Required: `--guild-id`, `--user-id`  
-Optional: `--reason`, `--delete-days`
+- `timeout`: `--guild-id`, `--user-id` (+ `--duration-min` or `--until`)
+- `kick`: `--guild-id`, `--user-id`
+- `ban`: `--guild-id`, `--user-id` (+ `--delete-days`)
 
 ## Examples
 
 Send a Discord reply:
 ```
-clawdbot message --action send --provider discord \
+clawdbot message send --provider discord \
   --to channel:123 --message "hi" --reply-to 456
 ```
 
 Create a Discord poll:
 ```
-clawdbot message --action poll --provider discord \
+clawdbot message poll --provider discord \
   --to channel:123 \
   --poll-question "Snack?" \
   --poll-option Pizza --poll-option Sushi \
@@ -205,6 +156,6 @@ clawdbot message --action poll --provider discord \
 
 React in Slack:
 ```
-clawdbot message --action react --provider slack \
+clawdbot message react --provider slack \
   --to C123 --message-id 456 --emoji "✅"
 ```
