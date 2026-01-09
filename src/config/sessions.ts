@@ -87,6 +87,7 @@ export type SessionEntry = {
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
+  responseUsage?: "on" | "off";
   providerOverride?: string;
   modelOverride?: string;
   authProfileOverride?: string;

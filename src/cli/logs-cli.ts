@@ -52,7 +52,10 @@ async function fetchLogs(
   return payload as LogsTailPayload;
 }
 
-function formatLogTimestamp(value?: string, mode: "pretty" | "plain" = "plain") {
+function formatLogTimestamp(
+  value?: string,
+  mode: "pretty" | "plain" = "plain",
+) {
   if (!value) return "";
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
@@ -70,7 +73,10 @@ function formatLogLine(
   const parsed = parseLogLine(raw);
   if (!parsed) return raw;
   const label = parsed.subsystem ?? parsed.module ?? "";
-  const time = formatLogTimestamp(parsed.time, opts.pretty ? "pretty" : "plain");
+  const time = formatLogTimestamp(
+    parsed.time,
+    opts.pretty ? "pretty" : "plain",
+  );
   const level = parsed.level ?? "";
   const levelLabel = level.padEnd(5).trim();
   const message = parsed.message || parsed.raw;

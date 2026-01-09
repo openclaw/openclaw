@@ -24,7 +24,10 @@
 - Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
 - Auto-reply: preserve spacing when stripping inline directives. (#539) — thanks @joshp123
+- Auto-reply: fix /status usage summary filtering for the active provider.
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
+- Status: compact /status with session token usage + estimated cost, add `/cost` per-response usage lines (tokens-only for OAuth).
+- Status: show active auth profile and key snippet in /status.
 - macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
 - WhatsApp: group `/model list` output by provider for scannability. (#456) - thanks @mcinteerj
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
@@ -56,7 +59,15 @@
 - Docs: expand parameter descriptions for agent/wake hooks. (#532) — thanks @mcinteerj
 - Docs: add community showcase entries from Discord. (#476) — thanks @gupsammy
 - TUI: refresh status bar after think/verbose/reasoning changes. (#519) — thanks @jdrhyne
+- Status: show Verbose/Elevated only when enabled.
+- Status: filter usage summary to the active model provider.
+- Status: map model providers to usage sources so unrelated usage doesn’t appear.
+- Commands: allow /elevated off in groups without a mention; keep /elevated on mention-gated.
+- Commands: keep multi-directive messages from clearing directive handling.
+- Commands: warn when /elevated runs in direct (unsandboxed) runtime.
 - Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
+- Commands: return /status in directive-only multi-line messages.
+- Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
 
 ## 2026.1.8
 

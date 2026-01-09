@@ -14,6 +14,17 @@ vi.mock("../agents/pi-embedded.js", () => ({
   isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
+const usageMocks = vi.hoisted(() => ({
+  loadProviderUsageSummary: vi.fn().mockResolvedValue({
+    updatedAt: 0,
+    providers: [],
+  }),
+  formatUsageSummaryLine: vi.fn().mockReturnValue("📊 Usage: Claude 80% left"),
+  resolveUsageProviderId: vi.fn((provider: string) => provider.split("/")[0]),
+}));
+
+vi.mock("../infra/provider-usage.js", () => usageMocks);
+
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -66,6 +77,30 @@ afterEach(() => {
 });
 
 describe("trigger handling", () => {
+  it("filters usage summary to the current model provider", async () => {
+    await withTempHome(async (home) => {
+      usageMocks.loadProviderUsageSummary.mockClear();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1000",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {},
+        makeCfg(home),
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("📊 Usage: Claude 80% left");
+      expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
+        expect.objectContaining({ providers: ["anthropic"] }),
+      );
+    });
+  });
+
   it("aborts even with timestamp prefix", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
@@ -178,7 +213,71 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("ClawdBot");
+      expect(text).toContain("status");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports active auth profile and key snippet in status", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const agentDir = join(home, ".clawdbot", "agents", "main", "agent");
+      await fs.mkdir(agentDir, { recursive: true });
+      await fs.writeFile(
+        join(agentDir, "auth-profiles.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "anthropic:work": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-test-1234567890abcdef",
+              },
+            },
+            lastGood: { anthropic: "anthropic:work" },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const sessionKey = resolveSessionKey("per-sender", {
+        From: "+1002",
+        To: "+2000",
+        Provider: "whatsapp",
+      } as Parameters<typeof resolveSessionKey>[1]);
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "session-auth",
+              updatedAt: Date.now(),
+              authProfileOverride: "anthropic:work",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1002",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1002",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("🔑 api-key");
+      expect(text).toContain("…");
+      expect(text).toContain("(anthropic:work)");
+      expect(text).not.toContain("mixed");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -380,6 +479,48 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe("ok");
       expect(text).not.toContain("Elevated mode enabled");
+    });
+  });
+
+  it("allows elevated off in groups without mention", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const cfg = {
+        agent: {
+          model: "anthropic/claude-opus-4-5",
+          workspace: join(home, "clawd"),
+          elevated: {
+            allowFrom: { whatsapp: ["+1000"] },
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+          groups: { "*": { requireMention: false } },
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/elevated off",
+          From: "group:123@g.us",
+          To: "whatsapp:+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+          ChatType: "group",
+          WasMentioned: false,
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Elevated mode disabled.");
     });
   });
 

@@ -2,6 +2,7 @@ export type ThinkLevel = "off" | "minimal" | "low" | "medium" | "high";
 export type VerboseLevel = "off" | "on";
 export type ElevatedLevel = "off" | "on";
 export type ReasoningLevel = "off" | "on" | "stream";
+export type UsageDisplayLevel = "off" | "on";
 
 // Normalize user-provided thinking level strings to the canonical enum.
 export function normalizeThinkLevel(
@@ -43,6 +44,19 @@ export function normalizeVerboseLevel(
   const key = raw.toLowerCase();
   if (["off", "false", "no", "0"].includes(key)) return "off";
   if (["on", "full", "true", "yes", "1"].includes(key)) return "on";
+  return undefined;
+}
+
+// Normalize response-usage display flags used to toggle cost/token lines.
+export function normalizeUsageDisplay(
+  raw?: string | null,
+): UsageDisplayLevel | undefined {
+  if (!raw) return undefined;
+  const key = raw.toLowerCase();
+  if (["off", "false", "no", "0", "disable", "disabled"].includes(key))
+    return "off";
+  if (["on", "true", "yes", "1", "enable", "enabled"].includes(key))
+    return "on";
   return undefined;
 }
 

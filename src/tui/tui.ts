@@ -6,12 +6,14 @@ import {
   Text,
   TUI,
 } from "@mariozechner/pi-tui";
+import { normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { formatTokenCount } from "../utils/usage-format.js";
 import { getSlashCommands, helpText, parseCommand } from "./commands.js";
 import { ChatLog } from "./components/chat-log.js";
 import { CustomEditor } from "./components/custom-editor.js";
@@ -52,8 +54,12 @@ type SessionInfo = {
   verboseLevel?: string;
   reasoningLevel?: string;
   model?: string;
+  modelProvider?: string;
   contextTokens?: number | null;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
   totalTokens?: number | null;
+  responseUsage?: "on" | "off";
   updatedAt?: number | null;
   displayName?: string;
 };
@@ -99,13 +105,16 @@ function extractTextFromMessage(
 }
 
 function formatTokens(total?: number | null, context?: number | null) {
-  if (!total && !context) return "tokens ?";
-  if (!context) return `tokens ${total ?? 0}`;
+  if (total == null && context == null) return "tokens ?";
+  const totalLabel = total == null ? "?" : formatTokenCount(total);
+  if (context == null) return `tokens ${totalLabel}`;
   const pct =
     typeof total === "number" && context > 0
       ? Math.min(999, Math.round((total / context) * 100))
       : null;
-  return `tokens ${total ?? 0}/${context}${pct !== null ? ` (${pct}%)` : ""}`;
+  return `tokens ${totalLabel}/${formatTokenCount(context)}${
+    pct !== null ? ` (${pct}%)` : ""
+  }`;
 }
 
 function asString(value: unknown, fallback = ""): string {
@@ -213,7 +222,11 @@ export async function runTui(opts: TuiOptions) {
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
       : sessionKeyLabel;
     const agentLabel = formatAgentLabel(currentAgentId);
-    const modelLabel = sessionInfo.model ?? "unknown";
+    const modelLabel = sessionInfo.model
+      ? sessionInfo.modelProvider
+        ? `${sessionInfo.modelProvider}/${sessionInfo.model}`
+        : sessionInfo.model
+      : "unknown";
     const tokens = formatTokens(
       sessionInfo.totalTokens ?? null,
       sessionInfo.contextTokens ?? null,
@@ -321,8 +334,12 @@ export async function runTui(opts: TuiOptions) {
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         model: entry?.model ?? result.defaults?.model ?? undefined,
+        modelProvider: entry?.modelProvider,
         contextTokens: entry?.contextTokens ?? result.defaults?.contextTokens,
+        inputTokens: entry?.inputTokens ?? null,
+        outputTokens: entry?.outputTokens ?? null,
         totalTokens: entry?.totalTokens ?? null,
+        responseUsage: entry?.responseUsage,
         updatedAt: entry?.updatedAt ?? null,
         displayName: entry?.displayName,
       };
@@ -773,6 +790,28 @@ export async function runTui(opts: TuiOptions) {
           chatLog.addSystem(`reasoning failed: ${String(err)}`);
         }
         break;
+      case "cost": {
+        const normalized = args ? normalizeUsageDisplay(args) : undefined;
+        if (args && !normalized) {
+          chatLog.addSystem("usage: /cost <on|off>");
+          break;
+        }
+        const current = sessionInfo.responseUsage === "on" ? "on" : "off";
+        const next = normalized ?? (current === "on" ? "off" : "on");
+        try {
+          await client.patchSession({
+            key: currentSessionKey,
+            responseUsage: next === "off" ? null : next,
+          });
+          chatLog.addSystem(
+            next === "on" ? "usage line enabled" : "usage line disabled",
+          );
+          await refreshSessionInfo();
+        } catch (err) {
+          chatLog.addSystem(`cost failed: ${String(err)}`);
+        }
+        break;
+      }
       case "elevated":
         if (!args) {
           chatLog.addSystem("usage: /elevated <on|off>");

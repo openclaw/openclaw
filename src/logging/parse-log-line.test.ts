@@ -20,7 +20,9 @@ describe("parseLogLine", () => {
     expect(parsed?.time).toBe("2026-01-09T01:38:41.523Z");
     expect(parsed?.level).toBe("info");
     expect(parsed?.subsystem).toBe("gateway/providers/whatsapp");
-    expect(parsed?.message).toBe("{\"subsystem\":\"gateway/providers/whatsapp\"} connected");
+    expect(parsed?.message).toBe(
+      '{"subsystem":"gateway/providers/whatsapp"} connected',
+    );
     expect(parsed?.raw).toBe(line);
   });
 
@@ -28,7 +30,7 @@ describe("parseLogLine", () => {
     const line = JSON.stringify({
       0: "hello",
       _meta: {
-        name: "{\"subsystem\":\"gateway\"}",
+        name: '{"subsystem":"gateway"}',
         logLevelName: "WARN",
         date: "2026-01-09T02:10:00.000Z",
       },

@@ -122,6 +122,19 @@ or state drift because only one workspace is active.
 **Fix:** keep a single active workspace and archive/remove the rest. See
 [Agent workspace](/concepts/agent-workspace#legacy-workspace-folders).
 
+### Main chat running in a sandbox workspace
+
+Symptoms: `pwd` or file tools show `~/.clawdbot/sandboxes/...` even though you
+expected the host workspace.
+
+**Why:** `agent.sandbox.mode: "non-main"` keys off `session.mainKey` (default `"main"`).
+Group/channel sessions use their own keys, so they are treated as non-main and
+get sandbox workspaces.
+
+**Fix options:**
+- If you want host workspaces for an agent: set `routing.agents.<id>.sandbox.mode: "off"`.
+- If you want host workspace access inside sandbox: set `workspaceAccess: "rw"` for that agent.
+
 ### "Agent was aborted"
 
 The agent was interrupted mid-response.
