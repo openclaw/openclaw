@@ -3,11 +3,8 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  modelKey,
+  resolveAllowedModelRef,
   resolveConfiguredModelRef,
-  resolveModelRefFromString,
 } from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
@@ -168,17 +165,6 @@ export async function applySessionsPatchToStore(params: {
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
-      const aliasIndex = buildModelAliasIndex({
-        cfg,
-        defaultProvider: resolvedDefault.provider,
-      });
-      const resolved = resolveModelRefFromString({
-        raw: trimmed,
-        defaultProvider: resolvedDefault.provider,
-        aliasIndex,
-      });
-      if (!resolved) return invalid(`invalid model: ${trimmed}`);
-
       if (!params.loadGatewayModelCatalog) {
         return {
           ok: false,
@@ -189,15 +175,15 @@ export async function applySessionsPatchToStore(params: {
         };
       }
       const catalog = await params.loadGatewayModelCatalog();
-      const allowed = buildAllowedModelSet({
+      const resolved = resolveAllowedModelRef({
         cfg,
         catalog,
+        raw: trimmed,
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
       });
-      const key = modelKey(resolved.ref.provider, resolved.ref.model);
-      if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
-        return invalid(`model not allowed: ${key}`);
+      if ("error" in resolved) {
+        return invalid(resolved.error);
       }
       if (
         resolved.ref.provider === resolvedDefault.provider &&

@@ -9,12 +9,10 @@ import {
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
-  buildAllowedModelSet,
-  buildModelAliasIndex,
-  modelKey,
+  getModelRefStatus,
+  resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -301,14 +299,14 @@ export async function runCronIsolatedAgentTurn(params: {
       })
     : null;
   if (hooksGmailModelRef) {
-    const allowed = buildAllowedModelSet({
+    const status = getModelRefStatus({
       cfg: params.cfg,
       catalog: await loadCatalog(),
+      ref: hooksGmailModelRef,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
     });
-    const key = modelKey(hooksGmailModelRef.provider, hooksGmailModelRef.model);
-    if (allowed.allowAny || allowed.allowedKeys.has(key)) {
+    if (status.allowed) {
       provider = hooksGmailModelRef.provider;
       model = hooksGmailModelRef.model;
     }
@@ -321,34 +319,15 @@ export async function runCronIsolatedAgentTurn(params: {
     if (typeof modelOverrideRaw !== "string") {
       return { status: "error", error: "invalid model: expected string" };
     }
-    const trimmed = modelOverrideRaw.trim();
-    if (!trimmed) {
-      return { status: "error", error: "invalid model: empty" };
-    }
-    const aliasIndex = buildModelAliasIndex({
-      cfg: params.cfg,
-      defaultProvider: resolvedDefault.provider,
-    });
-    const resolvedOverride = resolveModelRefFromString({
-      raw: trimmed,
-      defaultProvider: resolvedDefault.provider,
-      aliasIndex,
-    });
-    if (!resolvedOverride) {
-      return { status: "error", error: `invalid model: ${trimmed}` };
-    }
-    const allowed = buildAllowedModelSet({
+    const resolvedOverride = resolveAllowedModelRef({
       cfg: params.cfg,
       catalog: await loadCatalog(),
+      raw: modelOverrideRaw,
       defaultProvider: resolvedDefault.provider,
       defaultModel: resolvedDefault.model,
     });
-    const key = modelKey(
-      resolvedOverride.ref.provider,
-      resolvedOverride.ref.model,
-    );
-    if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
-      return { status: "error", error: `model not allowed: ${key}` };
+    if ("error" in resolvedOverride) {
+      return { status: "error", error: resolvedOverride.error };
     }
     provider = resolvedOverride.ref.provider;
     model = resolvedOverride.ref.model;

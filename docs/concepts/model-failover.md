@@ -83,7 +83,10 @@ State is stored in `auth-profiles.json` under `usageStats`:
 
 If all profiles for a provider fail, Clawdbot moves to the next model in
 `agents.defaults.model.fallbacks`. This applies to auth failures, rate limits, and
-timeouts that exhausted profile rotation.
+timeouts that exhausted profile rotation (other errors do not advance fallback).
+
+When a run starts with a model override (hooks or CLI), fallbacks still end at
+`agents.defaults.model.primary` after trying any configured fallbacks.
 
 ## Related config
 
