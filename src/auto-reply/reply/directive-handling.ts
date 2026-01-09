@@ -379,7 +379,87 @@ export async function handleDirectiveOnly(params: {
       modelDirective === "status" || modelDirective === "list";
     if (!directives.rawModelDirective || isModelListAlias) {
       if (allowedModelCatalog.length === 0) {
-        return { text: "No models available." };
+        const resolvedDefault = resolveConfiguredModelRef({
+          cfg: params.cfg,
+          defaultProvider,
+          defaultModel,
+        });
+        const fallbackKeys = new Set<string>();
+        const fallbackCatalog: Array<{
+          provider: string;
+          id: string;
+        }> = [];
+        for (const raw of Object.keys(params.cfg.agent?.models ?? {})) {
+          const resolved = resolveModelRefFromString({
+            raw: String(raw),
+            defaultProvider,
+            aliasIndex,
+          });
+          if (!resolved) continue;
+          const key = modelKey(resolved.ref.provider, resolved.ref.model);
+          if (fallbackKeys.has(key)) continue;
+          fallbackKeys.add(key);
+          fallbackCatalog.push({
+            provider: resolved.ref.provider,
+            id: resolved.ref.model,
+          });
+        }
+        if (fallbackCatalog.length === 0 && resolvedDefault.model) {
+          const key = modelKey(resolvedDefault.provider, resolvedDefault.model);
+          fallbackKeys.add(key);
+          fallbackCatalog.push({
+            provider: resolvedDefault.provider,
+            id: resolvedDefault.model,
+          });
+        }
+        if (fallbackCatalog.length === 0) {
+          return { text: "No models available." };
+        }
+        const agentDir = resolveClawdbotAgentDir();
+        const modelsPath = `${agentDir}/models.json`;
+        const formatPath = (value: string) => shortenHomePath(value);
+        const authByProvider = new Map<string, string>();
+        for (const entry of fallbackCatalog) {
+          if (authByProvider.has(entry.provider)) continue;
+          const auth = await resolveAuthLabel(
+            entry.provider,
+            params.cfg,
+            modelsPath,
+          );
+          authByProvider.set(entry.provider, formatAuthLabel(auth));
+        }
+        const current = `${params.provider}/${params.model}`;
+        const defaultLabel = `${defaultProvider}/${defaultModel}`;
+        const lines = [
+          `Current: ${current}`,
+          `Default: ${defaultLabel}`,
+          `Auth file: ${formatPath(resolveAuthStorePathForDisplay())}`,
+          `⚠️ Model catalog unavailable; showing configured models only.`,
+        ];
+        const byProvider = new Map<string, typeof fallbackCatalog>();
+        for (const entry of fallbackCatalog) {
+          const models = byProvider.get(entry.provider);
+          if (models) {
+            models.push(entry);
+            continue;
+          }
+          byProvider.set(entry.provider, [entry]);
+        }
+        for (const provider of byProvider.keys()) {
+          const models = byProvider.get(provider);
+          if (!models) continue;
+          const authLabel = authByProvider.get(provider) ?? "missing";
+          lines.push("");
+          lines.push(`[${provider}] auth: ${authLabel}`);
+          for (const entry of models) {
+            const label = `${entry.provider}/${entry.id}`;
+            const aliases = aliasIndex.byKey.get(label);
+            const aliasSuffix =
+              aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
+            lines.push(`  • ${label}${aliasSuffix}`);
+          }
+        }
+        return { text: lines.join("\n") };
       }
       const agentDir = resolveClawdbotAgentDir();
       const modelsPath = `${agentDir}/models.json`;

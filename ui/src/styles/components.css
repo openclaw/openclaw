@@ -454,6 +454,15 @@
   background: rgba(0, 0, 0, 0.2);
 }
 
+.session-link {
+  text-decoration: none;
+  color: var(--accent);
+}
+
+.session-link:hover {
+  text-decoration: underline;
+}
+
 .log-stream {
   border: 1px solid var(--border);
   border-radius: 14px;

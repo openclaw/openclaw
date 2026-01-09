@@ -33,6 +33,7 @@
 - Hooks: allow per-hook model overrides for webhook/Gmail runs (e.g. GPT 5 Mini).
 - Control UI: logs tab opens at the newest entries (bottom).
 - Control UI: add Docs link, remove chat composer divider, and add New session button.
+- Control UI: link sessions list to chat view. (#471) — thanks @HazAT
 - Control UI: queue outgoing chat messages, add Enter-to-send, and show queued items. (#527) — thanks @YuriNachos
 - Telegram: retry long-polling conflicts with backoff to avoid fatal exits.
 - Telegram: fix grammY fetch type mismatch when injecting `fetch`. (#512) — thanks @YuriNachos
@@ -67,6 +68,7 @@
 - Commands: warn when /elevated runs in direct (unsandboxed) runtime.
 - Commands: treat mention-bypassed group command messages as mentioned so elevated directives respond.
 - Commands: return /status in directive-only multi-line messages.
+- Models: fall back to configured models when the provider catalog is unavailable.
 - Agent system prompt: add messaging guidance for reply routing and cross-session sends. (#526) — thanks @neist
 
 ## 2026.1.8

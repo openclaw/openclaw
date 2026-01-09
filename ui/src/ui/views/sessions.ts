@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 
 import { formatAgo } from "../format";
 import { formatSessionTokens } from "../presenter";
+import { pathForTab } from "../navigation";
 import type { GatewaySessionRow, SessionsListResult } from "../types";
 
 export type SessionsProps = {
@@ -12,6 +13,7 @@ export type SessionsProps = {
   limit: string;
   includeGlobal: boolean;
   includeUnknown: boolean;
+  basePath: string;
   onFiltersChange: (next: {
     activeMinutes: string;
     limit: string;
@@ -118,19 +120,27 @@ export function renderSessions(props: SessionsProps) {
         </div>
         ${rows.length === 0
           ? html`<div class="muted">No sessions found.</div>`
-          : rows.map((row) => renderRow(row, props.onPatch))}
+          : rows.map((row) => renderRow(row, props.basePath, props.onPatch))}
       </div>
     </section>
   `;
 }
 
-function renderRow(row: GatewaySessionRow, onPatch: SessionsProps["onPatch"]) {
+function renderRow(row: GatewaySessionRow, basePath: string, onPatch: SessionsProps["onPatch"]) {
   const updated = row.updatedAt ? formatAgo(row.updatedAt) : "n/a";
   const thinking = row.thinkingLevel ?? "";
   const verbose = row.verboseLevel ?? "";
+  const displayName = row.displayName ?? row.key;
+  const canLink = row.kind !== "global";
+  const chatUrl = canLink
+    ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
+    : null;
+
   return html`
     <div class="table-row">
-      <div class="mono">${row.displayName ?? row.key}</div>
+      <div class="mono">${canLink
+        ? html`<a href=${chatUrl} class="session-link">${displayName}</a>`
+        : displayName}</div>
       <div>${row.kind}</div>
       <div>${updated}</div>
       <div>${formatSessionTokens(row)}</div>
