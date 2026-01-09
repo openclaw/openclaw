@@ -21,6 +21,7 @@ import android.speech.tts.UtteranceProgressListener
 import android.util.Log
 import androidx.core.content.ContextCompat
 import com.clawdbot.android.bridge.BridgeSession
+import com.clawdbot.android.normalizeMainKey
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -814,7 +815,7 @@ class TalkModeManager(
       val config = root?.get("config").asObjectOrNull()
       val talk = config?.get("talk").asObjectOrNull()
       val sessionCfg = config?.get("session").asObjectOrNull()
-      val mainKey = sessionCfg?.get("mainKey").asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() } ?: "main"
+      val mainKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull())
       val voice = talk?.get("voiceId")?.asStringOrNull()?.trim()?.takeIf { it.isNotEmpty() }
       val aliases =
         talk?.get("voiceAliases").asObjectOrNull()?.entries?.mapNotNull { (key, value) ->
