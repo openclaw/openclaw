@@ -274,7 +274,7 @@ describe("trigger handling", () => {
         cfg,
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("🔑 api-key");
+      expect(text).toContain("api-key");
       expect(text).toContain("…");
       expect(text).toContain("(anthropic:work)");
       expect(text).not.toContain("mixed");

@@ -52,6 +52,7 @@ export async function createModelSelectionState(params: {
     sessionKey,
     storePath,
     defaultProvider,
+    defaultModel,
   } = params;
 
   let provider = params.provider;
@@ -76,6 +77,7 @@ export async function createModelSelectionState(params: {
       cfg,
       catalog: modelCatalog,
       defaultProvider,
+      defaultModel,
     });
     allowedModelCatalog = allowed.allowedCatalog;
     allowedModelKeys = allowed.allowedKeys;

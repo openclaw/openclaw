@@ -299,6 +299,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           cfg,
           catalog,
           defaultProvider: resolvedDefault.provider,
+          defaultModel: resolvedDefault.model,
         });
         const key = modelKey(resolved.ref.provider, resolved.ref.model);
         if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
