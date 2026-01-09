@@ -10,8 +10,7 @@ import {
   resetModelCatalogCacheForTest,
 } from "../agents/model-catalog.js";
 import {
-  buildAllowedModelSet,
-  modelKey,
+  getModelRefStatus,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
@@ -1782,22 +1781,21 @@ export async function startGatewayServer(
           defaultModel: DEFAULT_MODEL,
         });
       const catalog = await loadModelCatalog({ config: cfgAtStart });
-      const key = modelKey(hooksModelRef.provider, hooksModelRef.model);
-      const allowed = buildAllowedModelSet({
+      const status = getModelRefStatus({
         cfg: cfgAtStart,
         catalog,
+        ref: hooksModelRef,
         defaultProvider,
         defaultModel,
       });
-      if (!allowed.allowAny && !allowed.allowedKeys.has(key)) {
+      if (!status.allowed) {
         logHooks.warn(
-          `hooks.gmail.model "${key}" not in agents.defaults.models allowlist (will use primary instead)`,
+          `hooks.gmail.model "${status.key}" not in agents.defaults.models allowlist (will use primary instead)`,
         );
       }
-      const inCatalog = catalog.some((e) => modelKey(e.provider, e.id) === key);
-      if (!inCatalog) {
+      if (!status.inCatalog) {
         logHooks.warn(
-          `hooks.gmail.model "${key}" not in the model catalog (may fail at runtime)`,
+          `hooks.gmail.model "${status.key}" not in the model catalog (may fail at runtime)`,
         );
       }
     }
