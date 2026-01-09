@@ -1,6 +1,11 @@
-import crypto from "node:crypto";
-import { resolveModelAuthMode } from "../../agents/model-auth.js";
-import { normalizeProviderId } from "../../agents/model-selection.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../../agents/auth-profiles.js";
+import {
+  getCustomProviderApiKey,
+  resolveEnvApiKey,
+} from "../../agents/model-auth.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
@@ -18,7 +23,7 @@ import { logVerbose } from "../../globals.js";
 import {
   formatUsageSummaryLine,
   loadProviderUsageSummary,
-  type UsageProviderId,
+  resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import {
   scheduleGatewaySigusr1Restart,
@@ -49,32 +54,14 @@ import type {
   ElevatedLevel,
   ReasoningLevel,
   ThinkLevel,
-  UsageDisplayLevel,
   VerboseLevel,
 } from "../thinking.js";
-import { normalizeUsageDisplay } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
-
-const usageProviderMap: Record<string, UsageProviderId> = {
-  anthropic: "anthropic",
-  "github-copilot": "github-copilot",
-  "google-antigravity": "google-antigravity",
-  "google-gemini-cli": "google-gemini-cli",
-  google: "google-gemini-cli",
-  openai: "openai-codex",
-  "openai-codex": "openai-codex",
-  zai: "zai",
-};
-
-function resolveUsageProviderId(provider: string): UsageProviderId | undefined {
-  const normalized = normalizeProviderId(provider);
-  return usageProviderMap[normalized];
-}
 
 function resolveSessionEntryForKey(
   store: Record<string, SessionEntry> | undefined,
@@ -104,6 +91,36 @@ export type CommandContext = {
   from?: string;
   to?: string;
 };
+
+function resolveModelAuthLabel(
+  provider?: string,
+  cfg?: ClawdbotConfig,
+): string | undefined {
+  const resolved = provider?.trim();
+  if (!resolved) return undefined;
+
+  const store = ensureAuthProfileStore();
+  const profiles = listProfilesForProvider(store, resolved);
+  if (profiles.length > 0) {
+    const modes = new Set(
+      profiles
+        .map((id) => store.profiles[id]?.type)
+        .filter((mode): mode is "api_key" | "oauth" => Boolean(mode)),
+    );
+    if (modes.has("oauth") && modes.has("api_key")) return "mixed";
+    if (modes.has("oauth")) return "oauth";
+    if (modes.has("api_key")) return "api-key";
+  }
+
+  const envKey = resolveEnvApiKey(resolved);
+  if (envKey?.apiKey) {
+    return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+  }
+
+  if (getCustomProviderApiKey(cfg, resolved)) return "api-key";
+
+  return "unknown";
+}
 
 function extractCompactInstructions(params: {
   rawBody?: string;
@@ -407,13 +424,11 @@ export async function handleCommands(params: {
     let usageLine: string | null = null;
     try {
       const usageProvider = resolveUsageProviderId(provider);
-      if (usageProvider) {
-        const usageSummary = await loadProviderUsageSummary({
-          timeoutMs: 3500,
-          providers: [usageProvider],
-        });
-        usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
-      }
+      const usageSummary = await loadProviderUsageSummary({
+        timeoutMs: 3500,
+        providers: usageProvider ? [usageProvider] : [],
+      });
+      usageLine = formatUsageSummaryLine(usageSummary, { now: Date.now() });
     } catch {
       usageLine = null;
     }
@@ -434,7 +449,6 @@ export async function handleCommands(params: {
         defaultGroupActivation())
       : undefined;
     const statusText = buildStatusMessage({
-      config: cfg,
       agent: {
         ...cfg.agent,
         model: {
@@ -455,7 +469,7 @@ export async function handleCommands(params: {
       resolvedVerbose: resolvedVerboseLevel,
       resolvedReasoning: resolvedReasoningLevel,
       resolvedElevated: resolvedElevatedLevel,
-      modelAuth: resolveModelAuthMode(provider, cfg),
+      modelAuth: resolveModelAuthLabel(provider, cfg),
       usageLine: usageLine ?? undefined,
       queue: {
         mode: queueSettings.mode,
@@ -468,51 +482,6 @@ export async function handleCommands(params: {
       includeTranscriptUsage: false,
     });
     return { shouldContinue: false, reply: { text: statusText } };
-  }
-
-  const costRequested =
-    command.commandBodyNormalized === "/cost" ||
-    command.commandBodyNormalized.startsWith("/cost ");
-  if (allowTextCommands && costRequested) {
-    if (!command.isAuthorizedSender) {
-      logVerbose(
-        `Ignoring /cost from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
-      );
-      return { shouldContinue: false };
-    }
-    const rawArgs = command.commandBodyNormalized.slice("/cost".length).trim();
-    const normalized =
-      rawArgs.length > 0 ? normalizeUsageDisplay(rawArgs) : undefined;
-    if (rawArgs.length > 0 && !normalized) {
-      return {
-        shouldContinue: false,
-        reply: { text: "⚙️ Usage: /cost on|off" },
-      };
-    }
-    const current: UsageDisplayLevel =
-      sessionEntry?.responseUsage === "on" ? "on" : "off";
-    const next = normalized ?? (current === "on" ? "off" : "on");
-    if (sessionStore && sessionKey) {
-      const entry = sessionEntry ??
-        sessionStore[sessionKey] ?? {
-          sessionId: crypto.randomUUID(),
-          updatedAt: Date.now(),
-        };
-      if (next === "off") delete entry.responseUsage;
-      else entry.responseUsage = next;
-      entry.updatedAt = Date.now();
-      sessionStore[sessionKey] = entry;
-      if (storePath) {
-        await saveSessionStore(storePath, sessionStore);
-      }
-    }
-    return {
-      shouldContinue: false,
-      reply: {
-        text:
-          next === "on" ? "⚙️ Usage line enabled." : "⚙️ Usage line disabled.",
-      },
-    };
   }
 
   const stopRequested = command.commandBodyNormalized === "/stop";

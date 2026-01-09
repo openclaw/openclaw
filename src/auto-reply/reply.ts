@@ -346,6 +346,7 @@ export async function getReplyFromConfig(
       };
     }
   }
+  const disableElevatedInGroup = isGroup && ctx.WasMentioned !== true;
   const hasDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||

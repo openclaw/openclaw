@@ -24,6 +24,7 @@
 - Auto-reply: block reply ordering fix (duplicate PR superseded by #503). (#483) — thanks @AbhisekBasu1
 - Auto-reply: avoid splitting outbound chunks inside parentheses. (#499) — thanks @philipp-spiess
 - Auto-reply: preserve spacing when stripping inline directives. (#539) — thanks @joshp123
+- Auto-reply: fix /status usage summary filtering for the active provider.
 - Status: show provider prefix in /status model display. (#506) — thanks @mcinteerj
 - Status: compact /status with session token usage + estimated cost, add `/cost` per-response usage lines (tokens-only for OAuth).
 - macOS: package ClawdbotKit resources and Swift 6.2 compatibility dylib to avoid launch/tool crashes. (#473) — thanks @gupsammy
