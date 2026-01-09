@@ -57,7 +57,6 @@ beforeEach(() => {
   config = {
     messages: { responsePrefix: "PFX" },
     signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },
-    routing: { allowFrom: [] },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();

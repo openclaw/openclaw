@@ -52,18 +52,20 @@ describe("agents_list", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             name: "Main",
             subagents: {
               allowAgents: ["research"],
             },
           },
-          research: {
+          {
+            id: "research",
             name: "Research",
           },
-        },
+        ],
       },
     };
 
@@ -87,20 +89,23 @@ describe("agents_list", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             subagents: {
               allowAgents: ["*"],
             },
           },
-          research: {
+          {
+            id: "research",
             name: "Research",
           },
-          coder: {
+          {
+            id: "coder",
             name: "Coder",
           },
-        },
+        ],
       },
     };
 
@@ -131,14 +136,15 @@ describe("agents_list", () => {
         mainKey: "main",
         scope: "per-sender",
       },
-      routing: {
-        agents: {
-          main: {
+      agents: {
+        list: [
+          {
+            id: "main",
             subagents: {
               allowAgents: ["research"],
             },
           },
-        },
+        ],
       },
     };
 

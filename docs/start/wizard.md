@@ -34,7 +34,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Gateway port **18789**
 - Gateway auth **Off** (loopback only)
 - Tailscale exposure **Off**
-- Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for a number)
+- Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for your phone number)
 
 **Advanced** exposes every step (mode, workspace, gateway, providers, daemon, skills).
 
@@ -70,11 +70,13 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
      - Full reset (also removes workspace)
 
 2) **Model/Auth**
+   - **Preferred Anthropic setup:** install Claude CLI on the gateway host and run `claude setup-token` (the wizard can run it for you and reuse the token).
    - **Anthropic OAuth (Claude CLI)**: on macOS the wizard checks Keychain item "Claude Code-credentials" (choose "Always Allow" so launchd starts don't block); on Linux/Windows it reuses `~/.claude/.credentials.json` if present.
-   - **Anthropic OAuth (recommended)**: browser flow; paste the `code#state`.
+   - **Anthropic token (paste setup-token)**: run `claude setup-token` in your terminal, then paste the token (you can name it; blank = default).
    - **OpenAI Codex OAuth (Codex CLI)**: if `~/.codex/auth.json` exists, the wizard can reuse it.
    - **OpenAI Codex OAuth**: browser flow; paste the `code#state`.
-     - Sets `agent.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+     - Sets `agents.defaults.model` to `openai-codex/gpt-5.2` when model is unset or `openai/*`.
+   - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.clawdbot/.env` so launchd can read it.
    - **API key**: stores the key for you.
    - **Minimax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - **Skip**: no auth configured yet.
@@ -120,7 +122,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 9) **Finish**
    - Summary + next steps, including iOS/Android/macOS apps for extra features.
   - If no GUI is detected, the wizard prints SSH port-forward instructions for the Control UI instead of opening a browser.
-  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:install && pnpm ui:build`.
+  - If the Control UI assets are missing, the wizard attempts to build them; fallback is `pnpm ui:build` (auto-installs UI deps).
 
 ## Remote mode
 
@@ -143,14 +145,14 @@ Use `clawdbot agents add <name>` to create a separate agent with its own workspa
 sessions, and auth profiles. Running without `--workspace` launches the wizard.
 
 What it sets:
-- `routing.agents.<agentId>.name`
-- `routing.agents.<agentId>.workspace`
-- `routing.agents.<agentId>.agentDir`
+- `agents.list[].name`
+- `agents.list[].workspace`
+- `agents.list[].agentDir`
 
 Notes:
 - Default workspaces follow `~/clawd-<agentId>`.
-- Add `routing.bindings` to route inbound messages (the wizard can do this).
- - Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
+- Add `bindings` to route inbound messages (the wizard can do this).
+- Non-interactive flags: `--model`, `--agent-dir`, `--bind`, `--non-interactive`.
 
 ## Non‑interactive mode
 
@@ -212,8 +214,8 @@ Notes:
 ## What the wizard writes
 
 Typical fields in `~/.clawdbot/clawdbot.json`:
-- `agent.workspace`
-- `agent.model` / `models.providers` (if Minimax chosen)
+- `agents.defaults.workspace`
+- `agents.defaults.model` / `models.providers` (if Minimax chosen)
 - `gateway.*` (mode, bind, auth, tailscale)
 - `telegram.botToken`, `discord.token`, `signal.*`, `imessage.*`
 - `skills.install.nodeManager`
@@ -223,7 +225,7 @@ Typical fields in `~/.clawdbot/clawdbot.json`:
 - `wizard.lastRunCommand`
 - `wizard.lastRunMode`
 
-`clawdbot agents add` writes `routing.agents.<agentId>` and optional `routing.bindings`.
+`clawdbot agents add` writes `agents.list[]` and optional `bindings`.
 
 WhatsApp credentials go under `~/.clawdbot/credentials/whatsapp/<accountId>/`.
 Sessions are stored under `~/.clawdbot/agents/<agentId>/sessions/`.

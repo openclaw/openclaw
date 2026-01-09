@@ -78,9 +78,8 @@ beforeEach(() => {
       groups: { "*": { requireMention: true } },
     },
     session: { mainKey: "main" },
-    routing: {
+    messages: {
       groupChat: { mentionPatterns: ["@clawd"] },
-      allowFrom: [],
     },
   };
   requestMock.mockReset().mockImplementation((method: string) => {
@@ -159,7 +158,7 @@ describe("monitorIMessageProvider", () => {
   it("allows group messages when requireMention is true but no mentionPatterns exist", async () => {
     config = {
       ...config,
-      routing: { groupChat: { mentionPatterns: [] }, allowFrom: [] },
+      messages: { groupChat: { mentionPatterns: [] } },
       imessage: { groups: { "*": { requireMention: true } } },
     };
     const run = monitorIMessageProvider();

@@ -4,7 +4,7 @@ import path from "node:path";
 
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
-import { createClawdbotCodingTools } from "./pi-tools.js";
+import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
 describe("createClawdbotCodingTools", () => {
@@ -64,9 +64,38 @@ describe("createClawdbotCodingTools", () => {
     expect(format?.enum).toEqual(["aria", "ai"]);
   });
 
+  it("inlines local $ref before removing unsupported keywords", () => {
+    const cleaned = __testing.cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        foo: { $ref: "#/$defs/Foo" },
+      },
+      $defs: {
+        Foo: { type: "string", enum: ["a", "b"] },
+      },
+    }) as {
+      $defs?: unknown;
+      properties?: Record<string, unknown>;
+    };
+
+    expect(cleaned.$defs).toBeUndefined();
+    expect(cleaned.properties).toBeDefined();
+    expect(cleaned.properties?.foo).toMatchObject({
+      type: "string",
+      enum: ["a", "b"],
+    });
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
-    const toolNames = ["browser", "canvas", "nodes", "cron", "gateway", "message"];
+    const toolNames = [
+      "browser",
+      "canvas",
+      "nodes",
+      "cron",
+      "gateway",
+      "message",
+    ];
 
     const collectActionValues = (
       schema: unknown,
@@ -134,36 +163,13 @@ describe("createClawdbotCodingTools", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("scopes discord tool to discord provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(other.some((tool) => tool.name === "discord")).toBe(false);
-
-    const discord = createClawdbotCodingTools({ messageProvider: "discord" });
-    expect(discord.some((tool) => tool.name === "discord")).toBe(true);
-  });
-
-  it("scopes slack tool to slack provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(other.some((tool) => tool.name === "slack")).toBe(false);
-
-    const slack = createClawdbotCodingTools({ messageProvider: "slack" });
-    expect(slack.some((tool) => tool.name === "slack")).toBe(true);
-  });
-
-  it("scopes telegram tool to telegram provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(other.some((tool) => tool.name === "telegram")).toBe(false);
-
-    const telegram = createClawdbotCodingTools({ messageProvider: "telegram" });
-    expect(telegram.some((tool) => tool.name === "telegram")).toBe(true);
-  });
-
-  it("scopes whatsapp tool to whatsapp provider", () => {
-    const other = createClawdbotCodingTools({ messageProvider: "slack" });
-    expect(other.some((tool) => tool.name === "whatsapp")).toBe(false);
-
-    const whatsapp = createClawdbotCodingTools({ messageProvider: "whatsapp" });
-    expect(whatsapp.some((tool) => tool.name === "whatsapp")).toBe(true);
+  it("does not expose provider-specific message tools", () => {
+    const tools = createClawdbotCodingTools({ messageProvider: "discord" });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("discord")).toBe(false);
+    expect(names.has("slack")).toBe(false);
+    expect(names.has("telegram")).toBe(false);
+    expect(names.has("whatsapp")).toBe(false);
   });
 
   it("filters session tools for sub-agent sessions by default", () => {
@@ -187,7 +193,7 @@ describe("createClawdbotCodingTools", () => {
       sessionKey: "agent:main:subagent:test",
       // Intentionally partial config; only fields used by pi-tools are provided.
       config: {
-        agent: {
+        tools: {
           subagents: {
             tools: {
               // Policy matching is case-insensitive
@@ -341,10 +347,58 @@ describe("createClawdbotCodingTools", () => {
 
   it("filters tools by agent tool policy even without sandbox", () => {
     const tools = createClawdbotCodingTools({
-      config: { agent: { tools: { deny: ["browser"] } } },
+      config: { tools: { deny: ["browser"] } },
     });
     // NOTE: bash is capitalized to bypass Anthropic OAuth blocking
     expect(tools.some((tool) => tool.name === "Bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+  });
+
+  it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {
+    const tools = createClawdbotCodingTools();
+
+    // Helper to recursively check schema for unsupported keywords
+    const unsupportedKeywords = new Set([
+      "patternProperties",
+      "additionalProperties",
+      "$schema",
+      "$id",
+      "$ref",
+      "$defs",
+      "definitions",
+    ]);
+
+    const findUnsupportedKeywords = (
+      schema: unknown,
+      path: string,
+    ): string[] => {
+      const found: string[] = [];
+      if (!schema || typeof schema !== "object") return found;
+      if (Array.isArray(schema)) {
+        schema.forEach((item, i) => {
+          found.push(...findUnsupportedKeywords(item, `${path}[${i}]`));
+        });
+        return found;
+      }
+      for (const [key, value] of Object.entries(
+        schema as Record<string, unknown>,
+      )) {
+        if (unsupportedKeywords.has(key)) {
+          found.push(`${path}.${key}`);
+        }
+        if (value && typeof value === "object") {
+          found.push(...findUnsupportedKeywords(value, `${path}.${key}`));
+        }
+      }
+      return found;
+    };
+
+    for (const tool of tools) {
+      const violations = findUnsupportedKeywords(
+        tool.parameters,
+        `${tool.name}.parameters`,
+      );
+      expect(violations).toEqual([]);
+    }
   });
 });

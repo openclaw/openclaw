@@ -9,6 +9,7 @@ import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
 import { splitMediaFromOutput } from "../media/parse.js";
+import { truncateUtf16Safe } from "../utils.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
 import { isMessagingToolDuplicate } from "./pi-embedded-helpers.js";
@@ -24,6 +25,7 @@ const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
 const THINKING_OPEN_GLOBAL_RE = /<\s*think(?:ing)?\s*>/gi;
 const THINKING_CLOSE_GLOBAL_RE = /<\s*\/\s*think(?:ing)?\s*>/gi;
+const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*think(?:ing)?\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
 const RAW_STREAM_ENABLED = process.env.CLAWDBOT_RAW_STREAM === "1";
@@ -63,7 +65,7 @@ type MessagingToolSend = {
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) return text;
-  return `${text.slice(0, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
+  return `${truncateUtf16Safe(text, TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
 function sanitizeToolResult(result: unknown): unknown {
@@ -119,6 +121,96 @@ function stripUnpairedThinkingTags(text: string): string {
   if (!hasOpen) return text.replace(THINKING_CLOSE_RE, "");
   if (!hasClose) return text.replace(THINKING_OPEN_RE, "");
   return text;
+}
+
+type ThinkTaggedSplitBlock =
+  | { type: "thinking"; thinking: string }
+  | { type: "text"; text: string };
+
+function splitThinkingTaggedText(text: string): ThinkTaggedSplitBlock[] | null {
+  const trimmedStart = text.trimStart();
+  // Avoid false positives: only treat it as structured thinking when it begins
+  // with a think tag (common for local/OpenAI-compat providers that emulate
+  // reasoning blocks via tags).
+  if (!trimmedStart.startsWith("<")) return null;
+  if (!THINKING_OPEN_RE.test(trimmedStart)) return null;
+  if (!THINKING_CLOSE_RE.test(text)) return null;
+
+  THINKING_TAG_SCAN_RE.lastIndex = 0;
+  let inThinking = false;
+  let cursor = 0;
+  let thinkingStart = 0;
+  const blocks: ThinkTaggedSplitBlock[] = [];
+
+  const pushText = (value: string) => {
+    if (!value) return;
+    blocks.push({ type: "text", text: value });
+  };
+  const pushThinking = (value: string) => {
+    const cleaned = value.trim();
+    if (!cleaned) return;
+    blocks.push({ type: "thinking", thinking: cleaned });
+  };
+
+  for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
+    const index = match.index ?? 0;
+    const isClose = Boolean(match[1]?.includes("/"));
+
+    if (!inThinking && !isClose) {
+      pushText(text.slice(cursor, index));
+      thinkingStart = index + match[0].length;
+      inThinking = true;
+      continue;
+    }
+
+    if (inThinking && isClose) {
+      pushThinking(text.slice(thinkingStart, index));
+      cursor = index + match[0].length;
+      inThinking = false;
+    }
+  }
+
+  if (inThinking) return null;
+  pushText(text.slice(cursor));
+
+  const hasThinking = blocks.some((b) => b.type === "thinking");
+  if (!hasThinking) return null;
+  return blocks;
+}
+
+function promoteThinkingTagsToBlocks(message: AssistantMessage): void {
+  if (!Array.isArray(message.content)) return;
+  const hasThinkingBlock = message.content.some(
+    (block) => block.type === "thinking",
+  );
+  if (hasThinkingBlock) return;
+
+  const next: AssistantMessage["content"] = [];
+  let changed = false;
+
+  for (const block of message.content) {
+    if (block.type !== "text") {
+      next.push(block);
+      continue;
+    }
+    const split = splitThinkingTaggedText(block.text);
+    if (!split) {
+      next.push(block);
+      continue;
+    }
+    changed = true;
+    for (const part of split) {
+      if (part.type === "thinking") {
+        next.push({ type: "thinking", thinking: part.thinking });
+      } else if (part.type === "text") {
+        const cleaned = part.text.trimStart();
+        if (cleaned) next.push({ type: "text", text: cleaned });
+      }
+    }
+  }
+
+  if (!changed) return;
+  message.content = next;
 }
 
 function normalizeSlackTarget(raw: string): string | undefined {
@@ -792,6 +884,7 @@ export function subscribeEmbeddedPiSession(params: {
         const msg = (evt as AgentEvent & { message: AgentMessage }).message;
         if (msg?.role === "assistant") {
           const assistantMessage = msg as AssistantMessage;
+          promoteThinkingTagsToBlocks(assistantMessage);
           const rawText = extractAssistantText(assistantMessage);
           appendRawStream({
             ts: Date.now(),

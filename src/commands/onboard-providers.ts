@@ -541,8 +541,13 @@ async function promptWhatsAppAllowFrom(
   const existingResponsePrefix = cfg.messages?.responsePrefix;
 
   if (options?.forceAllowlist) {
+    await prompter.note(
+      "We need the sender/owner number so Clawdbot can allowlist you.",
+      "WhatsApp number",
+    );
     const entry = await prompter.text({
-      message: "Your WhatsApp number (E.164)",
+      message:
+        "Your personal WhatsApp number (the phone you will message from)",
       placeholder: "+15555550123",
       initialValue: existingAllowFrom[0],
       validate: (value) => {
@@ -604,8 +609,13 @@ async function promptWhatsAppAllowFrom(
   })) as "personal" | "separate";
 
   if (phoneMode === "personal") {
+    await prompter.note(
+      "We need the sender/owner number so Clawdbot can allowlist you.",
+      "WhatsApp number",
+    );
     const entry = await prompter.text({
-      message: "Your WhatsApp number (E.164)",
+      message:
+        "Your personal WhatsApp number (the phone you will message from)",
       placeholder: "+15555550123",
       initialValue: existingAllowFrom[0],
       validate: (value) => {

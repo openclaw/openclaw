@@ -92,6 +92,6 @@ Provider options:
 - `signal.mediaMaxMb`: inbound/outbound media cap (MB).
 
 Related global options:
-- `routing.groupChat.mentionPatterns` (Signal does not support native mentions).
-- Multi-agent override: `routing.agents.<agentId>.mentionPatterns` takes precedence.
+- `agents.list[].groupChat.mentionPatterns` (Signal does not support native mentions).
+- `messages.groupChat.mentionPatterns` (global fallback).
 - `messages.responsePrefix`.

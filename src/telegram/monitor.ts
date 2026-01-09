@@ -28,13 +28,15 @@ export function createTelegramRunnerOptions(
 ): RunOptions<unknown> {
   return {
     sink: {
-      concurrency: cfg.agent?.maxConcurrent ?? 1,
+      concurrency: cfg.agents?.defaults?.maxConcurrent ?? 1,
     },
     runner: {
       fetch: {
         // Match grammY defaults
         timeout: 30,
       },
+      // Suppress grammY getUpdates stack traces; we log concise errors ourselves.
+      silent: true,
     },
   };
 }

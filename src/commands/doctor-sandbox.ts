@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
@@ -12,8 +12,12 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { replaceModernName } from "./doctor-legacy-config.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 type SandboxScriptInfo = {
   scriptPath: string;
@@ -92,12 +96,12 @@ async function dockerImageExists(image: string): Promise<boolean> {
 }
 
 function resolveSandboxDockerImage(cfg: ClawdbotConfig): string {
-  const image = cfg.agent?.sandbox?.docker?.image?.trim();
+  const image = cfg.agents?.defaults?.sandbox?.docker?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_IMAGE;
 }
 
 function resolveSandboxBrowserImage(cfg: ClawdbotConfig): string {
-  const image = cfg.agent?.sandbox?.browser?.image?.trim();
+  const image = cfg.agents?.defaults?.sandbox?.browser?.image?.trim();
   return image ? image : DEFAULT_SANDBOX_BROWSER_IMAGE;
 }
 
@@ -107,13 +111,16 @@ function updateSandboxDockerImage(
 ): ClawdbotConfig {
   return {
     ...cfg,
-    agent: {
-      ...cfg.agent,
-      sandbox: {
-        ...cfg.agent?.sandbox,
-        docker: {
-          ...cfg.agent?.sandbox?.docker,
-          image,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        sandbox: {
+          ...cfg.agents?.defaults?.sandbox,
+          docker: {
+            ...cfg.agents?.defaults?.sandbox?.docker,
+            image,
+          },
         },
       },
     },
@@ -126,13 +133,16 @@ function updateSandboxBrowserImage(
 ): ClawdbotConfig {
   return {
     ...cfg,
-    agent: {
-      ...cfg.agent,
-      sandbox: {
-        ...cfg.agent?.sandbox,
-        browser: {
-          ...cfg.agent?.sandbox?.browser,
-          image,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        sandbox: {
+          ...cfg.agents?.defaults?.sandbox,
+          browser: {
+            ...cfg.agents?.defaults?.sandbox?.browser,
+            image,
+          },
         },
       },
     },
@@ -194,7 +204,7 @@ export async function maybeRepairSandboxImages(
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ): Promise<ClawdbotConfig> {
-  const sandbox = cfg.agent?.sandbox;
+  const sandbox = cfg.agents?.defaults?.sandbox;
   const mode = sandbox?.mode ?? "off";
   if (!sandbox || mode === "off") return cfg;
 
@@ -220,7 +230,7 @@ export async function maybeRepairSandboxImages(
             : undefined,
       updateConfig: (image) => {
         next = updateSandboxDockerImage(next, image);
-        changes.push(`Updated agent.sandbox.docker.image → ${image}`);
+        changes.push(`Updated agents.defaults.sandbox.docker.image → ${image}`);
       },
     },
     runtime,
@@ -235,7 +245,9 @@ export async function maybeRepairSandboxImages(
         buildScript: "scripts/sandbox-browser-setup.sh",
         updateConfig: (image) => {
           next = updateSandboxBrowserImage(next, image);
-          changes.push(`Updated agent.sandbox.browser.image → ${image}`);
+          changes.push(
+            `Updated agents.defaults.sandbox.browser.image → ${image}`,
+          );
         },
       },
       runtime,
@@ -251,11 +263,12 @@ export async function maybeRepairSandboxImages(
 }
 
 export function noteSandboxScopeWarnings(cfg: ClawdbotConfig) {
-  const globalSandbox = cfg.agent?.sandbox;
-  const agents = cfg.routing?.agents ?? {};
+  const globalSandbox = cfg.agents?.defaults?.sandbox;
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
   const warnings: string[] = [];
 
-  for (const [agentId, agent] of Object.entries(agents)) {
+  for (const agent of agents) {
+    const agentId = agent.id;
     const agentSandbox = agent.sandbox;
     if (!agentSandbox) continue;
 
@@ -280,7 +293,7 @@ export function noteSandboxScopeWarnings(cfg: ClawdbotConfig) {
     if (overrides.length === 0) continue;
 
     warnings.push(
-      `- routing.agents.${agentId}.sandbox: ${overrides.join(
+      `- agents.list (id "${agentId}") sandbox ${overrides.join(
         "/",
       )} overrides ignored (scope resolves to "shared").`,
     );

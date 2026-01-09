@@ -71,6 +71,9 @@ export function createGatewayTool(opts?: {
           typeof params.reason === "string" && params.reason.trim()
             ? params.reason.trim().slice(0, 200)
             : undefined;
+        console.info(
+          `gateway tool: restart requested (delayMs=${delayMs ?? "default"}, reason=${reason ?? "none"})`,
+        );
         const scheduled = scheduleGatewaySigusr1Restart({
           delayMs,
           reason,

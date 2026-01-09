@@ -1,5 +1,7 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../agents/workspace.js";
 import {
   applyAuthChoice,
   warnIfModelConfigLooksOff,
@@ -52,6 +54,7 @@ import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { runTui } from "../tui/tui.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import type { WizardPrompter } from "./prompts.js";
 
@@ -92,7 +95,8 @@ export async function runOnboardingWizard(
     })) as "keep" | "modify" | "reset";
 
     if (action === "reset") {
-      const workspaceDefault = baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE;
+      const workspaceDefault =
+        baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE;
       const resetScope = (await prompter.select({
         message: "Reset scope",
         options: [
@@ -133,17 +137,92 @@ export async function runOnboardingWizard(
     flow = "advanced";
   }
 
+  const quickstartGateway = (() => {
+    const hasExisting =
+      typeof baseConfig.gateway?.port === "number" ||
+      baseConfig.gateway?.bind !== undefined ||
+      baseConfig.gateway?.auth?.mode !== undefined ||
+      baseConfig.gateway?.auth?.token !== undefined ||
+      baseConfig.gateway?.auth?.password !== undefined ||
+      baseConfig.gateway?.tailscale?.mode !== undefined;
+
+    const bindRaw = baseConfig.gateway?.bind;
+    const bind =
+      bindRaw === "loopback" ||
+      bindRaw === "lan" ||
+      bindRaw === "tailnet" ||
+      bindRaw === "auto"
+        ? bindRaw
+        : "loopback";
+
+    let authMode: GatewayAuthChoice = "off";
+    if (
+      baseConfig.gateway?.auth?.mode === "token" ||
+      baseConfig.gateway?.auth?.mode === "password"
+    ) {
+      authMode = baseConfig.gateway.auth.mode;
+    } else if (baseConfig.gateway?.auth?.token) {
+      authMode = "token";
+    } else if (baseConfig.gateway?.auth?.password) {
+      authMode = "password";
+    }
+
+    const tailscaleRaw = baseConfig.gateway?.tailscale?.mode;
+    const tailscaleMode =
+      tailscaleRaw === "off" ||
+      tailscaleRaw === "serve" ||
+      tailscaleRaw === "funnel"
+        ? tailscaleRaw
+        : "off";
+
+    return {
+      hasExisting,
+      port: resolveGatewayPort(baseConfig),
+      bind,
+      authMode,
+      tailscaleMode,
+      token: baseConfig.gateway?.auth?.token,
+      password: baseConfig.gateway?.auth?.password,
+      tailscaleResetOnExit: baseConfig.gateway?.tailscale?.resetOnExit ?? false,
+    };
+  })();
+
   if (flow === "quickstart") {
-    await prompter.note(
-      [
-        "Gateway port: 18789",
-        "Gateway bind: Loopback (127.0.0.1)",
-        "Gateway auth: Off (loopback only)",
-        "Tailscale exposure: Off",
-        "Direct to chat providers.",
-      ].join("\n"),
-      "QuickStart defaults",
-    );
+    const formatBind = (value: "loopback" | "lan" | "tailnet" | "auto") => {
+      if (value === "loopback") return "Loopback (127.0.0.1)";
+      if (value === "lan") return "LAN";
+      if (value === "tailnet") return "Tailnet";
+      return "Auto";
+    };
+    const formatAuth = (value: GatewayAuthChoice) => {
+      if (value === "off") return "Off (loopback only)";
+      if (value === "token") return "Token";
+      return "Password";
+    };
+    const formatTailscale = (value: "off" | "serve" | "funnel") => {
+      if (value === "off") return "Off";
+      if (value === "serve") return "Serve";
+      return "Funnel";
+    };
+    const quickstartLines = quickstartGateway.hasExisting
+      ? [
+          "Keeping your current gateway settings:",
+          `Gateway port: ${quickstartGateway.port}`,
+          `Gateway bind: ${formatBind(quickstartGateway.bind)}`,
+          `Gateway auth: ${formatAuth(quickstartGateway.authMode)}`,
+          `Tailscale exposure: ${formatTailscale(
+            quickstartGateway.tailscaleMode,
+          )}`,
+          "Direct to chat providers.",
+        ]
+      : [
+          `Gateway port: ${DEFAULT_GATEWAY_PORT}`,
+          "Gateway bind: Loopback (127.0.0.1)",
+          "Gateway auth: Off (loopback only)",
+          "Tailscale exposure: Off",
+          "Direct to chat providers.",
+        ];
+    await prompter.note(quickstartLines.join("\n"), "QuickStart");
   }
 
   const localPort = resolveGatewayPort(baseConfig);
@@ -201,10 +280,11 @@ export async function runOnboardingWizard(
   const workspaceInput =
     opts.workspace ??
     (flow === "quickstart"
-      ? (baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE)
+      ? (baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE)
       : await prompter.text({
           message: "Workspace directory",
-          initialValue: baseConfig.agent?.workspace ?? DEFAULT_WORKSPACE,
+          initialValue:
+            baseConfig.agents?.defaults?.workspace ?? DEFAULT_WORKSPACE,
         }));
 
   const workspaceDir = resolveUserPath(
@@ -213,9 +293,12 @@ export async function runOnboardingWizard(
 
   let nextConfig: ClawdbotConfig = {
     ...baseConfig,
-    agent: {
-      ...baseConfig.agent,
-      workspace: workspaceDir,
+    agents: {
+      ...baseConfig.agents,
+      defaults: {
+        ...baseConfig.agents?.defaults,
+        workspace: workspaceDir,
+      },
     },
     gateway: {
       ...baseConfig.gateway,
@@ -248,7 +331,7 @@ export async function runOnboardingWizard(
 
   const port =
     flow === "quickstart"
-      ? DEFAULT_GATEWAY_PORT
+      ? quickstartGateway.port
       : Number.parseInt(
           String(
             await prompter.text({
@@ -263,7 +346,7 @@ export async function runOnboardingWizard(
 
   let bind = (
     flow === "quickstart"
-      ? "loopback"
+      ? quickstartGateway.bind
       : ((await prompter.select({
           message: "Gateway bind",
           options: [
@@ -277,7 +360,7 @@ export async function runOnboardingWizard(
 
   let authMode = (
     flow === "quickstart"
-      ? "off"
+      ? quickstartGateway.authMode
       : ((await prompter.select({
           message: "Gateway auth",
           options: [
@@ -298,7 +381,7 @@ export async function runOnboardingWizard(
 
   const tailscaleMode = (
     flow === "quickstart"
-      ? "off"
+      ? quickstartGateway.tailscaleMode
       : ((await prompter.select({
           message: "Tailscale exposure",
           options: [
@@ -317,7 +400,8 @@ export async function runOnboardingWizard(
         })) as "off" | "serve" | "funnel")
   ) as "off" | "serve" | "funnel";
 
-  let tailscaleResetOnExit = false;
+  let tailscaleResetOnExit =
+    flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(
       [
@@ -358,19 +442,26 @@ export async function runOnboardingWizard(
 
   let gatewayToken: string | undefined;
   if (authMode === "token") {
-    const tokenInput = await prompter.text({
-      message: "Gateway token (blank to generate)",
-      placeholder: "Needed for multi-machine or non-loopback access",
-      initialValue: randomToken(),
-    });
-    gatewayToken = String(tokenInput).trim() || randomToken();
+    if (flow === "quickstart" && quickstartGateway.token) {
+      gatewayToken = quickstartGateway.token;
+    } else {
+      const tokenInput = await prompter.text({
+        message: "Gateway token (blank to generate)",
+        placeholder: "Needed for multi-machine or non-loopback access",
+        initialValue: quickstartGateway.token ?? randomToken(),
+      });
+      gatewayToken = String(tokenInput).trim() || randomToken();
+    }
   }
 
   if (authMode === "password") {
-    const password = await prompter.text({
-      message: "Gateway password",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
+    const password =
+      flow === "quickstart" && quickstartGateway.password
+        ? quickstartGateway.password
+        : await prompter.text({
+            message: "Gateway password",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          });
     nextConfig = {
       ...nextConfig,
       gateway: {
@@ -422,7 +513,7 @@ export async function runOnboardingWizard(
   await writeConfigFile(nextConfig);
   runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agent?.skipBootstrap),
+    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
   });
 
   nextConfig = await setupSkills(nextConfig, workspaceDir, runtime, prompter);
@@ -548,57 +639,70 @@ export async function runOnboardingWizard(
     "Optional apps",
   );
 
+  const links = resolveControlUiLinks({
+    bind,
+    port,
+    basePath: baseConfig.gateway?.controlUi?.basePath,
+  });
+  const tokenParam =
+    authMode === "token" && gatewayToken
+      ? `?token=${encodeURIComponent(gatewayToken)}`
+      : "";
+  const authedUrl = `${links.httpUrl}${tokenParam}`;
+  const gatewayProbe = await probeGatewayReachable({
+    url: links.wsUrl,
+    token: authMode === "token" ? gatewayToken : undefined,
+    password: authMode === "password" ? baseConfig.gateway?.auth?.password : "",
+  });
+  const gatewayStatusLine = gatewayProbe.ok
+    ? "Gateway: reachable"
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+  const bootstrapPath = path.join(workspaceDir, DEFAULT_BOOTSTRAP_FILENAME);
+  const hasBootstrap = await fs
+    .access(bootstrapPath)
+    .then(() => true)
+    .catch(() => false);
+
   await prompter.note(
-    (() => {
-      const links = resolveControlUiLinks({
-        bind,
-        port,
-        basePath: baseConfig.gateway?.controlUi?.basePath,
-      });
-      const tokenParam =
-        authMode === "token" && gatewayToken
-          ? `?token=${encodeURIComponent(gatewayToken)}`
-          : "";
-      const authedUrl = `${links.httpUrl}${tokenParam}`;
-      return [
-        `Web UI: ${links.httpUrl}`,
-        tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
-        `Gateway WS: ${links.wsUrl}`,
-        "Docs: https://docs.clawd.bot/web/control-ui",
-      ]
-        .filter(Boolean)
-        .join("\n");
-    })(),
+    [
+      `Web UI: ${links.httpUrl}`,
+      tokenParam ? `Web UI (with token): ${authedUrl}` : undefined,
+      `Gateway WS: ${links.wsUrl}`,
+      gatewayStatusLine,
+      "Docs: https://docs.clawd.bot/web/control-ui",
+    ]
+      .filter(Boolean)
+      .join("\n"),
     "Control UI",
   );
 
-  const browserSupport = await detectBrowserOpenSupport();
-  if (!browserSupport.ok) {
-    await prompter.note(
-      formatControlUiSshHint({
-        port,
-        basePath: baseConfig.gateway?.controlUi?.basePath,
-        token: authMode === "token" ? gatewayToken : undefined,
-      }),
-      "Open Control UI",
-    );
-  } else {
-    const wantsOpen = await prompter.confirm({
-      message: "Open Control UI now?",
-      initialValue: true,
-    });
-    if (wantsOpen) {
-      const links = resolveControlUiLinks({
-        bind,
-        port,
-        basePath: baseConfig.gateway?.controlUi?.basePath,
+  if (gatewayProbe.ok) {
+    if (hasBootstrap) {
+      await prompter.note(
+        [
+          "This is the defining action that makes your agent you.",
+          "Please take your time.",
+          "The more you tell it, the better the experience will be.",
+          'We will send: "Wake up, my friend!"',
+        ].join("\n"),
+        "Start TUI (best option!)",
+      );
+      const wantsTui = await prompter.confirm({
+        message: "Start TUI now? (best option!)",
+        initialValue: true,
       });
-      const tokenParam =
-        authMode === "token" && gatewayToken
-          ? `?token=${encodeURIComponent(gatewayToken)}`
-          : "";
-      const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
-      if (!opened) {
+      if (wantsTui) {
+        await runTui({
+          url: links.wsUrl,
+          token: authMode === "token" ? gatewayToken : undefined,
+          password:
+            authMode === "password" ? baseConfig.gateway?.auth?.password : "",
+          message: "Wake up, my friend!",
+        });
+      }
+    } else {
+      const browserSupport = await detectBrowserOpenSupport();
+      if (!browserSupport.ok) {
         await prompter.note(
           formatControlUiSshHint({
             port,
@@ -607,6 +711,24 @@ export async function runOnboardingWizard(
           }),
           "Open Control UI",
         );
+      } else {
+        const wantsOpen = await prompter.confirm({
+          message: "Open Control UI now?",
+          initialValue: true,
+        });
+        if (wantsOpen) {
+          const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
+          if (!opened) {
+            await prompter.note(
+              formatControlUiSshHint({
+                port,
+                basePath: baseConfig.gateway?.controlUi?.basePath,
+                token: authMode === "token" ? gatewayToken : undefined,
+              }),
+              "Open Control UI",
+            );
+          }
+        }
       }
     }
   }

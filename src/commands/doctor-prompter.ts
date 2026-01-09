@@ -1,6 +1,10 @@
 import { confirm, select } from "@clack/prompts";
 
 import type { RuntimeEnv } from "../runtime.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+} from "../terminal/prompt-style.js";
 import { guardCancel } from "./onboard-helpers.js";
 
 export type DoctorOptions = {
@@ -42,7 +46,15 @@ export function createDoctorPrompter(params: {
     if (nonInteractive) return false;
     if (shouldRepair) return true;
     if (!canPrompt) return Boolean(p.initialValue ?? false);
-    return guardCancel(await confirm(p), params.runtime) === true;
+    return (
+      guardCancel(
+        await confirm({
+          ...p,
+          message: stylePromptMessage(p.message),
+        }),
+        params.runtime,
+      ) === true
+    );
   };
 
   return {
@@ -56,7 +68,15 @@ export function createDoctorPrompter(params: {
       if (shouldRepair && shouldForce) return true;
       if (shouldRepair && !shouldForce) return false;
       if (!canPrompt) return Boolean(p.initialValue ?? false);
-      return guardCancel(await confirm(p), params.runtime) === true;
+      return (
+        guardCancel(
+          await confirm({
+            ...p,
+            message: stylePromptMessage(p.message),
+          }),
+          params.runtime,
+        ) === true
+      );
     },
     confirmSkipInNonInteractive: async (p) => {
       if (nonInteractive) return false;
@@ -65,7 +85,18 @@ export function createDoctorPrompter(params: {
     },
     select: async <T>(p: Parameters<typeof select>[0], fallback: T) => {
       if (!canPrompt || shouldRepair) return fallback;
-      return guardCancel(await select(p), params.runtime) as T;
+      return guardCancel(
+        await select({
+          ...p,
+          message: stylePromptMessage(p.message),
+          options: p.options.map((opt) =>
+            opt.hint === undefined
+              ? opt
+              : { ...opt, hint: stylePromptHint(opt.hint) },
+          ),
+        }),
+        params.runtime,
+      ) as T;
     },
     shouldRepair,
     shouldForce,

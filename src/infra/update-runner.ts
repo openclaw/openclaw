@@ -307,15 +307,6 @@ export async function runGatewayUpdate(
     steps.push(
       await runStep(
         runCommand,
-        "ui:install",
-        managerScriptArgs(manager, "ui:install"),
-        gitRoot,
-        timeoutMs,
-      ),
-    );
-    steps.push(
-      await runStep(
-        runCommand,
         "ui:build",
         managerScriptArgs(manager, "ui:build"),
         gitRoot,

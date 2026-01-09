@@ -4,6 +4,7 @@ import path from "node:path";
 
 import JSON5 from "json5";
 
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -12,7 +13,6 @@ import { createSubsystemLogger } from "../logging.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_ACCOUNT_ID,
-  DEFAULT_AGENT_ID,
   DEFAULT_MAIN_KEY,
   normalizeAgentId,
 } from "../routing/session-key.js";
@@ -192,9 +192,7 @@ export async function detectLegacyStateMigrations(params: {
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
 
-  const targetAgentId = normalizeAgentId(
-    params.cfg.routing?.defaultAgentId ?? DEFAULT_AGENT_ID,
-  );
+  const targetAgentId = normalizeAgentId(resolveDefaultAgentId(params.cfg));
   const rawMainKey = params.cfg.session?.mainKey;
   const targetMainKey =
     typeof rawMainKey === "string" && rawMainKey.trim().length > 0

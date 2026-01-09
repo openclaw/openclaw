@@ -100,7 +100,7 @@ export async function resolveApiKeyForProvider(params: {
 }
 
 export type EnvApiKeyResult = { apiKey: string; source: string };
-export type ModelAuthMode = "api-key" | "oauth" | "mixed" | "unknown";
+export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
   const applied = new Set(getShellEnvAppliedKeys());
@@ -136,6 +136,7 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     cerebras: "CEREBRAS_API_KEY",
     xai: "XAI_API_KEY",
     openrouter: "OPENROUTER_API_KEY",
+    minimax: "MINIMAX_API_KEY",
     zai: "ZAI_API_KEY",
     mistral: "MISTRAL_API_KEY",
   };
@@ -158,10 +159,14 @@ export function resolveModelAuthMode(
     const modes = new Set(
       profiles
         .map((id) => authStore.profiles[id]?.type)
-        .filter((mode): mode is "api_key" | "oauth" => Boolean(mode)),
+        .filter((mode): mode is "api_key" | "oauth" | "token" => Boolean(mode)),
     );
-    if (modes.has("oauth") && modes.has("api_key")) return "mixed";
+    const distinct = ["oauth", "token", "api_key"].filter((k) =>
+      modes.has(k as "oauth" | "token" | "api_key"),
+    );
+    if (distinct.length >= 2) return "mixed";
     if (modes.has("oauth")) return "oauth";
+    if (modes.has("token")) return "token";
     if (modes.has("api_key")) return "api-key";
   }
 

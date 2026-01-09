@@ -202,4 +202,67 @@ export const DiscordToolSchema = Type.Union([
     reason: Type.Optional(Type.String()),
     deleteMessageDays: Type.Optional(Type.Number()),
   }),
+  // Channel management actions
+  Type.Object({
+    action: Type.Literal("channelCreate"),
+    guildId: Type.String(),
+    name: Type.String(),
+    type: Type.Optional(Type.Number()),
+    parentId: Type.Optional(Type.String()),
+    topic: Type.Optional(Type.String()),
+    position: Type.Optional(Type.Number()),
+    nsfw: Type.Optional(Type.Boolean()),
+  }),
+  Type.Object({
+    action: Type.Literal("channelEdit"),
+    channelId: Type.String(),
+    name: Type.Optional(Type.String()),
+    topic: Type.Optional(Type.String()),
+    position: Type.Optional(Type.Number()),
+    parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    nsfw: Type.Optional(Type.Boolean()),
+    rateLimitPerUser: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("channelDelete"),
+    channelId: Type.String(),
+  }),
+  Type.Object({
+    action: Type.Literal("channelMove"),
+    guildId: Type.String(),
+    channelId: Type.String(),
+    parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+    position: Type.Optional(Type.Number()),
+  }),
+  // Category management actions (convenience aliases)
+  Type.Object({
+    action: Type.Literal("categoryCreate"),
+    guildId: Type.String(),
+    name: Type.String(),
+    position: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("categoryEdit"),
+    categoryId: Type.String(),
+    name: Type.Optional(Type.String()),
+    position: Type.Optional(Type.Number()),
+  }),
+  Type.Object({
+    action: Type.Literal("categoryDelete"),
+    categoryId: Type.String(),
+  }),
+  // Permission overwrite actions
+  Type.Object({
+    action: Type.Literal("channelPermissionSet"),
+    channelId: Type.String(),
+    targetId: Type.String(),
+    targetType: Type.Union([Type.Literal("role"), Type.Literal("member")]),
+    allow: Type.Optional(Type.String()),
+    deny: Type.Optional(Type.String()),
+  }),
+  Type.Object({
+    action: Type.Literal("channelPermissionRemove"),
+    channelId: Type.String(),
+    targetId: Type.String(),
+  }),
 ]);

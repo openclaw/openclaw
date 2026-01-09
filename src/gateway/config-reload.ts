@@ -17,7 +17,8 @@ export type ProviderKind =
   | "discord"
   | "slack"
   | "signal"
-  | "imessage";
+  | "imessage"
+  | "msteams";
 
 export type GatewayReloadPlan = {
   changedPaths: string[];
@@ -50,7 +51,8 @@ type ReloadAction =
   | "restart-provider:discord"
   | "restart-provider:slack"
   | "restart-provider:signal"
-  | "restart-provider:imessage";
+  | "restart-provider:imessage"
+  | "restart-provider:msteams";
 
 const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
@@ -62,7 +64,11 @@ const RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.reload", kind: "none" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
-  { prefix: "agent.heartbeat", kind: "hot", actions: ["restart-heartbeat"] },
+  {
+    prefix: "agents.defaults.heartbeat",
+    kind: "hot",
+    actions: ["restart-heartbeat"],
+  },
   { prefix: "cron", kind: "hot", actions: ["restart-cron"] },
   {
     prefix: "browser",
@@ -75,12 +81,14 @@ const RELOAD_RULES: ReloadRule[] = [
   { prefix: "slack", kind: "hot", actions: ["restart-provider:slack"] },
   { prefix: "signal", kind: "hot", actions: ["restart-provider:signal"] },
   { prefix: "imessage", kind: "hot", actions: ["restart-provider:imessage"] },
-  { prefix: "identity", kind: "none" },
+  { prefix: "msteams", kind: "hot", actions: ["restart-provider:msteams"] },
+  { prefix: "agents", kind: "none" },
+  { prefix: "tools", kind: "none" },
+  { prefix: "bindings", kind: "none" },
+  { prefix: "audio", kind: "none" },
   { prefix: "wizard", kind: "none" },
   { prefix: "logging", kind: "none" },
   { prefix: "models", kind: "none" },
-  { prefix: "agent", kind: "none" },
-  { prefix: "routing", kind: "none" },
   { prefix: "messages", kind: "none" },
   { prefix: "session", kind: "none" },
   { prefix: "whatsapp", kind: "none" },
@@ -212,6 +220,9 @@ export function buildGatewayReloadPlan(
       case "restart-provider:imessage":
         plan.restartProviders.add("imessage");
         break;
+      case "restart-provider:msteams":
+        plan.restartProviders.add("msteams");
+        break;
       default:
         break;
     }
@@ -308,6 +319,9 @@ export function startGatewayConfigReloader(opts: {
       settings = resolveGatewayReloadSettings(nextConfig);
       if (changedPaths.length === 0) return;
 
+      opts.log.info(
+        `config change detected; evaluating reload (${changedPaths.join(", ")})`,
+      );
       const plan = buildGatewayReloadPlan(changedPaths);
       if (settings.mode === "off") {
         opts.log.info("config reload disabled (gateway.reload.mode=off)");
@@ -351,13 +365,18 @@ export function startGatewayConfigReloader(opts: {
   const watcher = chokidar.watch(opts.watchPath, {
     ignoreInitial: true,
     awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+    usePolling: Boolean(process.env.VITEST),
   });
 
   watcher.on("add", schedule);
   watcher.on("change", schedule);
   watcher.on("unlink", schedule);
+  let watcherClosed = false;
   watcher.on("error", (err) => {
+    if (watcherClosed) return;
+    watcherClosed = true;
     opts.log.warn(`config watcher error: ${String(err)}`);
+    void watcher.close().catch(() => {});
   });
 
   return {
@@ -365,6 +384,7 @@ export function startGatewayConfigReloader(opts: {
       stopped = true;
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = null;
+      watcherClosed = true;
       await watcher.close().catch(() => {});
     },
   };

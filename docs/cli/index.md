@@ -13,6 +13,7 @@ This page describes the current CLI behavior. If commands change, update this do
 
 - `--dev`: isolate state under `~/.clawdbot-dev` and shift default ports.
 - `--profile <name>`: isolate state under `~/.clawdbot-<name>`.
+- `--no-color`: disable ANSI colors.
 - `-V`, `--version`, `-v`: print version and exit.
 
 ## Output styling
@@ -20,7 +21,7 @@ This page describes the current CLI behavior. If commands change, update this do
 - ANSI colors and progress indicators only render in TTY sessions.
 - OSC-8 hyperlinks render as clickable links in supported terminals; otherwise we fall back to plain URLs.
 - `--json` (and `--plain` where supported) disables styling for clean output.
-- `--no-color` disables ANSI styling where supported; `NO_COLOR=1` is also respected.
+- `--no-color` disables ANSI styling; `NO_COLOR=1` is also respected.
 - Long-running commands show a progress indicator (OSC 9;4 when supported).
 
 ## Color palette
@@ -35,6 +36,8 @@ Clawdbot uses a lobster palette for CLI output.
 - `warn` (#FFB020): warnings, fallbacks, attention.
 - `error` (#E23D2D): errors, failures.
 - `muted` (#8B7F77): de-emphasis, metadata.
+
+Palette source of truth: `src/terminal/palette.ts` (aka “lobster seam”).
 
 ## Command tree
 
@@ -56,8 +59,6 @@ clawdbot [--dev] [--profile <name>] <command>
     info
     check
   message
-    send
-    poll
   agent
   agents
     list
@@ -70,6 +71,7 @@ clawdbot [--dev] [--profile <name>] <command>
     call
     health
     status
+    discover
   models
     list
     status
@@ -145,6 +147,14 @@ clawdbot [--dev] [--profile <name>] <command>
   tui
 ```
 
+## Chat slash commands
+
+Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
+
+Highlights:
+- `/status` for quick diagnostics.
+- `/debug` for runtime-only config overrides (memory, not disk).
+
 ## Setup + onboarding
 
 ### `setup`
@@ -167,9 +177,15 @@ Options:
 - `--workspace <dir>`
 - `--non-interactive`
 - `--mode <local|remote>`
-- `--auth-choice <oauth|claude-cli|openai-codex|codex-cli|antigravity|gemini-api-key|apiKey|minimax|skip>`
+- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip>`
+- `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
+- `--token <token>` (non-interactive; used with `--auth-choice token`)
+- `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)
+- `--token-expires-in <duration>` (non-interactive; e.g. `365d`, `12h`)
 - `--anthropic-api-key <key>`
+- `--openai-api-key <key>`
 - `--gemini-api-key <key>`
+- `--minimax-api-key <key>`
 - `--gateway-port <port>`
 - `--gateway-bind <loopback|lan|tailnet|auto>`
 - `--gateway-auth <off|token|password>`
@@ -284,37 +300,25 @@ Options:
 
 ## Messaging + agent
 
-### `message send`
-Send a message through a provider.
+### `message`
+Unified outbound messaging + provider actions.
 
-Required:
-- `--to <dest>`
-- `--message <text>`
+See: [/cli/message](/cli/message)
 
-Options:
-- `--media <path-or-url>`
-- `--gif-playback`
-- `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
-- `--account <id>` (WhatsApp)
-- `--dry-run`
-- `--json`
-- `--verbose`
+Subcommands:
+- `message send|poll|react|reactions|read|edit|delete|pin|unpin|pins|permissions|search|timeout|kick|ban`
+- `message thread <create|list|reply>`
+- `message emoji <list|upload>`
+- `message sticker <send|upload>`
+- `message role <info|add|remove>`
+- `message channel <info|list>`
+- `message member info`
+- `message voice status`
+- `message event <list|create>`
 
-### `message poll`
-Create a poll (WhatsApp or Discord).
-
-Required:
-- `--to <id>`
-- `--question <text>`
-- `--option <choice>` (repeat 2-12 times)
-
-Options:
-- `--max-selections <n>`
-- `--duration-hours <n>` (Discord)
-- `--provider <whatsapp|discord>`
-- `--dry-run`
-- `--json`
-- `--verbose`
+Examples:
+- `clawdbot message send --to +15555550123 --message "Hi"`
+- `clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi`
 
 ### `agent`
 Run one agent turn via the Gateway (or `--local` embedded).
@@ -377,7 +381,7 @@ Options:
 Clawdbot can surface provider usage/quota when OAuth/API creds are available.
 
 Surfaces:
-- `/status` (adds a short usage line when available)
+- `/status` (alias: `/usage`; adds a short usage line when available)
 - `clawdbot status --usage` (prints full provider breakdown)
 - macOS menu bar (Usage section under Context)
 
@@ -418,6 +422,8 @@ Options:
 - `--tailscale <off|serve|funnel>`
 - `--tailscale-reset-on-exit`
 - `--allow-unconfigured`
+- `--dev`
+- `--reset` (reset dev config + credentials + sessions + workspace)
 - `--force` (kill existing listener on port)
 - `--verbose`
 - `--ws-log <auto|full|compact>`
@@ -474,6 +480,13 @@ Common RPCs:
 
 See [/concepts/models](/concepts/models) for fallback behavior and scanning strategy.
 
+Preferred Anthropic auth (CLI token, not API key):
+
+```bash
+claude setup-token
+clawdbot models status
+```
+
 ### `models` (root)
 `clawdbot models` is an alias for `models status`.
 
@@ -494,10 +507,10 @@ Options:
 Always includes the auth overview and OAuth expiry status for profiles in the auth store.
 
 ### `models set <model>`
-Set `agent.model.primary`.
+Set `agents.defaults.model.primary`.
 
 ### `models set-image <model>`
-Set `agent.imageModel.primary`.
+Set `agents.defaults.imageModel.primary`.
 
 ### `models aliases list|add|remove`
 Options:
@@ -659,5 +672,6 @@ Options:
 - `--session <key>`
 - `--deliver`
 - `--thinking <level>`
+- `--message <text>`
 - `--timeout-ms <ms>`
 - `--history-limit <n>`

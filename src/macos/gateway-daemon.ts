@@ -149,9 +149,18 @@ async function main() {
     })();
   };
 
-  const onSigterm = () => request("stop", "SIGTERM");
-  const onSigint = () => request("stop", "SIGINT");
-  const onSigusr1 = () => request("restart", "SIGUSR1");
+  const onSigterm = () => {
+    defaultRuntime.log("gateway: signal SIGTERM received");
+    request("stop", "SIGTERM");
+  };
+  const onSigint = () => {
+    defaultRuntime.log("gateway: signal SIGINT received");
+    request("stop", "SIGINT");
+  };
+  const onSigusr1 = () => {
+    defaultRuntime.log("gateway: signal SIGUSR1 received");
+    request("restart", "SIGUSR1");
+  };
 
   process.on("SIGTERM", onSigterm);
   process.on("SIGINT", onSigint);

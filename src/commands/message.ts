@@ -1,7 +1,16 @@
+import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { handleDiscordAction } from "../agents/tools/discord-actions.js";
+import { handleSlackAction } from "../agents/tools/slack-actions.js";
+import { handleTelegramAction } from "../agents/tools/telegram-actions.js";
+import { handleWhatsAppAction } from "../agents/tools/whatsapp-actions.js";
 import type { CliDeps } from "../cli/deps.js";
 import { withProgress } from "../cli/progress.js";
 import { loadConfig } from "../config/config.js";
 import { success } from "../globals.js";
+import type {
+  OutboundDeliveryResult,
+  OutboundSendDeps,
+} from "../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../infra/outbound/envelope.js";
 import {
   buildOutboundDeliveryJson,
@@ -9,18 +18,105 @@ import {
   formatOutboundDeliverySummary,
 } from "../infra/outbound/format.js";
 import {
-  sendMessage,
-  sendPoll,
   type MessagePollResult,
   type MessageSendResult,
+  sendMessage,
+  sendPoll,
 } from "../infra/outbound/message.js";
+import { resolveMessageProviderSelection } from "../infra/outbound/provider-selection.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { normalizeMessageProvider } from "../utils/message-provider.js";
+
+type MessageAction =
+  | "send"
+  | "poll"
+  | "react"
+  | "reactions"
+  | "read"
+  | "edit"
+  | "delete"
+  | "pin"
+  | "unpin"
+  | "list-pins"
+  | "permissions"
+  | "thread-create"
+  | "thread-list"
+  | "thread-reply"
+  | "search"
+  | "sticker"
+  | "member-info"
+  | "role-info"
+  | "emoji-list"
+  | "emoji-upload"
+  | "sticker-upload"
+  | "role-add"
+  | "role-remove"
+  | "channel-info"
+  | "channel-list"
+  | "voice-status"
+  | "event-list"
+  | "event-create"
+  | "timeout"
+  | "kick"
+  | "ban";
+
+type MessageCommandOpts = {
+  action?: string;
+  provider?: string;
+  to?: string;
+  message?: string;
+  media?: string;
+  messageId?: string;
+  replyTo?: string;
+  threadId?: string;
+  account?: string;
+  emoji?: string;
+  remove?: boolean;
+  limit?: string;
+  before?: string;
+  after?: string;
+  around?: string;
+  pollQuestion?: string;
+  pollOption?: string[] | string;
+  pollDurationHours?: string;
+  pollMulti?: boolean;
+  channelId?: string;
+  channelIds?: string[] | string;
+  guildId?: string;
+  userId?: string;
+  authorId?: string;
+  authorIds?: string[] | string;
+  roleId?: string;
+  roleIds?: string[] | string;
+  emojiName?: string;
+  stickerId?: string[] | string;
+  stickerName?: string;
+  stickerDesc?: string;
+  stickerTags?: string;
+  threadName?: string;
+  autoArchiveMin?: string;
+  query?: string;
+  eventName?: string;
+  eventType?: string;
+  startTime?: string;
+  endTime?: string;
+  desc?: string;
+  location?: string;
+  durationMin?: string;
+  until?: string;
+  reason?: string;
+  deleteDays?: string;
+  includeArchived?: boolean;
+  participant?: string;
+  fromMe?: boolean;
+  dryRun?: boolean;
+  json?: boolean;
+  gifPlayback?: boolean;
+};
 
 type MessageSendOpts = {
   to: string;
   message: string;
-  provider?: string;
+  provider: string;
   json?: boolean;
   dryRun?: boolean;
   media?: string;
@@ -28,19 +124,14 @@ type MessageSendOpts = {
   account?: string;
 };
 
-type MessagePollOpts = {
-  to: string;
-  question: string;
-  option: string[];
-  maxSelections?: string;
-  durationHours?: string;
-  provider?: string;
-  json?: boolean;
-  dryRun?: boolean;
-};
+function normalizeAction(value?: string): MessageAction {
+  const raw = value?.trim().toLowerCase() || "send";
+  return raw as MessageAction;
+}
 
 function parseIntOption(value: unknown, label: string): number | undefined {
   if (value === undefined || value === null) return undefined;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string" || value.trim().length === 0) return undefined;
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed)) {
@@ -49,18 +140,65 @@ function parseIntOption(value: unknown, label: string): number | undefined {
   return parsed;
 }
 
-function logSendDryRun(opts: MessageSendOpts, provider: string, runtime: RuntimeEnv) {
+function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`${label} required`);
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} required`);
+  }
+  return trimmed;
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry).trim()).filter(Boolean);
+  }
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  return [];
+}
+
+function extractToolPayload(result: AgentToolResult<unknown>): unknown {
+  if (result.details !== undefined) return result.details;
+  const textBlock = Array.isArray(result.content)
+    ? result.content.find(
+        (block) =>
+          block &&
+          typeof block === "object" &&
+          (block as { type?: unknown }).type === "text" &&
+          typeof (block as { text?: unknown }).text === "string",
+      )
+    : undefined;
+  const text = (textBlock as { text?: string } | undefined)?.text;
+  if (text) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      return text;
+    }
+  }
+  return result.content ?? result;
+}
+
+function logSendDryRun(opts: MessageSendOpts, runtime: RuntimeEnv) {
   runtime.log(
-    `[dry-run] would send via ${provider} -> ${opts.to}: ${opts.message}${
+    `[dry-run] would send via ${opts.provider} -> ${opts.to}: ${opts.message}${
       opts.media ? ` (media ${opts.media})` : ""
     }`,
   );
 }
 
-function logPollDryRun(
-  result: MessagePollResult,
-  runtime: RuntimeEnv,
-) {
+function logPollDryRun(result: MessagePollResult, runtime: RuntimeEnv) {
   runtime.log(
     `[dry-run] would send poll via ${result.provider} -> ${result.to}:\n  Question: ${result.question}\n  Options: ${result.options.join(
       ", ",
@@ -74,9 +212,10 @@ function logSendResult(
   runtime: RuntimeEnv,
 ) {
   if (result.via === "direct") {
+    const directResult = result.result as OutboundDeliveryResult | undefined;
     const summary = formatOutboundDeliverySummary(
       result.provider,
-      result.result,
+      directResult,
     );
     runtime.log(success(summary));
     if (opts.json) {
@@ -86,7 +225,7 @@ function logSendResult(
             provider: result.provider,
             via: "direct",
             to: opts.to,
-            result: result.result,
+            result: directResult,
             mediaUrl: opts.media ?? null,
           }),
           null,
@@ -125,116 +264,857 @@ function logSendResult(
   }
 }
 
-export async function messageSendCommand(
-  opts: MessageSendOpts,
+export async function messageCommand(
+  opts: MessageCommandOpts,
   deps: CliDeps,
   runtime: RuntimeEnv,
 ) {
-  const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
-  if (opts.dryRun) {
-    logSendDryRun(opts, provider, runtime);
+  const cfg = loadConfig();
+  const action = normalizeAction(opts.action);
+  const providerSelection = await resolveMessageProviderSelection({
+    cfg,
+    provider: opts.provider,
+  });
+  const provider = providerSelection.provider;
+  const outboundDeps: OutboundSendDeps = {
+    sendWhatsApp: deps.sendMessageWhatsApp,
+    sendTelegram: deps.sendMessageTelegram,
+    sendDiscord: deps.sendMessageDiscord,
+    sendSlack: deps.sendMessageSlack,
+    sendSignal: deps.sendMessageSignal,
+    sendIMessage: deps.sendMessageIMessage,
+    sendMSTeams: (to, text, opts) =>
+      deps.sendMessageMSTeams({ cfg, to, text, mediaUrl: opts?.mediaUrl }),
+  };
+
+  if (opts.dryRun && action !== "send" && action !== "poll") {
+    runtime.log(`[dry-run] would run ${action} via ${provider}`);
     return;
   }
 
-  const result = await withProgress(
-    {
-      label: `Sending via ${provider}...`,
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await sendMessage({
-        cfg: loadConfig(),
-        to: opts.to,
-        content: opts.message,
-        provider,
-        mediaUrl: opts.media,
-        gifPlayback: opts.gifPlayback,
-        accountId: opts.account,
-        dryRun: opts.dryRun,
-        deps,
-        gateway: { clientName: "cli", mode: "cli" },
-      }),
-  );
-
-  logSendResult(result, opts, runtime);
-}
-
-export async function messagePollCommand(
-  opts: MessagePollOpts,
-  _deps: CliDeps,
-  runtime: RuntimeEnv,
-) {
-  const provider = (opts.provider ?? "whatsapp").toLowerCase();
-  const maxSelections = parseIntOption(opts.maxSelections, "max-selections");
-  const durationHours = parseIntOption(opts.durationHours, "duration-hours");
-
-  if (opts.dryRun) {
-    const result = await sendPoll({
-      cfg: loadConfig(),
-      to: opts.to,
-      question: opts.question,
-      options: opts.option,
-      maxSelections,
-      durationHours,
+  if (action === "send") {
+    const to = requireString(opts.to, "to");
+    const message = requireString(opts.message, "message");
+    const sendOpts: MessageSendOpts = {
+      to,
+      message,
       provider,
-      dryRun: true,
-      gateway: { clientName: "cli", mode: "cli" },
-    });
-    logPollDryRun(result, runtime);
+      json: opts.json,
+      dryRun: opts.dryRun,
+      media: optionalString(opts.media),
+      gifPlayback: opts.gifPlayback,
+      account: optionalString(opts.account),
+    };
+
+    if (opts.dryRun) {
+      logSendDryRun(sendOpts, runtime);
+      return;
+    }
+
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "sendMessage",
+          to,
+          content: message,
+          mediaUrl: optionalString(opts.media),
+          replyTo: optionalString(opts.replyTo),
+        },
+        cfg,
+      );
+      const payload = extractToolPayload(result);
+      if (opts.json) {
+        runtime.log(JSON.stringify(payload, null, 2));
+      } else {
+        runtime.log(success(`Sent via ${provider}.`));
+      }
+      return;
+    }
+
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "sendMessage",
+          to,
+          content: message,
+          mediaUrl: optionalString(opts.media),
+          threadTs:
+            optionalString(opts.threadId) ?? optionalString(opts.replyTo),
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      const payload = extractToolPayload(result);
+      if (opts.json) {
+        runtime.log(JSON.stringify(payload, null, 2));
+      } else {
+        runtime.log(success(`Sent via ${provider}.`));
+      }
+      return;
+    }
+
+    if (provider === "telegram") {
+      const result = await handleTelegramAction(
+        {
+          action: "sendMessage",
+          to,
+          content: message,
+          mediaUrl: optionalString(opts.media),
+          replyToMessageId: optionalString(opts.replyTo),
+          messageThreadId: optionalString(opts.threadId),
+        },
+        cfg,
+      );
+      const payload = extractToolPayload(result);
+      if (opts.json) {
+        runtime.log(JSON.stringify(payload, null, 2));
+      } else {
+        runtime.log(success(`Sent via ${provider}.`));
+      }
+      return;
+    }
+
+    const result = await withProgress(
+      {
+        label: `Sending via ${provider}...`,
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await sendMessage({
+          cfg,
+          to,
+          content: message,
+          provider,
+          mediaUrl: optionalString(opts.media),
+          gifPlayback: opts.gifPlayback,
+          accountId: optionalString(opts.account),
+          dryRun: opts.dryRun,
+          deps: outboundDeps,
+          gateway: { clientName: "cli", mode: "cli" },
+        }),
+    );
+    logSendResult(result, sendOpts, runtime);
     return;
   }
 
-  const result = await withProgress(
-    {
-      label: `Sending poll via ${provider}...`,
-      indeterminate: true,
-      enabled: opts.json !== true,
-    },
-    async () =>
-      await sendPoll({
-        cfg: loadConfig(),
-        to: opts.to,
-        question: opts.question,
-        options: opts.option,
+  if (action === "poll") {
+    const to = requireString(opts.to, "to");
+    const question = requireString(opts.pollQuestion, "poll-question");
+    const options = toStringArray(opts.pollOption);
+    if (options.length < 2) {
+      throw new Error("poll-option requires at least two values");
+    }
+    const durationHours = parseIntOption(
+      opts.pollDurationHours,
+      "poll-duration-hours",
+    );
+    const allowMultiselect = Boolean(opts.pollMulti);
+    const maxSelections = allowMultiselect ? Math.max(2, options.length) : 1;
+
+    if (opts.dryRun) {
+      const result = await sendPoll({
+        cfg,
+        to,
+        question,
+        options,
         maxSelections,
         durationHours,
         provider,
-        dryRun: opts.dryRun,
+        dryRun: true,
         gateway: { clientName: "cli", mode: "cli" },
-      }),
-  );
+      });
+      logPollDryRun(result, runtime);
+      return;
+    }
 
-  runtime.log(
-    success(
-      formatGatewaySummary({
-        action: "Poll sent",
-        provider,
-        messageId: result.result?.messageId ?? null,
-      }),
-    ),
-  );
-  if (opts.json) {
-    runtime.log(
-      JSON.stringify(
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
         {
-          ...buildOutboundResultEnvelope({
-            delivery: buildOutboundDeliveryJson({
-              provider,
-              via: "gateway",
-              to: opts.to,
-              result: result.result,
-              mediaUrl: null,
-            }),
-          }),
-          question: result.question,
-          options: result.options,
-          maxSelections: result.maxSelections,
-          durationHours: result.durationHours,
+          action: "poll",
+          to,
+          question,
+          answers: options,
+          allowMultiselect,
+          durationHours: durationHours ?? undefined,
+          content: optionalString(opts.message),
         },
-        null,
-        2,
+        cfg,
+      );
+      const payload = extractToolPayload(result);
+      if (opts.json) {
+        runtime.log(JSON.stringify(payload, null, 2));
+      } else {
+        runtime.log(success(`Poll sent via ${provider}.`));
+      }
+      return;
+    }
+
+    const result = await withProgress(
+      {
+        label: `Sending poll via ${provider}...`,
+        indeterminate: true,
+        enabled: opts.json !== true,
+      },
+      async () =>
+        await sendPoll({
+          cfg,
+          to,
+          question,
+          options,
+          maxSelections,
+          durationHours,
+          provider,
+          dryRun: opts.dryRun,
+          gateway: { clientName: "cli", mode: "cli" },
+        }),
+    );
+
+    runtime.log(
+      success(
+        formatGatewaySummary({
+          action: "Poll sent",
+          provider,
+          messageId: result.result?.messageId ?? null,
+        }),
       ),
     );
+    const pollId = (result.result as { pollId?: string } | undefined)?.pollId;
+    if (pollId) {
+      runtime.log(success(`Poll id: ${pollId}`));
+    }
+    if (opts.json) {
+      runtime.log(
+        JSON.stringify(
+          {
+            ...buildOutboundResultEnvelope({
+              delivery: buildOutboundDeliveryJson({
+                provider,
+                via: "gateway",
+                to,
+                result: result.result,
+                mediaUrl: null,
+              }),
+            }),
+            question: result.question,
+            options: result.options,
+            maxSelections: result.maxSelections,
+            durationHours: result.durationHours,
+            pollId,
+          },
+          null,
+          2,
+        ),
+      );
+    }
+    return;
   }
+
+  if (action === "react") {
+    const messageId = requireString(opts.messageId, "message-id");
+    const emoji = optionalString(opts.emoji) ?? "";
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "react",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          emoji,
+          remove: opts.remove,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "react",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          emoji,
+          remove: opts.remove,
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "telegram") {
+      const result = await handleTelegramAction(
+        {
+          action: "react",
+          chatId: requireString(opts.to, "to"),
+          messageId,
+          emoji,
+          remove: opts.remove,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "whatsapp") {
+      const result = await handleWhatsAppAction(
+        {
+          action: "react",
+          chatJid: requireString(opts.to, "to"),
+          messageId,
+          emoji,
+          remove: opts.remove,
+          participant: optionalString(opts.participant),
+          accountId: optionalString(opts.account),
+          fromMe: opts.fromMe,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`React is not supported for provider ${provider}.`);
+  }
+
+  if (action === "reactions") {
+    const messageId = requireString(opts.messageId, "message-id");
+    const limit = parseIntOption(opts.limit, "limit");
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "reactions",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          limit,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "reactions",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          limit,
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Reactions are not supported for provider ${provider}.`);
+  }
+
+  if (action === "read") {
+    const limit = parseIntOption(opts.limit, "limit");
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "readMessages",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          limit,
+          before: optionalString(opts.before),
+          after: optionalString(opts.after),
+          around: optionalString(opts.around),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "readMessages",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          limit,
+          before: optionalString(opts.before),
+          after: optionalString(opts.after),
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Read is not supported for provider ${provider}.`);
+  }
+
+  if (action === "edit") {
+    const messageId = requireString(opts.messageId, "message-id");
+    const message = requireString(opts.message, "message");
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "editMessage",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          content: message,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "editMessage",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          content: message,
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Edit is not supported for provider ${provider}.`);
+  }
+
+  if (action === "delete") {
+    const messageId = requireString(opts.messageId, "message-id");
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "deleteMessage",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "deleteMessage",
+          channelId: requireString(opts.channelId ?? opts.to, "to"),
+          messageId,
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Delete is not supported for provider ${provider}.`);
+  }
+
+  if (action === "pin" || action === "unpin" || action === "list-pins") {
+    const channelId = requireString(opts.channelId ?? opts.to, "to");
+    const messageId =
+      action === "list-pins"
+        ? undefined
+        : requireString(opts.messageId, "message-id");
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action:
+            action === "pin"
+              ? "pinMessage"
+              : action === "unpin"
+                ? "unpinMessage"
+                : "listPins",
+          channelId,
+          messageId,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action:
+            action === "pin"
+              ? "pinMessage"
+              : action === "unpin"
+                ? "unpinMessage"
+                : "listPins",
+          channelId,
+          messageId,
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Pins are not supported for provider ${provider}.`);
+  }
+
+  if (action === "permissions") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Permissions are only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "permissions",
+        channelId: requireString(opts.channelId ?? opts.to, "to"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "thread-create") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Thread create is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "threadCreate",
+        channelId: requireString(opts.channelId ?? opts.to, "to"),
+        name: requireString(opts.threadName, "thread-name"),
+        messageId: optionalString(opts.messageId),
+        autoArchiveMinutes: parseIntOption(
+          opts.autoArchiveMin,
+          "auto-archive-min",
+        ),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "thread-list") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Thread list is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "threadList",
+        guildId: requireString(opts.guildId, "guild-id"),
+        channelId: optionalString(opts.channelId),
+        includeArchived: opts.includeArchived,
+        before: optionalString(opts.before),
+        limit: parseIntOption(opts.limit, "limit"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "thread-reply") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Thread reply is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "threadReply",
+        channelId: requireString(opts.channelId ?? opts.to, "to"),
+        content: requireString(opts.message, "message"),
+        mediaUrl: optionalString(opts.media),
+        replyTo: optionalString(opts.replyTo),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "search") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Search is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "searchMessages",
+        guildId: requireString(opts.guildId, "guild-id"),
+        content: requireString(opts.query, "query"),
+        channelId: optionalString(opts.channelId),
+        channelIds: toStringArray(opts.channelIds),
+        authorId: optionalString(opts.authorId),
+        authorIds: toStringArray(opts.authorIds),
+        limit: parseIntOption(opts.limit, "limit"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "sticker") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Sticker send is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const stickerIds = toStringArray(opts.stickerId);
+    if (stickerIds.length === 0) {
+      throw new Error("sticker-id required");
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "sticker",
+        to: requireString(opts.to, "to"),
+        stickerIds,
+        content: optionalString(opts.message),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "member-info") {
+    const userId = requireString(opts.userId, "user-id");
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "memberInfo",
+          guildId: requireString(opts.guildId, "guild-id"),
+          userId,
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        {
+          action: "memberInfo",
+          userId,
+          accountId: optionalString(opts.account),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Member info is not supported for provider ${provider}.`);
+  }
+
+  if (action === "role-info") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Role info is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      { action: "roleInfo", guildId: requireString(opts.guildId, "guild-id") },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "emoji-list") {
+    if (provider === "discord") {
+      const result = await handleDiscordAction(
+        {
+          action: "emojiList",
+          guildId: requireString(opts.guildId, "guild-id"),
+        },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    if (provider === "slack") {
+      const result = await handleSlackAction(
+        { action: "emojiList", accountId: optionalString(opts.account) },
+        cfg,
+      );
+      runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+      return;
+    }
+    throw new Error(`Emoji list is not supported for provider ${provider}.`);
+  }
+
+  if (action === "emoji-upload") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Emoji upload is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "emojiUpload",
+        guildId: requireString(opts.guildId, "guild-id"),
+        name: requireString(opts.emojiName, "emoji-name"),
+        mediaUrl: requireString(opts.media, "media"),
+        roleIds: toStringArray(opts.roleIds),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "sticker-upload") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Sticker upload is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "stickerUpload",
+        guildId: requireString(opts.guildId, "guild-id"),
+        name: requireString(opts.stickerName, "sticker-name"),
+        description: requireString(opts.stickerDesc, "sticker-desc"),
+        tags: requireString(opts.stickerTags, "sticker-tags"),
+        mediaUrl: requireString(opts.media, "media"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "role-add" || action === "role-remove") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Role changes are only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: action === "role-add" ? "roleAdd" : "roleRemove",
+        guildId: requireString(opts.guildId, "guild-id"),
+        userId: requireString(opts.userId, "user-id"),
+        roleId: requireString(opts.roleId, "role-id"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "channel-info") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Channel info is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "channelInfo",
+        channelId: requireString(opts.channelId, "channel-id"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "channel-list") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Channel list is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "channelList",
+        guildId: requireString(opts.guildId, "guild-id"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "voice-status") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Voice status is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "voiceStatus",
+        guildId: requireString(opts.guildId, "guild-id"),
+        userId: requireString(opts.userId, "user-id"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "event-list") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Event list is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      { action: "eventList", guildId: requireString(opts.guildId, "guild-id") },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "event-create") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Event create is only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: "eventCreate",
+        guildId: requireString(opts.guildId, "guild-id"),
+        name: requireString(opts.eventName, "event-name"),
+        startTime: requireString(opts.startTime, "start-time"),
+        endTime: optionalString(opts.endTime),
+        description: optionalString(opts.desc),
+        channelId: optionalString(opts.channelId),
+        location: optionalString(opts.location),
+        entityType: optionalString(opts.eventType),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  if (action === "timeout" || action === "kick" || action === "ban") {
+    if (provider !== "discord") {
+      throw new Error(
+        `Moderation actions are only supported for Discord (provider=${provider}).`,
+      );
+    }
+    const result = await handleDiscordAction(
+      {
+        action: action as "timeout" | "kick" | "ban",
+        guildId: requireString(opts.guildId, "guild-id"),
+        userId: requireString(opts.userId, "user-id"),
+        durationMinutes: parseIntOption(opts.durationMin, "duration-min"),
+        until: optionalString(opts.until),
+        reason: optionalString(opts.reason),
+        deleteMessageDays: parseIntOption(opts.deleteDays, "delete-days"),
+      },
+      cfg,
+    );
+    runtime.log(JSON.stringify(extractToolPayload(result), null, 2));
+    return;
+  }
+
+  throw new Error(`Unknown action: ${opts.action ?? "unknown"}`);
 }

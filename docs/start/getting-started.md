@@ -19,7 +19,7 @@ Recommended path: use the **CLI onboarding wizard** (`clawdbot onboard`). It set
 
 If you want the deeper reference pages, jump to: [Wizard](/start/wizard), [Setup](/start/setup), [Pairing](/start/pairing), [Security](/gateway/security).
 
-Sandboxing note: `agent.sandbox.mode: "non-main"` uses `session.mainKey` (default `"main"`),
+Sandboxing note: `agents.defaults.sandbox.mode: "non-main"` uses `session.mainKey` (default `"main"`),
 so group/channel sessions are sandboxed. If you want the main agent to always
 run on host, set an explicit per-agent override:
 
@@ -59,7 +59,7 @@ clawdbot onboard --install-daemon
 
 What you’ll choose:
 - **Local vs Remote** gateway
-- **Auth**: Anthropic OAuth or OpenAI OAuth (recommended), API key (optional), or skip for now
+- **Auth**: **Anthropic OAuth via Claude CLI setup-token (preferred)**, OpenAI OAuth (recommended), API key (optional), or skip for now
 - **Providers**: WhatsApp QR login, Telegram/Discord bot tokens, etc.
 - **Daemon**: background install (launchd/systemd; WSL2 uses systemd)
   - **Runtime**: Node (recommended; required for WhatsApp) or Bun (faster, but incompatible with WhatsApp)
@@ -67,6 +67,8 @@ What you’ll choose:
 Wizard doc: [Wizard](/start/wizard)
 
 ### Auth: where it lives (important)
+
+- **Preferred Anthropic path:** install Claude CLI on the gateway host and run `claude setup-token`. The wizard can reuse it, and `clawdbot models status` will sync it into Clawdbot auth profiles.
 
 - OAuth credentials (legacy import): `~/.clawdbot/credentials/oauth.json`
 - Auth profiles (OAuth + API keys): `~/.clawdbot/agents/<agentId>/agent/auth-profiles.json`
@@ -135,8 +137,7 @@ If you’re hacking on Clawdbot itself, run from source:
 git clone https://github.com/clawdbot/clawdbot.git
 cd clawdbot
 pnpm install
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 pnpm build
 pnpm clawdbot onboard --install-daemon
 ```

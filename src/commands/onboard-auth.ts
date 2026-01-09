@@ -2,6 +2,13 @@ import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import type { ModelDefinitionConfig } from "../config/types.js";
+
+const DEFAULT_MINIMAX_BASE_URL = "https://api.minimax.io/v1";
+export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
+const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
+const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
+export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
 
 export async function writeOAuthCredentials(
   provider: OAuthProvider,
@@ -46,12 +53,25 @@ export async function setGeminiApiKey(key: string, agentDir?: string) {
   });
 }
 
+export async function setMinimaxApiKey(key: string, agentDir?: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  upsertAuthProfile({
+    profileId: "minimax:default",
+    credential: {
+      type: "api_key",
+      provider: "minimax",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
 export function applyAuthProfileConfig(
   cfg: ClawdbotConfig,
   params: {
     profileId: string;
     provider: string;
-    mode: "api_key" | "oauth";
+    mode: "api_key" | "oauth" | "token";
     email?: string;
     preferProfileFirst?: boolean;
   },
@@ -100,7 +120,7 @@ export function applyAuthProfileConfig(
 export function applyMinimaxProviderConfig(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
-  const models = { ...cfg.agent?.models };
+  const models = { ...cfg.agents?.defaults?.models };
   models["anthropic/claude-opus-4-5"] = {
     ...models["anthropic/claude-opus-4-5"],
     alias: models["anthropic/claude-opus-4-5"]?.alias ?? "Opus",
@@ -132,9 +152,66 @@ export function applyMinimaxProviderConfig(
 
   return {
     ...cfg,
-    agent: {
-      ...cfg.agent,
-      models,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyMinimaxHostedProviderConfig(
+  cfg: ClawdbotConfig,
+  params?: { baseUrl?: string },
+): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MINIMAX_HOSTED_MODEL_REF] = {
+    ...models[MINIMAX_HOSTED_MODEL_REF],
+    alias: models[MINIMAX_HOSTED_MODEL_REF]?.alias ?? "Minimax",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const hostedModel: ModelDefinitionConfig = {
+    id: MINIMAX_HOSTED_MODEL_ID,
+    name: "MiniMax M2.1",
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
+    maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
+  };
+  const existingProvider = providers.minimax;
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  const hasHostedModel = existingModels.some(
+    (model) => model.id === MINIMAX_HOSTED_MODEL_ID,
+  );
+  const mergedModels = hasHostedModel
+    ? existingModels
+    : [...existingModels, hostedModel];
+  providers.minimax = {
+    ...existingProvider,
+    baseUrl: params?.baseUrl?.trim() || DEFAULT_MINIMAX_BASE_URL,
+    apiKey: "minimax",
+    api: "openai-completions",
+    models: mergedModels.length > 0 ? mergedModels : [hostedModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
     },
     models: {
       mode: cfg.models?.mode ?? "merge",
@@ -147,17 +224,41 @@ export function applyMinimaxConfig(cfg: ClawdbotConfig): ClawdbotConfig {
   const next = applyMinimaxProviderConfig(cfg);
   return {
     ...next,
-    agent: {
-      ...next.agent,
-      model: {
-        ...(next.agent?.model &&
-        "fallbacks" in (next.agent.model as Record<string, unknown>)
-          ? {
-              fallbacks: (next.agent.model as { fallbacks?: string[] })
-                .fallbacks,
-            }
-          : undefined),
-        primary: "lmstudio/minimax-m2.1-gs32",
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(next.agents?.defaults?.model &&
+          "fallbacks" in (next.agents.defaults.model as Record<string, unknown>)
+            ? {
+                fallbacks: (
+                  next.agents.defaults.model as { fallbacks?: string[] }
+                ).fallbacks,
+              }
+            : undefined),
+          primary: "lmstudio/minimax-m2.1-gs32",
+        },
+      },
+    },
+  };
+}
+
+export function applyMinimaxHostedConfig(
+  cfg: ClawdbotConfig,
+  params?: { baseUrl?: string },
+): ClawdbotConfig {
+  const next = applyMinimaxHostedProviderConfig(cfg, params);
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...next.agents?.defaults?.model,
+          primary: MINIMAX_HOSTED_MODEL_REF,
+        },
       },
     },
   };

@@ -17,6 +17,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import type {
@@ -27,7 +28,7 @@ import type {
 
 export function guardCancel<T>(value: T, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
-    cancel("Setup cancelled.");
+    cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
     runtime.exit(0);
   }
   return value;
@@ -35,13 +36,13 @@ export function guardCancel<T>(value: T, runtime: RuntimeEnv): T {
 
 export function summarizeExistingConfig(config: ClawdbotConfig): string {
   const rows: string[] = [];
-  if (config.agent?.workspace)
-    rows.push(`workspace: ${config.agent.workspace}`);
-  if (config.agent?.model) {
+  const defaults = config.agents?.defaults;
+  if (defaults?.workspace) rows.push(`workspace: ${defaults.workspace}`);
+  if (defaults?.model) {
     const model =
-      typeof config.agent.model === "string"
-        ? config.agent.model
-        : config.agent.model.primary;
+      typeof defaults.model === "string"
+        ? defaults.model
+        : defaults.model.primary;
     if (model) rows.push(`model: ${model}`);
   }
   if (config.gateway?.mode) rows.push(`gateway.mode: ${config.gateway.mode}`);

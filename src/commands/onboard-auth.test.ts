@@ -52,7 +52,7 @@ describe("writeOAuthCredentials", () => {
       expires: Date.now() + 60_000,
     } satisfies OAuthCredentials;
 
-    await writeOAuthCredentials("anthropic", creds);
+    await writeOAuthCredentials("openai-codex", creds);
 
     // Now writes to the multi-agent path: agents/main/agent
     const authProfilePath = path.join(
@@ -66,7 +66,7 @@ describe("writeOAuthCredentials", () => {
     const parsed = JSON.parse(raw) as {
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
     };
-    expect(parsed.profiles?.["anthropic:default"]).toMatchObject({
+    expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
       type: "oauth",

@@ -8,8 +8,8 @@ import {
 import { configureCommand } from "../commands/configure.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
+import { messageCommand } from "../commands/message.js";
 import { onboardCommand } from "../commands/onboard.js";
-import { messagePollCommand, messageSendCommand } from "../commands/message.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
 import { statusCommand } from "../commands/status.js";
@@ -25,7 +25,11 @@ import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { defaultRuntime } from "../runtime.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
-import { emitCliBanner, formatCliBannerLine } from "./banner.js";
+import {
+  emitCliBanner,
+  formatCliBannerArt,
+  formatCliBannerLine,
+} from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
 import { registerCronCli } from "./cron-cli.js";
@@ -42,6 +46,7 @@ import { registerPairingCli } from "./pairing-cli.js";
 import { forceFreePort } from "./ports.js";
 import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { registerProvidersCli } from "./providers-cli.js";
+import { registerSandboxCli } from "./sandbox-cli.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
 
@@ -67,6 +72,8 @@ export function buildProgram() {
       "--profile <name>",
       "Use a named profile (isolates CLAWDBOT_STATE_DIR/CLAWDBOT_CONFIG_PATH under ~/.clawdbot-<name>)",
     );
+
+  program.option("--no-color", "Disable ANSI colors", false);
 
   program.configureHelp({
     optionTerm: (option) => theme.option(option.flags),
@@ -95,8 +102,10 @@ export function buildProgram() {
   }
 
   program.addHelpText("beforeAll", () => {
-    const line = formatCliBannerLine(PROGRAM_VERSION, { richTty: isRich() });
-    return `\n${line}\n`;
+    const rich = isRich();
+    const art = formatCliBannerArt({ richTty: rich });
+    const line = formatCliBannerLine(PROGRAM_VERSION, { richTty: rich });
+    return `\n${art}\n${line}\n`;
   });
 
   program.hook("preAction", async (_thisCommand, actionCommand) => {
@@ -182,7 +191,7 @@ export function buildProgram() {
     .description("Initialize ~/.clawdbot/clawdbot.json and the agent workspace")
     .option(
       "--workspace <dir>",
-      "Agent workspace directory (default: ~/clawd; stored as agent.workspace)",
+      "Agent workspace directory (default: ~/clawd; stored as agents.defaults.workspace)",
     )
     .option("--wizard", "Run the interactive onboarding wizard", false)
     .option("--non-interactive", "Run the wizard without prompts", false)
@@ -231,10 +240,28 @@ export function buildProgram() {
     .option("--mode <mode>", "Wizard mode: local|remote")
     .option(
       "--auth-choice <choice>",
-      "Auth: oauth|claude-cli|openai-codex|codex-cli|antigravity|gemini-api-key|apiKey|minimax|skip",
+      "Auth: setup-token|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|apiKey|minimax-cloud|minimax|skip",
+    )
+    .option(
+      "--token-provider <id>",
+      "Token provider id (non-interactive; used with --auth-choice token)",
+    )
+    .option(
+      "--token <token>",
+      "Token value (non-interactive; used with --auth-choice token)",
+    )
+    .option(
+      "--token-profile-id <id>",
+      "Auth profile id (non-interactive; default: <provider>:manual)",
+    )
+    .option(
+      "--token-expires-in <duration>",
+      "Optional token expiry duration (e.g. 365d, 12h)",
     )
     .option("--anthropic-api-key <key>", "Anthropic API key")
+    .option("--openai-api-key <key>", "OpenAI API key")
     .option("--gemini-api-key <key>", "Gemini API key")
+    .option("--minimax-api-key <key>", "MiniMax API key")
     .option("--gateway-port <port>", "Gateway port")
     .option("--gateway-bind <mode>", "Gateway bind: loopback|lan|tailnet|auto")
     .option("--gateway-auth <mode>", "Gateway auth: off|token|password")
@@ -259,17 +286,27 @@ export function buildProgram() {
             mode: opts.mode as "local" | "remote" | undefined,
             authChoice: opts.authChoice as
               | "oauth"
+              | "setup-token"
               | "claude-cli"
+              | "token"
               | "openai-codex"
+              | "openai-api-key"
               | "codex-cli"
               | "antigravity"
               | "gemini-api-key"
               | "apiKey"
+              | "minimax-cloud"
               | "minimax"
               | "skip"
               | undefined,
+            tokenProvider: opts.tokenProvider as string | undefined,
+            token: opts.token as string | undefined,
+            tokenProfileId: opts.tokenProfileId as string | undefined,
+            tokenExpiresIn: opts.tokenExpiresIn as string | undefined,
             anthropicApiKey: opts.anthropicApiKey as string | undefined,
+            openaiApiKey: opts.openaiApiKey as string | undefined,
             geminiApiKey: opts.geminiApiKey as string | undefined,
+            minimaxApiKey: opts.minimaxApiKey as string | undefined,
             gatewayPort:
               typeof opts.gatewayPort === "string"
                 ? Number.parseInt(opts.gatewayPort, 10)
@@ -403,116 +440,470 @@ export function buildProgram() {
 
   const message = program
     .command("message")
-    .description("Send messages and polls across providers")
-    .action(() => {
-      message.outputHelp();
-      defaultRuntime.error(
-        danger('Missing subcommand. Try: "clawdbot message send"'),
-      );
-      defaultRuntime.exit(1);
-    });
-
-  message
-    .command("send")
-    .description(
-      "Send a message (WhatsApp Web, Telegram bot, Discord, Slack, Signal, iMessage)",
-    )
-    .requiredOption(
-      "-t, --to <number>",
-      "Recipient: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord channel/user, or iMessage handle/chat_id",
-    )
-    .requiredOption("-m, --message <text>", "Message body")
-    .option(
-      "--media <path-or-url>",
-      "Attach media (image/audio/video/document). Accepts local paths or URLs.",
-    )
-    .option(
-      "--gif-playback",
-      "Treat video media as GIF playback (WhatsApp only).",
-      false,
-    )
-    .option(
-      "--provider <provider>",
-      "Delivery provider: whatsapp|telegram|discord|slack|signal|imessage (default: whatsapp)",
-    )
-    .option("--account <id>", "WhatsApp account id (accountId)")
-    .option("--dry-run", "Print payload and skip sending", false)
-    .option("--json", "Output result as JSON", false)
-    .option("--verbose", "Verbose logging", false)
+    .description("Send messages and provider actions")
     .addHelpText(
       "after",
       `
 Examples:
   clawdbot message send --to +15555550123 --message "Hi"
   clawdbot message send --to +15555550123 --message "Hi" --media photo.jpg
-  clawdbot message send --to +15555550123 --message "Hi" --dry-run      # print payload only
-  clawdbot message send --to +15555550123 --message "Hi" --json         # machine-readable result`,
+  clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
+  clawdbot message react --provider discord --to 123 --message-id 456 --emoji "✅"`,
     )
-    .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      const deps = createDefaultDeps();
-      try {
-        await messageSendCommand(
-          {
-            ...opts,
-            account: opts.account as string | undefined,
-          },
-          deps,
-          defaultRuntime,
-        );
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+    .action(() => {
+      message.help({ error: true });
     });
 
-  message
-    .command("poll")
-    .description("Create a poll via WhatsApp or Discord")
-    .requiredOption(
-      "-t, --to <id>",
-      "Recipient: WhatsApp JID/number or Discord channel/user",
+  const withMessageBase = (command: Command) =>
+    command
+      .option(
+        "--provider <provider>",
+        "Provider: whatsapp|telegram|discord|slack|signal|imessage",
+      )
+      .option("--account <id>", "Provider account id")
+      .option("--json", "Output result as JSON", false)
+      .option("--dry-run", "Print payload and skip sending", false)
+      .option("--verbose", "Verbose logging", false);
+
+  const withMessageTarget = (command: Command) =>
+    command.option(
+      "-t, --to <dest>",
+      "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
+    );
+  const withRequiredMessageTarget = (command: Command) =>
+    command.requiredOption(
+      "-t, --to <dest>",
+      "Recipient/channel: E.164 for WhatsApp/Signal, Telegram chat id/@username, Discord/Slack channel/user, or iMessage handle/chat_id",
+    );
+
+  const runMessageAction = async (
+    action: string,
+    opts: Record<string, unknown>,
+  ) => {
+    setVerbose(Boolean(opts.verbose));
+    const deps = createDefaultDeps();
+    try {
+      await messageCommand(
+        {
+          ...opts,
+          action,
+          account: opts.account as string | undefined,
+        },
+        deps,
+        defaultRuntime,
+      );
+    } catch (err) {
+      defaultRuntime.error(String(err));
+      defaultRuntime.exit(1);
+    }
+  };
+
+  withMessageBase(
+    withRequiredMessageTarget(
+      message
+        .command("send")
+        .description("Send a message")
+        .requiredOption("-m, --message <text>", "Message body"),
     )
-    .requiredOption("-q, --question <text>", "Poll question")
-    .requiredOption(
-      "-o, --option <choice>",
-      "Poll option (use multiple times, 2-12 required)",
-      (value: string, previous: string[]) => previous.concat([value]),
+      .option(
+        "--media <path-or-url>",
+        "Attach media (image/audio/video/document). Accepts local paths or URLs.",
+      )
+      .option("--reply-to <id>", "Reply-to message id")
+      .option("--thread-id <id>", "Thread id (Telegram forum thread)")
+      .option(
+        "--gif-playback",
+        "Treat video media as GIF playback (WhatsApp only).",
+        false,
+      ),
+  ).action(async (opts) => {
+    await runMessageAction("send", opts);
+  });
+
+  withMessageBase(
+    withRequiredMessageTarget(
+      message.command("poll").description("Send a poll"),
+    ),
+  )
+    .requiredOption("--poll-question <text>", "Poll question")
+    .option(
+      "--poll-option <choice>",
+      "Poll option (repeat 2-12 times)",
+      collectOption,
       [] as string[],
     )
+    .option("--poll-multi", "Allow multiple selections", false)
+    .option("--poll-duration-hours <n>", "Poll duration (Discord)")
+    .option("-m, --message <text>", "Optional message body")
+    .action(async (opts) => {
+      await runMessageAction("poll", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("react").description("Add or remove a reaction"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--emoji <emoji>", "Emoji for reactions")
+    .option("--remove", "Remove reaction", false)
+    .option("--participant <id>", "WhatsApp reaction participant")
+    .option("--from-me", "WhatsApp reaction fromMe", false)
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("react", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("reactions").description("List reactions on a message"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--limit <n>", "Result limit")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("reactions", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("read").description("Read recent messages"),
+    ),
+  )
+    .option("--limit <n>", "Result limit")
+    .option("--before <id>", "Read/search before id")
+    .option("--after <id>", "Read/search after id")
+    .option("--around <id>", "Read around id (Discord)")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("read", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message
+        .command("edit")
+        .description("Edit a message")
+        .requiredOption("-m, --message <text>", "Message body"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("edit", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("delete").description("Delete a message"),
+    ),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("delete", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(message.command("pin").description("Pin a message")),
+  )
+    .requiredOption("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("pin", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(message.command("unpin").description("Unpin a message")),
+  )
+    .option("--message-id <id>", "Message id")
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("unpin", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("pins").description("List pinned messages"),
+    ),
+  )
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("list-pins", opts);
+    });
+
+  withMessageBase(
+    withMessageTarget(
+      message.command("permissions").description("Fetch channel permissions"),
+    ),
+  )
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .action(async (opts) => {
+      await runMessageAction("permissions", opts);
+    });
+
+  withMessageBase(
+    message.command("search").description("Search Discord messages"),
+  )
+    .requiredOption("--guild-id <id>", "Guild id")
+    .requiredOption("--query <text>", "Search query")
+    .option("--channel-id <id>", "Channel id")
     .option(
-      "-s, --max-selections <n>",
-      "How many options can be selected (default: 1)",
+      "--channel-ids <id>",
+      "Channel id (repeat)",
+      collectOption,
+      [] as string[],
     )
+    .option("--author-id <id>", "Author id")
     .option(
-      "--duration-hours <n>",
-      "Poll duration in hours (Discord only, default: 24)",
+      "--author-ids <id>",
+      "Author id (repeat)",
+      collectOption,
+      [] as string[],
     )
+    .option("--limit <n>", "Result limit")
+    .action(async (opts) => {
+      await runMessageAction("search", opts);
+    });
+
+  const thread = message.command("thread").description("Thread actions");
+
+  withMessageBase(
+    withMessageTarget(
+      thread
+        .command("create")
+        .description("Create a thread")
+        .requiredOption("--thread-name <name>", "Thread name"),
+    ),
+  )
+    .option("--channel-id <id>", "Channel id (defaults to --to)")
+    .option("--message-id <id>", "Message id (optional)")
+    .option("--auto-archive-min <n>", "Thread auto-archive minutes")
+    .action(async (opts) => {
+      await runMessageAction("thread-create", opts);
+    });
+
+  withMessageBase(
+    thread
+      .command("list")
+      .description("List threads")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  )
+    .option("--channel-id <id>", "Channel id")
+    .option("--include-archived", "Include archived threads", false)
+    .option("--before <id>", "Read/search before id")
+    .option("--limit <n>", "Result limit")
+    .action(async (opts) => {
+      await runMessageAction("thread-list", opts);
+    });
+
+  withMessageBase(
+    withRequiredMessageTarget(
+      thread
+        .command("reply")
+        .description("Reply in a thread")
+        .requiredOption("-m, --message <text>", "Message body"),
+    ),
+  )
     .option(
-      "--provider <provider>",
-      "Delivery provider: whatsapp|discord (default: whatsapp)",
+      "--media <path-or-url>",
+      "Attach media (image/audio/video/document). Accepts local paths or URLs.",
     )
-    .option("--dry-run", "Print payload and skip sending", false)
-    .option("--json", "Output result as JSON", false)
-    .option("--verbose", "Verbose logging", false)
-    .addHelpText(
-      "after",
-      `
-Examples:
-  clawdbot message poll --to +15555550123 -q "Lunch today?" -o "Yes" -o "No" -o "Maybe"
-  clawdbot message poll --to 123456789@g.us -q "Meeting time?" -o "10am" -o "2pm" -o "4pm" -s 2
-  clawdbot message poll --to channel:123456789 -q "Snack?" -o "Pizza" -o "Sushi" --provider discord
-  clawdbot message poll --to channel:123456789 -q "Plan?" -o "A" -o "B" --provider discord --duration-hours 48`,
+    .option("--reply-to <id>", "Reply-to message id")
+    .action(async (opts) => {
+      await runMessageAction("thread-reply", opts);
+    });
+
+  const emoji = message.command("emoji").description("Emoji actions");
+  withMessageBase(emoji.command("list").description("List emojis"))
+    .option("--guild-id <id>", "Guild id (Discord)")
+    .action(async (opts) => {
+      await runMessageAction("emoji-list", opts);
+    });
+
+  withMessageBase(
+    emoji
+      .command("upload")
+      .description("Upload an emoji")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  )
+    .requiredOption("--emoji-name <name>", "Emoji name")
+    .requiredOption("--media <path-or-url>", "Emoji media (path or URL)")
+    .option(
+      "--role-ids <id>",
+      "Role id (repeat)",
+      collectOption,
+      [] as string[],
     )
     .action(async (opts) => {
-      setVerbose(Boolean(opts.verbose));
-      const deps = createDefaultDeps();
-      try {
-        await messagePollCommand(opts, deps, defaultRuntime);
-      } catch (err) {
-        defaultRuntime.error(String(err));
-        defaultRuntime.exit(1);
-      }
+      await runMessageAction("emoji-upload", opts);
+    });
+
+  const sticker = message.command("sticker").description("Sticker actions");
+  withMessageBase(
+    withRequiredMessageTarget(
+      sticker.command("send").description("Send stickers"),
+    ),
+  )
+    .requiredOption("--sticker-id <id>", "Sticker id (repeat)", collectOption)
+    .option("-m, --message <text>", "Optional message body")
+    .action(async (opts) => {
+      await runMessageAction("sticker", opts);
+    });
+
+  withMessageBase(
+    sticker
+      .command("upload")
+      .description("Upload a sticker")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  )
+    .requiredOption("--sticker-name <name>", "Sticker name")
+    .requiredOption("--sticker-desc <text>", "Sticker description")
+    .requiredOption("--sticker-tags <tags>", "Sticker tags")
+    .requiredOption("--media <path-or-url>", "Sticker media (path or URL)")
+    .action(async (opts) => {
+      await runMessageAction("sticker-upload", opts);
+    });
+
+  const role = message.command("role").description("Role actions");
+  withMessageBase(
+    role
+      .command("info")
+      .description("List roles")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  ).action(async (opts) => {
+    await runMessageAction("role-info", opts);
+  });
+
+  withMessageBase(
+    role
+      .command("add")
+      .description("Add role to a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id")
+      .requiredOption("--role-id <id>", "Role id"),
+  ).action(async (opts) => {
+    await runMessageAction("role-add", opts);
+  });
+
+  withMessageBase(
+    role
+      .command("remove")
+      .description("Remove role from a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id")
+      .requiredOption("--role-id <id>", "Role id"),
+  ).action(async (opts) => {
+    await runMessageAction("role-remove", opts);
+  });
+
+  const channel = message.command("channel").description("Channel actions");
+  withMessageBase(
+    channel
+      .command("info")
+      .description("Fetch channel info")
+      .requiredOption("--channel-id <id>", "Channel id"),
+  ).action(async (opts) => {
+    await runMessageAction("channel-info", opts);
+  });
+
+  withMessageBase(
+    channel
+      .command("list")
+      .description("List channels")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  ).action(async (opts) => {
+    await runMessageAction("channel-list", opts);
+  });
+
+  const member = message.command("member").description("Member actions");
+  withMessageBase(
+    member
+      .command("info")
+      .description("Fetch member info")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--guild-id <id>", "Guild id (Discord)")
+    .action(async (opts) => {
+      await runMessageAction("member-info", opts);
+    });
+
+  const voice = message.command("voice").description("Voice actions");
+  withMessageBase(
+    voice
+      .command("status")
+      .description("Fetch voice status")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  ).action(async (opts) => {
+    await runMessageAction("voice-status", opts);
+  });
+
+  const event = message.command("event").description("Event actions");
+  withMessageBase(
+    event
+      .command("list")
+      .description("List scheduled events")
+      .requiredOption("--guild-id <id>", "Guild id"),
+  ).action(async (opts) => {
+    await runMessageAction("event-list", opts);
+  });
+
+  withMessageBase(
+    event
+      .command("create")
+      .description("Create a scheduled event")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--event-name <name>", "Event name")
+      .requiredOption("--start-time <iso>", "Event start time"),
+  )
+    .option("--end-time <iso>", "Event end time")
+    .option("--desc <text>", "Event description")
+    .option("--channel-id <id>", "Channel id")
+    .option("--location <text>", "Event location")
+    .option("--event-type <stage|external|voice>", "Event type")
+    .action(async (opts) => {
+      await runMessageAction("event-create", opts);
+    });
+
+  withMessageBase(
+    message
+      .command("timeout")
+      .description("Timeout a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--duration-min <n>", "Timeout duration minutes")
+    .option("--until <iso>", "Timeout until")
+    .option("--reason <text>", "Moderation reason")
+    .action(async (opts) => {
+      await runMessageAction("timeout", opts);
+    });
+
+  withMessageBase(
+    message
+      .command("kick")
+      .description("Kick a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--reason <text>", "Moderation reason")
+    .action(async (opts) => {
+      await runMessageAction("kick", opts);
+    });
+
+  withMessageBase(
+    message
+      .command("ban")
+      .description("Ban a member")
+      .requiredOption("--guild-id <id>", "Guild id")
+      .requiredOption("--user-id <id>", "User id"),
+  )
+    .option("--reason <text>", "Moderation reason")
+    .option("--delete-days <n>", "Ban delete message days")
+    .action(async (opts) => {
+      await runMessageAction("ban", opts);
     });
 
   program
@@ -672,6 +1063,7 @@ Examples:
   registerLogsCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
+  registerSandboxCli(program);
   registerTuiCli(program);
   registerCronCli(program);
   registerDnsCli(program);
@@ -792,7 +1184,7 @@ Examples:
   clawdbot sessions --json          # machine-readable output
   clawdbot sessions --store ./tmp/sessions.json
 
-Shows token usage per session when the agent reports it; set agent.contextTokens to see % of your model window.`,
+Shows token usage per session when the agent reports it; set agents.defaults.contextTokens to see % of your model window.`,
     )
     .action(async (opts) => {
       setVerbose(Boolean(opts.verbose));

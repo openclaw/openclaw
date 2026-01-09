@@ -1,4 +1,8 @@
-import { cancel, isCancel, multiselect } from "@clack/prompts";
+import {
+  cancel,
+  multiselect as clackMultiselect,
+  isCancel,
+} from "@clack/prompts";
 import { resolveApiKeyForProvider } from "../../agents/model-auth.js";
 import {
   type ModelScanResult,
@@ -7,10 +11,26 @@ import {
 import { withProgressTotals } from "../../cli/progress.js";
 import { CONFIG_PATH_CLAWDBOT, loadConfig } from "../../config/config.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../terminal/prompt-style.js";
 import { formatMs, formatTokenK, updateConfig } from "./shared.js";
 
 const MODEL_PAD = 42;
 const CTX_PAD = 8;
+
+const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
+  clackMultiselect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 const pad = (value: string, size: number) => value.padEnd(size);
 
@@ -268,7 +288,9 @@ export async function modelsScanCommand(
     });
 
     if (isCancel(selection)) {
-      cancel("Model scan cancelled.");
+      cancel(
+        stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.",
+      );
       runtime.exit(0);
     }
 
@@ -285,7 +307,9 @@ export async function modelsScanCommand(
       });
 
       if (isCancel(imageSelection)) {
-        cancel("Model scan cancelled.");
+        cancel(
+          stylePromptTitle("Model scan cancelled.") ?? "Model scan cancelled.",
+        );
         runtime.exit(0);
       }
 
@@ -303,14 +327,14 @@ export async function modelsScanCommand(
   }
 
   const _updated = await updateConfig((cfg) => {
-    const nextModels = { ...cfg.agent?.models };
+    const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
       if (!nextModels[entry]) nextModels[entry] = {};
     }
     for (const entry of selectedImages) {
       if (!nextModels[entry]) nextModels[entry] = {};
     }
-    const existingImageModel = cfg.agent?.imageModel as
+    const existingImageModel = cfg.agents?.defaults?.imageModel as
       | { primary?: string; fallbacks?: string[] }
       | undefined;
     const nextImageModel =
@@ -322,12 +346,12 @@ export async function modelsScanCommand(
             fallbacks: selectedImages,
             ...(opts.setImage ? { primary: selectedImages[0] } : {}),
           }
-        : cfg.agent?.imageModel;
-    const existingModel = cfg.agent?.model as
+        : cfg.agents?.defaults?.imageModel;
+    const existingModel = cfg.agents?.defaults?.model as
       | { primary?: string; fallbacks?: string[] }
       | undefined;
-    const agent = {
-      ...cfg.agent,
+    const defaults = {
+      ...cfg.agents?.defaults,
       model: {
         ...(existingModel?.primary
           ? { primary: existingModel.primary }
@@ -337,10 +361,13 @@ export async function modelsScanCommand(
       },
       ...(nextImageModel ? { imageModel: nextImageModel } : {}),
       models: nextModels,
-    } satisfies NonNullable<typeof cfg.agent>;
+    } satisfies NonNullable<NonNullable<typeof cfg.agents>["defaults"]>;
     return {
       ...cfg,
-      agent,
+      agents: {
+        ...cfg.agents,
+        defaults,
+      },
     };
   });
 

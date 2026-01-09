@@ -48,13 +48,29 @@ export type ApiKeyCredential = {
   email?: string;
 };
 
+export type TokenCredential = {
+  /**
+   * Static bearer-style token (often OAuth access token / PAT).
+   * Not refreshable by clawdbot (unlike `type: "oauth"`).
+   */
+  type: "token";
+  provider: string;
+  token: string;
+  /** Optional expiry timestamp (ms since epoch). */
+  expires?: number;
+  email?: string;
+};
+
 export type OAuthCredential = OAuthCredentials & {
   type: "oauth";
   provider: OAuthProvider;
   email?: string;
 };
 
-export type AuthProfileCredential = ApiKeyCredential | OAuthCredential;
+export type AuthProfileCredential =
+  | ApiKeyCredential
+  | TokenCredential
+  | OAuthCredential;
 
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
@@ -66,6 +82,12 @@ export type ProfileUsageStats = {
 export type AuthProfileStore = {
   version: number;
   profiles: Record<string, AuthProfileCredential>;
+  /**
+   * Optional per-agent preferred profile order overrides.
+   * This lets you lock/override auth rotation for a specific agent without
+   * changing the global config.
+   */
+  order?: Record<string, string[]>;
   lastGood?: Record<string, string>;
   /** Usage statistics per profile for round-robin rotation */
   usageStats?: Record<string, ProfileUsageStats>;
@@ -117,6 +139,7 @@ function syncAuthProfileStore(
 ): void {
   target.version = source.version;
   target.profiles = source.profiles;
+  target.order = source.order;
   target.lastGood = source.lastGood;
   target.usageStats = source.usageStats;
 }
@@ -220,7 +243,13 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
   for (const [key, value] of Object.entries(record)) {
     if (!value || typeof value !== "object") continue;
     const typed = value as Partial<AuthProfileCredential>;
-    if (typed.type !== "api_key" && typed.type !== "oauth") continue;
+    if (
+      typed.type !== "api_key" &&
+      typed.type !== "oauth" &&
+      typed.type !== "token"
+    ) {
+      continue;
+    }
     entries[key] = {
       ...typed,
       provider: typed.provider ?? (key as OAuthProvider),
@@ -238,13 +267,35 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
   for (const [key, value] of Object.entries(profiles)) {
     if (!value || typeof value !== "object") continue;
     const typed = value as Partial<AuthProfileCredential>;
-    if (typed.type !== "api_key" && typed.type !== "oauth") continue;
+    if (
+      typed.type !== "api_key" &&
+      typed.type !== "oauth" &&
+      typed.type !== "token"
+    ) {
+      continue;
+    }
     if (!typed.provider) continue;
     normalized[key] = typed as AuthProfileCredential;
   }
+  const order =
+    record.order && typeof record.order === "object"
+      ? Object.entries(record.order as Record<string, unknown>).reduce(
+          (acc, [provider, value]) => {
+            if (!Array.isArray(value)) return acc;
+            const list = value
+              .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+              .filter(Boolean);
+            if (list.length === 0) return acc;
+            acc[provider] = list;
+            return acc;
+          },
+          {} as Record<string, string[]>,
+        )
+      : undefined;
   return {
     version: Number(record.version ?? AUTH_STORE_VERSION),
     profiles: normalized,
+    order,
     lastGood:
       record.lastGood && typeof record.lastGood === "object"
         ? (record.lastGood as Record<string, string>)
@@ -285,7 +336,7 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
  */
 function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
-}): OAuthCredential | null {
+}): TokenCredential | null {
   if (process.platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials();
     if (keychainCreds) {
@@ -306,18 +357,15 @@ function readClaudeCliCredentials(options?: {
   if (!claudeOauth || typeof claudeOauth !== "object") return null;
 
   const accessToken = claudeOauth.accessToken;
-  const refreshToken = claudeOauth.refreshToken;
   const expiresAt = claudeOauth.expiresAt;
 
   if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
   if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
 
   return {
-    type: "oauth",
+    type: "token",
     provider: "anthropic",
-    access: accessToken,
-    refresh: refreshToken,
+    token: accessToken,
     expires: expiresAt,
   };
 }
@@ -326,7 +374,7 @@ function readClaudeCliCredentials(options?: {
  * Read Claude Code credentials from macOS keychain.
  * Uses the `security` CLI to access keychain without native dependencies.
  */
-function readClaudeCliKeychainCredentials(): OAuthCredential | null {
+function readClaudeCliKeychainCredentials(): TokenCredential | null {
   try {
     const result = execSync(
       'security find-generic-password -s "Claude Code-credentials" -w',
@@ -338,18 +386,15 @@ function readClaudeCliKeychainCredentials(): OAuthCredential | null {
     if (!claudeOauth || typeof claudeOauth !== "object") return null;
 
     const accessToken = claudeOauth.accessToken;
-    const refreshToken = claudeOauth.refreshToken;
     const expiresAt = claudeOauth.expiresAt;
 
     if (typeof accessToken !== "string" || !accessToken) return null;
-    if (typeof refreshToken !== "string" || !refreshToken) return null;
     if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
 
     return {
-      type: "oauth",
+      type: "token",
       provider: "anthropic",
-      access: accessToken,
-      refresh: refreshToken,
+      token: accessToken,
       expires: expiresAt,
     };
   } catch {
@@ -416,6 +461,20 @@ function shallowEqualOAuthCredentials(
   );
 }
 
+function shallowEqualTokenCredentials(
+  a: TokenCredential | undefined,
+  b: TokenCredential,
+): boolean {
+  if (!a) return false;
+  if (a.type !== "token") return false;
+  return (
+    a.provider === b.provider &&
+    a.token === b.token &&
+    a.expires === b.expires &&
+    a.email === b.email
+  );
+}
+
 /**
  * Sync OAuth credentials from external CLI tools (Claude CLI, Codex CLI) into the store.
  * This allows clawdbot to use the same credentials as these tools without requiring
@@ -434,25 +493,28 @@ function syncExternalCliCredentials(
   const claudeCreds = readClaudeCliCredentials(options);
   if (claudeCreds) {
     const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+    const existingToken = existing?.type === "token" ? existing : undefined;
 
     // Update if: no existing profile, existing is not oauth, or CLI has newer/valid token
     const shouldUpdate =
-      !existingOAuth ||
-      existingOAuth.provider !== "anthropic" ||
-      existingOAuth.expires <= now ||
-      (claudeCreds.expires > now &&
-        claudeCreds.expires > existingOAuth.expires);
+      !existingToken ||
+      existingToken.provider !== "anthropic" ||
+      (existingToken.expires ?? 0) <= now ||
+      ((claudeCreds.expires ?? 0) > now &&
+        (claudeCreds.expires ?? 0) > (existingToken.expires ?? 0));
 
     if (
       shouldUpdate &&
-      !shallowEqualOAuthCredentials(existingOAuth, claudeCreds)
+      !shallowEqualTokenCredentials(existingToken, claudeCreds)
     ) {
       store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
       mutated = true;
       log.info("synced anthropic credentials from claude cli", {
         profileId: CLAUDE_CLI_PROFILE_ID,
-        expires: new Date(claudeCreds.expires).toISOString(),
+        expires:
+          typeof claudeCreds.expires === "number"
+            ? new Date(claudeCreds.expires).toISOString()
+            : "unknown",
       });
     }
   }
@@ -515,6 +577,16 @@ export function loadAuthProfileStore(): AuthProfileStore {
           key: cred.key,
           ...(cred.email ? { email: cred.email } : {}),
         };
+      } else if (cred.type === "token") {
+        store.profiles[profileId] = {
+          type: "token",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          token: cred.token,
+          ...(typeof cred.expires === "number"
+            ? { expires: cred.expires }
+            : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
       } else {
         store.profiles[profileId] = {
           type: "oauth",
@@ -570,6 +642,16 @@ export function ensureAuthProfileStore(
           key: cred.key,
           ...(cred.email ? { email: cred.email } : {}),
         };
+      } else if (cred.type === "token") {
+        store.profiles[profileId] = {
+          type: "token",
+          provider: cred.provider ?? (provider as OAuthProvider),
+          token: cred.token,
+          ...(typeof cred.expires === "number"
+            ? { expires: cred.expires }
+            : {}),
+          ...(cred.email ? { email: cred.email } : {}),
+        };
       } else {
         store.profiles[profileId] = {
           type: "oauth",
@@ -621,10 +703,45 @@ export function saveAuthProfileStore(
   const payload = {
     version: AUTH_STORE_VERSION,
     profiles: store.profiles,
+    order: store.order ?? undefined,
     lastGood: store.lastGood ?? undefined,
     usageStats: store.usageStats ?? undefined,
   } satisfies AuthProfileStore;
   saveJsonFile(authPath, payload);
+}
+
+export async function setAuthProfileOrder(params: {
+  agentDir?: string;
+  provider: string;
+  order?: string[] | null;
+}): Promise<AuthProfileStore | null> {
+  const providerKey = normalizeProviderId(params.provider);
+  const sanitized =
+    params.order && Array.isArray(params.order)
+      ? params.order.map((entry) => String(entry).trim()).filter(Boolean)
+      : [];
+
+  const deduped: string[] = [];
+  for (const entry of sanitized) {
+    if (!deduped.includes(entry)) deduped.push(entry);
+  }
+
+  return await updateAuthProfileStoreWithLock({
+    agentDir: params.agentDir,
+    updater: (store) => {
+      store.order = store.order ?? {};
+      if (deduped.length === 0) {
+        if (!store.order[providerKey]) return false;
+        delete store.order[providerKey];
+        if (Object.keys(store.order).length === 0) {
+          store.order = undefined;
+        }
+        return true;
+      }
+      store.order[providerKey] = deduped;
+      return true;
+    },
+  });
 }
 
 export function upsertAuthProfile(params: {
@@ -804,6 +921,14 @@ export function resolveAuthProfileOrder(params: {
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
+  const storedOrder = (() => {
+    const order = store.order;
+    if (!order) return undefined;
+    for (const [key, value] of Object.entries(order)) {
+      if (normalizeProviderId(key) === providerKey) return value;
+    }
+    return undefined;
+  })();
   const configuredOrder = (() => {
     const order = cfg?.auth?.order;
     if (!order) return undefined;
@@ -812,6 +937,7 @@ export function resolveAuthProfileOrder(params: {
     }
     return undefined;
   })();
+  const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(
@@ -821,7 +947,7 @@ export function resolveAuthProfileOrder(params: {
         .map(([profileId]) => profileId)
     : [];
   const baseOrder =
-    configuredOrder ??
+    explicitOrder ??
     (explicitProfiles.length > 0
       ? explicitProfiles
       : listProfilesForProvider(store, providerKey));
@@ -836,16 +962,44 @@ export function resolveAuthProfileOrder(params: {
     if (!deduped.includes(entry)) deduped.push(entry);
   }
 
-  // If user specified explicit order in config, respect it exactly
-  if (configuredOrder && configuredOrder.length > 0) {
+  // If user specified explicit order (store override or config), respect it
+  // exactly, but still apply cooldown sorting to avoid repeatedly selecting
+  // known-bad/rate-limited keys as the first candidate.
+  if (explicitOrder && explicitOrder.length > 0) {
+    // ...but still respect cooldown tracking to avoid repeatedly selecting a
+    // known-bad/rate-limited key as the first candidate.
+    const now = Date.now();
+    const available: string[] = [];
+    const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
+
+    for (const profileId of deduped) {
+      const cooldownUntil = store.usageStats?.[profileId]?.cooldownUntil;
+      if (
+        typeof cooldownUntil === "number" &&
+        Number.isFinite(cooldownUntil) &&
+        cooldownUntil > 0 &&
+        now < cooldownUntil
+      ) {
+        inCooldown.push({ profileId, cooldownUntil });
+      } else {
+        available.push(profileId);
+      }
+    }
+
+    const cooldownSorted = inCooldown
+      .sort((a, b) => a.cooldownUntil - b.cooldownUntil)
+      .map((entry) => entry.profileId);
+
+    const ordered = [...available, ...cooldownSorted];
+
     // Still put preferredProfile first if specified
-    if (preferredProfile && deduped.includes(preferredProfile)) {
+    if (preferredProfile && ordered.includes(preferredProfile)) {
       return [
         preferredProfile,
-        ...deduped.filter((e) => e !== preferredProfile),
+        ...ordered.filter((e) => e !== preferredProfile),
       ];
     }
-    return deduped;
+    return ordered;
   }
 
   // Otherwise, use round-robin: sort by lastUsed (oldest first)
@@ -882,16 +1036,17 @@ function orderProfilesByMode(
   // Then by lastUsed (oldest first = round-robin within type)
   const scored = available.map((profileId) => {
     const type = store.profiles[profileId]?.type;
-    const typeScore = type === "oauth" ? 0 : type === "api_key" ? 1 : 2;
+    const typeScore =
+      type === "oauth" ? 0 : type === "token" ? 1 : type === "api_key" ? 2 : 3;
     const lastUsed = store.usageStats?.[profileId]?.lastUsed ?? 0;
     return { profileId, typeScore, lastUsed };
   });
 
-  // Primary sort: type preference (oauth > api_key).
+  // Primary sort: type preference (oauth > token > api_key).
   // Secondary sort: lastUsed (oldest first for round-robin within type).
   const sorted = scored
     .sort((a, b) => {
-      // First by type (oauth > api_key)
+      // First by type (oauth > token > api_key)
       if (a.typeScore !== b.typeScore) return a.typeScore - b.typeScore;
       // Then by lastUsed (oldest first)
       return a.lastUsed - b.lastUsed;
@@ -921,10 +1076,26 @@ export async function resolveApiKeyForProfile(params: {
   if (!cred) return null;
   const profileConfig = cfg?.auth?.profiles?.[profileId];
   if (profileConfig && profileConfig.provider !== cred.provider) return null;
-  if (profileConfig && profileConfig.mode !== cred.type) return null;
+  if (profileConfig && profileConfig.mode !== cred.type) {
+    // Compatibility: treat "oauth" config as compatible with stored token profiles.
+    if (!(profileConfig.mode === "oauth" && cred.type === "token")) return null;
+  }
 
   if (cred.type === "api_key") {
     return { apiKey: cred.key, provider: cred.provider, email: cred.email };
+  }
+  if (cred.type === "token") {
+    const token = cred.token?.trim();
+    if (!token) return null;
+    if (
+      typeof cred.expires === "number" &&
+      Number.isFinite(cred.expires) &&
+      cred.expires > 0 &&
+      Date.now() >= cred.expires
+    ) {
+      return null;
+    }
+    return { apiKey: token, provider: cred.provider, email: cred.email };
   }
   if (Date.now() < cred.expires) {
     return {
@@ -1016,8 +1187,8 @@ export async function markAuthProfileGood(params: {
   saveAuthProfileStore(store, agentDir);
 }
 
-export function resolveAuthStorePathForDisplay(): string {
-  const pathname = resolveAuthStorePath();
+export function resolveAuthStorePathForDisplay(agentDir?: string): string {
+  const pathname = resolveAuthStorePath(agentDir);
   return pathname.startsWith("~") ? pathname : resolveUserPath(pathname);
 }
 

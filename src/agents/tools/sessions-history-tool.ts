@@ -25,7 +25,7 @@ const SessionsHistoryToolSchema = Type.Object({
 function resolveSandboxSessionToolsVisibility(
   cfg: ReturnType<typeof loadConfig>,
 ) {
-  return cfg.agent?.sandbox?.sessionToolsVisibility ?? "spawned";
+  return cfg.agents?.defaults?.sandbox?.sessionToolsVisibility ?? "spawned";
 }
 
 async function isSpawnedSessionAllowed(params: {
@@ -97,7 +97,7 @@ export function createSessionsHistoryTool(opts?: {
         }
       }
 
-      const routingA2A = cfg.routing?.agentToAgent;
+      const routingA2A = cfg.tools?.agentToAgent;
       const a2aEnabled = routingA2A?.enabled === true;
       const allowPatterns = Array.isArray(routingA2A?.allow)
         ? routingA2A.allow
@@ -126,14 +126,13 @@ export function createSessionsHistoryTool(opts?: {
           return jsonResult({
             status: "forbidden",
             error:
-              "Agent-to-agent history is disabled. Set routing.agentToAgent.enabled=true to allow cross-agent access.",
+              "Agent-to-agent history is disabled. Set tools.agentToAgent.enabled=true to allow cross-agent access.",
           });
         }
         if (!matchesAllow(requesterAgentId) || !matchesAllow(targetAgentId)) {
           return jsonResult({
             status: "forbidden",
-            error:
-              "Agent-to-agent history denied by routing.agentToAgent.allow.",
+            error: "Agent-to-agent history denied by tools.agentToAgent.allow.",
           });
         }
       }

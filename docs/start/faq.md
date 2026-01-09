@@ -64,8 +64,7 @@ pnpm install
 pnpm build
 
 # If the Control UI assets are missing or you want the dashboard:
-pnpm ui:install
-pnpm ui:build
+pnpm ui:build # auto-installs UI deps on first run
 
 pnpm clawdbot onboard
 ```
@@ -116,14 +115,14 @@ Everything lives under `$CLAWDBOT_STATE_DIR` (default: `~/.clawdbot`):
 
 Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`).
 
-Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agent.workspace` (default: `~/clawd`).
+Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agents.defaults.workspace` (default: `~/clawd`).
 
 ### Can agents work outside the workspace?
 
 Yes. The workspace is the **default cwd** and memory anchor, not a hard sandbox.
 Relative paths resolve inside the workspace, but absolute paths can access other
 host locations unless sandboxing is enabled. If you need isolation, use
-[`agent.sandbox`](/gateway/sandboxing) or per‑agent sandbox settings. If you
+[`agents.defaults.sandbox`](/gateway/sandboxing) or per‑agent sandbox settings. If you
 want a repo to be the default working directory, point that agent’s
 `workspace` to the repo root. The Clawdbot repo is just source code; keep the
 workspace separate unless you intentionally want the agent to work inside it.
@@ -260,7 +259,7 @@ Direct chats collapse to the main session by default. Groups/channels have their
 Clawdbot’s default model is whatever you set as:
 
 ```
-agent.model.primary
+agents.defaults.model.primary
 ```
 
 Models are referenced as `provider/model` (example: `anthropic/claude-opus-4-5`). If you omit the provider, Clawdbot currently assumes `anthropic` as a temporary deprecation fallback — but you should still **explicitly** set `provider/model`.
@@ -281,9 +280,18 @@ Use the `/model` command as a standalone message:
 
 You can list available models with `/model`, `/model list`, or `/model status`.
 
+You can also force a specific auth profile for the provider (per session):
+
+```
+/model opus@anthropic:claude-cli
+/model opus@anthropic:default
+```
+
+Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
+
 ### Why do I see “Model … is not allowed” and then no reply?
 
-If `agent.models` is set, it becomes the **allowlist** for `/model` and any
+If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and any
 session overrides. Choosing a model that isn’t in that list returns:
 
 ```
@@ -291,11 +299,11 @@ Model "provider/model" is not allowed. Use /model to list available models.
 ```
 
 That error is returned **instead of** a normal reply. Fix: add the model to
-`agent.models`, remove the allowlist, or pick a model from `/model list`.
+`agents.defaults.models`, remove the allowlist, or pick a model from `/model list`.
 
 ### Are opus / sonnet / gpt built‑in shortcuts?
 
-Yes. Clawdbot ships a few default shorthands (only applied when the model exists in `agent.models`):
+Yes. Clawdbot ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
 - `opus` → `anthropic/claude-opus-4-5`
 - `sonnet` → `anthropic/claude-sonnet-4-5`
@@ -308,7 +316,7 @@ If you set your own alias with the same name, your value wins.
 
 ### How do I define/override model shortcuts (aliases)?
 
-Aliases come from `agent.models.<modelId>.alias`. Example:
+Aliases come from `agents.defaults.models.<modelId>.alias`. Example:
 
 ```json5
 {
@@ -360,7 +368,7 @@ If you reference a provider/model but the required provider key is missing, you�
 Failover happens in two stages:
 
 1) **Auth profile rotation** within the same provider.
-2) **Model fallback** to the next model in `agent.model.fallbacks`.
+2) **Model fallback** to the next model in `agents.defaults.model.fallbacks`.
 
 Cooldowns apply to failing profiles (exponential backoff), so Clawdbot can keep responding even when a provider is rate‑limited or temporarily failing.
 
@@ -388,7 +396,7 @@ It means the system attempted to use the auth profile ID `anthropic:default`, bu
 
 If your model config includes Google Gemini as a fallback (or you switched to a Gemini shorthand), Clawdbot will try it during model fallback. If you haven’t configured Google credentials, you’ll see `No API key found for provider "google"`.
 
-Fix: either provide Google auth, or remove/avoid Google models in `agent.model.fallbacks` / aliases so fallback doesn’t route there.
+Fix: either provide Google auth, or remove/avoid Google models in `agents.defaults.model.fallbacks` / aliases so fallback doesn’t route there.
 
 ## Auth profiles: what they are and how to manage them
 
@@ -413,6 +421,28 @@ Clawdbot uses provider‑prefixed IDs like:
 ### Can I control which auth profile is tried first?
 
 Yes. Config supports optional metadata for profiles and an ordering per provider (`auth.order.<provider>`). This does **not** store secrets; it maps IDs to provider/mode and sets rotation order.
+
+You can also set a **per-agent** order override (stored in that agent’s `auth-profiles.json`) via the CLI:
+
+```bash
+# Defaults to the configured default agent (omit --agent)
+clawdbot models auth order get --provider anthropic
+
+# Lock rotation to a single profile (only try this one)
+clawdbot models auth order set --provider anthropic anthropic:claude-cli
+
+# Or set an explicit order (fallback within provider)
+clawdbot models auth order set --provider anthropic anthropic:claude-cli anthropic:default
+
+# Clear override (fall back to config auth.order / round-robin)
+clawdbot models auth order clear --provider anthropic
+```
+
+To target a specific agent:
+
+```bash
+clawdbot models auth order set --provider anthropic --agent main anthropic:claude-cli
+```
 
 ### OAuth vs API key: what’s the difference?
 
@@ -507,7 +537,7 @@ Yes, but you must isolate:
 
 - `CLAWDBOT_CONFIG_PATH` (per‑instance config)
 - `CLAWDBOT_STATE_DIR` (per‑instance state)
-- `agent.workspace` (workspace isolation)
+- `agents.defaults.workspace` (workspace isolation)
 - `gateway.port` (unique ports)
 
 There are convenience CLI flags like `--dev` and `--profile <name>` that shift state dirs and ports.
@@ -620,7 +650,7 @@ You can add options like `debounce:2s cap:25 drop:summarize` for followup modes.
 ### “All models failed” — what should I check first?
 
 - **Credentials** present for the provider(s) being tried (auth profiles + env vars).
-- **Model routing**: confirm `agent.model.primary` and fallbacks are models you can access.
+- **Model routing**: confirm `agents.defaults.model.primary` and fallbacks are models you can access.
 - **Gateway logs** in `/tmp/clawdbot/…` for the exact provider error.
 - **`/model status`** to see current configured models + shorthands.
 
@@ -659,7 +689,7 @@ clawdbot providers login
 
 **Q: “What’s the default model for Anthropic with an API key?”**
 
-**A:** In Clawdbot, credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agent.model.primary` (for example, `anthropic/claude-sonnet-4-5` or `anthropic/claude-opus-4-5`). If you see `No credentials found for profile "anthropic:default"`, it means the Gateway couldn’t find Anthropic credentials in the expected `auth-profiles.json` for the agent that’s running.
+**A:** In Clawdbot, credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example, `anthropic/claude-sonnet-4-5` or `anthropic/claude-opus-4-5`). If you see `No credentials found for profile "anthropic:default"`, it means the Gateway couldn’t find Anthropic credentials in the expected `auth-profiles.json` for the agent that’s running.
 
 ---
 

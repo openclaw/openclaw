@@ -1,5 +1,4 @@
 import {
-  loginAnthropic,
   loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
@@ -10,6 +9,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
@@ -19,6 +19,7 @@ import {
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { ClawdbotConfig } from "../config/config.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
@@ -26,15 +27,23 @@ import {
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
 import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
+import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
+  applyMinimaxHostedConfig,
+  applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
+  MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
@@ -56,13 +65,16 @@ export async function warnIfModelConfigLooksOff(
     agentModelOverride && agentModelOverride.length > 0
       ? {
           ...config,
-          agent: {
-            ...config.agent,
-            model: {
-              ...(typeof config.agent?.model === "object"
-                ? config.agent.model
-                : undefined),
-              primary: agentModelOverride,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              model: {
+                ...(typeof config.agents?.defaults?.model === "object"
+                  ? config.agents.defaults.model
+                  : undefined),
+                primary: agentModelOverride,
+              },
             },
           },
         }
@@ -83,7 +95,7 @@ export async function warnIfModelConfigLooksOff(
     );
     if (!known) {
       warnings.push(
-        `Model not found: ${ref.provider}/${ref.model}. Update agent.model or run /models list.`,
+        `Model not found: ${ref.provider}/${ref.model}. Update agents.defaults.model or run /models list.`,
       );
     }
   }
@@ -102,7 +114,7 @@ export async function warnIfModelConfigLooksOff(
     const hasCodex = listProfilesForProvider(store, "openai-codex").length > 0;
     if (hasCodex) {
       warnings.push(
-        `Detected OpenAI Codex OAuth. Consider setting agent.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
+        `Detected OpenAI Codex OAuth. Consider setting agents.defaults.model to ${OPENAI_CODEX_DEFAULT_MODEL}.`,
       );
     }
   }
@@ -132,47 +144,7 @@ export async function applyAuthChoice(params: {
     );
   };
 
-  if (params.authChoice === "oauth") {
-    await params.prompter.note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
-    );
-    const spin = params.prompter.progress("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          params.runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = await params.prompter.text({
-            message: "Paste authorization code (code#state)",
-            validate: (value) => (value?.trim() ? undefined : "Required"),
-          });
-          return String(code);
-        },
-      );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds, params.agentDir);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        nextConfig = applyAuthProfileConfig(nextConfig, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
-      }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      params.runtime.error(String(err));
-      await params.prompter.note(
-        "Trouble with OAuth? See https://docs.clawd.bot/start/faq",
-        "OAuth help",
-      );
-    }
-  } else if (params.authChoice === "claude-cli") {
+  if (params.authChoice === "claude-cli") {
     const store = ensureAuthProfileStore(params.agentDir, {
       allowKeychainPrompt: false,
     });
@@ -202,19 +174,189 @@ export async function applyAuthChoice(params: {
         });
 
     if (!storeWithKeychain.profiles[CLAUDE_CLI_PROFILE_ID]) {
-      await params.prompter.note(
-        process.platform === "darwin"
-          ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
-          : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
-        "Claude CLI OAuth",
-      );
-      return { config: nextConfig, agentModelOverride };
+      if (process.stdin.isTTY) {
+        const runNow = await params.prompter.confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        });
+        if (runNow) {
+          const res = await (async () => {
+            const { spawnSync } = await import("node:child_process");
+            return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+          })();
+          if (res.error) {
+            await params.prompter.note(
+              `Failed to run claude: ${String(res.error)}`,
+              "Claude setup-token",
+            );
+          }
+        }
+      } else {
+        await params.prompter.note(
+          "`claude setup-token` requires an interactive TTY.",
+          "Claude setup-token",
+        );
+      }
+
+      const refreshed = ensureAuthProfileStore(params.agentDir, {
+        allowKeychainPrompt: true,
+      });
+      if (!refreshed.profiles[CLAUDE_CLI_PROFILE_ID]) {
+        await params.prompter.note(
+          process.platform === "darwin"
+            ? 'No Claude CLI credentials found in Keychain ("Claude Code-credentials") or ~/.claude/.credentials.json.'
+            : "No Claude CLI credentials found at ~/.claude/.credentials.json.",
+          "Claude CLI OAuth",
+        );
+        return { config: nextConfig, agentModelOverride };
+      }
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
     });
+  } else if (
+    params.authChoice === "setup-token" ||
+    params.authChoice === "oauth"
+  ) {
+    await params.prompter.note(
+      [
+        "This will run `claude setup-token` to create a long-lived Anthropic token.",
+        "Requires an interactive TTY and a Claude Pro/Max subscription.",
+      ].join("\n"),
+      "Anthropic setup-token",
+    );
+
+    if (!process.stdin.isTTY) {
+      await params.prompter.note(
+        "`claude setup-token` requires an interactive TTY.",
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    const proceed = await params.prompter.confirm({
+      message: "Run `claude setup-token` now?",
+      initialValue: true,
+    });
+    if (!proceed) return { config: nextConfig, agentModelOverride };
+
+    const res = await (async () => {
+      const { spawnSync } = await import("node:child_process");
+      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+    })();
+    if (res.error) {
+      await params.prompter.note(
+        `Failed to run claude: ${String(res.error)}`,
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+    if (typeof res.status === "number" && res.status !== 0) {
+      await params.prompter.note(
+        `claude setup-token failed (exit ${res.status})`,
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: true,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      await params.prompter.note(
+        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
+        "Anthropic setup-token",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "token",
+    });
+  } else if (params.authChoice === "token") {
+    const provider = (await params.prompter.select({
+      message: "Token provider",
+      options: [{ value: "anthropic", label: "Anthropic (only supported)" }],
+    })) as "anthropic";
+    await params.prompter.note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
+    );
+
+    const tokenRaw = await params.prompter.text({
+      message: "Paste Anthropic setup-token",
+      validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+    });
+    const token = String(tokenRaw).trim();
+
+    const profileNameRaw = await params.prompter.text({
+      message: "Token name (blank = default)",
+      placeholder: "default",
+    });
+    const namedProfileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
+
+    upsertAuthProfile({
+      profileId: namedProfileId,
+      agentDir: params.agentDir,
+      credential: {
+        type: "token",
+        provider,
+        token,
+      },
+    });
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: namedProfileId,
+      provider,
+      mode: "token",
+    });
+  } else if (params.authChoice === "openai-api-key") {
+    const envKey = resolveEnvApiKey("openai");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        const result = upsertSharedEnvVar({
+          key: "OPENAI_API_KEY",
+          value: envKey.apiKey,
+        });
+        if (!process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = envKey.apiKey;
+        }
+        await params.prompter.note(
+          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+          "OpenAI API key",
+        );
+        return { config: nextConfig, agentModelOverride };
+      }
+    }
+
+    const key = await params.prompter.text({
+      message: "Enter OpenAI API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    const trimmed = String(key).trim();
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: trimmed,
+    });
+    process.env.OPENAI_API_KEY = trimmed;
+    await params.prompter.note(
+      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+      "OpenAI API key",
+    );
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(
@@ -376,30 +518,36 @@ export async function applyAuthChoice(params: {
         const modelKey = "google-antigravity/claude-opus-4-5-thinking";
         nextConfig = {
           ...nextConfig,
-          agent: {
-            ...nextConfig.agent,
-            models: {
-              ...nextConfig.agent?.models,
-              [modelKey]: nextConfig.agent?.models?.[modelKey] ?? {},
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              models: {
+                ...nextConfig.agents?.defaults?.models,
+                [modelKey]:
+                  nextConfig.agents?.defaults?.models?.[modelKey] ?? {},
+              },
             },
           },
         };
         if (params.setDefaultModel) {
+          const existingModel = nextConfig.agents?.defaults?.model;
           nextConfig = {
             ...nextConfig,
-            agent: {
-              ...nextConfig.agent,
-              model: {
-                ...(nextConfig.agent?.model &&
-                "fallbacks" in
-                  (nextConfig.agent.model as Record<string, unknown>)
-                  ? {
-                      fallbacks: (
-                        nextConfig.agent.model as { fallbacks?: string[] }
-                      ).fallbacks,
-                    }
-                  : undefined),
-                primary: modelKey,
+            agents: {
+              ...nextConfig.agents,
+              defaults: {
+                ...nextConfig.agents?.defaults,
+                model: {
+                  ...(existingModel &&
+                  "fallbacks" in (existingModel as Record<string, unknown>)
+                    ? {
+                        fallbacks: (existingModel as { fallbacks?: string[] })
+                          .fallbacks,
+                      }
+                    : undefined),
+                  primary: modelKey,
+                },
               },
             },
           };
@@ -455,6 +603,24 @@ export async function applyAuthChoice(params: {
       provider: "anthropic",
       mode: "api_key",
     });
+  } else if (params.authChoice === "minimax-cloud") {
+    const key = await params.prompter.text({
+      message: "Enter MiniMax API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setMinimaxApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyMinimaxHostedConfig(nextConfig);
+    } else {
+      nextConfig = applyMinimaxHostedProviderConfig(nextConfig);
+      agentModelOverride = MINIMAX_HOSTED_MODEL_REF;
+      await noteAgentModel(MINIMAX_HOSTED_MODEL_REF);
+    }
   } else if (params.authChoice === "minimax") {
     if (params.setDefaultModel) {
       nextConfig = applyMinimaxConfig(nextConfig);

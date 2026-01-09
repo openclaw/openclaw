@@ -159,6 +159,7 @@ type ProviderAuthOverview = {
   profiles: {
     count: number;
     oauth: number;
+    token: number;
     apiKey: number;
     labels: string[];
   };
@@ -180,6 +181,9 @@ function resolveProviderAuthOverview(params: {
     if (profile.type === "api_key") {
       return `${profileId}=${maskApiKey(profile.key)}`;
     }
+    if (profile.type === "token") {
+      return `${profileId}=token:${maskApiKey(profile.token)}`;
+    }
     const display = resolveAuthProfileDisplayLabel({ cfg, store, profileId });
     const suffix =
       display === profileId
@@ -191,6 +195,9 @@ function resolveProviderAuthOverview(params: {
   });
   const oauthCount = profiles.filter(
     (id) => store.profiles[id]?.type === "oauth",
+  ).length;
+  const tokenCount = profiles.filter(
+    (id) => store.profiles[id]?.type === "token",
   ).length;
   const apiKeyCount = profiles.filter(
     (id) => store.profiles[id]?.type === "api_key",
@@ -227,6 +234,7 @@ function resolveProviderAuthOverview(params: {
     profiles: {
       count: profiles.length,
       oauth: oauthCount,
+      token: tokenCount,
       apiKey: apiKeyCount,
       labels,
     },
@@ -282,10 +290,10 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
 
   addEntry(resolvedDefault, "default");
 
-  const modelConfig = cfg.agent?.model as
+  const modelConfig = cfg.agents?.defaults?.model as
     | { primary?: string; fallbacks?: string[] }
     | undefined;
-  const imageModelConfig = cfg.agent?.imageModel as
+  const imageModelConfig = cfg.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | undefined;
   const modelFallbacks =
@@ -325,7 +333,7 @@ const resolveConfiguredEntries = (cfg: ClawdbotConfig) => {
     addEntry(resolved.ref, `img-fallback#${idx + 1}`);
   });
 
-  for (const key of Object.keys(cfg.agent?.models ?? {})) {
+  for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
     const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
     if (!parsed) continue;
     addEntry(parsed, "configured");
@@ -615,11 +623,11 @@ export async function modelsStatusCommand(
     defaultModel: DEFAULT_MODEL,
   });
 
-  const modelConfig = cfg.agent?.model as
+  const modelConfig = cfg.agents?.defaults?.model as
     | { primary?: string; fallbacks?: string[] }
     | string
     | undefined;
-  const imageConfig = cfg.agent?.imageModel as
+  const imageConfig = cfg.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | string
     | undefined;
@@ -637,14 +645,14 @@ export async function modelsStatusCommand(
       : (imageConfig?.primary?.trim() ?? "");
   const imageFallbacks =
     typeof imageConfig === "object" ? (imageConfig?.fallbacks ?? []) : [];
-  const aliases = Object.entries(cfg.agent?.models ?? {}).reduce<
+  const aliases = Object.entries(cfg.agents?.defaults?.models ?? {}).reduce<
     Record<string, string>
   >((acc, [key, entry]) => {
     const alias = entry?.alias?.trim();
     if (alias) acc[alias] = key;
     return acc;
   }, {});
-  const allowed = Object.keys(cfg.agent?.models ?? {});
+  const allowed = Object.keys(cfg.agents?.defaults?.models ?? {});
 
   const agentDir = resolveClawdbotAgentDir();
   const store = ensureAuthProfileStore();
@@ -739,11 +747,16 @@ export async function modelsStatusCommand(
 
   const providersWithOauth = providerAuth
     .filter(
-      (entry) => entry.profiles.oauth > 0 || entry.env?.value === "OAuth (env)",
+      (entry) =>
+        entry.profiles.oauth > 0 ||
+        entry.profiles.token > 0 ||
+        entry.env?.value === "OAuth (env)",
     )
     .map((entry) => {
       const count =
-        entry.profiles.oauth || (entry.env?.value === "OAuth (env)" ? 1 : 0);
+        entry.profiles.oauth +
+        entry.profiles.token +
+        (entry.env?.value === "OAuth (env)" ? 1 : 0);
       return `${entry.provider} (${count})`;
     });
 
@@ -754,7 +767,7 @@ export async function modelsStatusCommand(
     providers,
   });
   const oauthProfiles = authHealth.profiles.filter(
-    (profile) => profile.type === "oauth",
+    (profile) => profile.type === "oauth" || profile.type === "token",
   );
 
   const checkStatus = (() => {
@@ -926,7 +939,7 @@ export async function modelsStatusCommand(
   );
   runtime.log(
     `${label(
-      `Providers w/ OAuth (${providersWithOauth.length || 0})`,
+      `Providers w/ OAuth/tokens (${providersWithOauth.length || 0})`,
     )}${colorize(rich, theme.muted, ":")} ${colorize(
       rich,
       providersWithOauth.length ? theme.info : theme.muted,
@@ -953,7 +966,7 @@ export async function modelsStatusCommand(
       bits.push(
         formatKeyValue(
           "profiles",
-          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, api_key=${entry.profiles.apiKey})`,
+          `${entry.profiles.count} (oauth=${entry.profiles.oauth}, token=${entry.profiles.token}, api_key=${entry.profiles.apiKey})`,
           rich,
         ),
       );
@@ -1003,7 +1016,7 @@ export async function modelsStatusCommand(
   }
 
   runtime.log("");
-  runtime.log(colorize(rich, theme.heading, "OAuth status"));
+  runtime.log(colorize(rich, theme.heading, "OAuth/token status"));
   if (oauthProfiles.length === 0) {
     runtime.log(colorize(rich, theme.muted, "- none"));
     return;
@@ -1011,6 +1024,7 @@ export async function modelsStatusCommand(
 
   const formatStatus = (status: string) => {
     if (status === "ok") return colorize(rich, theme.success, "ok");
+    if (status === "static") return colorize(rich, theme.muted, "static");
     if (status === "expiring") return colorize(rich, theme.warn, "expiring");
     if (status === "missing") return colorize(rich, theme.warn, "unknown");
     return colorize(rich, theme.error, "expired");
@@ -1020,9 +1034,12 @@ export async function modelsStatusCommand(
     const labelText = profile.label || profile.profileId;
     const label = colorize(rich, theme.accent, labelText);
     const status = formatStatus(profile.status);
-    const expiry = profile.expiresAt
-      ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
-      : " expires unknown";
+    const expiry =
+      profile.status === "static"
+        ? ""
+        : profile.expiresAt
+          ? ` expires in ${formatRemainingShort(profile.remainingMs)}`
+          : " expires unknown";
     const source =
       profile.source !== "store"
         ? colorize(rich, theme.muted, ` (${profile.source})`)

@@ -11,12 +11,11 @@ installGatewayTestHooks();
 
 describe("gateway server agents", () => {
   test("lists configured agents via agents.list RPC", async () => {
-    testState.routingConfig = {
-      defaultAgentId: "work",
-      agents: {
-        work: { name: "Work" },
-        home: { name: "Home" },
-      },
+    testState.agentsConfig = {
+      list: [
+        { id: "work", name: "Work", default: true },
+        { id: "home", name: "Home" },
+      ],
     };
 
     const { ws } = await startServerWithClient();

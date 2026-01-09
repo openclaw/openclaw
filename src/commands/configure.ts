@@ -1,17 +1,16 @@
 import path from "node:path";
 
 import {
-  confirm,
-  intro,
-  multiselect,
-  note,
-  outro,
-  select,
+  confirm as clackConfirm,
+  intro as clackIntro,
+  multiselect as clackMultiselect,
+  note as clackNote,
+  outro as clackOutro,
+  select as clackSelect,
+  text as clackText,
   spinner,
-  text,
 } from "@clack/prompts";
 import {
-  loginAnthropic,
   loginOpenAICodex,
   type OAuthCredentials,
   type OAuthProvider,
@@ -20,7 +19,9 @@ import {
   CLAUDE_CLI_PROFILE_ID,
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
+  upsertAuthProfile,
 } from "../agents/auth-profiles.js";
+import { resolveEnvApiKey } from "../agents/model-auth.js";
 import { createCliProgress } from "../cli/progress.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -35,8 +36,15 @@ import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { upsertSharedEnvVar } from "../infra/env-file.js";
+import { listChatProviders } from "../providers/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
 import { resolveUserPath, sleep } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
@@ -45,6 +53,10 @@ import {
   loginAntigravityVpsAware,
 } from "./antigravity-oauth.js";
 import { buildAuthChoiceOptions } from "./auth-choice-options.js";
+import {
+  buildTokenProfileId,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -58,16 +70,16 @@ import { healthCommand } from "./health.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
+  applyMinimaxHostedConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
+  setMinimaxApiKey,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
-  detectBrowserOpenSupport,
   ensureWorkspaceAndSessions,
-  formatControlUiSshHint,
   guardCancel,
   openUrl,
   printWizardHeader,
@@ -94,10 +106,49 @@ type WizardSection =
   | "skills"
   | "health";
 
+type ProvidersWizardMode = "configure" | "remove";
+
 type ConfigureWizardParams = {
   command: "configure" | "update";
   sections?: WizardSection[];
 };
+
+const intro = (message: string) =>
+  clackIntro(stylePromptTitle(message) ?? message);
+const outro = (message: string) =>
+  clackOutro(stylePromptTitle(message) ?? message);
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
+const text = (params: Parameters<typeof clackText>[0]) =>
+  clackText({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const confirm = (params: Parameters<typeof clackConfirm>[0]) =>
+  clackConfirm({
+    ...params,
+    message: stylePromptMessage(params.message),
+  });
+const select = <T>(params: Parameters<typeof clackSelect<T>>[0]) =>
+  clackSelect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
+const multiselect = <T>(params: Parameters<typeof clackMultiselect<T>>[0]) =>
+  clackMultiselect({
+    ...params,
+    message: stylePromptMessage(params.message),
+    options: params.options.map((opt) =>
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
+    ),
+  });
 
 const startOscSpinner = (label: string) => {
   const spin = spinner();
@@ -301,63 +352,214 @@ async function promptAuthConfig(
     runtime,
   ) as
     | "oauth"
+    | "setup-token"
     | "claude-cli"
+    | "token"
     | "openai-codex"
+    | "openai-api-key"
     | "codex-cli"
     | "antigravity"
     | "gemini-api-key"
     | "apiKey"
+    | "minimax-cloud"
     | "minimax"
     | "skip";
 
   let next = cfg;
 
-  if (authChoice === "oauth") {
-    note(
-      "Browser will open. Paste the code shown after login (code#state).",
-      "Anthropic OAuth",
-    );
-    const spin = startOscSpinner("Waiting for authorization…");
-    let oauthCreds: OAuthCredentials | null = null;
-    try {
-      oauthCreds = await loginAnthropic(
-        async (url) => {
-          await openUrl(url);
-          runtime.log(`Open: ${url}`);
-        },
-        async () => {
-          const code = guardCancel(
-            await text({
-              message: "Paste authorization code (code#state)",
-              validate: (value) => (value?.trim() ? undefined : "Required"),
-            }),
-            runtime,
-          );
-          return String(code);
-        },
+  if (authChoice === "claude-cli") {
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: false,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID] && process.stdin.isTTY) {
+      note(
+        [
+          "No Claude CLI credentials found yet.",
+          "If you have a Claude Pro/Max subscription, run `claude setup-token`.",
+        ].join("\n"),
+        "Claude CLI",
       );
-      spin.stop("OAuth complete");
-      if (oauthCreds) {
-        await writeOAuthCredentials("anthropic", oauthCreds);
-        const profileId = `anthropic:${oauthCreds.email ?? "default"}`;
-        next = applyAuthProfileConfig(next, {
-          profileId,
-          provider: "anthropic",
-          mode: "oauth",
-          email: oauthCreds.email ?? undefined,
-        });
+      const runNow = guardCancel(
+        await confirm({
+          message: "Run `claude setup-token` now?",
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (runNow) {
+        const res = await (async () => {
+          const { spawnSync } = await import("node:child_process");
+          return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+        })();
+        if (res.error) {
+          note(
+            `Failed to run claude: ${String(res.error)}`,
+            "Claude setup-token",
+          );
+        }
       }
-    } catch (err) {
-      spin.stop("OAuth failed");
-      runtime.error(String(err));
-      note("Trouble with OAuth? See https://docs.clawd.bot/start/faq", "OAuth");
     }
-  } else if (authChoice === "claude-cli") {
     next = applyAuthProfileConfig(next, {
       profileId: CLAUDE_CLI_PROFILE_ID,
       provider: "anthropic",
-      mode: "oauth",
+      mode: "token",
     });
+  } else if (authChoice === "setup-token" || authChoice === "oauth") {
+    note(
+      [
+        "This will run `claude setup-token` to create a long-lived Anthropic token.",
+        "Requires an interactive TTY and a Claude Pro/Max subscription.",
+      ].join("\n"),
+      "Anthropic setup-token",
+    );
+
+    if (!process.stdin.isTTY) {
+      note(
+        "`claude setup-token` requires an interactive TTY.",
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    const runNow = guardCancel(
+      await confirm({
+        message: "Run `claude setup-token` now?",
+        initialValue: true,
+      }),
+      runtime,
+    );
+    if (!runNow) return next;
+
+    const res = await (async () => {
+      const { spawnSync } = await import("node:child_process");
+      return spawnSync("claude", ["setup-token"], { stdio: "inherit" });
+    })();
+    if (res.error) {
+      note(
+        `Failed to run claude: ${String(res.error)}`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+    if (typeof res.status === "number" && res.status !== 0) {
+      note(
+        `claude setup-token failed (exit ${res.status})`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    const store = ensureAuthProfileStore(undefined, {
+      allowKeychainPrompt: true,
+    });
+    if (!store.profiles[CLAUDE_CLI_PROFILE_ID]) {
+      note(
+        `No Claude CLI credentials found after setup-token. Expected ${CLAUDE_CLI_PROFILE_ID}.`,
+        "Anthropic setup-token",
+      );
+      return next;
+    }
+
+    next = applyAuthProfileConfig(next, {
+      profileId: CLAUDE_CLI_PROFILE_ID,
+      provider: "anthropic",
+      mode: "token",
+    });
+  } else if (authChoice === "token") {
+    const provider = guardCancel(
+      await select({
+        message: "Token provider",
+        options: [
+          {
+            value: "anthropic",
+            label: "Anthropic (only supported)",
+          },
+        ],
+      }),
+      runtime,
+    ) as "anthropic";
+
+    note(
+      [
+        "Run `claude setup-token` in your terminal.",
+        "Then paste the generated token below.",
+      ].join("\n"),
+      "Anthropic token",
+    );
+
+    const tokenRaw = guardCancel(
+      await text({
+        message: "Paste Anthropic setup-token",
+        validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
+      }),
+      runtime,
+    );
+    const token = String(tokenRaw).trim();
+
+    const profileNameRaw = guardCancel(
+      await text({
+        message: "Token name (blank = default)",
+        placeholder: "default",
+      }),
+      runtime,
+    );
+    const profileId = buildTokenProfileId({
+      provider,
+      name: String(profileNameRaw ?? ""),
+    });
+
+    upsertAuthProfile({
+      profileId,
+      credential: {
+        type: "token",
+        provider,
+        token,
+      },
+    });
+
+    next = applyAuthProfileConfig(next, { profileId, provider, mode: "token" });
+  } else if (authChoice === "openai-api-key") {
+    const envKey = resolveEnvApiKey("openai");
+    if (envKey) {
+      const useExisting = guardCancel(
+        await confirm({
+          message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+          initialValue: true,
+        }),
+        runtime,
+      );
+      if (useExisting) {
+        const result = upsertSharedEnvVar({
+          key: "OPENAI_API_KEY",
+          value: envKey.apiKey,
+        });
+        if (!process.env.OPENAI_API_KEY) {
+          process.env.OPENAI_API_KEY = envKey.apiKey;
+        }
+        note(
+          `Copied OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+          "OpenAI API key",
+        );
+      }
+    }
+
+    const key = guardCancel(
+      await text({
+        message: "Enter OpenAI API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    const trimmed = String(key).trim();
+    const result = upsertSharedEnvVar({
+      key: "OPENAI_API_KEY",
+      value: trimmed,
+    });
+    process.env.OPENAI_API_KEY = trimmed;
+    note(
+      `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
+      "OpenAI API key",
+    );
   } else if (authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     note(
@@ -486,26 +688,32 @@ async function promptAuthConfig(
           mode: "oauth",
         });
         // Set default model to Claude Opus 4.5 via Antigravity
+        const existingDefaults = next.agents?.defaults;
+        const existingModel = existingDefaults?.model;
+        const existingModels = existingDefaults?.models;
         next = {
           ...next,
-          agent: {
-            ...next.agent,
-            model: {
-              ...(next.agent?.model &&
-              "fallbacks" in (next.agent.model as Record<string, unknown>)
-                ? {
-                    fallbacks: (next.agent.model as { fallbacks?: string[] })
-                      .fallbacks,
-                  }
-                : undefined),
-              primary: "google-antigravity/claude-opus-4-5-thinking",
-            },
-            models: {
-              ...next.agent?.models,
-              "google-antigravity/claude-opus-4-5-thinking":
-                next.agent?.models?.[
-                  "google-antigravity/claude-opus-4-5-thinking"
-                ] ?? {},
+          agents: {
+            ...next.agents,
+            defaults: {
+              ...existingDefaults,
+              model: {
+                ...(existingModel &&
+                "fallbacks" in (existingModel as Record<string, unknown>)
+                  ? {
+                      fallbacks: (existingModel as { fallbacks?: string[] })
+                        .fallbacks,
+                    }
+                  : undefined),
+                primary: "google-antigravity/claude-opus-4-5-thinking",
+              },
+              models: {
+                ...existingModels,
+                "google-antigravity/claude-opus-4-5-thinking":
+                  existingModels?.[
+                    "google-antigravity/claude-opus-4-5-thinking"
+                  ] ?? {},
+              },
             },
           },
         };
@@ -555,39 +763,72 @@ async function promptAuthConfig(
       provider: "anthropic",
       mode: "api_key",
     });
+  } else if (authChoice === "minimax-cloud") {
+    const key = guardCancel(
+      await text({
+        message: "Enter MiniMax API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      }),
+      runtime,
+    );
+    await setMinimaxApiKey(String(key).trim());
+    next = applyAuthProfileConfig(next, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    next = applyMinimaxHostedConfig(next);
   } else if (authChoice === "minimax") {
     next = applyMinimaxConfig(next);
   }
 
+  const currentModel =
+    typeof next.agents?.defaults?.model === "string"
+      ? next.agents?.defaults?.model
+      : (next.agents?.defaults?.model?.primary ?? "");
+  const preferAnthropic =
+    authChoice === "claude-cli" ||
+    authChoice === "setup-token" ||
+    authChoice === "token" ||
+    authChoice === "oauth" ||
+    authChoice === "apiKey";
+  const modelInitialValue =
+    preferAnthropic && !currentModel.startsWith("anthropic/")
+      ? "anthropic/claude-opus-4-5"
+      : currentModel;
+
   const modelInput = guardCancel(
     await text({
       message: "Default model (blank to keep)",
-      initialValue:
-        typeof next.agent?.model === "string"
-          ? next.agent?.model
-          : (next.agent?.model?.primary ?? ""),
+      initialValue: modelInitialValue,
     }),
     runtime,
   );
   const model = String(modelInput ?? "").trim();
   if (model) {
+    const existingDefaults = next.agents?.defaults;
+    const existingModel = existingDefaults?.model;
+    const existingModels = existingDefaults?.models;
     next = {
       ...next,
-      agent: {
-        ...next.agent,
-        model: {
-          ...(next.agent?.model &&
-          "fallbacks" in (next.agent.model as Record<string, unknown>)
-            ? {
-                fallbacks: (next.agent.model as { fallbacks?: string[] })
-                  .fallbacks,
-              }
-            : undefined),
-          primary: model,
-        },
-        models: {
-          ...next.agent?.models,
-          [model]: next.agent?.models?.[model] ?? {},
+      agents: {
+        ...next.agents,
+        defaults: {
+          ...existingDefaults,
+          model: {
+            ...(existingModel &&
+            "fallbacks" in (existingModel as Record<string, unknown>)
+              ? {
+                  fallbacks: (existingModel as { fallbacks?: string[] })
+                    .fallbacks,
+                }
+              : undefined),
+            primary: model,
+          },
+          models: {
+            ...existingModels,
+            [model]: existingModels?.[model] ?? {},
+          },
         },
       },
     };
@@ -684,6 +925,74 @@ async function maybeInstallDaemon(params: {
         "Linux installs use a systemd user service. Without lingering, systemd stops the user session on logout/idle and kills the Gateway.",
       requireConfirm: true,
     });
+  }
+}
+
+async function removeProviderConfigWizard(
+  cfg: ClawdbotConfig,
+  runtime: RuntimeEnv,
+): Promise<ClawdbotConfig> {
+  let next = { ...cfg };
+
+  const listConfiguredProviders = () =>
+    listChatProviders().filter((meta) => {
+      const value = (next as Record<string, unknown>)[meta.id];
+      return value !== undefined;
+    });
+
+  while (true) {
+    const configured = listConfiguredProviders();
+    if (configured.length === 0) {
+      note(
+        [
+          "No provider config found in clawdbot.json.",
+          "Tip: `clawdbot providers status` shows what is configured and enabled.",
+        ].join("\n"),
+        "Remove provider",
+      );
+      return next;
+    }
+
+    const provider = guardCancel(
+      await select({
+        message: "Remove which provider config?",
+        options: [
+          ...configured.map((meta) => ({
+            value: meta.id,
+            label: meta.label,
+            hint: "Deletes tokens + settings from config (credentials stay on disk)",
+          })),
+          { value: "done", label: "Done" },
+        ],
+      }),
+      runtime,
+    ) as string;
+
+    if (provider === "done") return next;
+
+    const label =
+      listChatProviders().find((meta) => meta.id === provider)?.label ??
+      provider;
+    const confirmed = guardCancel(
+      await confirm({
+        message: `Delete ${label} configuration from ${CONFIG_PATH_CLAWDBOT}?`,
+        initialValue: false,
+      }),
+      runtime,
+    );
+    if (!confirmed) continue;
+
+    const clone = { ...next } as Record<string, unknown>;
+    delete clone[provider];
+    next = clone as ClawdbotConfig;
+
+    note(
+      [
+        `${label} removed from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
+      "Provider removed",
+    );
   }
 }
 
@@ -787,13 +1096,41 @@ export async function runConfigureWizard(
         await multiselect({
           message: "Select sections to configure",
           options: [
-            { value: "workspace", label: "Workspace" },
-            { value: "model", label: "Model/auth" },
-            { value: "gateway", label: "Gateway config" },
-            { value: "daemon", label: "Gateway daemon" },
-            { value: "providers", label: "Providers" },
-            { value: "skills", label: "Skills" },
-            { value: "health", label: "Health check" },
+            {
+              value: "workspace",
+              label: "Workspace",
+              hint: "Set default workspace + ensure sessions",
+            },
+            {
+              value: "model",
+              label: "Model/auth",
+              hint: "Pick model + auth profile sources",
+            },
+            {
+              value: "gateway",
+              label: "Gateway config",
+              hint: "Port/bind/auth/control UI settings",
+            },
+            {
+              value: "daemon",
+              label: "Gateway daemon",
+              hint: "Install/manage the background service",
+            },
+            {
+              value: "providers",
+              label: "Providers",
+              hint: "Link WhatsApp/Telegram/etc and defaults",
+            },
+            {
+              value: "skills",
+              label: "Skills",
+              hint: "Install/enable workspace skills",
+            },
+            {
+              value: "health",
+              label: "Health check",
+              hint: "Run gateway + provider checks",
+            },
           ],
         }),
         runtime,
@@ -806,8 +1143,8 @@ export async function runConfigureWizard(
 
   let nextConfig = { ...baseConfig };
   let workspaceDir =
-    nextConfig.agent?.workspace ??
-    baseConfig.agent?.workspace ??
+    nextConfig.agents?.defaults?.workspace ??
+    baseConfig.agents?.defaults?.workspace ??
     DEFAULT_WORKSPACE;
   let gatewayPort = resolveGatewayPort(baseConfig);
   let gatewayToken: string | undefined;
@@ -825,9 +1162,12 @@ export async function runConfigureWizard(
     );
     nextConfig = {
       ...nextConfig,
-      agent: {
-        ...nextConfig.agent,
-        workspace: workspaceDir,
+      agents: {
+        ...nextConfig.agents,
+        defaults: {
+          ...nextConfig.agents?.defaults,
+          workspace: workspaceDir,
+        },
       },
     };
     await ensureWorkspaceAndSessions(workspaceDir, runtime);
@@ -845,10 +1185,34 @@ export async function runConfigureWizard(
   }
 
   if (selected.includes("providers")) {
-    nextConfig = await setupProviders(nextConfig, runtime, prompter, {
-      allowDisable: true,
-      allowSignalInstall: true,
-    });
+    const providerMode = guardCancel(
+      await select({
+        message: "Providers",
+        options: [
+          {
+            value: "configure",
+            label: "Configure/link",
+            hint: "Add/update providers; disable unselected accounts",
+          },
+          {
+            value: "remove",
+            label: "Remove provider config",
+            hint: "Delete provider tokens/settings from clawdbot.json",
+          },
+        ],
+        initialValue: "configure",
+      }),
+      runtime,
+    ) as ProvidersWizardMode;
+
+    if (providerMode === "configure") {
+      nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+        allowDisable: true,
+        allowSignalInstall: true,
+      });
+    } else {
+      nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+    }
   }
 
   if (selected.includes("skills")) {
@@ -906,61 +1270,33 @@ export async function runConfigureWizard(
     runtime.error(controlUiAssets.message);
   }
 
+  const bind = nextConfig.gateway?.bind ?? "loopback";
+  const links = resolveControlUiLinks({
+    bind,
+    port: gatewayPort,
+    basePath: nextConfig.gateway?.controlUi?.basePath,
+  });
+  const gatewayProbe = await probeGatewayReachable({
+    url: links.wsUrl,
+    token:
+      nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
+    password:
+      nextConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD,
+  });
+  const gatewayStatusLine = gatewayProbe.ok
+    ? "Gateway: reachable"
+    : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+
   note(
-    (() => {
-      const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({
-        bind,
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-      });
-      return [
-        `Web UI: ${links.httpUrl}`,
-        `Gateway WS: ${links.wsUrl}`,
-        "Docs: https://docs.clawd.bot/web/control-ui",
-      ].join("\n");
-    })(),
+    [
+      `Web UI: ${links.httpUrl}`,
+      `Gateway WS: ${links.wsUrl}`,
+      gatewayStatusLine,
+      "Docs: https://docs.clawd.bot/web/control-ui",
+    ].join("\n"),
     "Control UI",
   );
-
-  const browserSupport = await detectBrowserOpenSupport();
-  if (!browserSupport.ok) {
-    note(
-      formatControlUiSshHint({
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-        token: gatewayToken,
-      }),
-      "Open Control UI",
-    );
-  } else {
-    const wantsOpen = guardCancel(
-      await confirm({
-        message: "Open Control UI now?",
-        initialValue: false,
-      }),
-      runtime,
-    );
-    if (wantsOpen) {
-      const bind = nextConfig.gateway?.bind ?? "loopback";
-      const links = resolveControlUiLinks({
-        bind,
-        port: gatewayPort,
-        basePath: nextConfig.gateway?.controlUi?.basePath,
-      });
-      const opened = await openUrl(links.httpUrl);
-      if (!opened) {
-        note(
-          formatControlUiSshHint({
-            port: gatewayPort,
-            basePath: nextConfig.gateway?.controlUi?.basePath,
-            token: gatewayToken,
-          }),
-          "Open Control UI",
-        );
-      }
-    }
-  }
 
   outro("Configure complete.");
 }

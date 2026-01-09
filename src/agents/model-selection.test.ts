@@ -18,9 +18,11 @@ const catalog = [
 describe("buildAllowedModelSet", () => {
   it("always allows the configured default model", () => {
     const cfg = {
-      agent: {
-        models: {
-          "openai/gpt-4": { alias: "gpt4" },
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4": { alias: "gpt4" },
+          },
         },
       },
     } as ClawdbotConfig;
@@ -41,7 +43,7 @@ describe("buildAllowedModelSet", () => {
 
   it("includes the default model when no allowlist is set", () => {
     const cfg = {
-      agent: {},
+      agents: { defaults: {} },
     } as ClawdbotConfig;
 
     const allowed = buildAllowedModelSet({

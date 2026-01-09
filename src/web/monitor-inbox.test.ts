@@ -671,7 +671,7 @@ describe("web monitor inbox", () => {
     expect(sock.readMessages).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp sender id: +999"),
+      text: expect.stringContaining("Your WhatsApp phone number: +999"),
     });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
@@ -1081,7 +1081,7 @@ describe("web monitor inbox", () => {
 
     // Reset mock for other tests
     mockLoadConfig.mockReturnValue({
-      routing: {
+      whatsapp: {
         allowFrom: ["*"],
       },
       messages: {
@@ -1125,7 +1125,7 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(sock.sendMessage).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp sender id: +999"),
+      text: expect.stringContaining("Your WhatsApp phone number: +999"),
     });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),
@@ -1281,7 +1281,7 @@ describe("web monitor inbox", () => {
     expect(onMessage).not.toHaveBeenCalled();
     expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
-      text: expect.stringContaining("Your WhatsApp sender id: +999"),
+      text: expect.stringContaining("Your WhatsApp phone number: +999"),
     });
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: expect.stringContaining("Pairing code: PAIRCODE"),

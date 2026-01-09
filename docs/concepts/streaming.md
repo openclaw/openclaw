@@ -32,9 +32,9 @@ Legend:
 - `provider send`: actual outbound messages (block replies).
 
 **Controls:**
-- `agent.blockStreamingDefault`: `"on"`/`"off"` (default on).
-- `agent.blockStreamingBreak`: `"text_end"` or `"message_end"`.
-- `agent.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
+- `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default on).
+- `agents.defaults.blockStreamingBreak`: `"text_end"` or `"message_end"`.
+- `agents.defaults.blockStreamingChunk`: `{ minChars, maxChars, breakPreference? }`.
 - Provider hard cap: `*.textChunkLimit` (e.g., `whatsapp.textChunkLimit`).
 - Discord soft cap: `discord.maxLinesPerMessage` (default 17) splits tall replies to avoid UI clipping.
 

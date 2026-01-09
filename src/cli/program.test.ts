@@ -1,7 +1,7 @@
 import * as fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const messageSendCommand = vi.fn();
+const messageCommand = vi.fn();
 const statusCommand = vi.fn();
 const configureCommand = vi.fn();
 const setupCommand = vi.fn();
@@ -19,8 +19,7 @@ const runtime = {
 };
 
 vi.mock("../commands/message.js", () => ({
-  messageSendCommand,
-  messagePollCommand: vi.fn(),
+  messageCommand,
 }));
 vi.mock("../commands/status.js", () => ({ statusCommand }));
 vi.mock("../commands/configure.js", () => ({ configureCommand }));
@@ -46,12 +45,15 @@ describe("cli program", () => {
     vi.clearAllMocks();
   });
 
-  it("runs message send with required options", async () => {
+  it("runs message with required options", async () => {
     const program = buildProgram();
-    await program.parseAsync(["message", "send", "--to", "+1", "--message", "hi"], {
-      from: "user",
-    });
-    expect(messageSendCommand).toHaveBeenCalled();
+    await program.parseAsync(
+      ["message", "send", "--to", "+1", "--message", "hi"],
+      {
+        from: "user",
+      },
+    );
+    expect(messageCommand).toHaveBeenCalled();
   });
 
   it("runs status command", async () => {

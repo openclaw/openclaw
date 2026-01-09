@@ -111,7 +111,7 @@ import {
   startGatewayConfigReloader,
 } from "./config-reload.js";
 import { normalizeControlUiBasePath } from "./control-ui.js";
-import { resolveHooksConfig } from "./hooks.js";
+import { type HookMessageProvider, resolveHooksConfig } from "./hooks.js";
 import {
   isLoopbackAddress,
   isLoopbackHost,
@@ -183,6 +183,7 @@ const logDiscord = logProviders.child("discord");
 const logSlack = logProviders.child("slack");
 const logSignal = logProviders.child("signal");
 const logIMessage = logProviders.child("imessage");
+const logMSTeams = logProviders.child("msteams");
 const canvasRuntime = runtimeForLogger(logCanvas);
 const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
 const telegramRuntimeEnv = runtimeForLogger(logTelegram);
@@ -190,6 +191,7 @@ const discordRuntimeEnv = runtimeForLogger(logDiscord);
 const slackRuntimeEnv = runtimeForLogger(logSlack);
 const signalRuntimeEnv = runtimeForLogger(logSignal);
 const imessageRuntimeEnv = runtimeForLogger(logIMessage);
+const msteamsRuntimeEnv = runtimeForLogger(logMSTeams);
 
 type GatewayModelChoice = ModelCatalogEntry;
 
@@ -494,14 +496,7 @@ export async function startGatewayServer(
     wakeMode: "now" | "next-heartbeat";
     sessionKey: string;
     deliver: boolean;
-    provider:
-      | "last"
-      | "whatsapp"
-      | "telegram"
-      | "discord"
-      | "slack"
-      | "signal"
-      | "imessage";
+    provider: HookMessageProvider;
     to?: string;
     model?: string;
     thinking?: string;
@@ -684,10 +679,13 @@ export async function startGatewayServer(
     { controller: AbortController; sessionId: string; sessionKey: string }
   >();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
-  setCommandLaneConcurrency("main", cfgAtStart.agent?.maxConcurrent ?? 1);
+  setCommandLaneConcurrency(
+    "main",
+    cfgAtStart.agents?.defaults?.maxConcurrent ?? 1,
+  );
   setCommandLaneConcurrency(
     "subagent",
-    cfgAtStart.agent?.subagents?.maxConcurrent ?? 1,
+    cfgAtStart.agents?.defaults?.subagents?.maxConcurrent ?? 1,
   );
 
   const cronLogger = getChildLogger({
@@ -756,12 +754,14 @@ export async function startGatewayServer(
     logSlack,
     logSignal,
     logIMessage,
+    logMSTeams,
     whatsappRuntimeEnv,
     telegramRuntimeEnv,
     discordRuntimeEnv,
     slackRuntimeEnv,
     signalRuntimeEnv,
     imessageRuntimeEnv,
+    msteamsRuntimeEnv,
   });
   const {
     getRuntimeSnapshot,
@@ -772,12 +772,14 @@ export async function startGatewayServer(
     startSlackProvider,
     startSignalProvider,
     startIMessageProvider,
+    startMSTeamsProvider,
     stopWhatsAppProvider,
     stopTelegramProvider,
     stopDiscordProvider,
     stopSlackProvider,
     stopSignalProvider,
     stopIMessageProvider,
+    stopMSTeamsProvider,
     markWhatsAppLoggedOut,
   } = providerManager;
 
@@ -1091,15 +1093,14 @@ export async function startGatewayServer(
   }
 
   const tailnetDns = await resolveTailnetDnsHint();
+  const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
+  const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
+  const sshPort =
+    Number.isFinite(sshPortParsed) && sshPortParsed > 0
+      ? sshPortParsed
+      : undefined;
 
   try {
-    const sshPortEnv = process.env.CLAWDBOT_SSH_PORT?.trim();
-    const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : NaN;
-    const sshPort =
-      Number.isFinite(sshPortParsed) && sshPortParsed > 0
-        ? sshPortParsed
-        : undefined;
-
     const bonjour = await startGatewayBonjourAdvertiser({
       instanceName: formatBonjourInstanceName(machineDisplayName),
       gatewayPort: port,
@@ -1125,10 +1126,13 @@ export async function startGatewayServer(
         const tailnetIPv6 = pickPrimaryTailnetIPv6();
         const result = await writeWideAreaBridgeZone({
           bridgePort: bridge.port,
+          gatewayPort: port,
           displayName: formatBonjourInstanceName(machineDisplayName),
           tailnetIPv4,
           tailnetIPv6: tailnetIPv6 ?? undefined,
           tailnetDns,
+          sshPort,
+          cliPath: resolveBonjourCliPath(),
         });
         logDiscovery.info(
           `wide-area DNS-SD ${result.changed ? "updated" : "unchanged"} (${WIDE_AREA_DISCOVERY_DOMAIN} → ${result.zonePath})`,
@@ -1957,14 +1961,24 @@ export async function startGatewayServer(
             startIMessageProvider,
           );
         }
+        if (plan.restartProviders.has("msteams")) {
+          await restartProvider(
+            "msteams",
+            stopMSTeamsProvider,
+            startMSTeamsProvider,
+          );
+        }
       }
     }
 
     setCommandLaneConcurrency("cron", nextConfig.cron?.maxConcurrentRuns ?? 1);
-    setCommandLaneConcurrency("main", nextConfig.agent?.maxConcurrent ?? 1);
+    setCommandLaneConcurrency(
+      "main",
+      nextConfig.agents?.defaults?.maxConcurrent ?? 1,
+    );
     setCommandLaneConcurrency(
       "subagent",
-      nextConfig.agent?.subagents?.maxConcurrent ?? 1,
+      nextConfig.agents?.defaults?.subagents?.maxConcurrent ?? 1,
     );
 
     if (plan.hotReasons.length > 0) {
@@ -2053,6 +2067,7 @@ export async function startGatewayServer(
       await stopSlackProvider();
       await stopSignalProvider();
       await stopIMessageProvider();
+      await stopMSTeamsProvider();
       await stopGmailWatcher();
       cron.stop();
       heartbeatRunner.stop();

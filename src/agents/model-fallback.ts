@@ -34,7 +34,7 @@ function buildAllowedModelKeys(
   defaultProvider: string,
 ): Set<string> | null {
   const rawAllowlist = (() => {
-    const modelMap = cfg?.agent?.models ?? {};
+    const modelMap = cfg?.agents?.defaults?.models ?? {};
     return Object.keys(modelMap);
   })();
   if (rawAllowlist.length === 0) return null;
@@ -85,7 +85,7 @@ function resolveImageFallbackCandidates(params: {
   if (params.modelOverride?.trim()) {
     addRaw(params.modelOverride, false);
   } else {
-    const imageModel = params.cfg?.agent?.imageModel as
+    const imageModel = params.cfg?.agents?.defaults?.imageModel as
       | { primary?: string }
       | string
       | undefined;
@@ -95,7 +95,7 @@ function resolveImageFallbackCandidates(params: {
   }
 
   const imageFallbacks = (() => {
-    const imageModel = params.cfg?.agent?.imageModel as
+    const imageModel = params.cfg?.agents?.defaults?.imageModel as
       | { fallbacks?: string[] }
       | string
       | undefined;
@@ -142,7 +142,7 @@ function resolveFallbackCandidates(params: {
   addCandidate({ provider, model }, false);
 
   const modelFallbacks = (() => {
-    const model = params.cfg?.agent?.model as
+    const model = params.cfg?.agents?.defaults?.model as
       | { fallbacks?: string[] }
       | string
       | undefined;
@@ -253,7 +253,7 @@ export async function runWithImageModelFallback<T>(params: {
   });
   if (candidates.length === 0) {
     throw new Error(
-      "No image model configured. Set agent.imageModel.primary or agent.imageModel.fallbacks.",
+      "No image model configured. Set agents.defaults.imageModel.primary or agents.defaults.imageModel.fallbacks.",
     );
   }
 

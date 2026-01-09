@@ -9,7 +9,7 @@ import {
 describe("mention helpers", () => {
   it("builds regexes and skips invalid patterns", () => {
     const regexes = buildMentionRegexes({
-      routing: {
+      messages: {
         groupChat: { mentionPatterns: ["\\bclawd\\b", "(invalid"] },
       },
     });
@@ -23,7 +23,7 @@ describe("mention helpers", () => {
 
   it("matches patterns case-insensitively", () => {
     const regexes = buildMentionRegexes({
-      routing: { groupChat: { mentionPatterns: ["\\bclawd\\b"] } },
+      messages: { groupChat: { mentionPatterns: ["\\bclawd\\b"] } },
     });
     expect(matchesMentionPatterns("CLAWD: hi", regexes)).toBe(true);
   });
@@ -31,11 +31,16 @@ describe("mention helpers", () => {
   it("uses per-agent mention patterns when configured", () => {
     const regexes = buildMentionRegexes(
       {
-        routing: {
+        messages: {
           groupChat: { mentionPatterns: ["\\bglobal\\b"] },
-          agents: {
-            work: { mentionPatterns: ["\\bworkbot\\b"] },
-          },
+        },
+        agents: {
+          list: [
+            {
+              id: "work",
+              groupChat: { mentionPatterns: ["\\bworkbot\\b"] },
+            },
+          ],
         },
       },
       "work",

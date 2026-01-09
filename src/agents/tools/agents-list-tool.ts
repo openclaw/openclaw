@@ -55,19 +55,17 @@ export function createAgentsListTool(opts?: {
           .map((value) => normalizeAgentId(value)),
       );
 
-      const configuredAgents = cfg.routing?.agents ?? {};
-      const configuredIds = Object.keys(configuredAgents).map((key) =>
-        normalizeAgentId(key),
+      const configuredAgents = Array.isArray(cfg.agents?.list)
+        ? cfg.agents?.list
+        : [];
+      const configuredIds = configuredAgents.map((entry) =>
+        normalizeAgentId(entry.id),
       );
       const configuredNameMap = new Map<string, string>();
-      for (const [key, value] of Object.entries(configuredAgents)) {
-        if (!value || typeof value !== "object") continue;
-        const name =
-          typeof (value as { name?: unknown }).name === "string"
-            ? ((value as { name?: string }).name?.trim() ?? "")
-            : "";
+      for (const entry of configuredAgents) {
+        const name = entry?.name?.trim() ?? "";
         if (!name) continue;
-        configuredNameMap.set(normalizeAgentId(key), name);
+        configuredNameMap.set(normalizeAgentId(entry.id), name);
       }
 
       const allowed = new Set<string>();

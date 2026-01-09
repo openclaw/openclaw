@@ -72,13 +72,15 @@
     "format": "biome format src",
     "format:swift": "swiftformat --lint --config .swiftformat apps/macos/Sources apps/ios/Sources apps/shared/ClawdbotKit/Sources",
     "format:fix": "biome format src --write",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:ui": "pnpm --dir ui test",
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:docker:qr": "bash scripts/e2e/qr-import-docker.sh",
+    "test:docker:doctor-switch": "bash scripts/e2e/doctor-install-switch-docker.sh",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
     "protocol:gen:swift": "tsx scripts/protocol-gen-swift.ts",
     "protocol:check": "pnpm protocol:gen && pnpm protocol:gen:swift && git diff --exit-code -- dist/protocol.schema.json apps/macos/Sources/ClawdbotProtocol/GatewayModels.swift",
@@ -92,7 +94,7 @@
   },
   "packageManager": "pnpm@10.23.0",
   "dependencies": {
-    "@buape/carbon": "0.13.0",
+    "@buape/carbon": "0.0.0-beta-20260109165250",
     "@clack/prompts": "^0.11.0",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
@@ -101,6 +103,9 @@
     "@mariozechner/pi-ai": "^0.41.0",
     "@mariozechner/pi-coding-agent": "^0.41.0",
     "@mariozechner/pi-tui": "^0.41.0",
+    "@microsoft/agents-hosting": "^1.1.1",
+    "@microsoft/agents-hosting-express": "^1.1.1",
+    "@microsoft/agents-hosting-extensions-teams": "^1.1.1",
     "@sinclair/typebox": "0.34.47",
     "@slack/bolt": "^4.6.0",
     "@slack/web-api": "^7.13.0",
@@ -165,7 +170,9 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch"
+      "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
+      "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
+      "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch"
     }
   },
   "vitest": {
@@ -203,6 +210,7 @@
   "patchedDependencies": {
     "@mariozechner/pi-agent-core": "patches/@mariozechner__pi-agent-core.patch",
     "@mariozechner/pi-coding-agent": "patches/@mariozechner__pi-coding-agent.patch",
+    "@mariozechner/pi-ai": "patches/@mariozechner__pi-ai.patch",
     "qrcode-terminal": "patches/qrcode-terminal.patch",
     "playwright-core@1.57.0": "patches/playwright-core@1.57.0.patch"
   }

@@ -1,7 +1,7 @@
 import os from "node:os";
 import path from "node:path";
 
-import { note } from "@clack/prompts";
+import { note as clackNote } from "@clack/prompts";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import {
@@ -12,7 +12,11 @@ import {
   writeConfigFile,
 } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveUserPath } from "../utils.js";
+
+const note = (message: string, title?: string) =>
+  clackNote(message, stylePromptTitle(title));
 
 function resolveLegacyConfigPath(env: NodeJS.ProcessEnv): string {
   const override = env.CLAWDIS_CONFIG_PATH?.trim();
@@ -67,75 +71,184 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
   const changes: string[] = [];
   let next: ClawdbotConfig = cfg;
 
-  const workspace = cfg.agent?.workspace;
-  const updatedWorkspace = normalizeDefaultWorkspacePath(workspace);
-  if (updatedWorkspace && updatedWorkspace !== workspace) {
-    next = {
-      ...next,
-      agent: {
-        ...next.agent,
-        workspace: updatedWorkspace,
-      },
-    };
-    changes.push(`Updated agent.workspace → ${updatedWorkspace}`);
-  }
+  const defaults = cfg.agents?.defaults;
+  if (defaults) {
+    let updatedDefaults = defaults;
+    let defaultsChanged = false;
 
-  const workspaceRoot = cfg.agent?.sandbox?.workspaceRoot;
-  const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(workspaceRoot);
-  if (updatedWorkspaceRoot && updatedWorkspaceRoot !== workspaceRoot) {
-    next = {
-      ...next,
-      agent: {
-        ...next.agent,
-        sandbox: {
-          ...next.agent?.sandbox,
+    const updatedWorkspace = normalizeDefaultWorkspacePath(defaults.workspace);
+    if (updatedWorkspace && updatedWorkspace !== defaults.workspace) {
+      updatedDefaults = { ...updatedDefaults, workspace: updatedWorkspace };
+      defaultsChanged = true;
+      changes.push(`Updated agents.defaults.workspace → ${updatedWorkspace}`);
+    }
+
+    const sandbox = defaults.sandbox;
+    if (sandbox) {
+      let updatedSandbox = sandbox;
+      let sandboxChanged = false;
+
+      const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(
+        sandbox.workspaceRoot,
+      );
+      if (
+        updatedWorkspaceRoot &&
+        updatedWorkspaceRoot !== sandbox.workspaceRoot
+      ) {
+        updatedSandbox = {
+          ...updatedSandbox,
           workspaceRoot: updatedWorkspaceRoot,
-        },
-      },
-    };
-    changes.push(
-      `Updated agent.sandbox.workspaceRoot → ${updatedWorkspaceRoot}`,
-    );
-  }
+        };
+        sandboxChanged = true;
+        changes.push(
+          `Updated agents.defaults.sandbox.workspaceRoot → ${updatedWorkspaceRoot}`,
+        );
+      }
 
-  const dockerImage = cfg.agent?.sandbox?.docker?.image;
-  const updatedDockerImage = replaceLegacyName(dockerImage);
-  if (updatedDockerImage && updatedDockerImage !== dockerImage) {
-    next = {
-      ...next,
-      agent: {
-        ...next.agent,
-        sandbox: {
-          ...next.agent?.sandbox,
+      const dockerImage = sandbox.docker?.image;
+      const updatedDockerImage = replaceLegacyName(dockerImage);
+      if (updatedDockerImage && updatedDockerImage !== dockerImage) {
+        updatedSandbox = {
+          ...updatedSandbox,
           docker: {
-            ...next.agent?.sandbox?.docker,
+            ...updatedSandbox.docker,
             image: updatedDockerImage,
           },
-        },
-      },
-    };
-    changes.push(`Updated agent.sandbox.docker.image → ${updatedDockerImage}`);
-  }
+        };
+        sandboxChanged = true;
+        changes.push(
+          `Updated agents.defaults.sandbox.docker.image → ${updatedDockerImage}`,
+        );
+      }
 
-  const containerPrefix = cfg.agent?.sandbox?.docker?.containerPrefix;
-  const updatedContainerPrefix = replaceLegacyName(containerPrefix);
-  if (updatedContainerPrefix && updatedContainerPrefix !== containerPrefix) {
-    next = {
-      ...next,
-      agent: {
-        ...next.agent,
-        sandbox: {
-          ...next.agent?.sandbox,
+      const containerPrefix = sandbox.docker?.containerPrefix;
+      const updatedContainerPrefix = replaceLegacyName(containerPrefix);
+      if (
+        updatedContainerPrefix &&
+        updatedContainerPrefix !== containerPrefix
+      ) {
+        updatedSandbox = {
+          ...updatedSandbox,
           docker: {
-            ...next.agent?.sandbox?.docker,
+            ...updatedSandbox.docker,
             containerPrefix: updatedContainerPrefix,
           },
+        };
+        sandboxChanged = true;
+        changes.push(
+          `Updated agents.defaults.sandbox.docker.containerPrefix → ${updatedContainerPrefix}`,
+        );
+      }
+
+      if (sandboxChanged) {
+        updatedDefaults = { ...updatedDefaults, sandbox: updatedSandbox };
+        defaultsChanged = true;
+      }
+    }
+
+    if (defaultsChanged) {
+      next = {
+        ...next,
+        agents: {
+          ...next.agents,
+          defaults: updatedDefaults,
         },
-      },
-    };
-    changes.push(
-      `Updated agent.sandbox.docker.containerPrefix → ${updatedContainerPrefix}`,
-    );
+      };
+    }
+  }
+
+  const list = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  if (list.length > 0) {
+    let listChanged = false;
+    const nextList = list.map((agent) => {
+      let updatedAgent = agent;
+      let agentChanged = false;
+
+      const updatedWorkspace = normalizeDefaultWorkspacePath(agent.workspace);
+      if (updatedWorkspace && updatedWorkspace !== agent.workspace) {
+        updatedAgent = { ...updatedAgent, workspace: updatedWorkspace };
+        agentChanged = true;
+        changes.push(
+          `Updated agents.list (id "${agent.id}") workspace → ${updatedWorkspace}`,
+        );
+      }
+
+      const sandbox = agent.sandbox;
+      if (sandbox) {
+        let updatedSandbox = sandbox;
+        let sandboxChanged = false;
+
+        const updatedWorkspaceRoot = normalizeDefaultWorkspacePath(
+          sandbox.workspaceRoot,
+        );
+        if (
+          updatedWorkspaceRoot &&
+          updatedWorkspaceRoot !== sandbox.workspaceRoot
+        ) {
+          updatedSandbox = {
+            ...updatedSandbox,
+            workspaceRoot: updatedWorkspaceRoot,
+          };
+          sandboxChanged = true;
+          changes.push(
+            `Updated agents.list (id "${agent.id}") sandbox.workspaceRoot → ${updatedWorkspaceRoot}`,
+          );
+        }
+
+        const dockerImage = sandbox.docker?.image;
+        const updatedDockerImage = replaceLegacyName(dockerImage);
+        if (updatedDockerImage && updatedDockerImage !== dockerImage) {
+          updatedSandbox = {
+            ...updatedSandbox,
+            docker: {
+              ...updatedSandbox.docker,
+              image: updatedDockerImage,
+            },
+          };
+          sandboxChanged = true;
+          changes.push(
+            `Updated agents.list (id "${agent.id}") sandbox.docker.image → ${updatedDockerImage}`,
+          );
+        }
+
+        const containerPrefix = sandbox.docker?.containerPrefix;
+        const updatedContainerPrefix = replaceLegacyName(containerPrefix);
+        if (
+          updatedContainerPrefix &&
+          updatedContainerPrefix !== containerPrefix
+        ) {
+          updatedSandbox = {
+            ...updatedSandbox,
+            docker: {
+              ...updatedSandbox.docker,
+              containerPrefix: updatedContainerPrefix,
+            },
+          };
+          sandboxChanged = true;
+          changes.push(
+            `Updated agents.list (id "${agent.id}") sandbox.docker.containerPrefix → ${updatedContainerPrefix}`,
+          );
+        }
+
+        if (sandboxChanged) {
+          updatedAgent = { ...updatedAgent, sandbox: updatedSandbox };
+          agentChanged = true;
+        }
+      }
+
+      if (agentChanged) listChanged = true;
+      return agentChanged ? updatedAgent : agent;
+    });
+
+    if (listChanged) {
+      next = {
+        ...next,
+        agents: {
+          ...next.agents,
+          list: nextList,
+        },
+      };
+    }
   }
 
   return { config: next, changes };
@@ -166,18 +279,40 @@ export async function maybeMigrateLegacyConfigFile(runtime: RuntimeEnv) {
     typeof (legacySnapshot.parsed as ClawdbotConfig)?.gateway?.bind === "string"
       ? (legacySnapshot.parsed as ClawdbotConfig).gateway?.bind
       : undefined;
-  const agentWorkspace =
-    typeof (legacySnapshot.parsed as ClawdbotConfig)?.agent?.workspace ===
-    "string"
-      ? (legacySnapshot.parsed as ClawdbotConfig).agent?.workspace
+  const parsed = legacySnapshot.parsed as Record<string, unknown>;
+  const parsedAgents =
+    parsed.agents && typeof parsed.agents === "object"
+      ? (parsed.agents as Record<string, unknown>)
       : undefined;
+  const parsedDefaults =
+    parsedAgents?.defaults && typeof parsedAgents.defaults === "object"
+      ? (parsedAgents.defaults as Record<string, unknown>)
+      : undefined;
+  const parsedLegacyAgent =
+    parsed.agent && typeof parsed.agent === "object"
+      ? (parsed.agent as Record<string, unknown>)
+      : undefined;
+  const defaultWorkspace =
+    typeof parsedDefaults?.workspace === "string"
+      ? parsedDefaults.workspace
+      : undefined;
+  const legacyWorkspace =
+    typeof parsedLegacyAgent?.workspace === "string"
+      ? parsedLegacyAgent.workspace
+      : undefined;
+  const agentWorkspace = defaultWorkspace ?? legacyWorkspace;
+  const workspaceLabel = defaultWorkspace
+    ? "agents.defaults.workspace"
+    : legacyWorkspace
+      ? "agent.workspace"
+      : "agents.defaults.workspace";
 
   note(
     [
       `- File exists at ${legacyConfigPath}`,
       gatewayMode ? `- gateway.mode: ${gatewayMode}` : undefined,
       gatewayBind ? `- gateway.bind: ${gatewayBind}` : undefined,
-      agentWorkspace ? `- agent.workspace: ${agentWorkspace}` : undefined,
+      agentWorkspace ? `- ${workspaceLabel}: ${agentWorkspace}` : undefined,
     ]
       .filter(Boolean)
       .join("\n"),

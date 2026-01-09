@@ -169,7 +169,7 @@ export async function sessionsCommand(
     defaultModel: DEFAULT_MODEL,
   });
   const configContextTokens =
-    cfg.agent?.contextTokens ??
+    cfg.agents?.defaults?.contextTokens ??
     lookupContextTokens(resolved.model) ??
     DEFAULT_CONTEXT_TOKENS;
   const configModel = resolved.model ?? DEFAULT_MODEL;

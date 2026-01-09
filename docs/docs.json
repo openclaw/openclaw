@@ -550,6 +550,14 @@
         ]
       },
       {
+        "group": "CLI",
+        "pages": [
+          "cli/index",
+          "cli/gateway",
+          "cli/sandbox"
+        ]
+      },
+      {
         "group": "Core Concepts",
         "pages": [
           "concepts/architecture",

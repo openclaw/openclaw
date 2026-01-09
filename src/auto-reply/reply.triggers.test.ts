@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { normalizeTestText } from "../../test/helpers/normalize-text.js";
+import { withTempHome as withTempHomeBase } from "../../test/helpers/temp-home.js";
 
 vi.mock("../agents/pi-embedded.js", () => ({
   abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
@@ -25,13 +27,18 @@ const usageMocks = vi.hoisted(() => ({
 
 vi.mock("../infra/provider-usage.js", () => usageMocks);
 
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
   compactEmbeddedPiSession,
   runEmbeddedPiAgent,
 } from "../agents/pi-embedded.js";
 import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
-import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveSessionKey,
+} from "../config/sessions.js";
 import { getReplyFromConfig } from "./reply.js";
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
@@ -46,24 +53,23 @@ const webMocks = vi.hoisted(() => ({
 vi.mock("../web/session.js", () => webMocks);
 
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
-  const base = await fs.mkdtemp(join(tmpdir(), "clawdbot-triggers-"));
-  const previousHome = process.env.HOME;
-  process.env.HOME = base;
-  try {
-    vi.mocked(runEmbeddedPiAgent).mockClear();
-    vi.mocked(abortEmbeddedPiRun).mockClear();
-    return await fn(base);
-  } finally {
-    process.env.HOME = previousHome;
-    await fs.rm(base, { recursive: true, force: true });
-  }
+  return withTempHomeBase(
+    async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+      vi.mocked(abortEmbeddedPiRun).mockClear();
+      return await fn(home);
+    },
+    { prefix: "clawdbot-triggers-" },
+  );
 }
 
 function makeCfg(home: string) {
   return {
-    agent: {
-      model: "anthropic/claude-opus-4-5",
-      workspace: join(home, "clawd"),
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: join(home, "clawd"),
+      },
     },
     whatsapp: {
       allowFrom: ["*"],
@@ -94,7 +100,7 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("📊 Usage: Claude 80% left");
+      expect(normalizeTestText(text ?? "")).toContain("Usage: Claude 80% left");
       expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
         expect.objectContaining({ providers: ["anthropic"] }),
       );
@@ -236,6 +242,23 @@ describe("trigger handling", () => {
     });
   });
 
+  it("reports status via /usage without invoking the agent", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/usage",
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("ClawdBot");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("reports active auth profile and key snippet in status", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
@@ -293,7 +316,7 @@ describe("trigger handling", () => {
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("api-key");
-      expect(text).toContain("…");
+      expect(text).toMatch(/…|\.{3}/);
       expect(text).toContain("(anthropic:work)");
       expect(text).not.toContain("mixed");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
@@ -345,9 +368,11 @@ describe("trigger handling", () => {
   it("allows owner to set send policy", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
         },
         whatsapp: {
           allowFrom: ["+1000"],
@@ -381,9 +406,13 @@ describe("trigger handling", () => {
   it("allows approved sender to toggle elevated mode", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { whatsapp: ["+1000"] },
           },
@@ -420,9 +449,13 @@ describe("trigger handling", () => {
   it("rejects elevated toggles when disabled", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             enabled: false,
             allowFrom: { whatsapp: ["+1000"] },
@@ -467,9 +500,13 @@ describe("trigger handling", () => {
         },
       });
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { whatsapp: ["+1000"] },
           },
@@ -510,9 +547,13 @@ describe("trigger handling", () => {
         },
       });
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { whatsapp: ["+1000"] },
           },
@@ -545,9 +586,13 @@ describe("trigger handling", () => {
   it("allows elevated directive in groups when mentioned", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { whatsapp: ["+1000"] },
           },
@@ -589,9 +634,13 @@ describe("trigger handling", () => {
   it("allows elevated directive in direct chats without mentions", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { whatsapp: ["+1000"] },
           },
@@ -635,9 +684,13 @@ describe("trigger handling", () => {
         },
       });
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { whatsapp: ["+1000"] },
           },
@@ -668,9 +721,11 @@ describe("trigger handling", () => {
   it("falls back to discord dm allowFrom for elevated approval", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
         },
         discord: {
           dm: {
@@ -708,9 +763,13 @@ describe("trigger handling", () => {
   it("treats explicit discord elevated allowlist as override", async () => {
     await withTempHome(async (home) => {
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        tools: {
           elevated: {
             allowFrom: { discord: [] },
           },
@@ -799,9 +858,12 @@ describe("trigger handling", () => {
       });
 
       const cfg = makeCfg(home);
-      cfg.agent = {
-        ...cfg.agent,
-        heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
+        },
       };
 
       await getReplyFromConfig(
@@ -941,15 +1003,17 @@ describe("trigger handling", () => {
         },
         {},
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+            },
           },
           whatsapp: {
             allowFrom: ["*"],
             groups: { "*": { requireMention: false } },
           },
-          routing: {
+          messages: {
             groupChat: {},
           },
           session: { store: join(home, "sessions.json") },
@@ -985,9 +1049,11 @@ describe("trigger handling", () => {
         },
         {},
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+            },
           },
           whatsapp: {
             allowFrom: ["*"],
@@ -1024,9 +1090,11 @@ describe("trigger handling", () => {
         },
         {},
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+            },
           },
           whatsapp: {
             allowFrom: ["*"],
@@ -1056,9 +1124,11 @@ describe("trigger handling", () => {
         },
         {},
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+            },
           },
           whatsapp: {
             allowFrom: ["+1999"],
@@ -1083,9 +1153,11 @@ describe("trigger handling", () => {
         },
         {},
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+            },
           },
           whatsapp: {
             allowFrom: ["+1999"],
@@ -1124,9 +1196,11 @@ describe("trigger handling", () => {
         },
         {},
         {
-          agent: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+            },
           },
           whatsapp: {
             allowFrom: ["*"],
@@ -1183,6 +1257,7 @@ describe("trigger handling", () => {
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).toContain("Give me the status");
       expect(prompt).not.toContain("/thinking high");
+      expect(prompt).not.toContain("/think high");
     });
   });
 
@@ -1229,12 +1304,14 @@ describe("trigger handling", () => {
       });
 
       const cfg = {
-        agent: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: join(home, "clawd"),
-          sandbox: {
-            mode: "non-main" as const,
-            workspaceRoot: join(home, "sandboxes"),
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+            sandbox: {
+              mode: "non-main" as const,
+              workspaceRoot: join(home, "sandboxes"),
+            },
           },
         },
         whatsapp: {
@@ -1272,10 +1349,11 @@ describe("trigger handling", () => {
         ctx,
         cfg.session?.mainKey,
       );
+      const agentId = resolveAgentIdFromSessionKey(sessionKey);
       const sandbox = await ensureSandboxWorkspaceForSession({
         config: cfg,
         sessionKey,
-        workspaceDir: cfg.agent.workspace,
+        workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
       });
       expect(sandbox).not.toBeNull();
       if (!sandbox) {

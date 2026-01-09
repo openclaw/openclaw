@@ -8,28 +8,28 @@ import {
 
 describe("applyGoogleGeminiModelDefault", () => {
   it("sets gemini default when model is unset", () => {
-    const cfg: ClawdbotConfig = { agent: {} };
+    const cfg: ClawdbotConfig = { agents: { defaults: {} } };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expect(applied.changed).toBe(true);
-    expect(applied.next.agent?.model).toEqual({
+    expect(applied.next.agents?.defaults?.model).toEqual({
       primary: GOOGLE_GEMINI_DEFAULT_MODEL,
     });
   });
 
   it("overrides existing model", () => {
     const cfg: ClawdbotConfig = {
-      agent: { model: "anthropic/claude-opus-4-5" },
+      agents: { defaults: { model: "anthropic/claude-opus-4-5" } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expect(applied.changed).toBe(true);
-    expect(applied.next.agent?.model).toEqual({
+    expect(applied.next.agents?.defaults?.model).toEqual({
       primary: GOOGLE_GEMINI_DEFAULT_MODEL,
     });
   });
 
   it("no-ops when already gemini default", () => {
     const cfg: ClawdbotConfig = {
-      agent: { model: GOOGLE_GEMINI_DEFAULT_MODEL },
+      agents: { defaults: { model: GOOGLE_GEMINI_DEFAULT_MODEL } },
     };
     const applied = applyGoogleGeminiModelDefault(cfg);
     expect(applied.changed).toBe(false);
