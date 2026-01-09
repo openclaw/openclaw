@@ -510,6 +510,14 @@ export function createClawdbotCodingTools(options?: {
   sessionKey?: string;
   agentDir?: string;
   config?: ClawdbotConfig;
+  /** Current channel ID for auto-threading (Slack). */
+  currentChannelId?: string;
+  /** Current thread timestamp for auto-threading (Slack). */
+  currentThreadTs?: string;
+  /** Reply-to mode for Slack auto-threading. */
+  replyToMode?: "off" | "first" | "all";
+  /** Mutable ref to track if a reply was sent (for "first" mode). */
+  hasRepliedRef?: { value: boolean };
 }): AnyAgentTool[] {
   const bashToolName = "bash";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -580,6 +588,10 @@ export function createClawdbotCodingTools(options?: {
       agentDir: options?.agentDir,
       sandboxed: !!sandbox,
       config: options?.config,
+      currentChannelId: options?.currentChannelId,
+      currentThreadTs: options?.currentThreadTs,
+      replyToMode: options?.replyToMode,
+      hasRepliedRef: options?.hasRepliedRef,
     }),
   ];
   const toolsFiltered = effectiveToolsPolicy
