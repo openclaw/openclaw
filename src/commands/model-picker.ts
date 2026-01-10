@@ -230,7 +230,20 @@ export async function promptDefaultModel(
     });
   }
 
-  const initialValue = allowKeep ? KEEP_VALUE : configuredKey || undefined;
+  let initialValue: string | undefined = allowKeep
+    ? KEEP_VALUE
+    : configuredKey || undefined;
+  if (
+    allowKeep &&
+    hasPreferredProvider &&
+    preferredProvider &&
+    resolved.provider !== preferredProvider
+  ) {
+    const firstModel = models[0];
+    if (firstModel) {
+      initialValue = modelKey(firstModel.provider, firstModel.id);
+    }
+  }
 
   const selection = await params.prompter.select({
     message: params.message ?? "Default model",
@@ -256,6 +269,12 @@ export function applyPrimaryModel(
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
   const existingModels = defaults?.models;
+  const fallbacks =
+    typeof existingModel === "object" &&
+    existingModel !== null &&
+    "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      : undefined;
   return {
     ...cfg,
     agents: {
@@ -263,13 +282,7 @@ export function applyPrimaryModel(
       defaults: {
         ...defaults,
         model: {
-          ...(existingModel &&
-          "fallbacks" in (existingModel as Record<string, unknown>)
-            ? {
-                fallbacks: (existingModel as { fallbacks?: string[] })
-                  .fallbacks,
-              }
-            : undefined),
+          ...(fallbacks ? { fallbacks } : undefined),
           primary: model,
         },
         models: {
