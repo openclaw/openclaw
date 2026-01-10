@@ -1,6 +1,7 @@
 ---
-summary: "Run Clawdbot Gateway on Hetzner (Docker + VPS) with durable state and baked-in binaries"
+summary: "Run Clawdbot Gateway 24/7 on a cheap Hetzner VPS (Docker) with durable state and baked-in binaries"
 read_when:
+  - You want Clawdbot running 24/7 on a cloud VPS (not your laptop)
   - You want a production-grade, always-on Gateway on your own VPS
   - You want full control over persistence, binaries, and restart behavior
   - You are running Clawdbot in Docker on Hetzner or a similar provider
@@ -10,6 +11,17 @@ read_when:
 
 ## Goal
 Run a persistent Clawdbot Gateway on a Hetzner VPS using Docker, with durable state, baked-in binaries, and safe restart behavior.
+
+If you want “Clawdbot 24/7 for ~$5”, this is the simplest reliable setup.
+Hetzner pricing changes; pick the smallest Debian/Ubuntu VPS and scale up if you hit OOMs.
+
+## What are we doing (simple terms)?
+
+- Rent a small Linux server (Hetzner VPS)
+- Install Docker (isolated app runtime)
+- Start the Clawdbot Gateway in Docker
+- Persist `~/.clawdbot` + `~/clawd` on the host (survives restarts/rebuilds)
+- Access the Control UI from your laptop via an SSH tunnel
 
 The Gateway can be accessed via:
 - SSH port forwarding from your laptop
@@ -38,6 +50,8 @@ For the generic Docker flow, see [Docker](/install/docker).
 
 - Hetzner VPS with root access  
 - SSH access from your laptop  
+- Basic comfort with SSH + copy/paste  
+- ~20 minutes  
 - Docker and Docker Compose  
 - Model auth credentials  
 - Optional provider credentials  
@@ -124,6 +138,12 @@ GOG_KEYRING_PASSWORD=change-me-now
 XDG_CONFIG_HOME=/home/node/.clawdbot
 ```
 
+Generate strong secrets:
+
+```bash
+openssl rand -hex 32
+```
+
 **Do not commit this file.**
 
 ---
@@ -155,9 +175,14 @@ services:
       - ${CLAWDBOT_CONFIG_DIR}:/home/node/.clawdbot
       - ${CLAWDBOT_WORKSPACE_DIR}:/home/node/clawd
     ports:
-      - "${CLAWDBOT_GATEWAY_PORT}:18789"
-      - "${CLAWDBOT_BRIDGE_PORT}:18790"
-      - "18793:18793"
+      # Recommended: keep the Gateway loopback-only on the VPS; access via SSH tunnel.
+      # To expose it publicly, remove the `127.0.0.1:` prefix and firewall accordingly.
+      - "127.0.0.1:${CLAWDBOT_GATEWAY_PORT}:18789"
+
+      # Optional: only if you run iOS/Android nodes against this VPS.
+      # If you expose these publicly, read /gateway/security and firewall accordingly.
+      # - "${CLAWDBOT_BRIDGE_PORT}:18790"
+      # - "18793:18793"
     command:
       [
         "node",
@@ -226,6 +251,8 @@ COPY . .
 RUN pnpm build
 RUN pnpm ui:install
 RUN pnpm ui:build
+
+ENV NODE_ENV=production
 
 CMD ["node","dist/index.js"]
 ```
