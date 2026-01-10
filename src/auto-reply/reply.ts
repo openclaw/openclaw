@@ -589,6 +589,7 @@ export async function getReplyFromConfig(
       (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
       "on")
     : "off";
+  const _providerKey = sessionCtx.Provider?.trim().toLowerCase();
   const resolvedBlockStreaming =
     opts?.disableBlockStreaming === true
       ? "off"

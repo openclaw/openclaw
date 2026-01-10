@@ -278,6 +278,10 @@ describe("gateway (mock openai): tool calling", () => {
 
     const originalFetch = globalThis.fetch;
     const openaiResponsesUrl = "https://api.openai.com/v1/responses";
+    const isOpenAIResponsesRequest = (url: string) =>
+      url === openaiResponsesUrl ||
+      url.startsWith(`${openaiResponsesUrl}/`) ||
+      url.startsWith(`${openaiResponsesUrl}?`);
     const fetchImpl = async (
       input: RequestInfo | URL,
       init?: RequestInit,
@@ -289,7 +293,7 @@ describe("gateway (mock openai): tool calling", () => {
             ? input.toString()
             : input.url;
 
-      if (url === openaiResponsesUrl) {
+      if (isOpenAIResponsesRequest(url)) {
         const bodyText =
           typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
             ? decodeBodyText((init as { body?: unknown }).body)
