@@ -1,6 +1,6 @@
 --- a/dist/src/classes/RequestClient.js
 +++ b/dist/src/classes/RequestClient.js
-@@ -118,6 +118,9 @@
+@@ -86,6 +86,9 @@
              }
          }
          this.abortController = new AbortController();
@@ -10,7 +10,7 @@
          let body;
          if (data?.body &&
              typeof data.body === "object" &&
-@@ -178,12 +181,26 @@
+@@ -146,12 +149,26 @@
                  body = JSON.stringify(data.body);
              }
          }
@@ -40,14 +40,6 @@
 +                clearTimeout(timeoutId);
 +            }
 +        }
-         let rawBody = "";
-         let parsedBody;
-         try {
-@@ -405,4 +422,4 @@
-     }
- }
- const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, Math.max(ms, 0)));
--//# sourceMappingURL=RequestClient.js.map
-\ No newline at end of file
-+//# sourceMappingURL=RequestClient.js.map
-
+         if (response.status === 429) {
+             const responseBody = await response.json();
+             const rateLimitError = new RateLimitError(response, responseBody);
