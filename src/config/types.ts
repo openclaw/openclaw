@@ -1396,6 +1396,13 @@ export type AgentDefaultsConfig = {
     prompt?: string;
     /** Max chars allowed after HEARTBEAT_OK before delivery (default: 30). */
     ackMaxChars?: number;
+    /**
+     * When enabled, deliver the model's reasoning payload for heartbeat runs (when available)
+     * as a separate message prefixed with `Reasoning:` (same as `/reasoning on`).
+     *
+     * Default: false (only the final heartbeat payload is delivered).
+     */
+    includeReasoning?: boolean;
   };
   /** Max concurrent agent runs across all conversations. Default: 1 (sequential). */
   maxConcurrent?: number;

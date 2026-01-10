@@ -646,6 +646,7 @@ const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
     model: z.string().optional(),
+    includeReasoning: z.boolean().optional(),
     target: z
       .union([
         z.literal("last"),

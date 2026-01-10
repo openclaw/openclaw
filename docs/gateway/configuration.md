@@ -1227,6 +1227,7 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 - `every`: duration string (`ms`, `s`, `m`, `h`); default unit minutes. Default:
   `30m`. Set `0m` to disable.
 - `model`: optional override model for heartbeat runs (`provider/model`).
+- `includeReasoning`: when `true`, heartbeats will also deliver the separate `Reasoning:` message when available (same shape as `/reasoning on`). Default: `false`.
 - `target`: optional delivery provider (`last`, `whatsapp`, `telegram`, `discord`, `slack`, `signal`, `imessage`, `none`). Default: `last`.
 - `to`: optional recipient override (provider-specific id, e.g. E.164 for WhatsApp, chat id for Telegram).
 - `prompt`: optional override for the heartbeat body (default: `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`). Overrides are sent verbatim; include a `Read HEARTBEAT.md if exists` line if you still want the file read.
