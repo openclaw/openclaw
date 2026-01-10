@@ -43,6 +43,7 @@
 - Create commits with `scripts/committer "<msg>" <file...>`; avoid manual `git add`/`git commit` so staging stays scoped.
 - Follow concise, action-oriented commit messages (e.g., `CLI: add verbose flag to send`).
 - Group related changes; avoid bundling unrelated refactors.
+- Changelog workflow: keep latest released version at top (no `Unreleased`); after publishing, bump version and start a new top section.
 - PRs should summarize scope, note testing performed, and mention any user-facing changes or new flags.
 - PR review flow: when given a PR link, review via `gh pr view`/`gh pr diff` and do **not** change branches.
 - PR merge flow: create a temp branch from `main`, merge the PR branch into it (prefer squash unless commit history is important; use rebase/merge when it is). Always try to merge the PR unless it’s truly difficult, then use another approach. If we squash, add the PR author as a co-contributor. Apply fixes, add changelog entry (include PR # + thanks), run full gate before the final commit, commit, merge back to `main`, delete the temp branch, and end on `main`.
