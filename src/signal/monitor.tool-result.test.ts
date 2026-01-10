@@ -249,6 +249,60 @@ describe("monitorSignalProvider tool results", () => {
     );
   });
 
+  it("notifies on own reactions when target includes uuid + phone", async () => {
+    config = {
+      ...config,
+      signal: {
+        autoStart: false,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        account: "+15550002222",
+        reactionNotifications: "own",
+      },
+    };
+    const abortController = new AbortController();
+
+    streamMock.mockImplementation(async ({ onEvent }) => {
+      const payload = {
+        envelope: {
+          sourceNumber: "+15550001111",
+          sourceName: "Ada",
+          timestamp: 1,
+          reactionMessage: {
+            emoji: "✅",
+            targetAuthor: "+15550002222",
+            targetAuthorUuid: "123e4567-e89b-12d3-a456-426614174000",
+            targetSentTimestamp: 2,
+          },
+        },
+      };
+      await onEvent({
+        event: "receive",
+        data: JSON.stringify(payload),
+      });
+      abortController.abort();
+    });
+
+    await monitorSignalProvider({
+      autoStart: false,
+      baseUrl: "http://127.0.0.1:8080",
+      abortSignal: abortController.signal,
+    });
+
+    await flush();
+
+    const route = resolveAgentRoute({
+      cfg: config as ClawdbotConfig,
+      provider: "signal",
+      accountId: "default",
+      peer: { kind: "dm", id: normalizeE164("+15550001111") },
+    });
+    const events = peekSystemEvents(route.sessionKey);
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(
+      true,
+    );
+  });
+
   it("processes messages when reaction metadata is present", async () => {
     const abortController = new AbortController();
     replyMock.mockResolvedValue({ text: "pong" });
