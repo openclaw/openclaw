@@ -286,8 +286,18 @@ export function sanitizeToolUseResultPairing(
   // displaced (e.g. after user turns) or duplicated. Repair by:
   // - moving matching toolResult messages directly after their assistant toolCall turn
   // - inserting synthetic error toolResults for missing ids
-  // - dropping duplicate toolResults for the same id within the span
+  // - dropping duplicate toolResults for the same id (anywhere in the transcript)
   const out: AgentMessage[] = [];
+  const seenToolResultIds = new Set<string>();
+
+  const pushToolResult = (
+    msg: Extract<AgentMessage, { role: "toolResult" }>,
+  ) => {
+    const id = extractToolResultId(msg);
+    if (id && seenToolResultIds.has(id)) return;
+    if (id) seenToolResultIds.add(id);
+    out.push(msg);
+  };
 
   for (let i = 0; i < messages.length; i += 1) {
     const msg = messages[i] as AgentMessage;
@@ -298,7 +308,11 @@ export function sanitizeToolUseResultPairing(
 
     const role = (msg as { role?: unknown }).role;
     if (role !== "assistant") {
-      out.push(msg);
+      if (role === "toolResult") {
+        pushToolResult(msg as Extract<AgentMessage, { role: "toolResult" }>);
+      } else {
+        out.push(msg);
+      }
       continue;
     }
 
@@ -335,6 +349,9 @@ export function sanitizeToolUseResultPairing(
         >;
         const id = extractToolResultId(toolResult);
         if (id && toolCallIds.has(id)) {
+          if (seenToolResultIds.has(id)) {
+            continue;
+          }
           if (!spanResultsById.has(id)) {
             spanResultsById.set(id, toolResult);
           }
@@ -349,13 +366,24 @@ export function sanitizeToolUseResultPairing(
 
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
-      out.push(
+      pushToolResult(
         existing ??
           makeMissingToolResult({ toolCallId: call.id, toolName: call.name }),
       );
     }
 
-    out.push(...remainder);
+    for (const rem of remainder) {
+      if (!rem || typeof rem !== "object") {
+        out.push(rem);
+        continue;
+      }
+      const remRole = (rem as { role?: unknown }).role;
+      if (remRole === "toolResult") {
+        pushToolResult(rem as Extract<AgentMessage, { role: "toolResult" }>);
+        continue;
+      }
+      out.push(rem);
+    }
     i = j - 1;
   }
 

@@ -642,6 +642,40 @@ describe("sanitizeToolUseResultPairing", () => {
     const out = sanitizeToolUseResultPairing(input);
     expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
   });
+
+  it("drops duplicate tool results for the same id across the transcript", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "first" }],
+        isError: false,
+      },
+      { role: "assistant", content: [{ type: "text", text: "ok" }] },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "second (duplicate)" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    const results = out.filter((m) => m.role === "toolResult") as Array<{
+      toolCallId?: string;
+      content?: unknown;
+    }>;
+    expect(results).toHaveLength(1);
+    expect(results[0]?.toolCallId).toBe("call_1");
+  });
 });
 
 describe("normalizeTextForComparison", () => {

@@ -338,6 +338,11 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               key: sessionKey,
               model: modelKey,
             });
+            // Reset between models: avoids cross-provider transcript incompatibilities
+            // (notably OpenAI Responses requiring reasoning replay for function_call items).
+            await client.request<Record<string, unknown>>("sessions.reset", {
+              key: sessionKey,
+            });
 
             // “Meaningful” direct prompt (no tools).
             const runId = randomUUID();
