@@ -36,6 +36,22 @@ Or target a specific Clawdbot agent by header:
 Advanced:
 - `x-clawdbot-session-key: <sessionKey>` to fully control session routing.
 
+## Disabling the endpoint
+
+Set `gateway.http.endpoints.chatCompletions.enabled` to `false`:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: false }
+      }
+    }
+  }
+}
+```
+
 ## Session behavior
 
 By default the endpoint is **stateless per request** (a new session key is generated each call).

@@ -1477,6 +1477,19 @@ export const ClawdbotSchema = z
             debounceMs: z.number().int().min(0).optional(),
           })
           .optional(),
+        http: z
+          .object({
+            endpoints: z
+              .object({
+                chatCompletions: z
+                  .object({
+                    enabled: z.boolean().optional(),
+                  })
+                  .optional(),
+              })
+              .optional(),
+          })
+          .optional(),
       })
       .optional(),
     skills: z

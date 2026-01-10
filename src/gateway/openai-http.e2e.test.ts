@@ -9,12 +9,16 @@ import {
 
 installGatewayTestHooks();
 
-async function startServer(port: number) {
+async function startServer(
+  port: number,
+  opts?: { openAiChatCompletionsEnabled?: boolean },
+) {
   const { startGatewayServer } = await import("./server.js");
   return await startGatewayServer(port, {
     host: "127.0.0.1",
     auth: { mode: "token", token: "secret" },
     controlUiEnabled: false,
+    openAiChatCompletionsEnabled: opts?.openAiChatCompletionsEnabled,
   });
 }
 
@@ -44,6 +48,22 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
+  it("can be disabled via config (404)", async () => {
+    const port = await getFreePort();
+    const server = await startServer(port, {
+      openAiChatCompletionsEnabled: false,
+    });
+    try {
+      const res = await postChatCompletions(port, {
+        model: "clawdbot",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(404);
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
   it("rejects non-POST", async () => {
     const port = await getFreePort();
     const server = await startServer(port);

@@ -206,6 +206,7 @@ export function createGatewayHttpServer(opts: {
   canvasHost: CanvasHostHandler | null;
   controlUiEnabled: boolean;
   controlUiBasePath: string;
+  openAiChatCompletionsEnabled: boolean;
   handleHooksRequest: HooksRequestHandler;
   resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
 }): HttpServer {
@@ -213,6 +214,7 @@ export function createGatewayHttpServer(opts: {
     canvasHost,
     controlUiEnabled,
     controlUiBasePath,
+    openAiChatCompletionsEnabled,
     handleHooksRequest,
     resolvedAuth,
   } = opts;
@@ -222,8 +224,10 @@ export function createGatewayHttpServer(opts: {
 
     void (async () => {
       if (await handleHooksRequest(req, res)) return;
-      if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth }))
-        return;
+      if (openAiChatCompletionsEnabled) {
+        if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth }))
+          return;
+      }
       if (canvasHost) {
         if (await handleA2uiHttpRequest(req, res)) return;
         if (await canvasHost.handleHttpRequest(req, res)) return;

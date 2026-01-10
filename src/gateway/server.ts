@@ -329,6 +329,11 @@ export type GatewayServerOptions = {
    */
   controlUiEnabled?: boolean;
   /**
+   * If false, do not serve `POST /v1/chat/completions`.
+   * Default: config `gateway.http.endpoints.chatCompletions.enabled` (or true when absent).
+   */
+  openAiChatCompletionsEnabled?: boolean;
+  /**
    * Override gateway auth configuration (merges with config).
    */
   auth?: import("../config/config.js").GatewayAuthConfig;
@@ -432,6 +437,10 @@ export async function startGatewayServer(
   }
   const controlUiEnabled =
     opts.controlUiEnabled ?? cfgAtStart.gateway?.controlUi?.enabled ?? true;
+  const openAiChatCompletionsEnabled =
+    opts.openAiChatCompletionsEnabled ??
+    cfgAtStart.gateway?.http?.endpoints?.chatCompletions?.enabled ??
+    true;
   const controlUiBasePath = normalizeControlUiBasePath(
     cfgAtStart.gateway?.controlUi?.basePath,
   );
@@ -615,6 +624,7 @@ export async function startGatewayServer(
     canvasHost,
     controlUiEnabled,
     controlUiBasePath,
+    openAiChatCompletionsEnabled,
     handleHooksRequest,
     resolvedAuth,
   });

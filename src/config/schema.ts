@@ -90,6 +90,8 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
   "gateway.controlUi.basePath": "Control UI Base Path",
+  "gateway.http.endpoints.chatCompletions.enabled":
+    "OpenAI Chat Completions Endpoint",
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
@@ -158,6 +160,8 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdbot).",
+  "gateway.http.endpoints.chatCompletions.enabled":
+    "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: true).",
   "gateway.reload.mode":
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":
