@@ -43,6 +43,7 @@ import {
   applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
   applyOpencodeZenConfig,
+  applyOpencodeZenProviderConfig,
   MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
@@ -678,7 +679,7 @@ export async function applyAuthChoice(params: {
         "Model configured",
       );
     } else {
-      nextConfig = applyOpencodeZenConfig(nextConfig);
+      nextConfig = applyOpencodeZenProviderConfig(nextConfig);
       agentModelOverride = OPENCODE_ZEN_DEFAULT_MODEL;
       await noteAgentModel(OPENCODE_ZEN_DEFAULT_MODEL);
     }

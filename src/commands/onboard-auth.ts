@@ -402,18 +402,24 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
 export function applyOpencodeZenProviderConfig(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
+  const opencodeModels = getOpencodeZenStaticFallbackModels();
+
   const providers = { ...cfg.models?.providers };
   providers["opencode-zen"] = {
     baseUrl: OPENCODE_ZEN_API_BASE_URL,
     apiKey: "opencode-zen",
     api: "openai-completions",
-    models: getOpencodeZenStaticFallbackModels(),
+    models: opencodeModels,
   };
 
   const models = { ...cfg.agents?.defaults?.models };
+  for (const model of opencodeModels) {
+    const key = `opencode-zen/${model.id}`;
+    models[key] = models[key] ?? {};
+  }
   models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
     ...models[OPENCODE_ZEN_DEFAULT_MODEL_REF],
-    alias: "Opus",
+    alias: models[OPENCODE_ZEN_DEFAULT_MODEL_REF]?.alias ?? "Opus",
   };
 
   return {
