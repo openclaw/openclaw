@@ -105,6 +105,8 @@ Path note: when `tailscale.mode` is enabled, Clawdbot automatically sets
 `hooks.gmail.serve.path` to `/` and keeps the public path at
 `hooks.gmail.tailscale.path` (default `/gmail-pubsub`) because Tailscale
 strips the set-path prefix before proxying.
+If you need the backend to receive the prefixed path, Tailscale can proxy
+to a full target URL with a path, but Clawdbot currently passes only a port.
 
 Want a custom endpoint? Use `--push-endpoint <url>` or `--tailscale off`.
 
