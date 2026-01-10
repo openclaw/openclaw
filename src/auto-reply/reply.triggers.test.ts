@@ -187,6 +187,83 @@ describe("trigger handling", () => {
     });
   });
 
+  it("applies native /model to the target session", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const slashSessionKey = "telegram:slash:111";
+      const targetSessionKey = MAIN_SESSION_KEY;
+
+      // Seed the target session to ensure the native command mutates it.
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify(
+          {
+            [targetSessionKey]: {
+              sessionId: "session-target",
+              updatedAt: Date.now(),
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model openai/gpt-4.1-mini",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: slashSessionKey,
+          CommandSource: "native",
+          CommandTargetSessionKey: targetSessionKey,
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to openai/gpt-4.1-mini");
+
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[targetSessionKey]?.providerOverride).toBe("openai");
+      expect(store[targetSessionKey]?.modelOverride).toBe("gpt-4.1-mini");
+      expect(store[slashSessionKey]).toBeUndefined();
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      await getReplyFromConfig(
+        {
+          Body: "hi",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        {},
+        cfg,
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      expect(vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]).toEqual(
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+        }),
+      );
+    });
+  });
+
   it("rejects /restart by default", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
