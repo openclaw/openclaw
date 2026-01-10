@@ -16,8 +16,8 @@ import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
-  readClaudeCliCredentials,
-  readCodexCliCredentials,
+  readClaudeCliCredentialsCached,
+  readCodexCliCredentialsCached,
   writeClaudeCliCredentials,
 } from "./cli-credentials.js";
 import { normalizeProviderId } from "./model-selection.js";
@@ -39,6 +39,9 @@ const AUTH_STORE_LOCK_OPTIONS = {
   },
   stale: 30_000,
 } as const;
+
+const EXTERNAL_CLI_SYNC_TTL_MS = 15 * 60 * 1000;
+const EXTERNAL_CLI_NEAR_EXPIRY_MS = 10 * 60 * 1000;
 
 const log = createSubsystemLogger("agents/auth-profiles");
 
@@ -363,6 +366,19 @@ function shallowEqualTokenCredentials(
   );
 }
 
+function isExternalProfileFresh(
+  cred: AuthProfileCredential | undefined,
+  now: number,
+): boolean {
+  if (!cred) return false;
+  if (cred.type !== "oauth" && cred.type !== "token") return false;
+  if (cred.provider !== "anthropic" && cred.provider !== "openai-codex") {
+    return false;
+  }
+  if (typeof cred.expires !== "number") return true;
+  return cred.expires > now + EXTERNAL_CLI_NEAR_EXPIRY_MS;
+}
+
 /**
  * Sync OAuth credentials from external CLI tools (Claude CLI, Codex CLI) into the store.
  * This allows clawdbot to use the same credentials as these tools without requiring
@@ -378,7 +394,18 @@ function syncExternalCliCredentials(
   const now = Date.now();
 
   // Sync from Claude CLI (supports both OAuth and Token credentials)
-  const claudeCreds = readClaudeCliCredentials(options);
+  const existingClaude = store.profiles[CLAUDE_CLI_PROFILE_ID];
+  const shouldSyncClaude =
+    !existingClaude ||
+    existingClaude.provider !== "anthropic" ||
+    existingClaude.type === "token" ||
+    !isExternalProfileFresh(existingClaude, now);
+  const claudeCreds = shouldSyncClaude
+    ? readClaudeCliCredentialsCached({
+        allowKeychainPrompt: options?.allowKeychainPrompt,
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+      })
+    : null;
   if (claudeCreds) {
     const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
     const claudeCredsExpires = claudeCreds.expires ?? 0;
@@ -438,7 +465,14 @@ function syncExternalCliCredentials(
   }
 
   // Sync from Codex CLI
-  const codexCreds = readCodexCliCredentials();
+  const existingCodex = store.profiles[CODEX_CLI_PROFILE_ID];
+  const shouldSyncCodex =
+    !existingCodex ||
+    existingCodex.provider !== ("openai-codex" as OAuthProvider) ||
+    !isExternalProfileFresh(existingCodex, now);
+  const codexCreds = shouldSyncCodex
+    ? readCodexCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS })
+    : null;
   if (codexCreds) {
     const existing = store.profiles[CODEX_CLI_PROFILE_ID];
     const existingOAuth = existing?.type === "oauth" ? existing : undefined;

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const execSyncMock = vi.hoisted(() => vi.fn());
 
@@ -11,7 +11,13 @@ vi.mock("node:child_process", () => ({
 }));
 
 describe("cli credentials", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
+    vi.useRealTimers();
+    vi.resetModules();
     execSyncMock.mockReset();
   });
 
@@ -108,5 +114,70 @@ describe("cli credentials", () => {
     expect(updated.claudeAiOauth?.accessToken).toBe("new-access");
     expect(updated.claudeAiOauth?.refreshToken).toBe("new-refresh");
     expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
+  });
+
+  it("caches Claude CLI credentials within the TTL window", async () => {
+    execSyncMock.mockImplementation(() =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: "cached-access",
+          refreshToken: "cached-refresh",
+          expiresAt: Date.now() + 60_000,
+        },
+      }),
+    );
+
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+
+    const { readClaudeCliCredentialsCached } = await import(
+      "./cli-credentials.js"
+    );
+
+    const first = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: 15 * 60 * 1000,
+    });
+    const second = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: false,
+      ttlMs: 15 * 60 * 1000,
+    });
+
+    expect(first).toBeTruthy();
+    expect(second).toEqual(first);
+    expect(execSyncMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes Claude CLI credentials after the TTL window", async () => {
+    execSyncMock.mockImplementation(() =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: `token-${Date.now()}`,
+          refreshToken: "refresh",
+          expiresAt: Date.now() + 60_000,
+        },
+      }),
+    );
+
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+
+    const { readClaudeCliCredentialsCached } = await import(
+      "./cli-credentials.js"
+    );
+
+    const first = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: 15 * 60 * 1000,
+    });
+
+    vi.advanceTimersByTime(15 * 60 * 1000 + 1);
+
+    const second = readClaudeCliCredentialsCached({
+      allowKeychainPrompt: true,
+      ttlMs: 15 * 60 * 1000,
+    });
+
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    expect(execSyncMock).toHaveBeenCalledTimes(2);
   });
 });
