@@ -272,6 +272,14 @@ describe("classifyFailoverReason", () => {
     );
     expect(classifyFailoverReason("bad request")).toBeNull();
   });
+
+  it("classifies OpenAI usage limit errors as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "You have hit your ChatGPT usage limit (plus plan)",
+      ),
+    ).toBe("rate_limit");
+  });
 });
 
 describe("isCloudCodeAssistFormatError", () => {
