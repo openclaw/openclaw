@@ -54,6 +54,22 @@
       "destination": "/concepts/messages"
     },
     {
+      "source": "/message",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/message/",
+      "destination": "/cli/message"
+    },
+    {
+      "source": "/sandbox",
+      "destination": "/cli/sandbox"
+    },
+    {
+      "source": "/sandbox/",
+      "destination": "/cli/sandbox"
+    },
+    {
       "source": "/AGENTS.default",
       "destination": "/reference/AGENTS.default"
     },
