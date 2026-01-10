@@ -115,7 +115,11 @@ final class BridgeConnectionController {
 
             self.didAutoConnect = true
             let endpoint = NWEndpoint.hostPort(host: NWEndpoint.Host(manualHost), port: port)
-            self.startAutoConnect(endpoint: endpoint, bridgeStableID: nil, token: token, instanceId: instanceId)
+            self.startAutoConnect(
+                endpoint: endpoint,
+                bridgeStableID: BridgeEndpointID.stableID(endpoint),
+                token: token,
+                instanceId: instanceId)
             return
         }
 
@@ -177,7 +181,7 @@ final class BridgeConnectionController {
 
     private func startAutoConnect(
         endpoint: NWEndpoint,
-        bridgeStableID: String?,
+        bridgeStableID: String,
         token: String,
         instanceId: String)
     {

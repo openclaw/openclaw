@@ -204,13 +204,13 @@ final class NodeAppModel {
 
     func connectToBridge(
         endpoint: NWEndpoint,
-        bridgeStableID: String? = nil,
+        bridgeStableID: String,
         hello: BridgeHello)
     {
         self.bridgeTask?.cancel()
         self.bridgeServerName = nil
         self.bridgeRemoteAddress = nil
-        let id = (bridgeStableID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let id = bridgeStableID.trimmingCharacters(in: .whitespacesAndNewlines)
         self.connectedBridgeID = id.isEmpty ? BridgeEndpointID.stableID(endpoint) : id
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil

@@ -500,7 +500,7 @@ struct SettingsTab: View {
 
             self.appModel.connectToBridge(
                 endpoint: endpoint,
-                bridgeStableID: nil,
+                bridgeStableID: BridgeEndpointID.stableID(endpoint),
                 hello: BridgeHello(
                     nodeId: self.instanceId,
                     displayName: self.displayName,
