@@ -769,6 +769,7 @@ export async function compactEmbeddedPiSession(params: {
   provider?: string;
   model?: string;
   thinkLevel?: ThinkLevel;
+  reasoningLevel?: ReasoningLevel;
   bashElevated?: BashElevatedDefaults;
   customInstructions?: string;
   lane?: string;
