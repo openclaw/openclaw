@@ -872,14 +872,31 @@ export async function setupProviders(
     }
   });
 
-  const initialSelection =
-    options?.initialSelection ??
-    (options?.quickstartDefaults && !telegramConfigured ? ["telegram"] : []);
-  const selection = (await prompter.multiselect({
-    message: "Select providers",
-    options: selectionOptions,
-    initialValues: initialSelection.length ? initialSelection : undefined,
-  })) as ProviderChoice[];
+  let selection: ProviderChoice[];
+  if (options?.quickstartDefaults) {
+    const choice = (await prompter.select({
+      message: "Select provider (QuickStart)",
+      options: [
+        ...selectionOptions,
+        {
+          value: "__skip__",
+          label: "Skip for now",
+          hint: "You can add providers later via `clawdbot providers add`",
+        },
+      ],
+      initialValue:
+        options?.initialSelection?.[0] ??
+        (!telegramConfigured ? "telegram" : "whatsapp"),
+    })) as ProviderChoice | "__skip__";
+    selection = choice === "__skip__" ? [] : [choice];
+  } else {
+    const initialSelection = options?.initialSelection ?? [];
+    selection = (await prompter.multiselect({
+      message: "Select providers (Space to toggle, Enter to continue)",
+      options: selectionOptions,
+      initialValues: initialSelection.length ? initialSelection : undefined,
+    })) as ProviderChoice[];
+  }
 
   options?.onSelection?.(selection);
   const accountOverrides: Partial<Record<ProviderChoice, string>> = {

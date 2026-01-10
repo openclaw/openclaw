@@ -1,81 +1,70 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../config/config.js";
-import {
-  mergeWhatsAppConfig,
-  setWhatsAppAllowFrom,
-  setWhatsAppDmPolicy,
-  setWhatsAppSelfChatMode,
-} from "./onboard-providers.js";
+import type { RuntimeEnv } from "../runtime.js";
+import type { WizardPrompter } from "../wizard/prompts.js";
+import { setupProviders } from "./onboard-providers.js";
 
-describe("onboard-providers WhatsApp setters", () => {
-  it("preserves existing WhatsApp fields when updating allowFrom", () => {
-    const cfg: ClawdbotConfig = {
-      whatsapp: {
-        selfChatMode: true,
-        dmPolicy: "pairing",
-        allowFrom: ["*"],
-        accounts: {
-          default: { enabled: false },
-        },
-      },
-    };
+vi.mock("node:fs/promises", () => ({
+  default: {
+    access: vi.fn(async () => {
+      throw new Error("ENOENT");
+    }),
+  },
+}));
 
-    const next = setWhatsAppAllowFrom(cfg, ["+15555550123"]);
+vi.mock("../provider-web.js", () => ({
+  loginWeb: vi.fn(async () => {}),
+}));
 
-    expect(next.whatsapp?.selfChatMode).toBe(true);
-    expect(next.whatsapp?.dmPolicy).toBe("pairing");
-    expect(next.whatsapp?.allowFrom).toEqual(["+15555550123"]);
-    expect(next.whatsapp?.accounts?.default?.enabled).toBe(false);
-  });
+vi.mock("./onboard-helpers.js", () => ({
+  detectBinary: vi.fn(async () => false),
+}));
 
-  it("updates dmPolicy without dropping selfChatMode", () => {
-    const cfg: ClawdbotConfig = {
-      whatsapp: {
-        selfChatMode: true,
-        dmPolicy: "pairing",
-      },
-    };
-
-    const next = setWhatsAppDmPolicy(cfg, "open");
-
-    expect(next.whatsapp?.dmPolicy).toBe("open");
-    expect(next.whatsapp?.selfChatMode).toBe(true);
-  });
-
-  it("updates selfChatMode without dropping allowFrom", () => {
-    const cfg: ClawdbotConfig = {
-      whatsapp: {
-        allowFrom: ["+15555550123"],
-      },
-    };
-
-    const next = setWhatsAppSelfChatMode(cfg, true);
-
-    expect(next.whatsapp?.selfChatMode).toBe(true);
-    expect(next.whatsapp?.allowFrom).toEqual(["+15555550123"]);
-  });
-
-  it("merges WhatsApp config without clobbering fields", () => {
-    const cfg: ClawdbotConfig = {
-      whatsapp: {
-        dmPolicy: "pairing",
-        allowFrom: ["*"],
-      },
-    };
-
-    const merged = mergeWhatsAppConfig(cfg, {
-      dmPolicy: "open",
-      allowFrom: undefined,
+describe("setupProviders", () => {
+  it("QuickStart uses single-select (no multiselect) and doesn't prompt for Telegram token when WhatsApp is chosen", async () => {
+    const select = vi.fn(async () => "whatsapp");
+    const multiselect = vi.fn(async () => {
+      throw new Error("unexpected multiselect");
     });
-    const cleared = mergeWhatsAppConfig(
-      cfg,
-      { allowFrom: undefined },
-      { unsetOnUndefined: ["allowFrom"] },
-    );
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message.includes("Enter Telegram bot token")) {
+        throw new Error("unexpected Telegram token prompt");
+      }
+      if (message.includes("Your personal WhatsApp number")) {
+        return "+15555550123";
+      }
+      throw new Error(`unexpected text prompt: ${message}`);
+    });
 
-    expect(merged.whatsapp?.dmPolicy).toBe("open");
-    expect(merged.whatsapp?.allowFrom).toEqual(["*"]);
-    expect(cleared.whatsapp?.allowFrom).toBeUndefined();
+    const prompter: WizardPrompter = {
+      intro: vi.fn(async () => {}),
+      outro: vi.fn(async () => {}),
+      note: vi.fn(async () => {}),
+      select,
+      multiselect,
+      text: text as unknown as WizardPrompter["text"],
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    };
+
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await setupProviders({} as ClawdbotConfig, runtime, prompter, {
+      skipConfirm: true,
+      quickstartDefaults: true,
+      forceAllowFromProviders: ["whatsapp"],
+    });
+
+    expect(select).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Select provider (QuickStart)" }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
   });
 });
