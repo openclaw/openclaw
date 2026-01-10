@@ -192,7 +192,8 @@ Tokens can also be supplied via env vars:
 - `SLACK_APP_TOKEN`
 
 Ack reactions are controlled globally via `messages.ackReaction` +
-`messages.ackReactionScope`.
+`messages.ackReactionScope`. Use `messages.removeAckAfterReply` to clear the
+ack reaction after the bot replies.
 
 ## Limits
 - Outbound text is chunked to `slack.textChunkLimit` (default 4000).
