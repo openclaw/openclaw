@@ -1,14 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Fixes
-- Agent/Anthropic: restore tool dispatch for OAuth tokens (bash/read/write/edit).
-- Build: relax fetch typing for Bun compatibility.
-
-### Maintenance
-- Dependencies: bump pi-* stack to 0.42.2.
-
 ## 2026.1.9
 
 ### Highlights
@@ -43,7 +34,6 @@
 - Doctor/Daemon: audit/repair flows, permissions checks, supervisor config audits; provider status probes + warnings for Discord intents and Telegram privacy; last activity timestamps; gateway restart guidance.
 - Docs: Hetzner Docker VPS guide + cross-links (#556/#592) — thanks @Iamadig; Ansible guide (#545) — thanks @pasogott; provider troubleshooting index; hook parameter expansion (#532) — thanks @mcinteerj; model allowlist notes; OAuth deep dive; showcase refresh.
 - Apps/Branding: refreshed iOS/Android/macOS icons (#521) — thanks @fishfisher.
-- Maintenance: Pi 0.40.0 bump (#543) — thanks @mcinteerj; Docker build cache layer (#605) — thanks @zknicker.
 
 ### Fixes
 - Sandbox/Browser: auto-start CDP endpoint; proxy CDP out of container for attachOnly; relax Bun fetch typing; align sandbox list output with config images.
@@ -60,6 +50,11 @@
 - Gateway/Daemon/Doctor: atomic config writes; repair gateway service entrypoint + install switches; non-interactive legacy migrations; systemd unit alignment + KillMode=process; node bridge keepalive/pings; Launch at Login persistence; bundle ClawdbotKit resources + Swift 6.2 compat dylib; relay version check + remove smoke test; regen Swift GatewayModels + keep agent provider string; cron jobId alias + channel alias migration + main session key normalization; heartbeat Telegram accountId resolution; avoid WhatsApp fallback for internal runs; gateway listener error wording; serveBaseUrl param; honor gateway --dev; fix wide-area discovery updates; align agents.defaults schema; provider account metadata in daemon status; refresh Carbon patch for gateway fixes; restore doctor prompter initialValue handling.
 - Control UI/TUI: persist per-session verbose off + hide tool cards; logs tab opens at bottom; relative asset paths + landing cleanup; session labels lookup/persistence; stop pinning main session in recents; start logs at bottom; TUI status bar refresh + timeout handling + hide reasoning label when off.
 - Onboarding/Configure: QuickStart single-select provider picker; avoid Codex CLI false-expiry warnings; clarify WhatsApp owner prompt; fix Minimax hosted onboarding (agents.defaults + msteams heartbeat target); remove configure Control UI prompt; honor gateway --dev flag.
+
+### Maintenance
+- Dependencies: bump pi-* stack to 0.42.2.
+- Dependencies: Pi 0.40.0 bump (#543) — thanks @mcinteerj.
+- Build: Docker build cache layer (#605) — thanks @zknicker.
 
 
 ## 2026.1.8
