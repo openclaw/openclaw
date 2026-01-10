@@ -85,6 +85,7 @@ export type ProfileStatus = {
 
 type ContextOptions = {
   getState: () => BrowserServerState | null;
+  onEnsureAttachTarget?: (profile: ResolvedBrowserProfile) => Promise<void>;
 };
 
 /**
@@ -259,6 +260,13 @@ function createProfileContext(
     const httpReachable = await isHttpReachable();
 
     if (!httpReachable) {
+      if (
+        (current.resolved.attachOnly || remoteCdp) &&
+        opts.onEnsureAttachTarget
+      ) {
+        await opts.onEnsureAttachTarget(profile);
+        if (await isHttpReachable(1200)) return;
+      }
       if (current.resolved.attachOnly || remoteCdp) {
         throw new Error(
           remoteCdp
@@ -284,6 +292,10 @@ function createProfileContext(
 
     // We own it but WebSocket failed - restart
     if (current.resolved.attachOnly || remoteCdp) {
+      if (opts.onEnsureAttachTarget) {
+        await opts.onEnsureAttachTarget(profile);
+        if (await isReachable(1200)) return;
+      }
       throw new Error(
         remoteCdp
           ? `Remote CDP websocket for profile "${profile.name}" is not reachable.`

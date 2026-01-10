@@ -19,6 +19,8 @@ and process access when the model does something dumb.
 ## What gets sandboxed
 - Tool execution (`bash`, `read`, `write`, `edit`, `process`, etc.).
 - Optional sandboxed browser (`agents.defaults.sandbox.browser`).
+  - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
+    Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
 
 Not sandboxed:
 - The Gateway process itself.
