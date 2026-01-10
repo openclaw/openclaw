@@ -487,31 +487,11 @@ export async function updateLastRoute(params: {
   const store = loadSessionStore(storePath);
   const existing = store[sessionKey];
   const now = Date.now();
+  const sessionId = existing?.sessionId ?? crypto.randomUUID();
   const next: SessionEntry = {
-    sessionId: existing?.sessionId ?? crypto.randomUUID(),
+    ...(existing ?? { sessionId, updatedAt: 0 }),
+    sessionId,
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-    sessionFile: existing?.sessionFile,
-    systemSent: existing?.systemSent,
-    abortedLastRun: existing?.abortedLastRun,
-    thinkingLevel: existing?.thinkingLevel,
-    verboseLevel: existing?.verboseLevel,
-    providerOverride: existing?.providerOverride,
-    modelOverride: existing?.modelOverride,
-    sendPolicy: existing?.sendPolicy,
-    queueMode: existing?.queueMode,
-    inputTokens: existing?.inputTokens,
-    outputTokens: existing?.outputTokens,
-    totalTokens: existing?.totalTokens,
-    modelProvider: existing?.modelProvider,
-    model: existing?.model,
-    contextTokens: existing?.contextTokens,
-    displayName: existing?.displayName,
-    chatType: existing?.chatType,
-    provider: existing?.provider,
-    subject: existing?.subject,
-    room: existing?.room,
-    space: existing?.space,
-    skillsSnapshot: existing?.skillsSnapshot,
     lastProvider: provider,
     lastTo: to?.trim() ? to.trim() : undefined,
     lastAccountId: accountId?.trim()

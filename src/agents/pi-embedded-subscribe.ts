@@ -304,6 +304,7 @@ export function subscribeEmbeddedPiSession(params: {
   let lastStreamedReasoning: string | undefined;
   let lastBlockReplyText: string | undefined;
   let assistantTextBaseline = 0;
+  let suppressBlockChunks = false; // Avoid late chunk inserts after final text merge.
   let compactionInFlight = false;
   let pendingCompactionRetry = 0;
   let compactionRetryResolve: (() => void) | undefined;
@@ -430,6 +431,7 @@ export function subscribeEmbeddedPiSession(params: {
   };
 
   const emitBlockChunk = (text: string) => {
+    if (suppressBlockChunks) return;
     // Strip <think> blocks across chunk boundaries to avoid leaking reasoning.
     const strippedText = stripBlockThinkingSegments(text);
     const chunk = strippedText.trimEnd();
@@ -487,6 +489,7 @@ export function subscribeEmbeddedPiSession(params: {
     lastStreamedAssistant = undefined;
     lastStreamedReasoning = undefined;
     lastBlockReplyText = undefined;
+    suppressBlockChunks = false;
     assistantTextBaseline = 0;
   };
 
@@ -508,6 +511,7 @@ export function subscribeEmbeddedPiSession(params: {
           lastBlockReplyText = undefined;
           lastStreamedReasoning = undefined;
           lastReasoningSent = undefined;
+          suppressBlockChunks = false;
           assistantTextBaseline = assistantTexts.length;
         }
       }
@@ -834,9 +838,23 @@ export function subscribeEmbeddedPiSession(params: {
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
           const chunkerHasBuffered = blockChunker?.hasBuffered() ?? false;
-          // Non-streaming models (no text_delta): ensure assistantTexts gets the
-          // final text when the chunker has nothing buffered to drain.
-          if (!addedDuringMessage && !chunkerHasBuffered && text) {
+          // If we're not streaming block replies, ensure the final payload
+          // includes the final text even when deltas already populated assistantTexts.
+          if (includeReasoning && text && !params.onBlockReply) {
+            if (assistantTexts.length > assistantTextBaseline) {
+              assistantTexts.splice(
+                assistantTextBaseline,
+                assistantTexts.length - assistantTextBaseline,
+                text,
+              );
+            } else {
+              const last = assistantTexts.at(-1);
+              if (!last || last !== text) assistantTexts.push(text);
+            }
+            suppressBlockChunks = true;
+          } else if (!addedDuringMessage && !chunkerHasBuffered && text) {
+            // Non-streaming models (no text_delta): ensure assistantTexts gets the
+            // final text when the chunker has nothing buffered to drain.
             const last = assistantTexts.at(-1);
             if (!last || last !== text) assistantTexts.push(text);
           }
