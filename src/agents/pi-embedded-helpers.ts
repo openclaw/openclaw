@@ -110,7 +110,9 @@ export async function sanitizeSessionMessagesImages(
           : undefined;
       const toolUseId = (toolMsg as { toolUseId?: unknown }).toolUseId;
       const sanitizedToolUseId =
-        options?.sanitizeToolCallIds && typeof toolUseId === "string" && toolUseId
+        options?.sanitizeToolCallIds &&
+        typeof toolUseId === "string" &&
+        toolUseId
           ? sanitizeToolCallId(toolUseId)
           : undefined;
       const sanitizedMsg = {
