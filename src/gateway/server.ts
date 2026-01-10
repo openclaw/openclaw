@@ -723,7 +723,7 @@ export async function startGatewayServer(
         return await runHeartbeatOnce({
           cfg: runtimeConfig,
           reason: opts?.reason,
-          deps: { runtime },
+          deps: { ...deps, runtime: defaultRuntime },
         });
       },
       runIsolatedAgentJob: async ({ job, message }) => {
