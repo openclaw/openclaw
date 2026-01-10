@@ -111,9 +111,7 @@ function buildAgentPrompt(messagesUnknown: unknown): {
   };
 }
 
-function resolveAgentIdFromHeader(
-  req: IncomingMessage,
-): string | undefined {
+function resolveAgentIdFromHeader(req: IncomingMessage): string | undefined {
   const raw =
     getHeader(req, "x-clawdbot-agent-id")?.trim() ||
     getHeader(req, "x-clawdbot-agent")?.trim() ||
@@ -122,7 +120,9 @@ function resolveAgentIdFromHeader(
   return normalizeAgentId(raw);
 }
 
-function resolveAgentIdFromModel(model: string | undefined): string | undefined {
+function resolveAgentIdFromModel(
+  model: string | undefined,
+): string | undefined {
   const raw = model?.trim();
   if (!raw) return undefined;
 
