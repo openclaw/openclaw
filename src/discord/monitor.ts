@@ -51,7 +51,7 @@ import { formatDurationSeconds } from "../infra/format-duration.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { detectMime } from "../media/mime.js";
+import { fetchRemoteMedia } from "../media/fetch.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
@@ -1879,19 +1879,16 @@ async function resolveMediaList(
   const out: DiscordMediaInfo[] = [];
   for (const attachment of attachments) {
     try {
-      const res = await fetch(attachment.url);
-      if (!res.ok) {
-        throw new Error(
-          `Failed to download discord attachment: HTTP ${res.status}`,
-        );
-      }
-      const buffer = Buffer.from(await res.arrayBuffer());
-      const mime = await detectMime({
-        buffer,
-        headerMime: attachment.content_type ?? res.headers.get("content-type"),
-        filePath: attachment.filename ?? attachment.url,
+      const fetched = await fetchRemoteMedia({
+        url: attachment.url,
+        filePathHint: attachment.filename ?? attachment.url,
       });
-      const saved = await saveMediaBuffer(buffer, mime, "inbound", maxBytes);
+      const saved = await saveMediaBuffer(
+        fetched.buffer,
+        fetched.contentType ?? attachment.content_type,
+        "inbound",
+        maxBytes,
+      );
       out.push({
         path: saved.path,
         contentType: saved.contentType,

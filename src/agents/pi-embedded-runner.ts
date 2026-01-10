@@ -17,6 +17,7 @@ import {
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import type {
   ReasoningLevel,
   ThinkLevel,
@@ -28,7 +29,6 @@ import type { ClawdbotConfig } from "../config/config.js";
 import { resolveProviderCapabilities } from "../config/provider-capabilities.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { createSubsystemLogger } from "../logging.js";
-import { splitMediaFromOutput } from "../media/parse.js";
 import {
   type enqueueCommand,
   enqueueCommandInLane,
@@ -1626,6 +1626,9 @@ export async function runEmbeddedPiAgent(params: {
             media?: string[];
             isError?: boolean;
             audioAsVoice?: boolean;
+            replyToId?: string;
+            replyToTag?: boolean;
+            replyToCurrent?: boolean;
           }> = [];
 
           const errorText = lastAssistant
@@ -1646,12 +1649,18 @@ export async function runEmbeddedPiAgent(params: {
                 text: cleanedText,
                 mediaUrls,
                 audioAsVoice,
-              } = splitMediaFromOutput(agg);
+                replyToId,
+                replyToTag,
+                replyToCurrent,
+              } = parseReplyDirectives(agg);
               if (cleanedText)
                 replyItems.push({
                   text: cleanedText,
                   media: mediaUrls,
                   audioAsVoice,
+                  replyToId,
+                  replyToTag,
+                  replyToCurrent,
                 });
             }
           }
@@ -1675,7 +1684,10 @@ export async function runEmbeddedPiAgent(params: {
               text: cleanedText,
               mediaUrls,
               audioAsVoice,
-            } = splitMediaFromOutput(text);
+              replyToId,
+              replyToTag,
+              replyToCurrent,
+            } = parseReplyDirectives(text);
             if (
               !cleanedText &&
               (!mediaUrls || mediaUrls.length === 0) &&
@@ -1686,6 +1698,9 @@ export async function runEmbeddedPiAgent(params: {
               text: cleanedText,
               media: mediaUrls,
               audioAsVoice,
+              replyToId,
+              replyToTag,
+              replyToCurrent,
             });
           }
 
@@ -1699,6 +1714,9 @@ export async function runEmbeddedPiAgent(params: {
               mediaUrls: item.media?.length ? item.media : undefined,
               mediaUrl: item.media?.[0],
               isError: item.isError,
+              replyToId: item.replyToId,
+              replyToTag: item.replyToTag,
+              replyToCurrent: item.replyToCurrent,
               // Apply audioAsVoice to media payloads if tag was found anywhere in response
               audioAsVoice:
                 item.audioAsVoice || (hasAudioAsVoiceTag && item.media?.length),

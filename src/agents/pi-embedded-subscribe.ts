@@ -3,12 +3,12 @@ import path from "node:path";
 import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
-import { splitMediaFromOutput } from "../media/parse.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -383,7 +383,7 @@ export function subscribeEmbeddedPiSession(params: {
   const emitToolSummary = (toolName?: string, meta?: string) => {
     if (!params.onToolResult) return;
     const agg = formatToolAggregate(toolName, meta ? [meta] : undefined);
-    const { text: cleanedText, mediaUrls } = splitMediaFromOutput(agg);
+    const { text: cleanedText, mediaUrls } = parseReplyDirectives(agg);
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
     try {
       void params.onToolResult({
@@ -437,7 +437,7 @@ export function subscribeEmbeddedPiSession(params: {
     lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
     if (!params.onBlockReply) return;
-    const splitResult = splitMediaFromOutput(chunk);
+    const splitResult = parseReplyDirectives(chunk);
     const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
     // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice)
@@ -739,7 +739,7 @@ export function subscribeEmbeddedPiSession(params: {
             if (next && next !== lastStreamedAssistant) {
               lastStreamedAssistant = next;
               const { text: cleanedText, mediaUrls } =
-                splitMediaFromOutput(next);
+                parseReplyDirectives(next);
               emitAgentEvent({
                 runId: params.runId,
                 stream: "assistant",
@@ -868,7 +868,7 @@ export function subscribeEmbeddedPiSession(params: {
                   text: cleanedText,
                   mediaUrls,
                   audioAsVoice,
-                } = splitMediaFromOutput(text);
+                } = parseReplyDirectives(text);
                 // Emit if there's content OR audioAsVoice flag (to propagate the flag)
                 if (
                   cleanedText ||

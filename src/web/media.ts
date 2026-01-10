@@ -54,43 +54,60 @@ async function loadWebMediaInternal(
     };
   };
 
-  if (/^https?:\/\//i.test(mediaUrl)) {
-    const fetched = await fetchRemoteMedia({ url: mediaUrl });
-    const { buffer, contentType, fileName } = fetched;
-    const kind = mediaKindFromMime(contentType);
+  const clampAndFinalize = async (params: {
+    buffer: Buffer;
+    contentType?: string;
+    kind: MediaKind;
+    fileName?: string;
+  }): Promise<WebMediaResult> => {
     const cap = Math.min(
-      maxBytes ?? maxBytesForKind(kind),
-      maxBytesForKind(kind),
+      maxBytes ?? maxBytesForKind(params.kind),
+      maxBytesForKind(params.kind),
     );
-    if (kind === "image") {
-      // Skip optimization for GIFs to preserve animation.
-      if (contentType === "image/gif" || !optimizeImages) {
-        if (buffer.length > cap) {
+    if (params.kind === "image") {
+      const isGif = params.contentType === "image/gif";
+      if (isGif || !optimizeImages) {
+        if (params.buffer.length > cap) {
           throw new Error(
             `${
-              contentType === "image/gif" ? "GIF" : "Media"
+              isGif ? "GIF" : "Media"
             } exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-              buffer.length / (1024 * 1024)
+              params.buffer.length / (1024 * 1024)
             ).toFixed(2)}MB)`,
           );
         }
-        return { buffer, contentType, kind, fileName };
+        return {
+          buffer: params.buffer,
+          contentType: params.contentType,
+          kind: params.kind,
+          fileName: params.fileName,
+        };
       }
-      return { ...(await optimizeAndClampImage(buffer, cap)), fileName };
+      return {
+        ...(await optimizeAndClampImage(params.buffer, cap)),
+        fileName: params.fileName,
+      };
     }
-    if (buffer.length > cap) {
+    if (params.buffer.length > cap) {
       throw new Error(
         `Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-          buffer.length / (1024 * 1024)
+          params.buffer.length / (1024 * 1024)
         ).toFixed(2)}MB)`,
       );
     }
     return {
-      buffer,
-      contentType: contentType ?? undefined,
-      kind,
-      fileName,
+      buffer: params.buffer,
+      contentType: params.contentType ?? undefined,
+      kind: params.kind,
+      fileName: params.fileName,
     };
+  };
+
+  if (/^https?:\/\//i.test(mediaUrl)) {
+    const fetched = await fetchRemoteMedia({ url: mediaUrl });
+    const { buffer, contentType, fileName } = fetched;
+    const kind = mediaKindFromMime(contentType);
+    return await clampAndFinalize({ buffer, contentType, kind, fileName });
   }
 
   // Local path
@@ -102,34 +119,12 @@ async function loadWebMediaInternal(
     const ext = extensionForMime(mime);
     if (ext) fileName = `${fileName}${ext}`;
   }
-  const cap = Math.min(
-    maxBytes ?? maxBytesForKind(kind),
-    maxBytesForKind(kind),
-  );
-  if (kind === "image") {
-    // Skip optimization for GIFs to preserve animation.
-    if (mime === "image/gif" || !optimizeImages) {
-      if (data.length > cap) {
-        throw new Error(
-          `${
-            mime === "image/gif" ? "GIF" : "Media"
-          } exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-            data.length / (1024 * 1024)
-          ).toFixed(2)}MB)`,
-        );
-      }
-      return { buffer: data, contentType: mime, kind, fileName };
-    }
-    return { ...(await optimizeAndClampImage(data, cap)), fileName };
-  }
-  if (data.length > cap) {
-    throw new Error(
-      `Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-        data.length / (1024 * 1024)
-      ).toFixed(2)}MB)`,
-    );
-  }
-  return { buffer: data, contentType: mime, kind, fileName };
+  return await clampAndFinalize({
+    buffer: data,
+    contentType: mime,
+    kind,
+    fileName,
+  });
 }
 
 export async function loadWebMedia(
