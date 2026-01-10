@@ -22,6 +22,7 @@ if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
 fi
 IFS=' ' read -r -a BUILD_ARCHS <<< "$BUILD_ARCHS_VALUE"
 PRIMARY_ARCH="${BUILD_ARCHS[0]}"
+BUNDLED_RUNTIME="${BUNDLED_RUNTIME:-node}"
 SPARKLE_PUBLIC_ED_KEY="${SPARKLE_PUBLIC_ED_KEY:-AGCY8w5vHirVfGGDGc8Szc5iuOqupZSh9pMj/Qs67XI=}"
 SPARKLE_FEED_URL="${SPARKLE_FEED_URL:-https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml}"
 AUTO_CHECKS=true
@@ -134,6 +135,116 @@ build_relay_binary() {
   else
     "${cmd[@]}"
   fi
+}
+
+resolve_node_version() {
+  if [[ -n "${NODE_VERSION:-}" ]]; then
+    echo "${NODE_VERSION#v}"
+    return
+  fi
+
+  local mirror="${NODE_DIST_MIRROR:-https://nodejs.org/dist}"
+  local latest
+  if latest="$(/usr/bin/curl -fsSL "$mirror/index.tab" 2>/dev/null | /usr/bin/awk 'NR==2 {print $1}')" && [[ -n "$latest" ]]; then
+    echo "${latest#v}"
+    return
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    node -p "process.versions.node"
+    return
+  fi
+
+  echo "22.12.0"
+}
+
+node_dist_filename() {
+  local version="$1"
+  local arch="$2"
+  local node_arch="$arch"
+  if [[ "$arch" == "x86_64" ]]; then
+    node_arch="x64"
+  fi
+  echo "node-v${version}-darwin-${node_arch}.tar.gz"
+}
+
+download_node_binary() {
+  local version="$1"
+  local arch="$2"
+  local out="$3"
+  local mirror="${NODE_DIST_MIRROR:-https://nodejs.org/dist}"
+  local tarball
+  tarball="$(node_dist_filename "$version" "$arch")"
+
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local url="$mirror/v${version}/${tarball}"
+  echo "⬇️  Downloading Node ${version} (${arch})"
+  /usr/bin/curl -fsSL "$url" -o "$tmp_dir/node.tgz"
+
+  /usr/bin/tar -xzf "$tmp_dir/node.tgz" -C "$tmp_dir"
+  local node_arch="$arch"
+  if [[ "$arch" == "x86_64" ]]; then
+    node_arch="x64"
+  fi
+  local node_src="$tmp_dir/node-v${version}-darwin-${node_arch}/bin/node"
+  if [[ ! -f "$node_src" ]]; then
+    echo "ERROR: Node binary missing in $tarball" >&2
+    rm -rf "$tmp_dir"
+    exit 1
+  fi
+  cp "$node_src" "$out"
+  chmod +x "$out"
+  rm -rf "$tmp_dir"
+}
+
+stage_relay_payload() {
+  local relay_dir="$1"
+
+  if [[ "${SKIP_RELAY_DEPS:-0}" != "1" ]]; then
+    local stage_dir="$relay_dir/.relay-deploy"
+    rm -rf "$stage_dir"
+    mkdir -p "$stage_dir"
+    echo "📦 Staging relay dependencies (pnpm deploy --prod --no-optional --legacy)"
+    (cd "$ROOT_DIR" && pnpm --filter . deploy "$stage_dir" --prod --no-optional --legacy)
+    rm -rf "$relay_dir/node_modules"
+    cp -a "$stage_dir/node_modules" "$relay_dir/node_modules"
+    rm -rf "$stage_dir"
+  else
+    echo "📦 Skipping relay dependency staging (SKIP_RELAY_DEPS=1)"
+  fi
+
+  echo "📦 Copying relay dist payload"
+  rm -rf "$relay_dir/dist"
+  cp -R "$ROOT_DIR/dist" "$relay_dir/dist"
+}
+
+write_relay_wrapper() {
+  local relay_dir="$1"
+  local wrapper="$relay_dir/clawdbot"
+  cat > "$wrapper" <<SH
+#!/bin/sh
+set -e
+DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+NODE="\$DIR/node"
+REL="\$DIR/dist/macos/relay.js"
+export CLAWDBOT_BUNDLED_VERSION="\${CLAWDBOT_BUNDLED_VERSION:-$PKG_VERSION}"
+export CLAWDBOT_IMAGE_BACKEND="\${CLAWDBOT_IMAGE_BACKEND:-sips}"
+NODE_PATH="\$DIR/node_modules\${NODE_PATH:+:\$NODE_PATH}"
+export NODE_PATH
+exec "\$NODE" "\$REL" "\$@"
+SH
+  chmod +x "$wrapper"
+}
+
+validate_bundled_runtime() {
+  case "$BUNDLED_RUNTIME" in
+    node|bun) return 0 ;;
+    *)
+      echo "ERROR: Unsupported BUNDLED_RUNTIME=$BUNDLED_RUNTIME (use node|bun)" >&2
+      exit 1
+      ;;
+  esac
 }
 
 echo "📦 Ensuring deps (pnpm install)"
@@ -249,31 +360,58 @@ fi
 RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 
 if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
-  if ! command -v bun >/dev/null 2>&1; then
-    echo "ERROR: bun missing. Install bun to package the embedded gateway." >&2
-    exit 1
-  fi
-
-  echo "🧰 Building bundled relay (bun --compile)"
+  validate_bundled_runtime
   mkdir -p "$RELAY_DIR"
-  RELAY_OUT="$RELAY_DIR/clawdbot"
-  RELAY_BUILD_DIR="$RELAY_DIR/.relay-build"
-  rm -rf "$RELAY_BUILD_DIR"
-  mkdir -p "$RELAY_BUILD_DIR"
-  for arch in "${BUILD_ARCHS[@]}"; do
-    RELAY_ARCH_OUT="$RELAY_BUILD_DIR/clawdbot-$arch"
-    build_relay_binary "$arch" "$RELAY_ARCH_OUT"
-    chmod +x "$RELAY_ARCH_OUT"
-  done
-  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-    /usr/bin/lipo -create "$RELAY_BUILD_DIR"/clawdbot-* -output "$RELAY_OUT"
+  RELAY_CMD="$RELAY_DIR/clawdbot"
+
+  if [[ "$BUNDLED_RUNTIME" == "bun" ]]; then
+    if ! command -v bun >/dev/null 2>&1; then
+      echo "ERROR: bun missing. Install bun or set BUNDLED_RUNTIME=node." >&2
+      exit 1
+    fi
+
+    echo "🧰 Building bundled relay (bun --compile)"
+    RELAY_BUILD_DIR="$RELAY_DIR/.relay-build"
+    rm -rf "$RELAY_BUILD_DIR"
+    mkdir -p "$RELAY_BUILD_DIR"
+    for arch in "${BUILD_ARCHS[@]}"; do
+      RELAY_ARCH_OUT="$RELAY_BUILD_DIR/clawdbot-$arch"
+      build_relay_binary "$arch" "$RELAY_ARCH_OUT"
+      chmod +x "$RELAY_ARCH_OUT"
+    done
+    if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+      /usr/bin/lipo -create "$RELAY_BUILD_DIR"/clawdbot-* -output "$RELAY_CMD"
+    else
+      cp "$RELAY_BUILD_DIR/clawdbot-${BUILD_ARCHS[0]}" "$RELAY_CMD"
+    fi
+    rm -rf "$RELAY_BUILD_DIR"
   else
-    cp "$RELAY_BUILD_DIR/clawdbot-${BUILD_ARCHS[0]}" "$RELAY_OUT"
+    NODE_VERSION="$(resolve_node_version)"
+    echo "🧰 Preparing bundled Node runtime (v${NODE_VERSION})"
+    RELAY_NODE="$RELAY_DIR/node"
+    RELAY_NODE_BUILD_DIR="$RELAY_DIR/.node-build"
+    rm -rf "$RELAY_NODE_BUILD_DIR"
+    mkdir -p "$RELAY_NODE_BUILD_DIR"
+    for arch in "${BUILD_ARCHS[@]}"; do
+      NODE_ARCH_OUT="$RELAY_NODE_BUILD_DIR/node-$arch"
+      download_node_binary "$NODE_VERSION" "$arch" "$NODE_ARCH_OUT"
+    done
+    if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+      /usr/bin/lipo -create "$RELAY_NODE_BUILD_DIR"/node-* -output "$RELAY_NODE"
+    else
+      cp "$RELAY_NODE_BUILD_DIR/node-${BUILD_ARCHS[0]}" "$RELAY_NODE"
+    fi
+    chmod +x "$RELAY_NODE"
+    if [[ "${STRIP_NODE:-1}" == "1" ]]; then
+      /usr/bin/strip -x "$RELAY_NODE" 2>/dev/null || true
+    fi
+    rm -rf "$RELAY_NODE_BUILD_DIR"
+    stage_relay_payload "$RELAY_DIR"
+    write_relay_wrapper "$RELAY_DIR"
   fi
-  rm -rf "$RELAY_BUILD_DIR"
 
   echo "🧪 Verifying bundled relay (version)"
-  "$RELAY_OUT" --version >/dev/null
+  "$RELAY_CMD" --version >/dev/null
 
   echo "🎨 Copying gateway A2UI host assets"
   rm -rf "$RELAY_DIR/a2ui"
@@ -292,6 +430,7 @@ if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
 {
   "name": "clawdbot-embedded",
   "version": "$PKG_VERSION",
+  "type": "module",
   "piConfig": {
     "name": "pi",
     "configDir": ".pi"

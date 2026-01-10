@@ -12,7 +12,7 @@ This app is usually built from [`scripts/package-mac-app.sh`](https://github.com
 - calls [`scripts/codesign-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/codesign-mac-app.sh) to sign the main binary, bundled CLI, and app bundle so macOS treats each rebuild as the same signed bundle and keeps TCC permissions (notifications, accessibility, screen recording, mic, speech). For stable permissions, use a real signing identity; ad-hoc is opt-in and fragile (see [`docs/mac/permissions.md`](/platforms/mac/permissions)).
 - uses `CODESIGN_TIMESTAMP=auto` by default; it enables trusted timestamps for Developer ID signatures. Set `CODESIGN_TIMESTAMP=off` to skip timestamping (offline debug builds).
 - inject build metadata into Info.plist: `ClawdbotBuildTimestamp` (UTC) and `ClawdbotGitCommit` (short hash) so the About pane can show build, git, and debug/release channel.
-- **Packaging requires Bun**: The embedded gateway relay is compiled using `bun`. Ensure it is installed (`curl -fsSL https://bun.sh/install | bash`).
+- **Packaging requires Node**: The embedded gateway relay is bundled with Node. Ensure Node is available for the packaging script (or set `NODE_VERSION` to pin the download).
 - reads `SIGN_IDENTITY` from the environment. Add `export SIGN_IDENTITY="Apple Development: Your Name (TEAMID)"` (or your Developer ID Application cert) to your shell rc to always sign with your cert. Ad-hoc signing requires explicit opt-in via `ALLOW_ADHOC_SIGNING=1` or `SIGN_IDENTITY="-"` (not recommended for permission testing).
 
 ## Usage

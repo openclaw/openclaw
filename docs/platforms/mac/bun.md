@@ -1,32 +1,43 @@
 ---
-summary: "Bundled bun gateway: packaging, launchd, signing, and bytecode"
+summary: "Bundled Node gateway: packaging, launchd, signing, and bundling"
 read_when:
   - Packaging Clawdbot.app
   - Debugging the bundled gateway binary
-  - Changing bun build flags or codesigning
+  - Changing relay bundling flags or codesigning
 ---
 
-# Bundled bun Gateway (macOS)
+# Bundled Node Gateway (macOS)
 
-Goal: ship **Clawdbot.app** with a self-contained relay binary that can run both the CLI and the Gateway daemon. No global `npm install -g clawdbot`, no system Node requirement.
+Goal: ship **Clawdbot.app** with a self-contained relay that can run the CLI and
+Gateway daemon. No global `npm install -g clawdbot`, no system Node requirement.
 
 ## What gets bundled
 
 App bundle layout:
 
+- `Clawdbot.app/Contents/Resources/Relay/node`
+  - Node runtime binary (downloaded during packaging, stripped for size)
+- `Clawdbot.app/Contents/Resources/Relay/dist/`
+  - Compiled CLI/gateway payload from `pnpm exec tsc`
+- `Clawdbot.app/Contents/Resources/Relay/node_modules/`
+  - Production dependencies staged via `pnpm deploy --prod --no-optional --legacy`
 - `Clawdbot.app/Contents/Resources/Relay/clawdbot`
-  - bun `--compile` relay executable built from `dist/macos/relay.js`
-  - Supports:
-    - `clawdbot …` (CLI)
-    - `clawdbot gateway …` (LaunchAgent daemon)
+  - Wrapper script that execs the bundled Node + dist entrypoint
 - `Clawdbot.app/Contents/Resources/Relay/package.json`
-  - tiny “p runtime compatibility” file (see below)
+  - tiny “Pi runtime compatibility” file (see below, includes `"type": "module"`)
+- `Clawdbot.app/Contents/Resources/Relay/skills/`
+  - Bundled skills payload (required for Pi tools)
 - `Clawdbot.app/Contents/Resources/Relay/theme/`
-  - p TUI theme payload (optional, but strongly recommended)
+  - Pi TUI theme payload (optional, but strongly recommended)
+- `Clawdbot.app/Contents/Resources/Relay/a2ui/`
+  - A2UI host assets (served by the gateway)
+- `Clawdbot.app/Contents/Resources/Relay/control-ui/`
+  - Control UI build output (served by the gateway)
 
 Why the sidecar files matter:
-- The embedded p runtime detects “bun binary mode” and then looks for `package.json` + `theme/` **next to `process.execPath`** (i.e. next to `clawdbot`).
-- So even if bun can embed assets, the runtime expects filesystem paths. Keep the sidecar files.
+- The embedded Pi runtime detects “bundled relay mode” and then looks for
+  `package.json` + `theme/` **next to `process.execPath`** (i.e. next to
+  `node`). Keep the sidecar files.
 
 ## Build pipeline
 
@@ -36,18 +47,18 @@ Packaging script:
 It builds:
 - TS: `pnpm exec tsc`
 - Swift app + helper: `swift build …`
-- bun relay: `bun build dist/macos/relay.js --compile --bytecode …`
+- Relay payload: `pnpm deploy --prod --no-optional --legacy` + copy `dist/`
+- Node runtime: downloads the latest Node release (override via `NODE_VERSION`)
 
-Important bundler flags:
-- `--compile`: produces a standalone executable
-- `--bytecode`: reduces startup time / parsing overhead (works here)
-- externals:
-  - `-e electron`
-  - Reason: avoid bundling Electron stubs in the relay binary
+Important knobs:
+- `NODE_VERSION=22.12.0` → pin a specific Node version
+- `NODE_DIST_MIRROR=…` → mirror for downloads (default: nodejs.org)
+- `STRIP_NODE=0` → keep symbols (default strips to reduce size)
+- `BUNDLED_RUNTIME=bun` → switch the relay build back to Bun (`bun --compile`)
 
 Version injection:
-- `--define "__CLAWDBOT_VERSION__=\"<pkg version>\""`
-- The relay honors `__CLAWDBOT_VERSION__` / `CLAWDBOT_BUNDLED_VERSION` so `--version` doesn’t depend on reading `package.json` at runtime.
+- The relay wrapper exports `CLAWDBOT_BUNDLED_VERSION` so `--version` works
+  without reading `package.json` at runtime.
 
 ## Launchd (Gateway as LaunchAgent)
 
@@ -63,40 +74,26 @@ Manager:
 Behavior:
 - “Clawdbot Active” enables/disables the LaunchAgent.
 - App quit does **not** stop the gateway (launchd keeps it alive).
- - CLI install (`clawdbot daemon install`) writes the same LaunchAgent; `clawdbot daemon install --force` rewrites it.
- - `clawdbot doctor` audits the LaunchAgent config and can update it to current defaults.
+- CLI install (`clawdbot daemon install`) writes the same LaunchAgent; `--force` rewrites it.
 
 Logging:
 - launchd stdout/err: `/tmp/clawdbot/clawdbot-gateway.log`
 
 Default LaunchAgent env:
-- `CLAWDBOT_IMAGE_BACKEND=sips` (avoid sharp native addon under bun)
+- `CLAWDBOT_IMAGE_BACKEND=sips` (avoid sharp native addon inside the bundle)
 
-## Codesigning (hardened runtime + bun)
+## Codesigning (hardened runtime + Node)
 
-Symptom (when mis-signed):
-- `Ran out of executable memory …` on launch
+Node uses JIT. The bundled runtime is signed with:
+- `com.apple.security.cs.allow-jit`
+- `com.apple.security.cs.allow-unsigned-executable-memory`
 
-Fix:
-- The bun executable needs JIT-ish permissions under hardened runtime.
-- `scripts/codesign-mac-app.sh` signs `Relay/clawdbot` with:
-  - `com.apple.security.cs.allow-jit`
-  - `com.apple.security.cs.allow-unsigned-executable-memory`
+This is applied by `scripts/codesign-mac-app.sh`.
 
-## Image processing under bun
+## Image processing
 
-Problem:
-- bun can’t load some native Node addons like `sharp` (and we don’t want to ship native addon trees for the gateway).
-
-Solution:
-- Image operations prefer `/usr/bin/sips` on macOS (especially under bun).
-- When running in Node/dev, `sharp` is used when available.
-- This affects inbound/outbound media, screenshots, and tool image sanitization.
-
-## Browser control server
-
-The Gateway starts the browser control server (loopback only) from the relay daemon process,
-so the relay binary includes Playwright deps.
+To avoid shipping native `sharp` addons inside the bundle, the gateway defaults
+to `/usr/bin/sips` for image ops when run from the app (via launchd env + wrapper).
 
 ## Tests / smoke checks
 
@@ -115,17 +112,3 @@ Then, in another shell:
 ```bash
 pnpm -s clawdbot gateway call health --url ws://127.0.0.1:18999 --timeout 3000
 ```
-
-## Repo hygiene
-
-Bun may leave dotfiles like `*.bun-build` in the repo root or subfolders.
-- These are ignored via `.gitignore` (`*.bun-build`).
-
-## DMG styling (human installer)
-
-`scripts/create-dmg.sh` styles the DMG via Finder AppleScript.
-
-Rules of thumb:
-- Use a **72dpi** background image that matches the Finder window size in points.
-- Preferred asset: `assets/dmg-background-small.png` (**500×320**).
-- Default icon positions: app `{125,160}`, Applications `{375,160}`.

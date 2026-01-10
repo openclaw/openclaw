@@ -88,10 +88,11 @@ Safety:
 - `cd apps/macos && swift build`
 - `swift run Clawdbot` (or Xcode)
 - Package app + CLI: `scripts/package-mac-app.sh`
+  - Switch bundled gateway runtime with `BUNDLED_RUNTIME=node|bun` (default: node).
 
 ## Related docs
 
 - [Gateway runbook](/gateway)
-- [Bundled bun Gateway](/platforms/mac/bun)
+- [Bundled Node Gateway](/platforms/mac/bun)
 - [macOS permissions](/platforms/mac/permissions)
 - [Canvas](/platforms/mac/canvas)

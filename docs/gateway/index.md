@@ -187,7 +187,7 @@ Notes:
 - `daemon install` is a no-op when already installed; use `clawdbot daemon install --force` to reinstall (profile/env/path changes).
 
 Bundled mac app:
-- Clawdbot.app can bundle a bun-compiled gateway binary and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
+- Clawdbot.app can bundle a Node-based gateway relay and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
 - To stop it cleanly, use `clawdbot daemon stop` (or `launchctl bootout gui/$UID/com.clawdbot.gateway`).
 - To restart, use `clawdbot daemon restart` (or `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`).
   - `launchctl` only works if the LaunchAgent is installed; otherwise use `clawdbot daemon install` first.
