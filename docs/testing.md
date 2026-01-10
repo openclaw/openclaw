@@ -102,6 +102,8 @@ Live tests are split into two layers so we can isolate failures:
 - How to select models:
   - `CLAWDBOT_LIVE_MODELS=all` to run everything with keys
   - or `CLAWDBOT_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,..."` (comma allowlist)
+- How to select providers:
+  - `CLAWDBOT_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
   - By default: profile store and env fallbacks
   - Set `CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
@@ -126,11 +128,19 @@ Live tests are split into two layers so we can isolate failures:
 - How to select models:
   - `CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1` to scan all discovered models with keys
   - or set `CLAWDBOT_LIVE_GATEWAY_MODELS="provider/model,provider/model,..."` to narrow quickly
+- How to select providers (avoid “OpenRouter everything”):
+  - `CLAWDBOT_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Optional tool-calling stress:
   - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “bash writes file → read reads it back → echo nonce” check.
   - This is specifically meant to catch tool-calling compatibility issues across providers (formatting, history replay, tool_result pairing, etc.).
 - Optional image send smoke:
   - `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` sends a real image attachment through the gateway agent pipeline (multimodal message) and asserts the model can read back a per-run code from the image.
+  - Flow (high level):
+    - Test generates a tiny PNG with “CAT” + random code (`src/gateway/live-image-probe.ts`)
+    - Sends it via `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`
+    - Gateway parses attachments into `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
+    - Embedded agent forwards a multimodal user message to the model
+    - Assertion: reply contains `cat` + the code (OCR tolerance: minor mistakes allowed)
 
 ### Recommended live recipes
 
