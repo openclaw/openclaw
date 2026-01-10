@@ -114,6 +114,39 @@ describe("RawBody directive parsing", () => {
     });
   });
 
+  it("CommandBody is honored when RawBody is missing", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+
+      const groupMessageCtx = {
+        Body: `[Context]\nJake: /verbose on\n[from: Jake]`,
+        CommandBody: "/verbose on",
+        From: "+1222",
+        To: "+1222",
+        ChatType: "group",
+      };
+
+      const res = await getReplyFromConfig(
+        groupMessageCtx,
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Verbose logging enabled.");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("Integration: WhatsApp group message with structural wrapper and RawBody command", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
@@ -149,6 +182,60 @@ describe("RawBody directive parsing", () => {
       expect(text).toContain("Session: agent:main:whatsapp:group:G1");
       expect(text).toContain("anthropic/claude-opus-4-5");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("preserves history when RawBody is provided for command parsing", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const groupMessageCtx = {
+        Body: [
+          "[Chat messages since your last reply - for context]",
+          "[WhatsApp ...] Peter: hello",
+          "",
+          "[Current message - respond to this]",
+          "[WhatsApp ...] Jake: /think:high status please",
+          "[from: Jake McInteer (+6421807830)]",
+        ].join("\n"),
+        RawBody: "/think:high status please",
+        From: "+1222",
+        To: "+1222",
+        ChatType: "group",
+      };
+
+      const res = await getReplyFromConfig(
+        groupMessageCtx,
+        {},
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("ok");
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain(
+        "[Chat messages since your last reply - for context]",
+      );
+      expect(prompt).toContain("Peter: hello");
+      expect(prompt).toContain("status please");
+      expect(prompt).not.toContain("/think:high");
     });
   });
 });
