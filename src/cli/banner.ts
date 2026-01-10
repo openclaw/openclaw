@@ -38,7 +38,7 @@ export function formatCliBannerLine(
   const commitLabel = commit ?? "unknown";
   const tagline = pickTagline(options);
   const rich = options.richTty ?? isRich();
-  const title = "🦞 ClawdBot";
+  const title = "🦞 Clawdbot";
   if (rich) {
     return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(
       `(${commitLabel})`,

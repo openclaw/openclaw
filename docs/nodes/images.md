@@ -5,7 +5,7 @@ read_when:
 ---
 # Image & Media Support — 2025-12-05
 
-CLAWDBOT is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
+Clawdbot is now **web-only** (Baileys). This document captures the current media handling rules for send, gateway, and agent replies.
 
 ## Goals
 - Send media with optional captions via `clawdbot message send --media`.
@@ -34,7 +34,7 @@ CLAWDBOT is now **web-only** (Baileys). This document captures the current media
 - Multiple media entries are sent sequentially if provided.
 
 ## Inbound Media to Commands (Pi)
-- When inbound web messages include media, CLAWDBOT downloads to a temp file and exposes templating variables:
+- When inbound web messages include media, Clawdbot downloads to a temp file and exposes templating variables:
   - `{{MediaUrl}}` pseudo-URL for the inbound media.
   - `{{MediaPath}}` local temp path written before running the command.
 - When a per-session Docker sandbox is enabled, inbound media is copied into the sandbox workspace and `MediaPath`/`MediaUrl` are rewritten to a relative path like `media/inbound/<filename>`.

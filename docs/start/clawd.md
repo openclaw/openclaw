@@ -4,9 +4,9 @@ read_when:
   - Onboarding a new assistant instance
   - Reviewing safety/permission implications
 ---
-# Building a personal assistant with CLAWDBOT (Clawd-style)
+# Building a personal assistant with Clawdbot (Clawd-style)
 
-CLAWDBOT is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
+Clawdbot is a WhatsApp + Telegram + Discord gateway for **Pi** agents. This guide is the “personal assistant” setup: one dedicated WhatsApp number that behaves like your always-on agent.
 
 ## ⚠️ Safety first
 
@@ -23,7 +23,7 @@ Start conservative:
 ## Prerequisites
 
 - Node **22+**
-- CLAWDBOT available on PATH (recommended: global install)
+- Clawdbot available on PATH (recommended: global install)
 - A second phone number (SIM/eSIM/prepaid) for the assistant
 
 ```bash
@@ -61,7 +61,7 @@ Your Phone (personal)          Second Phone (assistant)
                               └─────────────────┘
 ```
 
-If you link your personal WhatsApp to CLAWDBOT, every message to you becomes “agent input”. That’s rarely what you want.
+If you link your personal WhatsApp to Clawdbot, every message to you becomes “agent input”. That’s rarely what you want.
 
 ## 5-minute quick start
 
@@ -125,7 +125,7 @@ If you already ship your own workspace files from a repo, you can disable bootst
 
 ## The config that turns it into “an assistant”
 
-CLAWDBOT defaults to a good assistant setup, but you’ll usually want to tune:
+Clawdbot defaults to a good assistant setup, but you’ll usually want to tune:
 - persona/instructions in `SOUL.md`
 - thinking defaults (if desired)
 - heartbeats (once you trust it)
@@ -171,11 +171,11 @@ Example:
 
 ## Heartbeats (proactive mode)
 
-By default, CLAWDBOT runs a heartbeat every 30 minutes with the prompt:
+By default, Clawdbot runs a heartbeat every 30 minutes with the prompt:
 `Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.`
 Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
-- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), CLAWDBOT suppresses outbound delivery for that heartbeat.
+- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), Clawdbot suppresses outbound delivery for that heartbeat.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 
 ```json5
@@ -200,7 +200,7 @@ Here’s the screenshot.
 MEDIA:/tmp/screenshot.png
 ```
 
-CLAWDBOT extracts these and sends them as media alongside the text.
+Clawdbot extracts these and sends them as media alongside the text.
 
 ## Operations checklist
 

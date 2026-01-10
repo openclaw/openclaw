@@ -3,12 +3,12 @@ summary: "Top-level overview of Clawdbot, features, and purpose"
 read_when:
   - Introducing Clawdbot to newcomers
 ---
-# CLAWDBOT 🦞
+# Clawdbot 🦞
 
 > *"EXFOLIATE! EXFOLIATE!"* — A space lobster, probably
 
 <p align="center">
-  <img src="whatsapp-clawd.jpg" alt="CLAWDBOT" width="420" />
+  <img src="whatsapp-clawd.jpg" alt="Clawdbot" width="420" />
 </p>
 
 <p align="center">
@@ -23,7 +23,7 @@ read_when:
   <a href="https://docs.clawd.bot/start/clawd">Clawdbot assistant setup</a>
 </p>
 
-CLAWDBOT bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
+Clawdbot bridges WhatsApp (via WhatsApp Web / Baileys), Telegram (Bot API / grammY), Discord (Bot API / discord.js), and iMessage (imsg CLI) to coding agents like [Pi](https://github.com/badlogic/pi-mono).
 Clawdbot also powers [Clawd](https://clawd.me), the space‑lobster assistant.
 
 ## Start here
@@ -136,14 +136,14 @@ clawdbot gateway --port 19001
 Send a test message (requires a running Gateway):
 
 ```bash
-clawdbot message send --to +15555550123 --message "Hello from CLAWDBOT"
+clawdbot message send --to +15555550123 --message "Hello from Clawdbot"
 ```
 
 ## Configuration (optional)
 
 Config lives at `~/.clawdbot/clawdbot.json`.
 
-- If you **do nothing**, CLAWDBOT uses the bundled Pi binary in RPC mode with per-sender sessions.
+- If you **do nothing**, Clawdbot uses the bundled Pi binary in RPC mode with per-sender sessions.
 - If you want to lock it down, start with `whatsapp.allowFrom` and (for groups) mention rules.
 
 Example:
@@ -206,7 +206,7 @@ Example:
 
 ## The name
 
-**CLAWDBOT = CLAW + TARDIS** — because every space lobster needs a time-and-space machine.
+**Clawdbot = CLAW + TARDIS** — because every space lobster needs a time-and-space machine.
 
 ---
 

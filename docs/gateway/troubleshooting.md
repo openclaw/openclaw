@@ -272,7 +272,7 @@ grep "media\\|fetch\\|download" "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)
 
 ### High Memory Usage
 
-CLAWDBOT keeps conversation history in memory.
+Clawdbot keeps conversation history in memory.
 
 **Fix:** Restart periodically or set session limits:
 ```json
@@ -390,7 +390,7 @@ clawdbot daemon restart           # or: clawdbot gateway
 1. Check logs first: `/tmp/clawdbot/` (default: `clawdbot-YYYY-MM-DD.log`, or your configured `logging.file`)
 2. Search existing issues on GitHub
 3. Open a new issue with:
-   - CLAWDBOT version
+   - Clawdbot version
    - Relevant log snippets
    - Steps to reproduce
    - Your config (redact secrets!)

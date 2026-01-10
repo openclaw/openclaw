@@ -90,7 +90,7 @@ describe("session_status tool", () => {
     const result = await tool.execute("call1", {});
     const details = result.details as { ok?: boolean; statusText?: string };
     expect(details.ok).toBe(true);
-    expect(details.statusText).toContain("ClawdBot");
+    expect(details.statusText).toContain("Clawdbot");
     expect(details.statusText).toContain("🧠 Model:");
   });
 

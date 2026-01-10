@@ -5,11 +5,11 @@ read_when:
 ---
 # Agent Runtime 🤖
 
-CLAWDBOT runs a single embedded agent runtime derived from **p-mono**.
+Clawdbot runs a single embedded agent runtime derived from **p-mono**.
 
 ## Workspace (required)
 
-CLAWDBOT uses a single agent workspace directory (`agents.defaults.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
+Clawdbot uses a single agent workspace directory (`agents.defaults.workspace`) as the agent’s **only** working directory (`cwd`) for tools and context.
 
 Recommended: use `clawdbot setup` to create `~/.clawdbot/clawdbot.json` if missing and initialize the workspace files.
 
@@ -21,7 +21,7 @@ per-session workspaces under `agents.defaults.sandbox.workspaceRoot` (see
 
 ## Bootstrap files (injected)
 
-Inside `agents.defaults.workspace`, CLAWDBOT expects these user-editable files:
+Inside `agents.defaults.workspace`, Clawdbot expects these user-editable files:
 - `AGENTS.md` — operating instructions + “memory”
 - `SOUL.md` — persona, boundaries, tone
 - `TOOLS.md` — user-maintained tool notes (e.g. `imsg`, `sag`, conventions)
@@ -29,11 +29,11 @@ Inside `agents.defaults.workspace`, CLAWDBOT expects these user-editable files:
 - `IDENTITY.md` — agent name/vibe/emoji
 - `USER.md` — user profile + preferred address
 
-On the first turn of a new session, CLAWDBOT injects the contents of these files directly into the agent context.
+On the first turn of a new session, Clawdbot injects the contents of these files directly into the agent context.
 
 Blank files are skipped. Large files are trimmed and truncated with a marker so prompts stay lean (read the file for full content).
 
-If a file is missing, CLAWDBOT injects a single “missing file” marker line (and `clawdbot setup` will create a safe default template).
+If a file is missing, Clawdbot injects a single “missing file” marker line (and `clawdbot setup` will create a safe default template).
 
 `BOOTSTRAP.md` is only created for a **brand new workspace** (no other bootstrap files present). If you delete it after completing the ritual, it should not be recreated on later restarts.
 
@@ -68,7 +68,7 @@ Clawdbot reuses pieces of the p-mono codebase (models/tools), but **session mana
 Session transcripts are stored as JSONL at:
 - `~/.clawdbot/agents/<agentId>/sessions/<SessionId>.jsonl`
 
-The session ID is stable and chosen by CLAWDBOT.
+The session ID is stable and chosen by Clawdbot.
 Legacy Pi/Tau session folders are **not** read.
 
 ## Steering while streaming

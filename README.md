@@ -1,7 +1,7 @@
-# 🦞 CLAWDBOT — Personal AI Assistant
+# 🦞 Clawdbot — Personal AI Assistant
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/clawdbot/clawdbot/main/docs/whatsapp-clawd.jpg" alt="CLAWDBOT" width="400">
+  <img src="https://raw.githubusercontent.com/clawdbot/clawdbot/main/docs/whatsapp-clawd.jpg" alt="Clawdbot" width="400">
 </p>
 
 <p align="center">

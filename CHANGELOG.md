@@ -2,6 +2,10 @@
 
 ## 2026.1.10
 
+### Fixes
+- CLI: `clawdbot sessions` now includes `elev:*` + `usage:*` flags in the table output.
+- Branding: normalize user-facing “ClawdBot”/“CLAWDBOT” → “Clawdbot” (CLI, status, docs).
+
 ## 2026.1.9
 
 ### Highlights

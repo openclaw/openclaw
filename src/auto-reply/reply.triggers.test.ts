@@ -237,7 +237,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("ClawdBot");
+      expect(text).toContain("Clawdbot");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -254,7 +254,7 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("ClawdBot");
+      expect(text).toContain("Clawdbot");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
