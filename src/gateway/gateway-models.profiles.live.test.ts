@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
@@ -16,7 +17,6 @@ import { loadConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
-import { getFreePort } from "./test-helpers.js";
 
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 const GATEWAY_LIVE = process.env.CLAWDBOT_LIVE_GATEWAY === "1";
@@ -57,6 +57,51 @@ function isMeaningful(text: string): boolean {
   const words = trimmed.split(/\s+/g).filter(Boolean);
   if (words.length < 12) return false;
   return true;
+}
+
+async function getFreePort(): Promise<number> {
+  return await new Promise((resolve, reject) => {
+    const srv = createServer();
+    srv.on("error", reject);
+    srv.listen(0, "127.0.0.1", () => {
+      const addr = srv.address();
+      if (!addr || typeof addr === "string") {
+        srv.close();
+        reject(new Error("failed to acquire free port"));
+        return;
+      }
+      const port = addr.port;
+      srv.close((err) => {
+        if (err) reject(err);
+        else resolve(port);
+      });
+    });
+  });
+}
+
+async function isPortFree(port: number): Promise<boolean> {
+  if (!Number.isFinite(port) || port <= 0 || port > 65535) return false;
+  return await new Promise((resolve) => {
+    const srv = createServer();
+    srv.once("error", () => resolve(false));
+    srv.listen(port, "127.0.0.1", () => {
+      srv.close(() => resolve(true));
+    });
+  });
+}
+
+async function getFreeGatewayPort(): Promise<number> {
+  // Gateway uses derived ports (bridge/browser/canvas). Avoid flaky collisions by
+  // ensuring the common derived offsets are free too.
+  for (let attempt = 0; attempt < 25; attempt += 1) {
+    const port = await getFreePort();
+    const candidates = [port, port + 1, port + 2, port + 4];
+    const ok = (
+      await Promise.all(candidates.map((candidate) => isPortFree(candidate)))
+    ).every(Boolean);
+    if (ok) return port;
+  }
+  throw new Error("failed to acquire a free gateway port block");
 }
 
 type AgentFinalPayload = {
@@ -182,7 +227,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       );
       process.env.CLAWDBOT_CONFIG_PATH = tempConfigPath;
 
-      const port = await getFreePort();
+      const port = await getFreeGatewayPort();
       const server = await startGatewayServer(port, {
         bind: "loopback",
         auth: { mode: "token", token },
