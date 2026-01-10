@@ -27,6 +27,7 @@ actor MacNodeBridgeSession {
     private var buffer = Data()
     private var pendingRPC: [String: CheckedContinuation<BridgeRPCResponse, Error>] = [:]
     private var serverEventSubscribers: [UUID: AsyncStream<BridgeEventFrame>.Continuation] = [:]
+    private var invokeTasks: [UUID: Task<Void, Never>] = [:]
     private var pingTask: Task<Void, Never>?
     private var lastPongAt: ContinuousClock.Instant?
 
@@ -142,15 +143,13 @@ actor MacNodeBridgeSession {
 
                 case "invoke":
                     let req = try self.decoder.decode(BridgeInvokeRequest.self, from: nextData)
-                    Task.detached { [weak self] in
+                    let taskID = UUID()
+                    let task = Task { [weak self] in
                         let res = await onInvoke(req)
                         guard let self else { return }
-                        do {
-                            try await self.send(res)
-                        } catch {
-                            await self.logInvokeSendFailure(error)
-                        }
+                        await self.sendInvokeResponse(res, taskID: taskID)
                     }
+                    self.invokeTasks[taskID] = task
 
                 default:
                     continue
@@ -226,6 +225,7 @@ actor MacNodeBridgeSession {
         self.pingTask = nil
         self.lastPongAt = nil
         self.disconnectHandler = nil
+        self.cancelInvokeTasks()
 
         self.connection?.cancel()
         self.connection = nil
@@ -411,6 +411,23 @@ actor MacNodeBridgeSession {
     private func logInvokeSendFailure(_ error: Error) {
         self.logger.error(
             "node bridge invoke response send failed: \(error.localizedDescription, privacy: .public)")
+    }
+
+    private func sendInvokeResponse(_ response: BridgeInvokeResponse, taskID: UUID) async {
+        defer { self.invokeTasks[taskID] = nil }
+        if Task.isCancelled { return }
+        do {
+            try await self.send(response)
+        } catch {
+            await self.logInvokeSendFailure(error)
+        }
+    }
+
+    private func cancelInvokeTasks() {
+        for task in self.invokeTasks.values {
+            task.cancel()
+        }
+        self.invokeTasks.removeAll()
     }
 
     private static func makeStateStream(
