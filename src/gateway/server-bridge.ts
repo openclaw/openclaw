@@ -23,6 +23,7 @@ import {
 import { buildConfigSchema } from "../config/schema.js";
 import {
   loadSessionStore,
+  mergeSessionEntry,
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
   saveSessionStore,
@@ -810,16 +811,10 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           });
           const now = Date.now();
           const sessionId = entry?.sessionId ?? randomUUID();
-          const sessionEntry: SessionEntry = {
+          const sessionEntry = mergeSessionEntry(entry, {
             sessionId,
             updatedAt: now,
-            thinkingLevel: entry?.thinkingLevel,
-            verboseLevel: entry?.verboseLevel,
-            reasoningLevel: entry?.reasoningLevel,
-            systemSent: entry?.systemSent,
-            lastProvider: entry?.lastProvider,
-            lastTo: entry?.lastTo,
-          };
+          });
           const clientRunId = p.idempotencyKey;
           registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
 

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommand } from "../../commands/agent.js";
-import { type SessionEntry, saveSessionStore } from "../../config/sessions.js";
+import { mergeSessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -197,17 +197,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
     const now = Date.now();
     const sessionId = entry?.sessionId ?? randomUUID();
-    const sessionEntry: SessionEntry = {
+    const sessionEntry = mergeSessionEntry(entry, {
       sessionId,
       updatedAt: now,
-      thinkingLevel: entry?.thinkingLevel,
-      verboseLevel: entry?.verboseLevel,
-      reasoningLevel: entry?.reasoningLevel,
-      systemSent: entry?.systemSent,
-      sendPolicy: entry?.sendPolicy,
-      lastProvider: entry?.lastProvider,
-      lastTo: entry?.lastTo,
-    };
+    });
     const clientRunId = p.idempotencyKey;
     registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
 
