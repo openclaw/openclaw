@@ -801,9 +801,9 @@ function formatContactsPlaceholder(labels: string[], total: number): string {
     const suffix = total === 1 ? "contact" : "contacts";
     return `<contacts: ${total} ${suffix}>`;
   }
-  const { shown, remaining } = summarizeList(cleaned, total, 3);
+  const remaining = Math.max(total - cleaned.length, 0);
   const suffix = remaining > 0 ? ` +${remaining} more` : "";
-  return `<contacts: ${shown.join(", ")}${suffix}>`;
+  return `<contacts: ${cleaned.join(", ")}${suffix}>`;
 }
 
 function formatContactLabel(
