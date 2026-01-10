@@ -558,7 +558,9 @@ export function subscribeEmbeddedPiSession(params: {
               ? (args as Record<string, unknown>)
               : {};
           const action =
-            typeof argsRecord.action === "string" ? argsRecord.action : "";
+            typeof argsRecord.action === "string"
+              ? argsRecord.action.trim()
+              : "";
           // Track send actions: sendMessage/threadReply for Discord/Slack, sessions_send (no action field),
           // and message/send or message/thread-reply for the generic message tool.
           const isMessagingSend =
