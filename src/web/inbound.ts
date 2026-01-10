@@ -14,6 +14,7 @@ import {
 
 import { loadConfig } from "../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import { createSubsystemLogger, getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
@@ -47,6 +48,17 @@ export type WebListenerCloseReason = {
   isLoggedOut: boolean;
   error?: unknown;
 };
+
+const RECENT_WEB_MESSAGE_TTL_MS = 20 * 60_000;
+const RECENT_WEB_MESSAGE_MAX = 5000;
+const recentInboundMessages = createDedupeCache({
+  ttlMs: RECENT_WEB_MESSAGE_TTL_MS,
+  maxSize: RECENT_WEB_MESSAGE_MAX,
+});
+
+export function resetWebInboundDedupe(): void {
+  recentInboundMessages.clear();
+}
 
 export type WebInboundMessage = {
   id?: string;
@@ -117,7 +129,6 @@ export async function monitorWebInbox(options: {
   }
   const selfJid = sock.user?.id;
   const selfE164 = selfJid ? jidToE164(selfJid) : null;
-  const seen = new Set<string>();
   const groupMetaCache = new Map<
     string,
     { subject?: string; participants?: string[]; expires: number }
@@ -169,9 +180,6 @@ export async function monitorWebInbox(options: {
         direction: "inbound",
       });
       const id = msg.key?.id ?? undefined;
-      // De-dupe on message id; Baileys can emit retries.
-      if (id && seen.has(id)) continue;
-      if (id) seen.add(id);
       // Note: not filtering fromMe here - echo detection happens in auto-reply layer
       const remoteJid = msg.key?.remoteJid;
       if (!remoteJid) continue;
@@ -179,6 +187,10 @@ export async function monitorWebInbox(options: {
       if (remoteJid.endsWith("@status") || remoteJid.endsWith("@broadcast"))
         continue;
       const group = isJidGroup(remoteJid);
+      if (id) {
+        const dedupeKey = `${options.accountId}:${remoteJid}:${id}`;
+        if (recentInboundMessages.check(dedupeKey)) continue;
+      }
       const participantJid = msg.key?.participant ?? undefined;
       const from = group ? remoteJid : await resolveInboundJid(remoteJid);
       // Skip if we still can't resolve an id to key conversation

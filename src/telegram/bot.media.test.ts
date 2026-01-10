@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 
 const useSpy = vi.fn();
 const middlewareUseSpy = vi.fn();
@@ -15,6 +16,10 @@ const apiStub: ApiStub = {
   config: { use: useSpy },
   sendChatAction: sendChatActionSpy,
 };
+
+beforeEach(() => {
+  resetInboundDedupe();
+});
 
 vi.mock("grammy", () => ({
   Bot: class {

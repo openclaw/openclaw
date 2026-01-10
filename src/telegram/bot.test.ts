@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as replyModule from "../auto-reply/reply.js";
 import { createTelegramBot, getTelegramSequentialKey } from "./bot.js";
 import { resolveTelegramFetch } from "./fetch.js";
@@ -124,6 +125,7 @@ const getOnHandler = (event: string) => {
 
 describe("createTelegramBot", () => {
   beforeEach(() => {
+    resetInboundDedupe();
     loadConfig.mockReturnValue({
       telegram: { dmPolicy: "open", allowFrom: ["*"] },
     });

@@ -45,6 +45,7 @@ import {
   updateLastRoute,
 } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
+import { createDedupeCache } from "../infra/dedupe.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { recordProviderActivity } from "../infra/provider-activity.js";
 import { getChildLogger } from "../logging.js";
@@ -120,32 +121,11 @@ const buildTelegramUpdateKey = (ctx: TelegramUpdateKeyContext) => {
   return undefined;
 };
 
-const shouldSkipTelegramUpdate = (
-  cache: Map<string, { ts: number }>,
-  key?: string,
-) => {
-  if (!key) return false;
-  const now = Date.now();
-  const existing = cache.get(key);
-  if (existing && now - existing.ts < RECENT_TELEGRAM_UPDATE_TTL_MS) {
-    return true;
-  }
-  if (existing) cache.delete(key);
-  cache.set(key, { ts: now });
-  if (cache.size > RECENT_TELEGRAM_UPDATE_MAX) {
-    for (const [cachedKey, entry] of cache) {
-      if (now - entry.ts > RECENT_TELEGRAM_UPDATE_TTL_MS) {
-        cache.delete(cachedKey);
-      }
-    }
-    while (cache.size > RECENT_TELEGRAM_UPDATE_MAX) {
-      const oldestKey = cache.keys().next().value as string | undefined;
-      if (!oldestKey) break;
-      cache.delete(oldestKey);
-    }
-  }
-  return false;
-};
+const createTelegramUpdateDedupe = () =>
+  createDedupeCache({
+    ttlMs: RECENT_TELEGRAM_UPDATE_TTL_MS,
+    maxSize: RECENT_TELEGRAM_UPDATE_MAX,
+  });
 
 /** Telegram Location object */
 interface TelegramLocation {
@@ -233,10 +213,10 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   bot.api.config.use(apiThrottler());
   bot.use(sequentialize(getTelegramSequentialKey));
 
-  const recentUpdates = new Map<string, { ts: number }>();
+  const recentUpdates = createTelegramUpdateDedupe();
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const key = buildTelegramUpdateKey(ctx);
-    const skipped = shouldSkipTelegramUpdate(recentUpdates, key);
+    const skipped = recentUpdates.check(key);
     if (skipped && key && shouldLogVerbose()) {
       logVerbose(`telegram dedupe: skipped ${key}`);
     }
@@ -388,7 +368,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     primaryCtx: TelegramContext,
     allMedia: Array<{ path: string; contentType?: string }>,
     storeAllowFrom: string[],
-    options?: { forceWasMentioned?: boolean },
+    options?: { forceWasMentioned?: boolean; messageIdOverride?: string },
   ) => {
     const msg = primaryCtx.message;
     recordProviderActivity({
@@ -720,7 +700,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       SenderUsername: senderUsername || undefined,
       Provider: "telegram",
       Surface: "telegram",
-      MessageSid: String(msg.message_id),
+      MessageSid: options?.messageIdOverride ?? String(msg.message_id),
       ReplyToId: replyTarget?.id,
       ReplyToBody: replyTarget?.body,
       ReplyToSender: replyTarget?.sender,
@@ -1163,7 +1143,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         { message: syntheticMessage, me: ctx.me, getFile },
         [],
         storeAllowFrom,
-        { forceWasMentioned: true },
+        { forceWasMentioned: true, messageIdOverride: callback.id },
       );
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));

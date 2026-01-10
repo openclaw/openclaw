@@ -27,6 +27,12 @@ Key knobs live in configuration:
 
 See [Configuration](/gateway/configuration) for full schema.
 
+## Inbound dedupe
+
+Providers can redeliver the same message after reconnects. Clawdbot keeps a
+short-lived cache keyed by provider/account/peer/session/message id so duplicate
+deliveries do not trigger another agent run.
+
 ## Sessions and devices
 
 Sessions are owned by the gateway, not by clients.

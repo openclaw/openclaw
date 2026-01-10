@@ -4,6 +4,7 @@ import { getReplyFromConfig } from "../reply.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { tryFastAbortFromMessage } from "./abort.js";
+import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
@@ -20,6 +21,10 @@ export async function dispatchReplyFromConfig(params: {
   replyResolver?: typeof getReplyFromConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+
+  if (shouldSkipDuplicateInbound(ctx)) {
+    return { queuedFinal: false, counts: dispatcher.getQueuedCounts() };
+  }
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
