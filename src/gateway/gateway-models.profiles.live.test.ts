@@ -23,6 +23,7 @@ const GATEWAY_LIVE = process.env.CLAWDBOT_LIVE_GATEWAY === "1";
 const ALL_MODELS =
   process.env.CLAWDBOT_LIVE_GATEWAY_ALL_MODELS === "1" ||
   process.env.CLAWDBOT_LIVE_GATEWAY_MODELS === "all";
+const EXTRA_TOOL_PROBES = process.env.CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE === "1";
 
 const describeLive = LIVE && GATEWAY_LIVE ? describe : describe.skip;
 
@@ -302,6 +303,62 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             const toolText = extractPayloadText(toolProbe?.result);
             if (!toolText.includes(nonceA) || !toolText.includes(nonceB)) {
               throw new Error(`tool probe missing nonce: ${toolText}`);
+            }
+
+            if (EXTRA_TOOL_PROBES) {
+              const nonceC = `nonceC=${randomUUID()}`;
+              const nonceD = `nonceD=${randomUUID()}`;
+              const toolWritePath = path.join(
+                tempDir,
+                `write-${runIdTool}.txt`,
+              );
+
+              const writeProbe = await client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdTool}-write`,
+                  message:
+                    `Call the tool named \`write\` (or \`Write\` if \`write\` is unavailable) to write exactly "${nonceC}" to "${toolWritePath}". ` +
+                    `Then call the tool named \`read\` (or \`Read\`) on "${toolWritePath}". ` +
+                    `Finally reply with exactly: ${nonceC}.`,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              );
+              if (writeProbe?.status !== "ok") {
+                throw new Error(
+                  `write probe failed: status=${String(writeProbe?.status)}`,
+                );
+              }
+              const writeText = extractPayloadText(writeProbe?.result);
+              if (!writeText.includes(nonceC)) {
+                throw new Error(`write probe missing nonce: ${writeText}`);
+              }
+
+              const bashProbe = await client.request<AgentFinalPayload>(
+                "agent",
+                {
+                  sessionKey,
+                  idempotencyKey: `idem-${runIdTool}-bash`,
+                  message:
+                    `Call the tool named \`bash\` (or \`Bash\` if \`bash\` is unavailable) and run: echo ${nonceD}. ` +
+                    `Then reply with exactly: ${nonceD}.`,
+                  deliver: false,
+                },
+                { expectFinal: true },
+              );
+              if (bashProbe?.status !== "ok") {
+                throw new Error(
+                  `bash probe failed: status=${String(bashProbe?.status)}`,
+                );
+              }
+              const bashText = extractPayloadText(bashProbe?.result);
+              if (!bashText.includes(nonceD)) {
+                throw new Error(`bash probe missing nonce: ${bashText}`);
+              }
+
+              await fs.rm(toolWritePath, { force: true });
             }
 
             // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
