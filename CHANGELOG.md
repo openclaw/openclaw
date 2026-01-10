@@ -2,7 +2,12 @@
 
 ## Unreleased
 
-- _None yet._
+### Fixes
+- Agent/Anthropic: restore tool dispatch for OAuth tokens (bash/read/write/edit).
+- Build: relax fetch typing for Bun compatibility.
+
+### Maintenance
+- Dependencies: bump pi-* stack to 0.42.2.
 
 ## 2026.1.9
 
