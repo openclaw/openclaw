@@ -801,8 +801,7 @@ function formatContactsPlaceholder(labels: string[], total: number): string {
     const suffix = total === 1 ? "contact" : "contacts";
     return `<contacts: ${total} ${suffix}>`;
   }
-  const shown = cleaned.slice(0, 3);
-  const remaining = Math.max(total - shown.length, 0);
+  const { shown, remaining } = summarizeList(cleaned, total, 3);
   const suffix = remaining > 0 ? ` +${remaining} more` : "";
   return `<contacts: ${shown.join(", ")}${suffix}>`;
 }
@@ -822,10 +821,21 @@ function formatContactLabel(
 function formatPhoneList(phones?: string[]): string | undefined {
   const cleaned = phones?.map((phone) => phone.trim()).filter(Boolean) ?? [];
   if (cleaned.length === 0) return undefined;
-  const [primary, ...rest] = cleaned;
+  const { shown, remaining } = summarizeList(cleaned, cleaned.length, 1);
+  const [primary] = shown;
   if (!primary) return undefined;
-  if (rest.length === 0) return primary;
-  return `${primary} (+${rest.length} more)`;
+  if (remaining === 0) return primary;
+  return `${primary} (+${remaining} more)`;
+}
+
+function summarizeList(
+  values: string[],
+  total: number,
+  maxShown: number,
+): { shown: string[]; remaining: number } {
+  const shown = values.slice(0, maxShown);
+  const remaining = Math.max(total - shown.length, 0);
+  return { shown, remaining };
 }
 
 export function extractLocationData(
