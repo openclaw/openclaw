@@ -111,6 +111,10 @@ describe("sessions", () => {
             updatedAt: 123,
             systemSent: true,
             thinkingLevel: "low",
+            reasoningLevel: "on",
+            elevatedLevel: "on",
+            authProfileOverride: "auth-1",
+            compactionCount: 2,
           },
         },
         null,
@@ -131,6 +135,10 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.updatedAt).toBeGreaterThanOrEqual(123);
     expect(store[mainSessionKey]?.lastProvider).toBe("telegram");
     expect(store[mainSessionKey]?.lastTo).toBe("12345");
+    expect(store[mainSessionKey]?.reasoningLevel).toBe("on");
+    expect(store[mainSessionKey]?.elevatedLevel).toBe("on");
+    expect(store[mainSessionKey]?.authProfileOverride).toBe("auth-1");
+    expect(store[mainSessionKey]?.compactionCount).toBe(2);
   });
 
   it("derives session transcripts dir from CLAWDBOT_STATE_DIR", () => {
