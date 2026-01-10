@@ -93,6 +93,6 @@ Safety:
 ## Related docs
 
 - [Gateway runbook](/gateway)
-- [Bundled Node Gateway](/platforms/mac/bun)
+- [Bundled Node Gateway](/platforms/mac/bundled-gateway)
 - [macOS permissions](/platforms/mac/permissions)
 - [Canvas](/platforms/mac/canvas)

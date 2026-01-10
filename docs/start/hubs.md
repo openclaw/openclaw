@@ -141,7 +141,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [macOS remote](https://docs.clawd.bot/platforms/mac/remote)
 - [macOS signing](https://docs.clawd.bot/platforms/mac/signing)
 - [macOS release](https://docs.clawd.bot/platforms/mac/release)
-- [macOS bundled gateway (Node)](https://docs.clawd.bot/platforms/mac/bun)
+- [macOS bundled gateway (Node)](https://docs.clawd.bot/platforms/mac/bundled-gateway)
 - [macOS XPC](https://docs.clawd.bot/platforms/mac/xpc)
 - [macOS skills](https://docs.clawd.bot/platforms/mac/skills)
 - [macOS Peekaboo](https://docs.clawd.bot/platforms/mac/peekaboo)

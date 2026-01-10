@@ -64,6 +64,7 @@ struct GatewayCommandResolution {
 enum GatewayEnvironment {
     private static let logger = Logger(subsystem: "com.clawdbot", category: "gateway.env")
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let bundledGatewayLabel = "Bundled gateway"
 
     static func bundledGatewayExecutable() -> String? {
         guard let res = Bundle.main.resourceURL else { return nil }
@@ -116,9 +117,9 @@ enum GatewayEnvironment {
             let bundledNode = self.bundledNodeExecutable()
             let bundledNodeVersion = bundledNode.flatMap { self.readNodeVersion(binary: $0) }
             if let expected, let installed, !installed.compatible(with: expected) {
-                let message =
-                    "Bundled gateway \(installed.description) is incompatible with app " +
-                    "\(expected.description); rebuild the app bundle."
+                let message = self.bundledGatewayIncompatibleMessage(
+                    installed: installed,
+                    expected: expected)
                 return GatewayEnvironmentStatus(
                     kind: .incompatible(found: installed.description, required: expected.description),
                     nodeVersion: bundledNodeVersion,
@@ -132,7 +133,9 @@ enum GatewayEnvironment {
                 nodeVersion: bundledNodeVersion,
                 gatewayVersion: gatewayVersionText,
                 requiredGateway: expected?.description,
-                message: "Bundled gateway \(gatewayVersionText) (node \(bundledNodeVersion ?? "unknown"))")
+                message: self.bundledGatewayStatusMessage(
+                    gatewayVersion: gatewayVersionText,
+                    nodeVersion: bundledNodeVersion))
         }
 
         let projectRoot = CommandResolver.projectRoot()
@@ -380,5 +383,20 @@ enum GatewayEnvironment {
         } catch {
             return nil
         }
+    }
+
+    private static func bundledGatewayStatusMessage(
+        gatewayVersion: String,
+        nodeVersion: String?
+    ) -> String {
+        "\(self.bundledGatewayLabel) \(gatewayVersion) (node \(nodeVersion ?? "unknown"))"
+    }
+
+    private static func bundledGatewayIncompatibleMessage(
+        installed: Semver,
+        expected: Semver
+    ) -> String {
+        "\(self.bundledGatewayLabel) \(installed.description) is incompatible with app " +
+            "\(expected.description); rebuild the app bundle."
     }
 }
