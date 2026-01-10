@@ -6,6 +6,7 @@ import {
   CURRENT_SESSION_VERSION,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
   buildGroupDisplayName,
@@ -13,7 +14,6 @@ import {
   DEFAULT_RESET_TRIGGERS,
   type GroupKeyResolution,
   loadSessionStore,
-  resolveAgentIdFromSessionKey,
   resolveGroupSessionKey,
   resolveSessionFilePath,
   resolveSessionKey,
@@ -92,7 +92,10 @@ export async function initSessionState(params: {
   const { ctx, cfg, commandAuthorized } = params;
   const sessionCfg = cfg.session;
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
-  const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
+  const agentId = resolveSessionAgentId({
+    sessionKey: ctx.SessionKey,
+    config: cfg,
+  });
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;

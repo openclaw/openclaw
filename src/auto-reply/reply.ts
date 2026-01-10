@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 import {
   resolveAgentConfig,
   resolveAgentDir,
-  resolveAgentIdFromSessionKey,
   resolveAgentWorkspaceDir,
+  resolveSessionAgentId,
 } from "../agents/agent-scope.js";
 import { resolveModelRefFromString } from "../agents/model-selection.js";
 import {
@@ -250,7 +250,10 @@ export async function getReplyFromConfig(
   configOverride?: ClawdbotConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const cfg = configOverride ?? loadConfig();
-  const agentId = resolveAgentIdFromSessionKey(ctx.SessionKey);
+  const agentId = resolveSessionAgentId({
+    sessionKey: ctx.SessionKey,
+    config: cfg,
+  });
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolveDefaultModel({

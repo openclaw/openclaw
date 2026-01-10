@@ -1,6 +1,7 @@
 import {
   resolveAgentDir,
   resolveDefaultAgentId,
+  resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import {
   ensureAuthProfileStore,
@@ -26,7 +27,6 @@ import {
   unsetConfigOverride,
 } from "../../config/runtime-overrides.js";
 import {
-  resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
   type SessionEntry,
   type SessionScope,
@@ -148,7 +148,7 @@ export async function buildStatusReply(params: {
     return undefined;
   }
   const statusAgentId = sessionKey
-    ? resolveAgentIdFromSessionKey(sessionKey)
+    ? resolveSessionAgentId({ sessionKey, config: cfg })
     : resolveDefaultAgentId(cfg);
   const statusAgentDir = resolveAgentDir(cfg, statusAgentId);
   let usageLine: string | null = null;

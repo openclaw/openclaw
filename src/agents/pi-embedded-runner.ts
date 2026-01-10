@@ -33,14 +33,10 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-} from "../routing/session-key.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { resolveDefaultAgentId } from "./agent-scope.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import {
   markAuthProfileFailure,
   markAuthProfileGood,
@@ -558,19 +554,6 @@ export function buildEmbeddedSandboxInfo(
     browserControlUrl: sandbox.browser?.controlUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
   };
-}
-
-export function resolveSessionAgentIds(params: {
-  sessionKey?: string;
-  config?: ClawdbotConfig;
-}): { defaultAgentId: string; sessionAgentId: string } {
-  const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
-  const sessionKey = params.sessionKey?.trim();
-  const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
-  const sessionAgentId = parsed?.agentId
-    ? normalizeAgentId(parsed.agentId)
-    : defaultAgentId;
-  return { defaultAgentId, sessionAgentId };
 }
 
 function buildEmbeddedSystemPrompt(params: {

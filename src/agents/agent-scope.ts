@@ -3,7 +3,11 @@ import path from "node:path";
 
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
-import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace.js";
 
@@ -47,6 +51,26 @@ export function resolveDefaultAgentId(cfg: ClawdbotConfig): string {
   }
   const chosen = (defaults[0] ?? agents[0])?.id?.trim();
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
+}
+
+export function resolveSessionAgentIds(params: {
+  sessionKey?: string;
+  config?: ClawdbotConfig;
+}): { defaultAgentId: string; sessionAgentId: string } {
+  const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+  const sessionKey = params.sessionKey?.trim();
+  const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
+  const sessionAgentId = parsed?.agentId
+    ? normalizeAgentId(parsed.agentId)
+    : defaultAgentId;
+  return { defaultAgentId, sessionAgentId };
+}
+
+export function resolveSessionAgentId(params: {
+  sessionKey?: string;
+  config?: ClawdbotConfig;
+}): string {
+  return resolveSessionAgentIds(params).sessionAgentId;
 }
 
 function resolveAgentEntry(
