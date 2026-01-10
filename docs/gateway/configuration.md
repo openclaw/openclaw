@@ -948,7 +948,8 @@ See [Messages](/concepts/messages) for queueing, sessions, and streaming context
   messages: {
     responsePrefix: "🦞", // or "auto"
     ackReaction: "👀",
-    ackReactionScope: "group-mentions"
+    ackReactionScope: "group-mentions",
+    removeAckAfterReply: false
   }
 }
 ```
@@ -974,6 +975,9 @@ active agent’s `identity.emoji` when set, otherwise `"👀"`. Set it to `""` t
 - `group-all`: all group/room messages
 - `direct`: direct messages only
 - `all`: all messages
+
+`removeAckAfterReply` removes the bot’s ack reaction after a reply is sent
+(Slack/Discord/Telegram only). Default: `false`.
 
 ### `talk`
 
