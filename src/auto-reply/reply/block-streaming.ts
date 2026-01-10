@@ -58,9 +58,10 @@ export function resolveBlockStreamingChunking(
     Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX),
   );
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
+  const minFallback = DEFAULT_BLOCK_STREAM_MIN;
   const minRequested = Math.max(
     1,
-    Math.floor(chunkCfg?.minChars ?? DEFAULT_BLOCK_STREAM_MIN),
+    Math.floor(chunkCfg?.minChars ?? minFallback),
   );
   const minChars = Math.min(minRequested, maxChars);
   const breakPreference =
@@ -80,7 +81,7 @@ export function resolveBlockStreamingCoalescing(
     maxChars: number;
     breakPreference: "paragraph" | "newline" | "sentence";
   },
-): BlockStreamingCoalescing {
+): BlockStreamingCoalescing | undefined {
   const providerKey = normalizeChunkProvider(provider);
   const textLimit = resolveTextChunkLimit(cfg, providerKey, accountId);
   const normalizedAccountId = normalizeAccountId(accountId);

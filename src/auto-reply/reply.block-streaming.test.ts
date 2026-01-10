@@ -273,4 +273,45 @@ describe("block streaming", () => {
       expect(sawAbort).toBe(true);
     });
   });
+
+  it("does not enable block streaming for telegram streamMode block", async () => {
+    await withTempHome(async (home) => {
+      const onBlockReply = vi.fn().mockResolvedValue(undefined);
+
+      const impl = async () => ({
+        payloads: [{ text: "final" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      piEmbeddedMock.runEmbeddedPiAgent.mockImplementation(impl);
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "ping",
+          From: "+1004",
+          To: "+2000",
+          MessageSid: "msg-126",
+          Provider: "telegram",
+        },
+        {
+          onBlockReply,
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          telegram: { allowFrom: ["*"], streamMode: "block" },
+          session: { store: path.join(home, "sessions.json") },
+        },
+      );
+
+      expect(res?.text).toBe("final");
+      expect(onBlockReply).not.toHaveBeenCalled();
+    });
+  });
 });

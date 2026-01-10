@@ -826,6 +826,12 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         onReplyStart: sendTyping,
       });
 
+    const disableBlockStreaming =
+      Boolean(draftStream) ||
+      (typeof telegramCfg.blockStreaming === "boolean"
+        ? !telegramCfg.blockStreaming
+        : undefined);
+
     const { queuedFinal } = await dispatchReplyFromConfig({
       ctx: ctxPayload,
       cfg,
@@ -841,11 +847,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               if (payload.text) draftStream.update(payload.text);
             }
           : undefined,
-        disableBlockStreaming:
-          Boolean(draftStream) ||
-          (typeof telegramCfg.blockStreaming === "boolean"
-            ? !telegramCfg.blockStreaming
-            : undefined),
+        disableBlockStreaming,
       },
     });
     markDispatchIdle();
