@@ -134,6 +134,11 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
   const serveBind = opts.bind ?? DEFAULT_GMAIL_SERVE_BIND;
   const servePort = opts.port ?? DEFAULT_GMAIL_SERVE_PORT;
   const configuredServePath = opts.path ?? baseConfig.hooks?.gmail?.serve?.path;
+  const normalizedServePath =
+    typeof configuredServePath === "string" &&
+    configuredServePath.trim().length > 0
+      ? normalizeServePath(configuredServePath)
+      : DEFAULT_GMAIL_SERVE_PATH;
 
   const includeBody = opts.includeBody ?? true;
   const maxBytes = opts.maxBytes ?? DEFAULT_GMAIL_MAX_BYTES;
@@ -142,18 +147,14 @@ export async function runGmailSetup(opts: GmailSetupOptions) {
 
   const tailscaleMode = opts.tailscale ?? "funnel";
   // Tailscale strips the path before proxying; keep a public path while gog
-  // listens on "/" unless the user explicitly configured a serve path.
+  // listens on "/" whenever Tailscale is enabled.
   const servePath = normalizeServePath(
-    tailscaleMode !== "off" && !configuredServePath
-      ? "/"
-      : (configuredServePath ?? DEFAULT_GMAIL_SERVE_PATH),
+    tailscaleMode !== "off" ? "/" : normalizedServePath,
   );
   const tailscalePath = normalizeServePath(
     opts.tailscalePath ??
       baseConfig.hooks?.gmail?.tailscale?.path ??
-      (tailscaleMode !== "off"
-        ? (configuredServePath ?? DEFAULT_GMAIL_SERVE_PATH)
-        : servePath),
+      (tailscaleMode !== "off" ? normalizedServePath : servePath),
   );
 
   await runGcloud(["config", "set", "project", projectId, "--quiet"]);

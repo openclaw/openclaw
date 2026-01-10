@@ -160,23 +160,22 @@ export function resolveGmailHookRuntimeConfig(
       ? Math.floor(servePortRaw)
       : DEFAULT_GMAIL_SERVE_PORT;
   const servePathRaw = overrides.servePath ?? gmail?.serve?.path;
-  const hasExplicitServePath =
-    typeof servePathRaw === "string" && servePathRaw.trim().length > 0;
+  const normalizedServePathRaw =
+    typeof servePathRaw === "string" && servePathRaw.trim().length > 0
+      ? normalizeServePath(servePathRaw)
+      : DEFAULT_GMAIL_SERVE_PATH;
 
   const tailscaleMode =
     overrides.tailscaleMode ?? gmail?.tailscale?.mode ?? "off";
-  // When exposing the push endpoint via Tailscale, the public path is stripped
-  // before proxying; use "/" internally unless the user set a path explicitly.
+  // Tailscale strips the public path before proxying, so listen on "/" when on.
   const servePath = normalizeServePath(
-    tailscaleMode !== "off" && !hasExplicitServePath ? "/" : servePathRaw,
+    tailscaleMode !== "off" ? "/" : normalizedServePathRaw,
   );
 
   const tailscalePathRaw = overrides.tailscalePath ?? gmail?.tailscale?.path;
   const tailscalePath = normalizeServePath(
-    tailscaleMode !== "off" && !tailscalePathRaw
-      ? hasExplicitServePath
-        ? servePathRaw
-        : DEFAULT_GMAIL_SERVE_PATH
+    tailscaleMode !== "off"
+      ? (tailscalePathRaw ?? normalizedServePathRaw)
       : (tailscalePathRaw ?? servePath),
   );
 
