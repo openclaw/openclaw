@@ -124,7 +124,7 @@ describe("update-cli", () => {
     };
 
     vi.mocked(runGatewayUpdate).mockResolvedValue(mockResult);
-    vi.mocked(runDaemonRestart).mockResolvedValue();
+    vi.mocked(runDaemonRestart).mockResolvedValue(true);
 
     await updateCommand({ restart: true });
 
