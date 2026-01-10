@@ -48,13 +48,10 @@ COMPOSE_FILES=("$COMPOSE_FILE")
 COMPOSE_ARGS=()
 
 write_extra_compose() {
-  local mounts_csv="$1"
-  local home_volume="$2"
-  local -a mounts=()
+  local home_volume="$1"
+  shift
+  local -a mounts=("$@")
   local mount
-
-  # Split on commas; ignore empty entries.
-  IFS=',' read -r -a mounts <<<"$mounts_csv"
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
@@ -64,14 +61,11 @@ YAML
 
   if [[ -n "$home_volume" ]]; then
     printf '      - %s:/home/node\n' "$home_volume" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s:/home/node/.clawdbot\n' "$CLAWDBOT_CONFIG_DIR" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s:/home/node/clawd\n' "$CLAWDBOT_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "${mounts[@]}"; do
-    mount="${mount#"${mount%%[![:space:]]*}"}"
-    mount="${mount%"${mount##*[![:space:]]}"}"
-    if [[ -z "$mount" ]]; then
-      continue
-    fi
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
@@ -82,18 +76,15 @@ YAML
 
   if [[ -n "$home_volume" ]]; then
     printf '      - %s:/home/node\n' "$home_volume" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s:/home/node/.clawdbot\n' "$CLAWDBOT_CONFIG_DIR" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s:/home/node/clawd\n' "$CLAWDBOT_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "${mounts[@]}"; do
-    mount="${mount#"${mount%%[![:space:]]*}"}"
-    mount="${mount%"${mount##*[![:space:]]}"}"
-    if [[ -z "$mount" ]]; then
-      continue
-    fi
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
-  if [[ -n "$home_volume" ]]; then
+  if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
     cat >>"$EXTRA_COMPOSE_FILE" <<YAML
 volumes:
   ${home_volume}:
@@ -101,8 +92,20 @@ YAML
   fi
 }
 
-if [[ -n "$EXTRA_MOUNTS" || -n "$HOME_VOLUME_NAME" ]]; then
-  write_extra_compose "$EXTRA_MOUNTS" "$HOME_VOLUME_NAME"
+VALID_MOUNTS=()
+if [[ -n "$EXTRA_MOUNTS" ]]; then
+  IFS=',' read -r -a mounts <<<"$EXTRA_MOUNTS"
+  for mount in "${mounts[@]}"; do
+    mount="${mount#"${mount%%[![:space:]]*}"}"
+    mount="${mount%"${mount##*[![:space:]]}"}"
+    if [[ -n "$mount" ]]; then
+      VALID_MOUNTS+=("$mount")
+    fi
+  done
+fi
+
+if [[ -n "$HOME_VOLUME_NAME" || ${#VALID_MOUNTS[@]} -gt 0 ]]; then
+  write_extra_compose "$HOME_VOLUME_NAME" "${VALID_MOUNTS[@]}"
   COMPOSE_FILES+=("$EXTRA_COMPOSE_FILE")
 fi
 for compose_file in "${COMPOSE_FILES[@]}"; do

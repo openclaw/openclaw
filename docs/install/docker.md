@@ -79,12 +79,15 @@ Notes:
 - Paths must be shared with Docker Desktop on macOS/Windows.
 - If you edit `CLAWDBOT_EXTRA_MOUNTS`, rerun `docker-setup.sh` to regenerate the
   extra compose file.
+- `docker-compose.extra.yml` is generated. Don’t hand-edit it.
 
 ### Persist the entire container home (optional)
 
 If you want `/home/node` to persist across container recreation, set a named
 volume via `CLAWDBOT_HOME_VOLUME`. This creates a Docker volume and mounts it at
-`/home/node`, while keeping the standard config/workspace bind mounts.
+`/home/node`, while keeping the standard config/workspace bind mounts. Use a
+named volume here (not a bind path); for bind mounts, use
+`CLAWDBOT_EXTRA_MOUNTS`.
 
 Example:
 
