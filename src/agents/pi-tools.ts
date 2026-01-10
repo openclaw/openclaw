@@ -283,28 +283,6 @@ function normalizeToolNames(list?: string[]) {
   return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 }
 
-/**
- * Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
- * Renaming to capitalized versions bypasses the block while maintaining compatibility
- * with regular API keys.
- */
-const OAUTH_BLOCKED_TOOL_NAMES: Record<string, string> = {
-  bash: "Bash",
-  read: "Read",
-  write: "Write",
-  edit: "Edit",
-};
-
-function renameBlockedToolsForOAuth(tools: AnyAgentTool[]): AnyAgentTool[] {
-  return tools.map((tool) => {
-    const newName = OAUTH_BLOCKED_TOOL_NAMES[tool.name];
-    if (newName) {
-      return { ...tool, name: newName };
-    }
-    return tool;
-  });
-}
-
 const DEFAULT_SUBAGENT_TOOL_DENY = [
   "sessions_list",
   "sessions_history",
@@ -656,7 +634,8 @@ export function createClawdbotCodingTools(options?: {
       )
     : normalized;
 
-  // Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
-  // Always use capitalized versions for compatibility with both OAuth and regular API keys.
-  return renameBlockedToolsForOAuth(withAbort);
+  // NOTE: Keep canonical (lowercase) tool names here.
+  // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
+  // on the wire and maps them back for tool dispatch.
+  return withAbort;
 }

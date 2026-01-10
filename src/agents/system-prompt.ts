@@ -84,9 +84,19 @@ export function buildAgentSystemPrompt(params: {
     "image",
   ];
 
-  const normalizedTools = (params.toolNames ?? [])
-    .map((tool) => tool.trim().toLowerCase())
-    .filter(Boolean);
+  const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
+  const canonicalToolNames = rawToolNames.filter(Boolean);
+  const canonicalByNormalized = new Map<string, string>();
+  for (const name of canonicalToolNames) {
+    const normalized = name.toLowerCase();
+    if (!canonicalByNormalized.has(normalized)) {
+      canonicalByNormalized.set(normalized, name);
+    }
+  }
+  const resolveToolName = (normalized: string) =>
+    canonicalByNormalized.get(normalized) ?? normalized;
+
+  const normalizedTools = canonicalToolNames.map((tool) => tool.toLowerCase());
   const availableTools = new Set(normalizedTools);
   const extraTools = Array.from(
     new Set(normalizedTools.filter((tool) => !toolOrder.includes(tool))),
@@ -94,13 +104,17 @@ export function buildAgentSystemPrompt(params: {
   const enabledTools = toolOrder.filter((tool) => availableTools.has(tool));
   const toolLines = enabledTools.map((tool) => {
     const summary = toolSummaries[tool];
-    return summary ? `- ${tool}: ${summary}` : `- ${tool}`;
+    const name = resolveToolName(tool);
+    return summary ? `- ${name}: ${summary}` : `- ${name}`;
   });
   for (const tool of extraTools.sort()) {
-    toolLines.push(`- ${tool}`);
+    toolLines.push(`- ${resolveToolName(tool)}`);
   }
 
   const hasGateway = availableTools.has("gateway");
+  const readToolName = resolveToolName("read");
+  const bashToolName = resolveToolName("bash");
+  const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
   const ownerNumbers = (params.ownerNumbers ?? [])
     .map((value) => value.trim())
@@ -143,7 +157,7 @@ export function buildAgentSystemPrompt(params: {
   const skillsSection = skillsPrompt
     ? [
         "## Skills",
-        "Skills provide task-specific instructions. Use `read` to load the SKILL.md at the location listed for that skill.",
+        `Skills provide task-specific instructions. Use \`${readToolName}\` to load the SKILL.md at the location listed for that skill.`,
         ...skillsLines,
         "",
       ]
@@ -154,6 +168,7 @@ export function buildAgentSystemPrompt(params: {
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
+    "Tool names are case-sensitive. Call tools exactly as listed.",
     toolLines.length > 0
       ? toolLines.join("\n")
       : [
@@ -161,8 +176,8 @@ export function buildAgentSystemPrompt(params: {
           "- grep: search file contents for patterns",
           "- find: find files by glob pattern",
           "- ls: list directory contents",
-          "- bash: run shell commands (supports background via yieldMs/background)",
-          "- process: manage background bash sessions",
+          `- ${bashToolName}: run shell commands (supports background via yieldMs/background)`,
+          `- ${processToolName}: manage background bash sessions`,
           "- whatsapp_login: generate a WhatsApp QR code and wait for linking",
           "- browser: control clawd's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",

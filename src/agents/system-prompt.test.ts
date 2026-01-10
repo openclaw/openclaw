@@ -46,6 +46,21 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_send");
   });
 
+  it("preserves tool casing in the prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      toolNames: ["Read", "Bash", "process"],
+      skillsPrompt:
+        "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
+    });
+
+    expect(prompt).toContain("- Read: Read file contents");
+    expect(prompt).toContain("- Bash: Run shell commands");
+    expect(prompt).toContain(
+      "Use `Read` to load the SKILL.md at the location listed for that skill.",
+    );
+  });
+
   it("includes user time when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",

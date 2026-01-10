@@ -118,12 +118,11 @@ function createStubTool(name: string): AgentTool {
 }
 
 describe("splitSdkTools", () => {
-  // Tool names are now capitalized (Bash, Read, etc.) to bypass Anthropic OAuth blocking
   const tools = [
-    createStubTool("Read"),
-    createStubTool("Bash"),
-    createStubTool("Edit"),
-    createStubTool("Write"),
+    createStubTool("read"),
+    createStubTool("bash"),
+    createStubTool("edit"),
+    createStubTool("write"),
     createStubTool("browser"),
   ];
 
@@ -134,27 +133,25 @@ describe("splitSdkTools", () => {
     });
     expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
-      "Read",
-      "Bash",
-      "Edit",
-      "Write",
+      "read",
+      "bash",
+      "edit",
+      "write",
       "browser",
     ]);
   });
 
-  it("routes all tools to customTools even when not sandboxed (for OAuth compatibility)", () => {
-    // All tools are now passed as customTools to bypass pi-coding-agent's
-    // built-in tool filtering, which expects lowercase names.
+  it("routes all tools to customTools even when not sandboxed", () => {
     const { builtInTools, customTools } = splitSdkTools({
       tools,
       sandboxEnabled: false,
     });
     expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
-      "Read",
-      "Bash",
-      "Edit",
-      "Write",
+      "read",
+      "bash",
+      "edit",
+      "write",
       "browser",
     ]);
   });

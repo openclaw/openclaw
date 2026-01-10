@@ -44,7 +44,7 @@ const DEFAULT_PATH =
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
 // Type.Union of literals compiles to { anyOf: [{enum:["a"]}, {enum:["b"]}, ...] }
 // which is valid but not accepted. A flat enum { type: "string", enum: [...] } works.
-const stringEnum = <T extends readonly string[]>(
+const _stringEnum = <T extends readonly string[]>(
   values: T,
   options?: { description?: string },
 ) =>
@@ -453,12 +453,7 @@ export function createBashTool(
 export const bashTool = createBashTool();
 
 const processSchema = Type.Object({
-  action: stringEnum(
-    ["list", "poll", "log", "write", "kill", "clear", "remove"] as const,
-    {
-      description: "Process action",
-    },
-  ),
+  action: Type.String({ description: "Process action" }),
   sessionId: Type.Optional(
     Type.String({ description: "Session id for actions other than list" }),
   ),
