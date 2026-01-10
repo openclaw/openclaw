@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 
+import { doctorCommand } from "../commands/doctor.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import {
   runGatewayUpdate,
@@ -159,6 +160,17 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       const restarted = await runDaemonRestart();
       if (!opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
+        defaultRuntime.log("");
+        process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
+        try {
+          await doctorCommand(defaultRuntime, { nonInteractive: true });
+        } catch (err) {
+          defaultRuntime.log(
+            theme.warn(`Doctor failed: ${String(err)}`),
+          );
+        } finally {
+          delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
+        }
       }
     } catch (err) {
       if (!opts.json) {

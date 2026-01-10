@@ -1,6 +1,7 @@
 import { resolveClawdbotPackageRoot } from "../../infra/clawdbot-root.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import {
+  DOCTOR_NONINTERACTIVE_HINT,
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
@@ -76,6 +77,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       ts: Date.now(),
       sessionKey,
       message: note ?? null,
+      doctorHint: DOCTOR_NONINTERACTIVE_HINT,
       stats: {
         mode: result.mode,
         root: result.root ?? undefined,
