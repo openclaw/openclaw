@@ -385,6 +385,18 @@ describe("createClawdbotCodingTools", () => {
       "$defs",
       "definitions",
       "examples",
+      "minLength",
+      "maxLength",
+      "minimum",
+      "maximum",
+      "multipleOf",
+      "pattern",
+      "format",
+      "minItems",
+      "maxItems",
+      "uniqueItems",
+      "minProperties",
+      "maxProperties",
     ]);
 
     const findUnsupportedKeywords = (
@@ -399,9 +411,24 @@ describe("createClawdbotCodingTools", () => {
         });
         return found;
       }
-      for (const [key, value] of Object.entries(
-        schema as Record<string, unknown>,
-      )) {
+
+      const record = schema as Record<string, unknown>;
+      const properties =
+        record.properties &&
+        typeof record.properties === "object" &&
+        !Array.isArray(record.properties)
+          ? (record.properties as Record<string, unknown>)
+          : undefined;
+      if (properties) {
+        for (const [key, value] of Object.entries(properties)) {
+          found.push(
+            ...findUnsupportedKeywords(value, `${path}.properties.${key}`),
+          );
+        }
+      }
+
+      for (const [key, value] of Object.entries(record)) {
+        if (key === "properties") continue;
         if (unsupportedKeywords.has(key)) {
           found.push(`${path}.${key}`);
         }

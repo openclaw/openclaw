@@ -106,11 +106,19 @@ export async function sanitizeSessionMessagesImages(
       const sanitizedToolCallId = toolMsg.toolCallId
         ? sanitizeToolCallId(toolMsg.toolCallId)
         : undefined;
+      const toolUseId = (toolMsg as { toolUseId?: unknown }).toolUseId;
+      const sanitizedToolUseId =
+        typeof toolUseId === "string" && toolUseId
+          ? sanitizeToolCallId(toolUseId)
+          : undefined;
       const sanitizedMsg = {
         ...toolMsg,
         content: nextContent,
         ...(sanitizedToolCallId && {
           toolCallId: sanitizedToolCallId,
+        }),
+        ...(sanitizedToolUseId && {
+          toolUseId: sanitizedToolUseId,
         }),
       };
       out.push(sanitizedMsg);
@@ -153,9 +161,13 @@ export async function sanitizeSessionMessagesImages(
             if (typeof id !== "string" || !id) return block;
 
             // Cloud Code Assist tool blocks require ids matching ^[a-zA-Z0-9_-]+$.
-            if (type === "functionCall" || type === "toolUse" || type === "toolCall") {
+            if (
+              type === "functionCall" ||
+              type === "toolUse" ||
+              type === "toolCall"
+            ) {
               return {
-                ...((block as unknown) as Record<string, unknown>),
+                ...(block as unknown as Record<string, unknown>),
                 id: sanitizeToolCallId(id),
               };
             }
