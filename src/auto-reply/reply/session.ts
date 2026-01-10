@@ -132,7 +132,8 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
-  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
+  const groupResolution =
+    resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const isGroup =
     ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
   const triggerBodyNormalized = stripStructuralPrefixes(ctx.Body ?? "")
