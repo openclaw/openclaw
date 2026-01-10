@@ -137,16 +137,18 @@ async function* fakeOpenAIResponsesStream(
   };
 }
 
-vi.mock("openai", () => {
-  class OpenAI {
-    responses = {
-      create: async (params: OpenAIResponsesParams) =>
-        fakeOpenAIResponsesStream(params),
-    };
-  }
+function installOpenAIMock() {
+  vi.doMock("openai", () => {
+    class OpenAI {
+      responses = {
+        create: async (params: OpenAIResponsesParams) =>
+          fakeOpenAIResponsesStream(params),
+      };
+    }
 
-  return { default: OpenAI };
-});
+    return { default: OpenAI };
+  });
+}
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -244,6 +246,9 @@ async function connectClient(params: { url: string; token: string }) {
 
 describe("gateway (mock openai): tool calling", () => {
   it("runs a Read tool call end-to-end via gateway agent loop", async () => {
+    vi.resetModules();
+    installOpenAIMock();
+
     const prev = {
       home: process.env.HOME,
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
