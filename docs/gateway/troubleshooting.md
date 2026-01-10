@@ -322,7 +322,7 @@ kill -9 <PID> # last resort
 ```
 
 **Fix 3: Check embedded gateway**
-Ensure the gateway relay was properly bundled. Run [`./scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) and ensure `bun` is installed.
+Ensure the gateway relay was properly bundled. Run [`./scripts/package-mac-app.sh`](https://github.com/clawdbot/clawdbot/blob/main/scripts/package-mac-app.sh) and ensure Node is available (the script downloads a bundled runtime by default).
 
 ## Debug Mode
 
