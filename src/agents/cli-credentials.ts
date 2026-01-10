@@ -111,8 +111,11 @@ function readClaudeCliKeychainCredentials(): ClaudeCliCredential | null {
 
 export function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
 }): ClaudeCliCredential | null {
-  if (process.platform === "darwin" && options?.allowKeychainPrompt !== false) {
+  const platform = options?.platform ?? process.platform;
+  if (platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials();
     if (keychainCreds) {
       log.info("read anthropic credentials from claude cli keychain", {
@@ -122,7 +125,7 @@ export function readClaudeCliCredentials(options?: {
     }
   }
 
-  const credPath = resolveClaudeCliCredentialsPath();
+  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") return null;
 
@@ -158,10 +161,12 @@ export function readClaudeCliCredentials(options?: {
 export function readClaudeCliCredentialsCached(options?: {
   allowKeychainPrompt?: boolean;
   ttlMs?: number;
+  platform?: NodeJS.Platform;
+  homeDir?: string;
 }): ClaudeCliCredential | null {
   const ttlMs = options?.ttlMs ?? 0;
   const now = Date.now();
-  const cacheKey = resolveClaudeCliCredentialsPath();
+  const cacheKey = resolveClaudeCliCredentialsPath(options?.homeDir);
   if (
     ttlMs > 0 &&
     claudeCliCache &&
@@ -172,6 +177,8 @@ export function readClaudeCliCredentialsCached(options?: {
   }
   const value = readClaudeCliCredentials({
     allowKeychainPrompt: options?.allowKeychainPrompt,
+    platform: options?.platform,
+    homeDir: options?.homeDir,
   });
   if (ttlMs > 0) {
     claudeCliCache = { value, readAt: now, cacheKey };

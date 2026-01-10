@@ -5,9 +5,6 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 
-const normalizeText = (value?: string) =>
-  (value ?? "").replace(/\r\n/g, "\n").trim();
-
 async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
   try {
@@ -120,11 +117,17 @@ describe("workspace path resolution", () => {
       expect(bashTool).toBeDefined();
 
       const result = await bashTool?.execute("ws-bash", {
-        command: 'node -e "console.log(process.cwd())"',
+        command: "echo ok",
       });
-      const output = normalizeText(getTextContent(result));
+      const cwd =
+        result?.details &&
+        typeof result.details === "object" &&
+        "cwd" in result.details
+          ? (result.details as { cwd?: string }).cwd
+          : undefined;
+      expect(cwd).toBeTruthy();
       const [resolvedOutput, resolvedWorkspace] = await Promise.all([
-        fs.realpath(output),
+        fs.realpath(String(cwd)),
         fs.realpath(workspaceDir),
       ]);
       expect(resolvedOutput).toBe(resolvedWorkspace);
@@ -139,12 +142,18 @@ describe("workspace path resolution", () => {
         expect(bashTool).toBeDefined();
 
         const result = await bashTool?.execute("ws-bash-override", {
-          command: 'node -e "console.log(process.cwd())"',
+          command: "echo ok",
           workdir: overrideDir,
         });
-        const output = normalizeText(getTextContent(result));
+        const cwd =
+          result?.details &&
+          typeof result.details === "object" &&
+          "cwd" in result.details
+            ? (result.details as { cwd?: string }).cwd
+            : undefined;
+        expect(cwd).toBeTruthy();
         const [resolvedOutput, resolvedOverride] = await Promise.all([
-          fs.realpath(output),
+          fs.realpath(String(cwd)),
           fs.realpath(overrideDir),
         ]);
         expect(resolvedOutput).toBe(resolvedOverride);

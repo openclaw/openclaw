@@ -114,6 +114,7 @@ export type BashToolDetails =
       sessionId: string;
       pid?: number;
       startedAt: number;
+      cwd?: string;
       tail?: string;
     }
   | {
@@ -121,6 +122,7 @@ export type BashToolDetails =
       exitCode: number | null;
       durationMs: number;
       aggregated: string;
+      cwd?: string;
     };
 
 export function createBashTool(
@@ -316,6 +318,7 @@ export function createBashTool(
             sessionId,
             pid: session.pid ?? undefined,
             startedAt,
+            cwd: session.cwd,
             tail: session.tail,
           },
         });
@@ -356,6 +359,7 @@ export function createBashTool(
                   sessionId,
                   pid: session.pid ?? undefined,
                   startedAt,
+                  cwd: session.cwd,
                   tail: session.tail,
                 },
               }),
@@ -431,6 +435,7 @@ export function createBashTool(
                   exitCode: code ?? 0,
                   durationMs,
                   aggregated,
+                  cwd: session.cwd,
                 },
               }),
             );
