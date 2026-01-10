@@ -4,7 +4,7 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 type OpenAIResponsesParams = {
   input?: unknown[];
@@ -137,16 +137,34 @@ async function* fakeOpenAIResponsesStream(
   };
 }
 
-function installOpenAIMock() {
-  vi.doMock("openai", () => {
-    class OpenAI {
-      responses = {
-        create: async (params: OpenAIResponsesParams) =>
-          fakeOpenAIResponsesStream(params),
-      };
-    }
+function decodeBodyText(body: unknown): string {
+  if (!body) return "";
+  if (typeof body === "string") return body;
+  if (body instanceof Uint8Array) return Buffer.from(body).toString("utf8");
+  if (body instanceof ArrayBuffer)
+    return Buffer.from(new Uint8Array(body)).toString("utf8");
+  return "";
+}
 
-    return { default: OpenAI };
+async function buildOpenAIResponsesSse(
+  params: OpenAIResponsesParams,
+): Promise<Response> {
+  const events: OpenAIResponseStreamEvent[] = [];
+  for await (const event of fakeOpenAIResponsesStream(params)) {
+    events.push(event);
+  }
+
+  const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
+  const encoder = new TextEncoder();
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(encoder.encode(sse));
+      controller.close();
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
   });
 }
 
@@ -246,9 +264,6 @@ async function connectClient(params: { url: string; token: string }) {
 
 describe("gateway (mock openai): tool calling", () => {
   it("runs a Read tool call end-to-end via gateway agent loop", async () => {
-    vi.resetModules();
-    installOpenAIMock();
-
     const prev = {
       home: process.env.HOME,
       configPath: process.env.CLAWDBOT_CONFIG_PATH,
@@ -258,6 +273,42 @@ describe("gateway (mock openai): tool calling", () => {
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
     };
+
+    const originalFetch = globalThis.fetch;
+    const openaiResponsesUrl = "https://api.openai.com/v1/responses";
+    const fetchImpl = async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): Promise<Response> => {
+      const url =
+        typeof input === "string"
+          ? input
+          : input instanceof URL
+            ? input.toString()
+            : input.url;
+
+      if (url === openaiResponsesUrl) {
+        const bodyText =
+          typeof (init as { body?: unknown } | undefined)?.body !== "undefined"
+            ? decodeBodyText((init as { body?: unknown }).body)
+            : input instanceof Request
+              ? await input.clone().text()
+              : "";
+
+        const parsed = bodyText
+          ? (JSON.parse(bodyText) as Record<string, unknown>)
+          : {};
+        const inputItems = Array.isArray(parsed.input) ? parsed.input : [];
+        return await buildOpenAIResponsesSse({ input: inputItems });
+      }
+
+      if (!originalFetch) {
+        throw new Error(`fetch is not available (url=${url})`);
+      }
+      return await originalFetch(input, init);
+    };
+    // TypeScript: Bun's fetch typing includes extra properties; keep this test portable.
+    (globalThis as unknown as { fetch: unknown }).fetch = fetchImpl;
 
     const tempHome = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-gw-mock-home-"),
@@ -362,6 +413,7 @@ describe("gateway (mock openai): tool calling", () => {
       client.stop();
       await server.close({ reason: "mock openai test complete" });
       await fs.rm(tempHome, { recursive: true, force: true });
+      (globalThis as unknown as { fetch: unknown }).fetch = originalFetch;
       process.env.HOME = prev.home;
       process.env.CLAWDBOT_CONFIG_PATH = prev.configPath;
       process.env.CLAWDBOT_GATEWAY_TOKEN = prev.token;
