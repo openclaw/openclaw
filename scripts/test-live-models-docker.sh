@@ -19,11 +19,11 @@ echo "==> Run live model tests (profile keys)"
 docker run --rm -t \
   --entrypoint bash \
   -e HOME=/home/node \
-  -e LIVE=1 \
+  -e CLAWDBOT_LIVE_TEST=1 \
   -e CLAWDBOT_LIVE_ALL_MODELS=1 \
-  -e CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS=1 \
+  -e CLAWDBOT_LIVE_MODELS="${CLAWDBOT_LIVE_MODELS:-all}" \
   -v "$CONFIG_DIR":/home/node/.clawdbot \
   -v "$WORKSPACE_DIR":/home/node/clawd \
   "${PROFILE_MOUNT[@]}" \
   "$IMAGE_NAME" \
-  -lc "cd /app && pnpm test:live"
+  -lc "set -euo pipefail; [ -f \"$HOME/.profile\" ] && source \"$HOME/.profile\" || true; cd /app && pnpm test:live"

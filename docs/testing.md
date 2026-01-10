@@ -15,7 +15,8 @@ Clawdbot has three Vitest suites (unit, e2e, live) plus a couple Docker helpers 
 - Full gate (what we expect before push): `pnpm lint && pnpm build && pnpm test`
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
-- Live suite (opt-in): `LIVE=1 pnpm test:live`
+- Live suite (opt-in, Clawdbot only): `CLAWDBOT_LIVE_TEST=1 pnpm test:live`
+- Live suite (opt-in, includes provider live tests too): `LIVE=1 pnpm test:live`
 
 ## Test suites (what runs where)
 
@@ -38,7 +39,7 @@ Clawdbot has three Vitest suites (unit, e2e, live) plus a couple Docker helpers 
 - Command: `pnpm test:live`
 - Config: `vitest.live.config.ts`
 - Files: `src/**/*.live.test.ts`
-- Default: **skipped** unless `LIVE=1` (or `CLAWDBOT_LIVE_TEST=1`)
+- Default: **skipped** unless `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
 - Scope: “does this provider/model actually work today with real creds”.
 
 ## Live: model smoke (profile keys)
@@ -57,6 +58,7 @@ Two layers:
 2. Gateway + dev agent smoke (what “@clawdbot” actually does):
    - Test: `src/gateway/gateway-models.profiles.live.test.ts`
    - Goal: spin up an in-process gateway, create/patch a `agent:dev:*` session, iterate models-with-keys, and assert “meaningful” responses.
+   - Covers providers present in your `models.json`/config (e.g. OpenAI, Anthropic, Google Gemini, `google-antigravity`, etc.) as long as a key/profile is available.
    - Selection:
      - `CLAWDBOT_LIVE_GATEWAY=1`
      - `CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1` (scan all discovered models with available keys)
@@ -74,18 +76,23 @@ If you want to rely on env keys (e.g. exported in your `~/.profile`), run local 
 
 ## Docker runners (optional “works in Linux” checks)
 
-These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace:
+These run `pnpm test:live` inside the repo Docker image, mounting your local config dir and workspace (and sourcing `~/.profile` if mounted):
 
-- Direct models: `scripts/test-live-models-docker.sh`
-- Gateway + dev agent: `scripts/test-live-gateway-models-docker.sh`
+- Direct models: `pnpm test:docker:live-models` (script: `scripts/test-live-models-docker.sh`)
+- Gateway + dev agent: `pnpm test:docker:live-gateway` (script: `scripts/test-live-gateway-models-docker.sh`)
 
 Useful env vars:
 
 - `CLAWDBOT_CONFIG_DIR=...` (default: `~/.clawdbot`) mounted to `/home/node/.clawdbot`
 - `CLAWDBOT_WORKSPACE_DIR=...` (default: `~/clawd`) mounted to `/home/node/clawd`
+- `CLAWDBOT_PROFILE_FILE=...` (default: `~/.profile`) mounted to `/home/node/.profile` and sourced before running tests
 - `CLAWDBOT_LIVE_GATEWAY_MODELS=...` / `CLAWDBOT_LIVE_MODELS=...` to narrow the run
+- `CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS=1` to ensure creds come from the profile store (not env)
 
 ## Docs sanity
 
 Run docs checks after doc edits: `pnpm docs:list`.
 
+## Offline regression (CI-safe)
+
+- Gateway tool calling (mock OpenAI, real gateway + agent loop): `src/gateway/gateway.tool-calling.mock-openai.test.ts`
