@@ -31,8 +31,8 @@ import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import {
   emitCliBanner,
-  formatCliBannerArt,
   formatCliBannerLine,
+  hasEmittedCliBanner,
 } from "./banner.js";
 import { registerBrowserCli } from "./browser-cli.js";
 import { hasExplicitOptions } from "./command-options.js";
@@ -106,10 +106,10 @@ export function buildProgram() {
   }
 
   program.addHelpText("beforeAll", () => {
+    if (hasEmittedCliBanner()) return "";
     const rich = isRich();
-    const art = formatCliBannerArt({ richTty: rich });
     const line = formatCliBannerLine(PROGRAM_VERSION, { richTty: rich });
-    return `\n${art}\n${line}\n`;
+    return `\n${line}\n`;
   });
 
   program.hook("preAction", async (_thisCommand, actionCommand) => {
