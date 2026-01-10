@@ -3,9 +3,9 @@ summary: "Expose an OpenAI-compatible /v1/chat/completions HTTP endpoint from th
 read_when:
   - Integrating tools that expect OpenAI Chat Completions
 ---
-# OpenAI-compatible HTTP API
+# OpenAI Chat Completions (HTTP)
 
-Clawdbot’s Gateway can serve a small OpenAI-compatible endpoint:
+Clawdbot’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint:
 
 - `POST /v1/chat/completions`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
