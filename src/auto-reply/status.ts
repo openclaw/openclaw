@@ -360,7 +360,7 @@ export function buildHelpMessage(): string {
   return [
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink (if enabled)",
-    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off | /debug show",
+    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off | /config show | /debug show",
     "More: /commands for all slash commands",
   ].join("\n");
 }

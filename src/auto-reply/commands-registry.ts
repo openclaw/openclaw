@@ -137,6 +137,13 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/status",
     }),
     defineChatCommand({
+      key: "config",
+      nativeName: "config",
+      description: "Show or set config values.",
+      textAlias: "/config",
+      acceptsArgs: true,
+    }),
+    defineChatCommand({
       key: "debug",
       nativeName: "debug",
       description: "Set runtime debug overrides.",

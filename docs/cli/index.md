@@ -153,6 +153,7 @@ Chat messages support `/...` commands (text and native). See [/tools/slash-comma
 
 Highlights:
 - `/status` for quick diagnostics.
+- `/config` for persisted config changes.
 - `/debug` for runtime-only config overrides (memory, not disk).
 
 ## Setup + onboarding
