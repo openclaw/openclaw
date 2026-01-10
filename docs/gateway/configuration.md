@@ -676,6 +676,11 @@ Multi-account support lives under `telegram.accounts` (see the multi-account sec
     },
     replyToMode: "first",                 // off | first | all
     streamMode: "partial",               // off | partial | block (draft streaming; separate from block streaming)
+    draftChunk: {                        // optional; only for streamMode=block
+      minChars: 200,
+      maxChars: 800,
+      breakPreference: "paragraph"       // paragraph | newline | sentence
+    },
     actions: { reactions: true, sendMessage: true }, // tool action gates (false disables)
     mediaMaxMb: 5,
     retry: {                             // outbound retry policy
