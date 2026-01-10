@@ -2,10 +2,12 @@ import type { AgentMessage, AgentTool } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
   applyGoogleTurnOrderingFix,
   buildEmbeddedSandboxInfo,
   createSystemPromptOverride,
+  resolveSessionAgentIds,
   splitSdkTools,
 } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -54,6 +56,38 @@ describe("buildEmbeddedSandboxInfo", () => {
       browserControlUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
     });
+  });
+});
+
+describe("resolveSessionAgentIds", () => {
+  const cfg = {
+    agents: {
+      list: [{ id: "main" }, { id: "beta", default: true }],
+    },
+  } as ClawdbotConfig;
+
+  it("falls back to the configured default when sessionKey is missing", () => {
+    const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+      config: cfg,
+    });
+    expect(defaultAgentId).toBe("beta");
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("falls back to the configured default when sessionKey is non-agent", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "telegram:slash:123",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("uses the agent id from agent session keys", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "agent:main:main",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("main");
   });
 });
 

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Agents: gate heartbeat prompt to default agent sessions (including non-agent session keys). (#630) — thanks @adam91holt
 - Agent: fast abort on /stop and cancel tool calls between tool boundaries. (#617)
 - Models/Auth: add OpenCode Zen (multi-model proxy) onboarding. (#623) — thanks @magimetal
 - WhatsApp: refactor vCard parsing helper and improve empty contact card summaries. (#624) — thanks @steipete
