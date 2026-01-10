@@ -14,6 +14,7 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
   sanitizeToolCallId,
+  sanitizeToolUseResultPairing,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
@@ -538,6 +539,108 @@ describe("sanitizeSessionMessagesImages", () => {
     };
     expect(toolResult.role).toBe("toolResult");
     expect(toolResult.toolCallId).toBe("call_123_fc_456");
+  });
+
+  it("drops assistant blocks after a tool call when enforceToolCallLast is enabled", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "thinking", thinking: "after", thinkingSignature: "sig" },
+          { type: "text", text: "after text" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      enforceToolCallLast: true,
+    });
+    const assistant = out[0] as { content?: Array<{ type?: string }> };
+    expect(assistant.content?.map((b) => b.type)).toEqual(["text", "toolCall"]);
+  });
+
+  it("keeps assistant blocks after a tool call when enforceToolCallLast is disabled", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "before" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "thinking", thinking: "after", thinkingSignature: "sig" },
+          { type: "text", text: "after text" },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+    const assistant = out[0] as { content?: Array<{ type?: string }> };
+    expect(assistant.content?.map((b) => b.type)).toEqual([
+      "text",
+      "toolCall",
+      "thinking",
+      "text",
+    ]);
+  });
+});
+
+describe("sanitizeToolUseResultPairing", () => {
+  it("moves tool results directly after tool calls and inserts missing results", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+          { type: "toolCall", id: "call_2", name: "bash", arguments: {} },
+        ],
+      },
+      { role: "user", content: "user message that should come after tool use" },
+      {
+        role: "toolResult",
+        toolCallId: "call_2",
+        toolName: "bash",
+        content: [{ type: "text", text: "ok" }],
+        isError: false,
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out[0]?.role).toBe("assistant");
+    expect(out[1]?.role).toBe("toolResult");
+    expect((out[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
+    expect(out[2]?.role).toBe("toolResult");
+    expect((out[2] as { toolCallId?: string }).toolCallId).toBe("call_2");
+    expect(out[3]?.role).toBe("user");
+  });
+
+  it("drops duplicate tool results for the same id within a span", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "first" }],
+        isError: false,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "second" }],
+        isError: false,
+      },
+      { role: "user", content: "ok" },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.filter((m) => m.role === "toolResult")).toHaveLength(1);
   });
 });
 

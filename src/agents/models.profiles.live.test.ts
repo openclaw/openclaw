@@ -96,7 +96,6 @@ describeLive("live models (profile keys)", () => {
                 apiKey: apiKeyInfo.apiKey,
                 reasoning: model.reasoning ? "low" : undefined,
                 maxTokens: 128,
-                temperature: 0,
               },
             );
 
@@ -136,7 +135,6 @@ describeLive("live models (profile keys)", () => {
                 apiKey: apiKeyInfo.apiKey,
                 reasoning: model.reasoning ? "low" : undefined,
                 maxTokens: 64,
-                temperature: 0,
               },
             );
 
@@ -163,7 +161,6 @@ describeLive("live models (profile keys)", () => {
               apiKey: apiKeyInfo.apiKey,
               reasoning: model.reasoning ? "low" : undefined,
               maxTokens: 64,
-              temperature: 0,
             },
           );
 

@@ -88,6 +88,7 @@ import {
   pickFallbackThinkingLevel,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  sanitizeToolUseResultPairing,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
@@ -379,10 +380,14 @@ async function sanitizeSessionHistory(params: {
   const sanitizedImages = await sanitizeSessionMessagesImages(
     params.messages,
     "session:history",
-    { sanitizeToolCallIds: isGoogleModelApi(params.modelApi) },
+    {
+      sanitizeToolCallIds: isGoogleModelApi(params.modelApi),
+      enforceToolCallLast: params.modelApi === "anthropic-messages",
+    },
   );
+  const repairedTools = sanitizeToolUseResultPairing(sanitizedImages);
   return applyGoogleTurnOrderingFix({
-    messages: sanitizedImages,
+    messages: repairedTools,
     modelApi: params.modelApi,
     sessionManager: params.sessionManager,
     sessionId: params.sessionId,
