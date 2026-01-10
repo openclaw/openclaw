@@ -1402,4 +1402,36 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
+
+  it("normalizes participant phone numbers to JIDs in sendReaction", async () => {
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage: vi.fn(),
+      accountId: ACCOUNT_ID,
+      authDir,
+    });
+    const sock = await createWaSocket();
+
+    await listener.sendReaction(
+      "[redacted-email]",
+      "msg123",
+      "👍",
+      false,
+      "+6421000000",
+    );
+
+    expect(sock.sendMessage).toHaveBeenCalledWith("[redacted-email]", {
+      react: {
+        text: "👍",
+        key: {
+          remoteJid: "[redacted-email]",
+          id: "msg123",
+          fromMe: false,
+          participant: "[redacted-email]",
+        },
+      },
+    });
+
+    await listener.close();
+  });
 });
