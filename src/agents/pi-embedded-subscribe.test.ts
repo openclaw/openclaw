@@ -456,6 +456,53 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Hello block"]);
   });
 
+  it("suppresses message_end block replies when the message tool already sent", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+    });
+
+    const messageText = "This is the answer.";
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-message-1",
+      args: { action: "send", to: "+1555", message: messageText },
+    });
+
+    handler?.({
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-message-1",
+      isError: false,
+      result: "ok",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: messageText }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("clears block reply state on message_start", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
