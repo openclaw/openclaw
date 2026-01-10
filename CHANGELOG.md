@@ -4,6 +4,7 @@
 
 ### Fixes
 - Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”).
+- Auth: update Claude Code keychain credentials in-place during refresh sync; extract CLI sync helpers + coverage.
 - Onboarding/Gateway: persist non-interactive gateway token auth in config; add WS wizard + gateway tool-calling regression coverage.
 - CLI: `clawdbot sessions` now includes `elev:*` + `usage:*` flags in the table output.
 - Branding: normalize user-facing “ClawdBot”/“CLAWDBOT” → “Clawdbot” (CLI, status, docs).

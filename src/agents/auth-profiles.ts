@@ -1,4 +1,3 @@
-import { execSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -15,15 +14,16 @@ import type { AuthProfileConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import {
+  readClaudeCliCredentials,
+  readCodexCliCredentials,
+  writeClaudeCliCredentials,
+} from "./cli-credentials.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const AUTH_STORE_VERSION = 1;
 const AUTH_PROFILE_FILENAME = "auth-profiles.json";
 const LEGACY_AUTH_FILENAME = "auth.json";
-
-// External CLI credential file locations
-const CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH = ".claude/.credentials.json";
-const CODEX_CLI_AUTH_RELATIVE_PATH = ".codex/auth.json";
 
 export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
 export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
@@ -134,133 +134,6 @@ function saveJsonFile(pathname: string, data: unknown) {
   }
   fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
   fs.chmodSync(pathname, 0o600);
-}
-
-/**
- * Write refreshed OAuth credentials back to Claude CLI's credential storage.
- * This ensures Claude Code continues to work after ClawdBot refreshes the token.
- *
- * On macOS: Updates keychain entry "Claude Code-credentials" (primary storage).
- * On Linux/Windows: Updates ~/.claude/.credentials.json file.
- *
- * Only writes if Claude CLI credentials exist (Claude Code is installed).
- */
-function writeClaudeCliCredentials(newCredentials: OAuthCredentials): boolean {
-  // On macOS, Claude Code uses keychain as primary storage
-  if (process.platform === "darwin") {
-    return writeClaudeCliKeychainCredentials(newCredentials);
-  }
-
-  // On Linux/Windows, use file storage
-  return writeClaudeCliFileCredentials(newCredentials);
-}
-
-/**
- * Write credentials to macOS keychain.
- */
-function writeClaudeCliKeychainCredentials(
-  newCredentials: OAuthCredentials,
-): boolean {
-  try {
-    // First read existing keychain entry to preserve other fields
-    const existingResult = execSync(
-      'security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null',
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    const existingData = JSON.parse(existingResult.trim());
-    const existingOauth = existingData?.claudeAiOauth;
-    if (!existingOauth || typeof existingOauth !== "object") {
-      return false;
-    }
-
-    // Update with new tokens while preserving other fields
-    existingData.claudeAiOauth = {
-      ...existingOauth,
-      accessToken: newCredentials.access,
-      refreshToken: newCredentials.refresh,
-      expiresAt: newCredentials.expires,
-    };
-
-    const newValue = JSON.stringify(existingData);
-
-    // Delete old entry and add new one (keychain doesn't support update)
-    try {
-      execSync(
-        'security delete-generic-password -s "Claude Code-credentials"',
-        {
-          encoding: "utf8",
-          timeout: 5000,
-          stdio: ["pipe", "pipe", "pipe"],
-        },
-      );
-    } catch {
-      // Entry might not exist, continue
-    }
-
-    execSync(
-      `security add-generic-password -s "Claude Code-credentials" -a "Claude Code" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    log.info("wrote refreshed credentials to claude cli keychain", {
-      expires: new Date(newCredentials.expires).toISOString(),
-    });
-    return true;
-  } catch (error) {
-    log.warn("failed to write credentials to claude cli keychain", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    // Fall back to file storage on macOS
-    return writeClaudeCliFileCredentials(newCredentials);
-  }
-}
-
-/**
- * Write credentials to file storage (~/.claude/.credentials.json).
- */
-function writeClaudeCliFileCredentials(
-  newCredentials: OAuthCredentials,
-): boolean {
-  const credPath = path.join(
-    resolveUserPath("~"),
-    CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
-  );
-
-  // Only update if Claude CLI credentials file exists
-  if (!fs.existsSync(credPath)) {
-    return false;
-  }
-
-  try {
-    const raw = loadJsonFile(credPath);
-    if (!raw || typeof raw !== "object") return false;
-
-    const data = raw as Record<string, unknown>;
-    const existingOauth = data.claudeAiOauth as
-      | Record<string, unknown>
-      | undefined;
-    if (!existingOauth || typeof existingOauth !== "object") return false;
-
-    // Update with new tokens while preserving other fields (scopes, subscriptionType, etc.)
-    data.claudeAiOauth = {
-      ...existingOauth,
-      accessToken: newCredentials.access,
-      refreshToken: newCredentials.refresh,
-      expiresAt: newCredentials.expires,
-    };
-
-    saveJsonFile(credPath, data);
-    log.info("wrote refreshed credentials to claude cli file", {
-      expires: new Date(newCredentials.expires).toISOString(),
-    });
-    return true;
-  } catch (error) {
-    log.warn("failed to write credentials to claude cli file", {
-      error: error instanceof Error ? error.message : String(error),
-    });
-    return false;
-  }
 }
 
 function ensureAuthStoreFile(pathname: string) {
@@ -474,159 +347,6 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
     mutated = true;
   }
   return mutated;
-}
-
-/**
- * Read Anthropic OAuth credentials from Claude CLI's keychain entry (macOS)
- * or credential file (Linux/Windows).
- *
- * On macOS, Claude Code stores credentials in keychain "Claude Code-credentials".
- * On Linux/Windows, it uses ~/.claude/.credentials.json
- *
- * Returns OAuthCredential when refreshToken is available (enables auto-refresh),
- * or TokenCredential as fallback for backward compatibility.
- */
-function readClaudeCliCredentials(options?: {
-  allowKeychainPrompt?: boolean;
-}): OAuthCredential | TokenCredential | null {
-  if (process.platform === "darwin" && options?.allowKeychainPrompt !== false) {
-    const keychainCreds = readClaudeCliKeychainCredentials();
-    if (keychainCreds) {
-      log.info("read anthropic credentials from claude cli keychain", {
-        type: keychainCreds.type,
-      });
-      return keychainCreds;
-    }
-  }
-
-  const credPath = path.join(
-    resolveUserPath("~"),
-    CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
-  );
-  const raw = loadJsonFile(credPath);
-  if (!raw || typeof raw !== "object") return null;
-
-  const data = raw as Record<string, unknown>;
-  const claudeOauth = data.claudeAiOauth as Record<string, unknown> | undefined;
-  if (!claudeOauth || typeof claudeOauth !== "object") return null;
-
-  const accessToken = claudeOauth.accessToken;
-  const refreshToken = claudeOauth.refreshToken;
-  const expiresAt = claudeOauth.expiresAt;
-
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
-
-  // Return OAuthCredential when refreshToken is available (enables auto-refresh)
-  if (typeof refreshToken === "string" && refreshToken) {
-    return {
-      type: "oauth",
-      provider: "anthropic",
-      access: accessToken,
-      refresh: refreshToken,
-      expires: expiresAt,
-    };
-  }
-
-  // Fallback to TokenCredential for backward compatibility (no auto-refresh)
-  return {
-    type: "token",
-    provider: "anthropic",
-    token: accessToken,
-    expires: expiresAt,
-  };
-}
-
-/**
- * Read Claude Code credentials from macOS keychain.
- * Uses the `security` CLI to access keychain without native dependencies.
- *
- * Returns OAuthCredential when refreshToken is available (enables auto-refresh),
- * or TokenCredential as fallback for backward compatibility.
- */
-function readClaudeCliKeychainCredentials():
-  | OAuthCredential
-  | TokenCredential
-  | null {
-  try {
-    const result = execSync(
-      'security find-generic-password -s "Claude Code-credentials" -w',
-      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
-    );
-
-    const data = JSON.parse(result.trim());
-    const claudeOauth = data?.claudeAiOauth;
-    if (!claudeOauth || typeof claudeOauth !== "object") return null;
-
-    const accessToken = claudeOauth.accessToken;
-    const refreshToken = claudeOauth.refreshToken;
-    const expiresAt = claudeOauth.expiresAt;
-
-    if (typeof accessToken !== "string" || !accessToken) return null;
-    if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
-
-    // Return OAuthCredential when refreshToken is available (enables auto-refresh)
-    if (typeof refreshToken === "string" && refreshToken) {
-      return {
-        type: "oauth",
-        provider: "anthropic",
-        access: accessToken,
-        refresh: refreshToken,
-        expires: expiresAt,
-      };
-    }
-
-    // Fallback to TokenCredential for backward compatibility (no auto-refresh)
-    return {
-      type: "token",
-      provider: "anthropic",
-      token: accessToken,
-      expires: expiresAt,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Read OpenAI Codex OAuth credentials from Codex CLI's auth file.
- * Codex CLI stores credentials at ~/.codex/auth.json
- */
-function readCodexCliCredentials(): OAuthCredential | null {
-  const authPath = path.join(
-    resolveUserPath("~"),
-    CODEX_CLI_AUTH_RELATIVE_PATH,
-  );
-  const raw = loadJsonFile(authPath);
-  if (!raw || typeof raw !== "object") return null;
-
-  const data = raw as Record<string, unknown>;
-  const tokens = data.tokens as Record<string, unknown> | undefined;
-  if (!tokens || typeof tokens !== "object") return null;
-
-  const accessToken = tokens.access_token;
-  const refreshToken = tokens.refresh_token;
-
-  if (typeof accessToken !== "string" || !accessToken) return null;
-  if (typeof refreshToken !== "string" || !refreshToken) return null;
-
-  // Codex CLI doesn't store expiry, estimate 1 hour from file mtime or now
-  let expires: number;
-  try {
-    const stat = fs.statSync(authPath);
-    // Assume token is valid for ~1 hour from when the file was last modified
-    expires = stat.mtimeMs + 60 * 60 * 1000;
-  } catch {
-    expires = Date.now() + 60 * 60 * 1000;
-  }
-
-  return {
-    type: "oauth",
-    provider: "openai-codex" as unknown as OAuthProvider,
-    access: accessToken,
-    refresh: refreshToken,
-    expires,
-  };
 }
 
 function shallowEqualOAuthCredentials(
