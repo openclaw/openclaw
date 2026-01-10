@@ -27,11 +27,28 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   // Claude
   opus: "claude-opus-4-5",
   "opus-4.5": "claude-opus-4-5",
+  "opus-4": "claude-opus-4-5",
+
+  // Legacy Claude aliases (OpenCode Zen rotates model catalogs; keep old keys working).
+  sonnet: "claude-opus-4-5",
+  "sonnet-4": "claude-opus-4-5",
+  haiku: "claude-opus-4-5",
+  "haiku-3.5": "claude-opus-4-5",
 
   // GPT-5.x family
   gpt5: "gpt-5.2",
   "gpt-5": "gpt-5.2",
   "gpt-5.1": "gpt-5.1",
+
+  // Legacy GPT aliases (keep old config/docs stable; map to closest current equivalents).
+  gpt4: "gpt-5.1",
+  "gpt-4": "gpt-5.1",
+  "gpt-mini": "gpt-5.1-codex-mini",
+
+  // Legacy O-series aliases (no longer in the Zen catalog; map to a strong default).
+  o1: "gpt-5.2",
+  o3: "gpt-5.2",
+  "o3-mini": "gpt-5.1-codex-mini",
 
   // Codex family
   codex: "gpt-5.1-codex",
@@ -44,6 +61,11 @@ export const OPENCODE_ZEN_MODEL_ALIASES: Record<string, string> = {
   "gemini-3": "gemini-3-pro",
   flash: "gemini-3-flash",
   "gemini-flash": "gemini-3-flash",
+
+  // Legacy Gemini 2.5 aliases (map to the nearest current Gemini tier).
+  "gemini-2.5": "gemini-3-pro",
+  "gemini-2.5-pro": "gemini-3-pro",
+  "gemini-2.5-flash": "gemini-3-flash",
 
   // GLM (free + alpha)
   glm: "glm-4.7-free",
@@ -161,6 +183,7 @@ function buildModelDefinition(modelId: string): ModelDefinitionConfig {
     id: modelId,
     name: formatModelName(modelId),
     api: resolveOpencodeZenModelApi(modelId),
+    // Treat Zen models as reasoning-capable so defaults pick thinkLevel="low" unless users opt out.
     reasoning: true,
     input: supportsImageInput(modelId) ? ["text", "image"] : ["text"],
     cost: MODEL_COSTS[modelId] ?? DEFAULT_COST,

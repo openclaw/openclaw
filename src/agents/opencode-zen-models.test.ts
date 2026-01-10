@@ -12,6 +12,14 @@ describe("resolveOpencodeZenAlias", () => {
     expect(resolveOpencodeZenAlias("opus")).toBe("claude-opus-4-5");
   });
 
+  it("keeps legacy aliases working", () => {
+    expect(resolveOpencodeZenAlias("sonnet")).toBe("claude-opus-4-5");
+    expect(resolveOpencodeZenAlias("haiku")).toBe("claude-opus-4-5");
+    expect(resolveOpencodeZenAlias("gpt4")).toBe("gpt-5.1");
+    expect(resolveOpencodeZenAlias("o1")).toBe("gpt-5.2");
+    expect(resolveOpencodeZenAlias("gemini-2.5")).toBe("gemini-3-pro");
+  });
+
   it("resolves gpt5 alias", () => {
     expect(resolveOpencodeZenAlias("gpt5")).toBe("gpt-5.2");
   });
@@ -88,5 +96,12 @@ describe("OPENCODE_ZEN_MODEL_ALIASES", () => {
     expect(OPENCODE_ZEN_MODEL_ALIASES.gemini).toBe("gemini-3-pro");
     expect(OPENCODE_ZEN_MODEL_ALIASES.glm).toBe("glm-4.7-free");
     expect(OPENCODE_ZEN_MODEL_ALIASES.minimax).toBe("minimax-m2.1-free");
+
+    // Legacy aliases (kept for backward compatibility).
+    expect(OPENCODE_ZEN_MODEL_ALIASES.sonnet).toBe("claude-opus-4-5");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.haiku).toBe("claude-opus-4-5");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.gpt4).toBe("gpt-5.1");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.o1).toBe("gpt-5.2");
+    expect(OPENCODE_ZEN_MODEL_ALIASES["gemini-2.5"]).toBe("gemini-3-pro");
   });
 });
