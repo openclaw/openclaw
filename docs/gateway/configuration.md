@@ -1186,6 +1186,15 @@ Block streaming:
   Provider overrides: `whatsapp.blockStreamingCoalesce`, `telegram.blockStreamingCoalesce`,
   `discord.blockStreamingCoalesce`, `slack.blockStreamingCoalesce`, `signal.blockStreamingCoalesce`,
   `imessage.blockStreamingCoalesce`, `msteams.blockStreamingCoalesce` (and per-account variants).
+- `agents.defaults.humanDelay`: randomized pause between **block replies** after the first.
+  Modes: `off` (default), `natural` (800–2500ms), `custom` (use `minMs`/`maxMs`).
+  Per-agent override: `agents.list[].humanDelay`.
+  Example:
+  ```json5
+  {
+    agents: { defaults: { humanDelay: { mode: "natural" } } }
+  }
+  ```
 See [/concepts/streaming](/concepts/streaming) for behavior + chunking details.
 
 Typing indicators:
