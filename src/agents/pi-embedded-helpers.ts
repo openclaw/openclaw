@@ -85,6 +85,7 @@ function isEmptyAssistantErrorMessage(
 export async function sanitizeSessionMessagesImages(
   messages: AgentMessage[],
   label: string,
+  options?: { sanitizeToolCallIds?: boolean },
 ): Promise<AgentMessage[]> {
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (see MAX_IMAGE_DIMENSION_PX).
@@ -103,12 +104,13 @@ export async function sanitizeSessionMessagesImages(
         content as ContentBlock[],
         label,
       )) as unknown as typeof toolMsg.content;
-      const sanitizedToolCallId = toolMsg.toolCallId
-        ? sanitizeToolCallId(toolMsg.toolCallId)
-        : undefined;
+      const sanitizedToolCallId =
+        options?.sanitizeToolCallIds && toolMsg.toolCallId
+          ? sanitizeToolCallId(toolMsg.toolCallId)
+          : undefined;
       const toolUseId = (toolMsg as { toolUseId?: unknown }).toolUseId;
       const sanitizedToolUseId =
-        typeof toolUseId === "string" && toolUseId
+        options?.sanitizeToolCallIds && typeof toolUseId === "string" && toolUseId
           ? sanitizeToolCallId(toolUseId)
           : undefined;
       const sanitizedMsg = {
@@ -151,30 +153,31 @@ export async function sanitizeSessionMessagesImages(
           if (rec.type !== "text" || typeof rec.text !== "string") return true;
           return rec.text.trim().length > 0;
         });
-        // Also sanitize tool call IDs in assistant messages (function call blocks)
-        const sanitizedContent = await Promise.all(
-          filteredContent.map(async (block) => {
-            if (!block || typeof block !== "object") return block;
+        const sanitizedContent = options?.sanitizeToolCallIds
+          ? await Promise.all(
+              filteredContent.map(async (block) => {
+                if (!block || typeof block !== "object") return block;
 
-            const type = (block as { type?: unknown }).type;
-            const id = (block as { id?: unknown }).id;
-            if (typeof id !== "string" || !id) return block;
+                const type = (block as { type?: unknown }).type;
+                const id = (block as { id?: unknown }).id;
+                if (typeof id !== "string" || !id) return block;
 
-            // Cloud Code Assist tool blocks require ids matching ^[a-zA-Z0-9_-]+$.
-            if (
-              type === "functionCall" ||
-              type === "toolUse" ||
-              type === "toolCall"
-            ) {
-              return {
-                ...(block as unknown as Record<string, unknown>),
-                id: sanitizeToolCallId(id),
-              };
-            }
+                // Cloud Code Assist tool blocks require ids matching ^[a-zA-Z0-9_-]+$.
+                if (
+                  type === "functionCall" ||
+                  type === "toolUse" ||
+                  type === "toolCall"
+                ) {
+                  return {
+                    ...(block as unknown as Record<string, unknown>),
+                    id: sanitizeToolCallId(id),
+                  };
+                }
 
-            return block;
-          }),
-        );
+                return block;
+              }),
+            )
+          : filteredContent;
         const finalContent = (await sanitizeContentBlocksImages(
           sanitizedContent as unknown as ContentBlock[],
           label,
