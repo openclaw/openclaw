@@ -24,6 +24,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **Reply Tags**: optional reply tag syntax for supported providers.
 - **Heartbeats**: heartbeat prompt and ack behavior.
 - **Runtime**: host, OS, node, model, thinking level (one line).
+- **Reasoning**: current visibility level + /reasoning toggle hint.
 
 ## Workspace bootstrap injection
 

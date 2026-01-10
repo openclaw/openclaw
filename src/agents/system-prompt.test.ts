@@ -170,6 +170,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("capabilities=inlineButtons");
   });
 
+  it("includes reasoning visibility hint", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/clawd",
+      reasoningLevel: "off",
+    });
+
+    expect(prompt).toContain("Reasoning: off");
+    expect(prompt).toContain("/reasoning");
+    expect(prompt).toContain("/status shows Reasoning");
+  });
+
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",

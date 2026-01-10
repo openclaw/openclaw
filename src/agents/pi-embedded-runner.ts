@@ -584,6 +584,7 @@ export function buildEmbeddedSandboxInfo(
 function buildEmbeddedSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
+  reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
   reasoningTagHint: boolean;
@@ -608,6 +609,7 @@ function buildEmbeddedSystemPrompt(params: {
   return buildAgentSystemPrompt({
     workspaceDir: params.workspaceDir,
     defaultThinkLevel: params.defaultThinkLevel,
+    reasoningLevel: params.reasoningLevel,
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: params.reasoningTagHint,
@@ -921,6 +923,7 @@ export async function compactEmbeddedPiSession(params: {
         const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
           defaultThinkLevel: params.thinkLevel,
+          reasoningLevel: params.reasoningLevel ?? "off",
           extraSystemPrompt: params.extraSystemPrompt,
           ownerNumbers: params.ownerNumbers,
           reasoningTagHint,
@@ -1301,6 +1304,7 @@ export async function runEmbeddedPiAgent(params: {
           const appendPrompt = buildEmbeddedSystemPrompt({
             workspaceDir: effectiveWorkspace,
             defaultThinkLevel: thinkLevel,
+            reasoningLevel: params.reasoningLevel ?? "off",
             extraSystemPrompt: params.extraSystemPrompt,
             ownerNumbers: params.ownerNumbers,
             reasoningTagHint,
