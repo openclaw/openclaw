@@ -517,7 +517,7 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
 }
 
 // ── Messaging tool duplicate detection ──────────────────────────────────────
-// When the agent uses a messaging tool (telegram, discord, slack, sessions_send)
+// When the agent uses a messaging tool (telegram, discord, slack, message, sessions_send)
 // to send a message, we track the text so we can suppress duplicate block replies.
 // The LLM sometimes elaborates or wraps the same content, so we use substring matching.
 
@@ -537,6 +537,22 @@ export function normalizeTextForComparison(text: string): string {
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function isMessagingToolDuplicateNormalized(
+  normalized: string,
+  normalizedSentTexts: string[],
+): boolean {
+  if (normalizedSentTexts.length === 0) return false;
+  if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH)
+    return false;
+  return normalizedSentTexts.some((normalizedSent) => {
+    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH)
+      return false;
+    return (
+      normalized.includes(normalizedSent) || normalizedSent.includes(normalized)
+    );
+  });
 }
 
 /**
@@ -577,13 +593,8 @@ export function isMessagingToolDuplicate(
   const normalized = normalizeTextForComparison(text);
   if (!normalized || normalized.length < MIN_DUPLICATE_TEXT_LENGTH)
     return false;
-  return sentTexts.some((sent) => {
-    const normalizedSent = normalizeTextForComparison(sent);
-    if (!normalizedSent || normalizedSent.length < MIN_DUPLICATE_TEXT_LENGTH)
-      return false;
-    // Substring match: either text contains the other
-    return (
-      normalized.includes(normalizedSent) || normalizedSent.includes(normalized)
-    );
-  });
+  return isMessagingToolDuplicateNormalized(
+    normalized,
+    sentTexts.map(normalizeTextForComparison),
+  );
 }
