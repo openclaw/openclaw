@@ -1,18 +1,10 @@
-import { getFileExtension } from "../media/mime.js";
+import { isVoiceCompatibleAudio } from "../media/audio.js";
 
 export function isTelegramVoiceCompatible(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  const mime = opts.contentType?.toLowerCase();
-  if (mime && (mime.includes("ogg") || mime.includes("opus"))) {
-    return true;
-  }
-  const fileName = opts.fileName?.trim();
-  if (!fileName) return false;
-  const ext = getFileExtension(fileName);
-  if (!ext) return false;
-  return ext === ".ogg" || ext === ".opus" || ext === ".oga";
+  return isVoiceCompatibleAudio(opts);
 }
 
 export function resolveTelegramVoiceDecision(opts: {

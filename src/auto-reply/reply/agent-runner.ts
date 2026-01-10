@@ -33,9 +33,8 @@ import {
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
-import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
+import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { parseAudioTag } from "./audio-tags.js";
 import {
   createAudioAsVoiceBuffer,
   createBlockReplyPipeline,
@@ -48,6 +47,7 @@ import {
   type QueueSettings,
   scheduleFollowupDrain,
 } from "./queue.js";
+import { parseReplyDirectives } from "./reply-directives.js";
 import {
   applyReplyTagsToPayload,
   applyReplyThreading,
@@ -550,28 +550,39 @@ export async function runReplyAgent(params: {
                       !payload.audioAsVoice
                     )
                       return;
-                    const audioTagResult = parseAudioTag(taggedPayload.text);
-                    const cleaned = audioTagResult.text || undefined;
+                    const parsed = parseReplyDirectives(
+                      taggedPayload.text ?? "",
+                      {
+                        currentMessageId: sessionCtx.MessageSid,
+                        silentToken: SILENT_REPLY_TOKEN,
+                      },
+                    );
+                    const cleaned = parsed.text || undefined;
                     const hasMedia =
                       Boolean(taggedPayload.mediaUrl) ||
                       (taggedPayload.mediaUrls?.length ?? 0) > 0;
                     // Skip empty payloads unless they have audioAsVoice flag (need to track it)
-                    if (!cleaned && !hasMedia && !payload.audioAsVoice) return;
                     if (
-                      isSilentReplyText(cleaned, SILENT_REPLY_TOKEN) &&
-                      !hasMedia
+                      !cleaned &&
+                      !hasMedia &&
+                      !payload.audioAsVoice &&
+                      !parsed.audioAsVoice
                     )
                       return;
+                    if (parsed.isSilent && !hasMedia) return;
 
                     const blockPayload: ReplyPayload = applyReplyToMode({
                       ...taggedPayload,
                       text: cleaned,
-                      audioAsVoice:
-                        audioTagResult.audioAsVoice || payload.audioAsVoice,
+                      audioAsVoice: parsed.audioAsVoice || payload.audioAsVoice,
+                      replyToId: taggedPayload.replyToId ?? parsed.replyToId,
+                      replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
+                      replyToCurrent:
+                        taggedPayload.replyToCurrent || parsed.replyToCurrent,
                     });
 
                     void typingSignals
-                      .signalTextDelta(taggedPayload.text)
+                      .signalTextDelta(cleaned ?? taggedPayload.text)
                       .catch((err) => {
                         logVerbose(
                           `block reply typing signal failed: ${String(err)}`,
@@ -735,11 +746,21 @@ export async function runReplyAgent(params: {
       currentMessageId: sessionCtx.MessageSid,
     })
       .map((payload) => {
-        const audioTagResult = parseAudioTag(payload.text);
+        const parsed = parseReplyDirectives(payload.text ?? "", {
+          currentMessageId: sessionCtx.MessageSid,
+          silentToken: SILENT_REPLY_TOKEN,
+        });
+        const mediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
+        const mediaUrl = payload.mediaUrl ?? parsed.mediaUrl ?? mediaUrls?.[0];
         return {
           ...payload,
-          text: audioTagResult.text ? audioTagResult.text : undefined,
-          audioAsVoice: audioTagResult.audioAsVoice,
+          text: parsed.text ? parsed.text : undefined,
+          mediaUrls,
+          mediaUrl,
+          replyToId: payload.replyToId ?? parsed.replyToId,
+          replyToTag: payload.replyToTag || parsed.replyToTag,
+          replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
+          audioAsVoice: payload.audioAsVoice || parsed.audioAsVoice,
         };
       })
       .filter(isRenderablePayload);
@@ -775,8 +796,7 @@ export async function runReplyAgent(params: {
 
     const shouldSignalTyping = replyPayloads.some((payload) => {
       const trimmed = payload.text?.trim();
-      if (trimmed && !isSilentReplyText(trimmed, SILENT_REPLY_TOKEN))
-        return true;
+      if (trimmed) return true;
       if (payload.mediaUrl) return true;
       if (payload.mediaUrls && payload.mediaUrls.length > 0) return true;
       return false;

@@ -10,8 +10,23 @@ export function applyReplyTagsToPayload(
   payload: ReplyPayload,
   currentMessageId?: string,
 ): ReplyPayload {
-  if (typeof payload.text !== "string") return payload;
-  const { cleaned, replyToId, hasTag } = extractReplyToTag(
+  if (typeof payload.text !== "string") {
+    if (!payload.replyToCurrent || payload.replyToId) return payload;
+    return {
+      ...payload,
+      replyToId: currentMessageId?.trim() || undefined,
+    };
+  }
+  const shouldParseTags = payload.text.includes("[[");
+  if (!shouldParseTags) {
+    if (!payload.replyToCurrent || payload.replyToId) return payload;
+    return {
+      ...payload,
+      replyToId: currentMessageId?.trim() || undefined,
+      replyToTag: payload.replyToTag ?? true,
+    };
+  }
+  const { cleaned, replyToId, replyToCurrent, hasTag } = extractReplyToTag(
     payload.text,
     currentMessageId,
   );
@@ -20,6 +35,7 @@ export function applyReplyTagsToPayload(
     text: cleaned ? cleaned : undefined,
     replyToId: replyToId ?? payload.replyToId,
     replyToTag: hasTag || payload.replyToTag,
+    replyToCurrent: replyToCurrent || payload.replyToCurrent,
   };
 }
 
