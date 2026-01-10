@@ -1,8 +1,8 @@
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
@@ -432,7 +432,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const isRoomish = !isDirectMessage;
     const historyKey = isRoomish ? conversationId : undefined;
     if (isRoomish && historyKey && historyLimit > 0) {
-      appendHistoryEntry({
+      combinedBody = buildHistoryContextFromMap({
         historyMap: conversationHistories,
         historyKey,
         limit: historyLimit,
@@ -442,10 +442,6 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           timestamp: timestamp?.getTime(),
           messageId: activity.id ?? undefined,
         },
-      });
-      const history = conversationHistories.get(historyKey) ?? [];
-      combinedBody = buildHistoryContextFromEntries({
-        entries: history,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
@@ -520,7 +516,10 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       const didSendReply = counts.final + counts.tool + counts.block > 0;
       if (!queuedFinal) {
         if (isRoomish && historyKey && historyLimit > 0 && didSendReply) {
-          conversationHistories.set(historyKey, []);
+          clearHistoryEntries({
+            historyMap: conversationHistories,
+            historyKey,
+          });
         }
         return;
       }
@@ -531,7 +530,10 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         );
       }
       if (isRoomish && historyKey && historyLimit > 0 && didSendReply) {
-        conversationHistories.set(historyKey, []);
+        clearHistoryEntries({
+          historyMap: conversationHistories,
+          historyKey,
+        });
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });

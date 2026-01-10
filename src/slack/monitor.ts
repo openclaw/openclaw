@@ -25,8 +25,8 @@ import {
 } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
@@ -969,21 +969,17 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
     const isRoomish = isRoom || isGroupDm;
     const historyKey = message.channel;
-    if (isRoomish && historyLimit > 0) {
-      appendHistoryEntry({
-        historyMap: channelHistories,
-        historyKey,
-        limit: historyLimit,
-        entry: {
-          sender: senderName,
-          body: rawBody,
-          timestamp: message.ts
-            ? Math.round(Number(message.ts) * 1000)
-            : undefined,
-          messageId: message.ts,
-        },
-      });
-    }
+    const historyEntry =
+      isRoomish && historyLimit > 0
+        ? {
+            sender: senderName,
+            body: rawBody,
+            timestamp: message.ts
+              ? Math.round(Number(message.ts) * 1000)
+              : undefined,
+            messageId: message.ts,
+          }
+        : undefined;
 
     const preview = rawBody.replace(/\s+/g, " ").slice(0, 160);
     const inboundLabel = isDirectMessage
@@ -1021,9 +1017,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
 
     let combinedBody = body;
     if (isRoomish && historyLimit > 0) {
-      const history = channelHistories.get(historyKey) ?? [];
-      combinedBody = buildHistoryContextFromEntries({
-        entries: history,
+      combinedBody = buildHistoryContextFromMap({
+        historyMap: channelHistories,
+        historyKey,
+        limit: historyLimit,
+        entry: historyEntry,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
@@ -1220,7 +1218,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
     if (!queuedFinal) {
       if (isRoomish && historyLimit > 0 && didSendReply) {
-        channelHistories.set(historyKey, []);
+        clearHistoryEntries({ historyMap: channelHistories, historyKey });
       }
       return;
     }
@@ -1245,7 +1243,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       });
     }
     if (isRoomish && historyLimit > 0 && didSendReply) {
-      channelHistories.set(historyKey, []);
+      clearHistoryEntries({ historyMap: channelHistories, historyKey });
     }
   };
 

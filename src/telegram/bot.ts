@@ -21,8 +21,8 @@ import {
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { resolveTelegramDraftStreamingChunking } from "../auto-reply/reply/block-streaming.js";
 import {
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
@@ -671,7 +671,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       ? buildTelegramGroupPeerId(chatId, messageThreadId)
       : undefined;
     if (isGroup && historyKey && historyLimit > 0) {
-      appendHistoryEntry({
+      combinedBody = buildHistoryContextFromMap({
         historyMap: groupHistories,
         historyKey,
         limit: historyLimit,
@@ -684,10 +684,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               ? String(msg.message_id)
               : undefined,
         },
-      });
-      const history = groupHistories.get(historyKey) ?? [];
-      combinedBody = buildHistoryContextFromEntries({
-        entries: history,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
@@ -907,7 +903,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     draftStream?.stop();
     if (!queuedFinal) {
       if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
-        groupHistories.set(historyKey, []);
+        clearHistoryEntries({ historyMap: groupHistories, historyKey });
       }
       return;
     }
@@ -927,7 +923,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       });
     }
     if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
-      groupHistories.set(historyKey, []);
+      clearHistoryEntries({ historyMap: groupHistories, historyKey });
     }
   };
 

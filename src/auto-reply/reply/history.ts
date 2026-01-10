@@ -43,6 +43,41 @@ export function appendHistoryEntry(params: {
   return history;
 }
 
+export function buildHistoryContextFromMap(params: {
+  historyMap: Map<string, HistoryEntry[]>;
+  historyKey: string;
+  limit: number;
+  entry?: HistoryEntry;
+  currentMessage: string;
+  formatEntry: (entry: HistoryEntry) => string;
+  lineBreak?: string;
+  excludeLast?: boolean;
+}): string {
+  if (params.limit <= 0) return params.currentMessage;
+  const entries = params.entry
+    ? appendHistoryEntry({
+        historyMap: params.historyMap,
+        historyKey: params.historyKey,
+        entry: params.entry,
+        limit: params.limit,
+      })
+    : (params.historyMap.get(params.historyKey) ?? []);
+  return buildHistoryContextFromEntries({
+    entries,
+    currentMessage: params.currentMessage,
+    formatEntry: params.formatEntry,
+    lineBreak: params.lineBreak,
+    excludeLast: params.excludeLast,
+  });
+}
+
+export function clearHistoryEntries(params: {
+  historyMap: Map<string, HistoryEntry[]>;
+  historyKey: string;
+}): void {
+  params.historyMap.set(params.historyKey, []);
+}
+
 export function buildHistoryContextFromEntries(params: {
   entries: HistoryEntry[];
   currentMessage: string;

@@ -6,8 +6,8 @@ import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
@@ -635,7 +635,7 @@ export async function monitorSignalProvider(
       let combinedBody = body;
       const historyKey = isGroup ? String(groupId ?? "unknown") : undefined;
       if (isGroup && historyKey && historyLimit > 0) {
-        appendHistoryEntry({
+        combinedBody = buildHistoryContextFromMap({
           historyMap: groupHistories,
           historyKey,
           limit: historyLimit,
@@ -648,10 +648,6 @@ export async function monitorSignalProvider(
                 ? String(envelope.timestamp)
                 : undefined,
           },
-        });
-        const history = groupHistories.get(historyKey) ?? [];
-        combinedBody = buildHistoryContextFromEntries({
-          entries: history,
           currentMessage: combinedBody,
           formatEntry: (entry) =>
             formatAgentEnvelope({
@@ -763,12 +759,12 @@ export async function monitorSignalProvider(
       });
       if (!queuedFinal) {
         if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
-          groupHistories.set(historyKey, []);
+          clearHistoryEntries({ historyMap: groupHistories, historyKey });
         }
         return;
       }
       if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
-        groupHistories.set(historyKey, []);
+        clearHistoryEntries({ historyMap: groupHistories, historyKey });
       }
     };
 

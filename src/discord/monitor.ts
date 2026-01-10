@@ -35,8 +35,8 @@ import {
 } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
 import {
@@ -887,23 +887,19 @@ export function createDiscordMessageHandler(params: {
       const textForHistory = resolveDiscordMessageText(message, {
         includeForwarded: true,
       });
-      if (isGuildMessage && historyLimit > 0 && textForHistory) {
-        appendHistoryEntry({
-          historyMap: guildHistories,
-          historyKey: message.channelId,
-          limit: historyLimit,
-          entry: {
-            sender:
-              data.member?.nickname ??
-              author.globalName ??
-              author.username ??
-              author.id,
-            body: textForHistory,
-            timestamp: resolveTimestampMs(message.timestamp),
-            messageId: message.id,
-          },
-        });
-      }
+      const historyEntry =
+        isGuildMessage && historyLimit > 0 && textForHistory
+          ? {
+              sender:
+                data.member?.nickname ??
+                author.globalName ??
+                author.username ??
+                author.id,
+              body: textForHistory,
+              timestamp: resolveTimestampMs(message.timestamp),
+              messageId: message.id,
+            }
+          : undefined;
 
       const shouldRequireMention =
         channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
@@ -1049,10 +1045,11 @@ export function createDiscordMessageHandler(params: {
       });
       let shouldClearHistory = false;
       if (!isDirectMessage) {
-        const history =
-          historyLimit > 0 ? (guildHistories.get(message.channelId) ?? []) : [];
-        combinedBody = buildHistoryContextFromEntries({
-          entries: history,
+        combinedBody = buildHistoryContextFromMap({
+          historyMap: guildHistories,
+          historyKey: message.channelId,
+          limit: historyLimit,
+          entry: historyEntry,
           currentMessage: combinedBody,
           formatEntry: (entry) =>
             formatAgentEnvelope({
@@ -1227,7 +1224,10 @@ export function createDiscordMessageHandler(params: {
           historyLimit > 0 &&
           didSendReply
         ) {
-          guildHistories.set(message.channelId, []);
+          clearHistoryEntries({
+            historyMap: guildHistories,
+            historyKey: message.channelId,
+          });
         }
         return;
       }
@@ -1262,7 +1262,10 @@ export function createDiscordMessageHandler(params: {
         historyLimit > 0 &&
         didSendReply
       ) {
-        guildHistories.set(message.channelId, []);
+        clearHistoryEntries({
+          historyMap: guildHistories,
+          historyKey: message.channelId,
+        });
       }
     } catch (err) {
       runtime.error?.(danger(`handler failed: ${String(err)}`));

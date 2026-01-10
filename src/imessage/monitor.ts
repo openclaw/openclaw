@@ -7,8 +7,8 @@ import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
-  appendHistoryEntry,
-  buildHistoryContextFromEntries,
+  buildHistoryContextFromMap,
+  clearHistoryEntries,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
 } from "../auto-reply/reply/history.js";
@@ -409,7 +409,7 @@ export async function monitorIMessageProvider(
       ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
       : undefined;
     if (isGroup && historyKey && historyLimit > 0) {
-      appendHistoryEntry({
+      combinedBody = buildHistoryContextFromMap({
         historyMap: groupHistories,
         historyKey,
         limit: historyLimit,
@@ -419,10 +419,6 @@ export async function monitorIMessageProvider(
           timestamp: createdAt,
           messageId: message.id ? String(message.id) : undefined,
         },
-      });
-      const history = groupHistories.get(historyKey) ?? [];
-      combinedBody = buildHistoryContextFromEntries({
-        entries: history,
         currentMessage: combinedBody,
         formatEntry: (entry) =>
           formatAgentEnvelope({
@@ -527,12 +523,12 @@ export async function monitorIMessageProvider(
     });
     if (!queuedFinal) {
       if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
-        groupHistories.set(historyKey, []);
+        clearHistoryEntries({ historyMap: groupHistories, historyKey });
       }
       return;
     }
     if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
-      groupHistories.set(historyKey, []);
+      clearHistoryEntries({ historyMap: groupHistories, historyKey });
     }
   };
 
