@@ -243,7 +243,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 sessionKey,
                 idempotencyKey: `idem-${runIdTool}-tool`,
                 message:
-                  `Call the Read tool on "${toolProbePath}". ` +
+                  `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) on "${toolProbePath}". ` +
                   `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
                 deliver: false,
               },
@@ -273,7 +273,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-1`,
                   message:
-                    "Call the Read tool on package.json. Do not write any other text.",
+                    "Call the tool named `read` (or `Read`) on package.json. Do not write any other text.",
                   deliver: false,
                 },
                 { expectFinal: true },
