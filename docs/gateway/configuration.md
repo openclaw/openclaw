@@ -1491,6 +1491,8 @@ Notes:
 Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`
 in your environment and reference the model by provider/model.
 
+Shortcut: `clawdbot onboard --auth-choice zai-api-key`.
+
 ```json5
 {
   agents: {

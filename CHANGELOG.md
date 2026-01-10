@@ -2,6 +2,9 @@
 
 ## 2026.1.10
 
+### New Features and Changes
+- Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
+
 ### Fixes
 - Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”).
 - Auth: update Claude Code keychain credentials in-place during refresh sync; extract CLI sync helpers + coverage.

@@ -186,6 +186,17 @@ clawdbot onboard --non-interactive \
   --gateway-bind loopback
 ```
 
+Z.AI example:
+
+```bash
+clawdbot onboard --non-interactive \
+  --mode local \
+  --auth-choice zai-api-key \
+  --zai-api-key "$ZAI_API_KEY" \
+  --gateway-port 18789 \
+  --gateway-bind loopback
+```
+
 OpenCode Zen example:
 
 ```bash

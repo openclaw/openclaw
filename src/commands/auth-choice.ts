@@ -44,12 +44,15 @@ import {
   applyMinimaxProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  applyZaiConfig,
   MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
   setOpencodeZenApiKey,
+  setZaiApiKey,
   writeOAuthCredentials,
+  ZAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { AuthChoice } from "./onboard-types.js";
@@ -597,6 +600,45 @@ export async function applyAuthChoice(params: {
     } else {
       agentModelOverride = GOOGLE_GEMINI_DEFAULT_MODEL;
       await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
+    }
+  } else if (params.authChoice === "zai-api-key") {
+    const key = await params.prompter.text({
+      message: "Enter Z.AI API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setZaiApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zai:default",
+      provider: "zai",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyZaiConfig(nextConfig);
+      await params.prompter.note(
+        `Default model set to ${ZAI_DEFAULT_MODEL_REF}`,
+        "Model configured",
+      );
+    } else {
+      nextConfig = {
+        ...nextConfig,
+        agents: {
+          ...nextConfig.agents,
+          defaults: {
+            ...nextConfig.agents?.defaults,
+            models: {
+              ...nextConfig.agents?.defaults?.models,
+              [ZAI_DEFAULT_MODEL_REF]: {
+                ...nextConfig.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF],
+                alias:
+                  nextConfig.agents?.defaults?.models?.[ZAI_DEFAULT_MODEL_REF]
+                    ?.alias ?? "GLM",
+              },
+            },
+          },
+        },
+      };
+      agentModelOverride = ZAI_DEFAULT_MODEL_REF;
+      await noteAgentModel(ZAI_DEFAULT_MODEL_REF);
     }
   } else if (params.authChoice === "apiKey") {
     const key = await params.prompter.text({

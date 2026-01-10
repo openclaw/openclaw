@@ -36,10 +36,12 @@ import {
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   applyOpencodeZenConfig,
+  applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
   setOpencodeZenApiKey,
+  setZaiApiKey,
 } from "./onboard-auth.js";
 import {
   applyWizardMetadata,
@@ -225,6 +227,25 @@ export async function runNonInteractiveOnboarding(
       mode: "api_key",
     });
     nextConfig = applyGoogleGeminiModelDefault(nextConfig).next;
+  } else if (authChoice === "zai-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "zai",
+      cfg: baseConfig,
+      flagValue: opts.zaiApiKey,
+      flagName: "--zai-api-key",
+      envVar: "ZAI_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setZaiApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "zai:default",
+      provider: "zai",
+      mode: "api_key",
+    });
+    nextConfig = applyZaiConfig(nextConfig);
   } else if (authChoice === "openai-api-key") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "openai",
