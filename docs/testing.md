@@ -133,7 +133,7 @@ Live tests are split into two layers so we can isolate failures:
 - Optional tool-calling stress:
   - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “bash writes file → read reads it back → echo nonce” check.
   - This is specifically meant to catch tool-calling compatibility issues across providers (formatting, history replay, tool_result pairing, etc.).
-- Optional image send smoke:
+  - Optional image send smoke:
   - `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` sends a real image attachment through the gateway agent pipeline (multimodal message) and asserts the model can read back a per-run code from the image.
   - Flow (high level):
     - Test generates a tiny PNG with “CAT” + random code (`src/gateway/live-image-probe.ts`)
@@ -141,6 +141,26 @@ Live tests are split into two layers so we can isolate failures:
     - Gateway parses attachments into `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
     - Embedded agent forwards a multimodal user message to the model
     - Assertion: reply contains `cat` + the code (OCR tolerance: minor mistakes allowed)
+
+## Live: Anthropic setup-token smoke
+
+- Test: `src/agents/anthropic.setup-token.live.test.ts`
+- Goal: verify Claude CLI setup-token (or a pasted setup-token profile) can complete an Anthropic prompt.
+- Enable:
+  - `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
+  - `CLAWDBOT_LIVE_SETUP_TOKEN=1`
+- Token sources (pick one):
+  - Profile: `CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
+  - Raw token: `CLAWDBOT_LIVE_SETUP_TOKEN_VALUE=sk-ant-oat01-...`
+- Model override (optional):
+  - `CLAWDBOT_LIVE_SETUP_TOKEN_MODEL=anthropic/claude-opus-4-5`
+
+Setup example:
+
+```bash
+clawdbot models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
+CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
+```
 
 ### Recommended live recipes
 
@@ -153,22 +173,41 @@ Narrow, explicit allowlists are fastest and least flaky:
   - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Tool calling across several providers (bash + read probe):
-  - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-flash-latest,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-flash-preview,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
-  - Gemini (API key): `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="google/gemini-flash-latest" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - Gemini (API key): `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
   - Antigravity (OAuth): `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+
+Notes:
+- `google/...` uses the Gemini API (API key).
+- `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
+- `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
 
 ## Live: model matrix (what we cover)
 
 There is no fixed “CI model list” (live is opt-in), but these are the **recommended** models to cover regularly on a dev machine with keys.
+
+### Modern smoke set (tool calling + image)
+
+This is the “common models” run we expect to keep working:
+- OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
+- OpenAI Codex: `openai-codex/gpt-5.2` (optional: `openai-codex/gpt-5.2-codex`)
+- Anthropic: `anthropic/claude-opus-4-5` (or `anthropic/claude-sonnet-4-5`)
+- Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview`
+- Google (Antigravity): `google-antigravity/claude-opus-4-5-thinking` and `google-antigravity/gemini-3-flash`
+- Z.AI (GLM): `zai/glm-4.7`
+- MiniMax: `minimax/minimax-m2.1`
+
+Run gateway smoke with tools + image:
+`LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Bash)
 
 Pick at least one per provider family:
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
 - Anthropic: `anthropic/claude-opus-4-5` (or `anthropic/claude-sonnet-4-5`)
-- Google: `google/gemini-flash-latest` (or `google/gemini-2.5-pro`)
+- Google: `google/gemini-3-flash-preview` (or `google/gemini-3-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.1`
 
