@@ -2,9 +2,19 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { withTempHome } from "../../test/helpers/temp-home.js";
+
+vi.mock("../config/config.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/config.js")>();
+  return {
+    ...actual,
+    loadConfig: vi.fn(() => ({})),
+  };
+});
+
+import { loadConfig } from "../config/config.js";
 import {
   type AuthProfileStore,
   CLAUDE_CLI_PROFILE_ID,
@@ -827,6 +837,130 @@ describe("external CLI credential sync", () => {
         { prefix: "clawdbot-home-" },
       );
     } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips Claude CLI sync when autoSync.claudeCli=false", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-skip-claude-sync-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          vi.mocked(loadConfig).mockReturnValue({
+            auth: { autoSync: { claudeCli: false } },
+          });
+
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "should-not-sync",
+                refreshToken: "refresh",
+                expiresAt: Date.now() + 60 * 60 * 1000,
+              },
+            }),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({ version: 1, profiles: {} }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+          expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeUndefined();
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      vi.mocked(loadConfig).mockReturnValue({});
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips Codex CLI sync when autoSync.codexCli=false", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-skip-codex-sync-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          vi.mocked(loadConfig).mockReturnValue({
+            auth: { autoSync: { codexCli: false } },
+          });
+
+          const codexDir = path.join(tempHome, ".codex");
+          fs.mkdirSync(codexDir, { recursive: true });
+          const codexAuthPath = path.join(codexDir, "auth.json");
+          fs.writeFileSync(
+            codexAuthPath,
+            JSON.stringify({
+              tokens: {
+                access_token: "should-not-sync",
+                refresh_token: "refresh",
+              },
+            }),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({ version: 1, profiles: {} }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+          expect(store.profiles[CODEX_CLI_PROFILE_ID]).toBeUndefined();
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      vi.mocked(loadConfig).mockReturnValue({});
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("syncs CLI credentials by default (no autoSync config)", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-default-sync-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          vi.mocked(loadConfig).mockReturnValue({});
+
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "should-sync",
+                refreshToken: "refresh",
+                expiresAt: Date.now() + 60 * 60 * 1000,
+              },
+            }),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({ version: 1, profiles: {} }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+          expect(store.profiles[CLAUDE_CLI_PROFILE_ID]).toBeDefined();
+          expect(
+            (store.profiles[CLAUDE_CLI_PROFILE_ID] as { token: string }).token,
+          ).toBe("should-sync");
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      vi.mocked(loadConfig).mockReturnValue({});
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
   });

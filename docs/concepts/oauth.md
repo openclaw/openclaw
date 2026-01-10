@@ -50,7 +50,9 @@ If you already signed in with the external CLIs *on the gateway host*, Clawdbot 
 
 Sync happens when Clawdbot loads the auth store (so it stays up-to-date when the CLIs refresh tokens).
 On macOS, the first read may trigger a Keychain prompt; run `clawdbot models status`
-in a terminal once if the Gateway runs headless and can’t access the entry.
+in a terminal once if the Gateway runs headless and can't access the entry.
+
+To disable auto-sync for a provider you don't use, set `auth.autoSync.claudeCli: false` or `auth.autoSync.codexCli: false` in your config.
 
 How to verify:
 

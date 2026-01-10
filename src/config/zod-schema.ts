@@ -1203,6 +1203,12 @@ export const ClawdbotSchema = z
           )
           .optional(),
         order: z.record(z.string(), z.array(z.string())).optional(),
+        autoSync: z
+          .object({
+            claudeCli: z.boolean().optional(),
+            codexCli: z.boolean().optional(),
+          })
+          .optional(),
         cooldowns: z
           .object({
             billingBackoffHours: z.number().positive().optional(),

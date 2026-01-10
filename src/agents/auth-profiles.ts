@@ -9,9 +9,9 @@ import {
 } from "@mariozechner/pi-ai";
 import lockfile from "proper-lockfile";
 
-import type { ClawdbotConfig } from "../config/config.js";
+import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
-import type { AuthProfileConfig } from "../config/types.js";
+import type { AuthAutoSyncConfig, AuthProfileConfig } from "../config/types.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
@@ -496,64 +496,68 @@ function shallowEqualTokenCredentials(
  */
 function syncExternalCliCredentials(
   store: AuthProfileStore,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: { allowKeychainPrompt?: boolean; autoSync?: AuthAutoSyncConfig },
 ): boolean {
   let mutated = false;
   const now = Date.now();
 
-  // Sync from Claude CLI
-  const claudeCreds = readClaudeCliCredentials(options);
-  if (claudeCreds) {
-    const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
-    const existingToken = existing?.type === "token" ? existing : undefined;
+  const syncClaudeCli = options?.autoSync?.claudeCli ?? true;
+  const syncCodexCli = options?.autoSync?.codexCli ?? true;
 
-    // Update if: no existing profile, existing is not oauth, or CLI has newer/valid token
-    const shouldUpdate =
-      !existingToken ||
-      existingToken.provider !== "anthropic" ||
-      (existingToken.expires ?? 0) <= now ||
-      ((claudeCreds.expires ?? 0) > now &&
-        (claudeCreds.expires ?? 0) > (existingToken.expires ?? 0));
+  if (syncClaudeCli) {
+    const claudeCreds = readClaudeCliCredentials(options);
+    if (claudeCreds) {
+      const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
+      const existingToken = existing?.type === "token" ? existing : undefined;
 
-    if (
-      shouldUpdate &&
-      !shallowEqualTokenCredentials(existingToken, claudeCreds)
-    ) {
-      store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
-      mutated = true;
-      log.info("synced anthropic credentials from claude cli", {
-        profileId: CLAUDE_CLI_PROFILE_ID,
-        expires:
-          typeof claudeCreds.expires === "number"
-            ? new Date(claudeCreds.expires).toISOString()
-            : "unknown",
-      });
+      const shouldUpdate =
+        !existingToken ||
+        existingToken.provider !== "anthropic" ||
+        (existingToken.expires ?? 0) <= now ||
+        ((claudeCreds.expires ?? 0) > now &&
+          (claudeCreds.expires ?? 0) > (existingToken.expires ?? 0));
+
+      if (
+        shouldUpdate &&
+        !shallowEqualTokenCredentials(existingToken, claudeCreds)
+      ) {
+        store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
+        mutated = true;
+        log.info("synced anthropic credentials from claude cli", {
+          profileId: CLAUDE_CLI_PROFILE_ID,
+          expires:
+            typeof claudeCreds.expires === "number"
+              ? new Date(claudeCreds.expires).toISOString()
+              : "unknown",
+        });
+      }
     }
   }
 
-  // Sync from Codex CLI
-  const codexCreds = readCodexCliCredentials();
-  if (codexCreds) {
-    const existing = store.profiles[CODEX_CLI_PROFILE_ID];
-    const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+  if (syncCodexCli) {
+    const codexCreds = readCodexCliCredentials();
+    if (codexCreds) {
+      const existing = store.profiles[CODEX_CLI_PROFILE_ID];
+      const existingOAuth = existing?.type === "oauth" ? existing : undefined;
 
-    // Codex creds don't carry expiry; use file mtime heuristic for freshness.
-    const shouldUpdate =
-      !existingOAuth ||
-      existingOAuth.provider !== ("openai-codex" as unknown as OAuthProvider) ||
-      existingOAuth.expires <= now ||
-      codexCreds.expires > existingOAuth.expires;
+      const shouldUpdate =
+        !existingOAuth ||
+        existingOAuth.provider !==
+          ("openai-codex" as unknown as OAuthProvider) ||
+        existingOAuth.expires <= now ||
+        codexCreds.expires > existingOAuth.expires;
 
-    if (
-      shouldUpdate &&
-      !shallowEqualOAuthCredentials(existingOAuth, codexCreds)
-    ) {
-      store.profiles[CODEX_CLI_PROFILE_ID] = codexCreds;
-      mutated = true;
-      log.info("synced openai-codex credentials from codex cli", {
-        profileId: CODEX_CLI_PROFILE_ID,
-        expires: new Date(codexCreds.expires).toISOString(),
-      });
+      if (
+        shouldUpdate &&
+        !shallowEqualOAuthCredentials(existingOAuth, codexCreds)
+      ) {
+        store.profiles[CODEX_CLI_PROFILE_ID] = codexCreds;
+        mutated = true;
+        log.info("synced openai-codex credentials from codex cli", {
+          profileId: CODEX_CLI_PROFILE_ID,
+          expires: new Date(codexCreds.expires).toISOString(),
+        });
+      }
     }
   }
 
@@ -564,9 +568,10 @@ export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
+  const cfg = loadConfig();
+  const autoSync = cfg.auth?.autoSync;
   if (asStore) {
-    // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
+    const synced = syncExternalCliCredentials(asStore, { autoSync });
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -613,12 +618,12 @@ export function loadAuthProfileStore(): AuthProfileStore {
         };
       }
     }
-    syncExternalCliCredentials(store);
+    syncExternalCliCredentials(store, { autoSync });
     return store;
   }
 
   const store: AuthProfileStore = { version: AUTH_STORE_VERSION, profiles: {} };
-  syncExternalCliCredentials(store);
+  syncExternalCliCredentials(store, { autoSync });
   return store;
 }
 
@@ -629,9 +634,13 @@ export function ensureAuthProfileStore(
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
   const asStore = coerceAuthStore(raw);
+  const cfg = loadConfig();
+  const autoSync = cfg.auth?.autoSync;
   if (asStore) {
-    // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore, options);
+    const synced = syncExternalCliCredentials(asStore, {
+      ...options,
+      autoSync,
+    });
     if (synced) {
       saveJsonFile(authPath, asStore);
     }
@@ -681,7 +690,7 @@ export function ensureAuthProfileStore(
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store, options);
+  const syncedCli = syncExternalCliCredentials(store, { ...options, autoSync });
   const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
   if (shouldWrite) {
     saveJsonFile(authPath, store);

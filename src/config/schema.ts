@@ -168,6 +168,10 @@ const FIELD_HELP: Record<string, string> = {
     "Cap (hours) for billing backoff (default: 24).",
   "auth.cooldowns.failureWindowHours":
     "Failure window (hours) for backoff counters (default: 24).",
+  "auth.autoSync.claudeCli":
+    "Auto-sync credentials from Claude CLI (~/.claude). Default: true.",
+  "auth.autoSync.codexCli":
+    "Auto-sync credentials from Codex CLI (~/.codex). Default: true.",
   "agents.defaults.models":
     "Configured model catalog (keys are full provider/model IDs).",
   "agents.defaults.model.primary": "Primary model (provider/model).",

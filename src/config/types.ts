@@ -1225,9 +1225,18 @@ export type AuthProfileConfig = {
   email?: string;
 };
 
+export type AuthAutoSyncConfig = {
+  /** Auto-sync credentials from Claude CLI (~/.claude). Default: true. */
+  claudeCli?: boolean;
+  /** Auto-sync credentials from Codex CLI (~/.codex). Default: true. */
+  codexCli?: boolean;
+};
+
 export type AuthConfig = {
   profiles?: Record<string, AuthProfileConfig>;
   order?: Record<string, string[]>;
+  /** Control automatic credential syncing from external CLI tools. */
+  autoSync?: AuthAutoSyncConfig;
   cooldowns?: {
     /** Default billing backoff (hours). Default: 5. */
     billingBackoffHours?: number;

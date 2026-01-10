@@ -158,6 +158,19 @@ Clawdbot also auto-syncs OAuth tokens from external CLIs into `auth-profiles.jso
   - Linux/Windows: `~/.claude/.credentials.json`
 - `~/.codex/auth.json` (Codex CLI) → `openai-codex:codex-cli`
 
+To disable auto-sync for a provider you don't use:
+
+```json5
+{
+  auth: {
+    autoSync: {
+      claudeCli: false,  // Don't sync from Claude CLI
+      codexCli: false    // Don't sync from Codex CLI
+    }
+  }
+}
+```
+
 ### `auth`
 
 Optional metadata for auth profiles. This does **not** store secrets; it maps
