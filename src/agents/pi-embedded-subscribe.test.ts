@@ -402,6 +402,68 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(subscription.assistantTexts).toEqual(["Final answer"]);
   });
 
+  it("suppresses partial replies when reasoning is enabled and block replies are disabled", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onPartialReply = vi.fn();
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      reasoningMode: "on",
+      onPartialReply,
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Draft ",
+      },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "reply",
+      },
+    });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+        content: "Draft reply",
+      },
+    });
+
+    expect(onPartialReply).not.toHaveBeenCalled();
+    expect(subscription.assistantTexts).toEqual(["Final answer"]);
+  });
+
   it("emits block replies on text_end and does not duplicate on message_end", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
