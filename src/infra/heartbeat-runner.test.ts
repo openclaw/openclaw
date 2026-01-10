@@ -96,6 +96,21 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
+  it("normalizes explicit WhatsApp targets when allowFrom is '*'", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          heartbeat: { target: "whatsapp", to: "whatsapp:(555) 123" },
+        },
+      },
+      whatsapp: { allowFrom: ["*"] },
+    };
+    expect(resolveHeartbeatDeliveryTarget({ cfg, entry: baseEntry })).toEqual({
+      provider: "whatsapp",
+      to: "+555123",
+    });
+  });
+
   it("skips when last route is webchat", () => {
     const cfg: ClawdbotConfig = {};
     const entry = {

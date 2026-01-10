@@ -4,11 +4,11 @@ import type {
   DeliverableMessageProvider,
   GatewayMessageProvider,
 } from "../../utils/message-provider.js";
+import { normalizeE164 } from "../../utils.js";
 import {
   isWhatsAppGroupJid,
-  normalizeE164,
   normalizeWhatsAppTarget,
-} from "../../utils.js";
+} from "../../whatsapp/normalize.js";
 
 export type OutboundProvider = DeliverableMessageProvider | "none";
 
@@ -24,7 +24,7 @@ export type OutboundTargetResolution =
   | { ok: true; to: string }
   | { ok: false; error: Error };
 
-export function resolveOutboundTarget(params: {
+export function normalizeOutboundTarget(params: {
   provider: GatewayMessageProvider;
   to?: string;
   allowFrom?: string[];
@@ -129,6 +129,14 @@ export function resolveOutboundTarget(params: {
   };
 }
 
+export function resolveOutboundTarget(params: {
+  provider: GatewayMessageProvider;
+  to?: string;
+  allowFrom?: string[];
+}): OutboundTargetResolution {
+  return normalizeOutboundTarget(params);
+}
+
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: ClawdbotConfig;
   entry?: SessionEntry;
@@ -194,14 +202,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   if (provider !== "whatsapp") {
-    const resolved = resolveOutboundTarget({ provider, to });
+    const resolved = normalizeOutboundTarget({ provider, to });
     return resolved.ok
       ? { provider, to: resolved.to }
       : { provider: "none", reason: "no-target" };
   }
 
   const rawAllow = cfg.whatsapp?.allowFrom ?? [];
-  const resolved = resolveOutboundTarget({
+  const resolved = normalizeOutboundTarget({
     provider: "whatsapp",
     to,
     allowFrom: rawAllow,

@@ -18,11 +18,11 @@ import {
   isGatewayMessageProvider,
   normalizeMessageProvider,
 } from "../../utils/message-provider.js";
+import { normalizeE164 } from "../../utils.js";
 import {
   isWhatsAppGroupJid,
-  normalizeE164,
   normalizeWhatsAppTarget,
-} from "../../utils.js";
+} from "../../whatsapp/normalize.js";
 import {
   type AgentWaitParams,
   ErrorCodes,
@@ -227,16 +227,18 @@ export const agentHandlers: GatewayRequestHandlers = {
           : undefined;
       if (explicit) {
         if (!resolvedTo) return resolvedTo;
-        return normalizeWhatsAppTarget(resolvedTo) || resolvedTo;
+        return normalizeWhatsAppTarget(resolvedTo) ?? resolvedTo;
       }
       if (resolvedTo && isWhatsAppGroupJid(resolvedTo)) {
-        return normalizeWhatsAppTarget(resolvedTo) || resolvedTo;
+        return normalizeWhatsAppTarget(resolvedTo) ?? resolvedTo;
       }
 
       const cfg = cfgForAgent ?? loadConfig();
       const rawAllow = cfg.whatsapp?.allowFrom ?? [];
       if (rawAllow.includes("*")) {
-        return resolvedTo ? normalizeWhatsAppTarget(resolvedTo) : resolvedTo;
+        return resolvedTo
+          ? (normalizeWhatsAppTarget(resolvedTo) ?? resolvedTo)
+          : resolvedTo;
       }
       const allowFrom = rawAllow
         .map((val) => normalizeE164(val))
