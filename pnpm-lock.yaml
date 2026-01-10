@@ -8,6 +8,9 @@ overrides:
   '@sinclair/typebox': 0.34.47
 
 patchedDependencies:
+  '@buape/carbon':
+    hash: 85885a1d47a37ae00bcd21f2efbeb025284ea98981c300f095fb94c0604ff9ac
+    path: patches/@buape__carbon.patch
   '@mariozechner/pi-agent-core':
     hash: 01312ceb1f6be7e42822c24c9a7a4f7db56b24ae114a364855bd3819779d1cf4
     path: patches/@mariozechner__pi-agent-core.patch
