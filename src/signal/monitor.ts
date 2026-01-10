@@ -144,6 +144,20 @@ function resolveSignalReactionTargets(
   return targets;
 }
 
+function isSignalReactionMessage(
+  reaction: SignalReactionMessage | null | undefined,
+): reaction is SignalReactionMessage {
+  if (!reaction) return false;
+  const emoji = reaction.emoji?.trim();
+  const timestamp = reaction.targetSentTimestamp;
+  const hasTarget = Boolean(
+    reaction.targetAuthor?.trim() || reaction.targetAuthorUuid?.trim(),
+  );
+  return Boolean(
+    emoji && typeof timestamp === "number" && timestamp > 0 && hasTarget,
+  );
+}
+
 function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
@@ -404,8 +418,11 @@ export async function monitorSignalProvider(
       }
       const dataMessage =
         envelope.dataMessage ?? envelope.editMessage?.dataMessage;
-      const reaction =
-        envelope.reactionMessage ?? dataMessage?.reaction ?? null;
+      const reaction = isSignalReactionMessage(envelope.reactionMessage)
+        ? envelope.reactionMessage
+        : isSignalReactionMessage(dataMessage?.reaction)
+          ? dataMessage?.reaction
+          : null;
       const messageText = (dataMessage?.message ?? "").trim();
       const quoteText = dataMessage?.quote?.text?.trim() ?? "";
       const hasBodyContent =
