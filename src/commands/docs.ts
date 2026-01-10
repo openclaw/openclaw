@@ -6,7 +6,6 @@ import { isRich, theme } from "../terminal/theme.js";
 
 const SEARCH_TOOL = "https://docs.clawd.bot/mcp.SearchClawdbot";
 const SEARCH_TIMEOUT_MS = 30_000;
-const RENDER_TIMEOUT_MS = 10_000;
 const DEFAULT_SNIPPET_MAX = 220;
 
 type DocResult = {
@@ -154,20 +153,6 @@ function renderRichResults(
 }
 
 async function renderMarkdown(markdown: string, runtime: RuntimeEnv) {
-  const width = process.stdout.columns ?? 0;
-  const args = width > 0 ? ["--width", String(width)] : [];
-  try {
-    const res = await runTool("markdansi", args, {
-      timeoutMs: RENDER_TIMEOUT_MS,
-      input: markdown,
-    });
-    if (res.code === 0 && res.stdout.trim()) {
-      runtime.log(res.stdout.trimEnd());
-      return;
-    }
-  } catch {
-    // Fall back to plain Markdown if renderer fails or cannot be installed.
-  }
   runtime.log(markdown.trimEnd());
 }
 

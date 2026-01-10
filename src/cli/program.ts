@@ -1148,8 +1148,9 @@ ${theme.muted("Docs:")} ${formatDocsLink(
 
   program
     .command("status")
-    .description("Show web session health and recent session recipients")
+    .description("Show local status (gateway, agents, sessions, auth)")
     .option("--json", "Output JSON instead of text", false)
+    .option("--all", "Full diagnosis (read-only, pasteable)", false)
     .option("--usage", "Show provider usage/quota snapshots", false)
     .option(
       "--deep",
@@ -1164,6 +1165,7 @@ ${theme.muted("Docs:")} ${formatDocsLink(
       `
 Examples:
   clawdbot status                   # show linked account + session store summary
+  clawdbot status --all             # full diagnosis (read-only)
   clawdbot status --json            # machine-readable output
   clawdbot status --usage           # show provider usage/quota snapshots
   clawdbot status --deep            # run provider probes (WA + Telegram + Discord + Slack + Signal)
@@ -1187,6 +1189,7 @@ Examples:
         await statusCommand(
           {
             json: Boolean(opts.json),
+            all: Boolean(opts.all),
             deep: Boolean(opts.deep),
             usage: Boolean(opts.usage),
             timeoutMs: timeout,
