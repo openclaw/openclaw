@@ -237,10 +237,16 @@ export async function runTui(opts: TuiOptions) {
     const think = sessionInfo.thinkingLevel ?? "off";
     const verbose = sessionInfo.verboseLevel ?? "off";
     const reasoning = sessionInfo.reasoningLevel ?? "off";
+    const reasoningLabel =
+      reasoning === "on"
+        ? "reasoning"
+        : reasoning === "stream"
+          ? "reasoning:stream"
+          : null;
     const deliver = deliverDefault ? "on" : "off";
     footer.setText(
       theme.dim(
-        `${connection} | agent ${agentLabel} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose} | reasoning ${reasoning} | ${tokens} | deliver ${deliver}`,
+        `${connection} | agent ${agentLabel} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens} | deliver ${deliver}`,
       ),
     );
   };
