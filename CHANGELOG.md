@@ -14,6 +14,7 @@
 
 ### Fixes
 - CLI: avoid success message when daemon restart is skipped. (#685) — thanks @carlulsoe.
+- Gateway: disable the OpenAI-compatible `/v1/chat/completions` endpoint by default; enable via `gateway.http.endpoints.chatCompletions.enabled=true`.
 - macOS: stabilize bridge tunnels, guard invoke senders on disconnect, and drain stdout/stderr to avoid deadlocks. (#676) — thanks @ngutman.
 - Agents/System: clarify sandboxed runtime in system prompt and surface elevated availability when sandboxed.
 - Auto-reply: prefer `RawBody` for command/directive parsing (WhatsApp + Discord) and prevent fallback runs from clobbering concurrent session updates. (#643) — thanks @mcinteerj.

@@ -1158,7 +1158,7 @@ export type GatewayReloadConfig = {
 export type GatewayHttpChatCompletionsConfig = {
   /**
    * If false, the Gateway will not serve `POST /v1/chat/completions`.
-   * Default: true when absent.
+   * Default: false when absent.
    */
   enabled?: boolean;
 };

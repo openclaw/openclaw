@@ -5,7 +5,9 @@ read_when:
 ---
 # OpenAI Chat Completions (HTTP)
 
-Clawdbot’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint:
+Clawdbot’s Gateway can serve a small OpenAI-compatible Chat Completions endpoint.
+
+This endpoint is **disabled by default**. Enable it in config first.
 
 - `POST /v1/chat/completions`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
@@ -35,6 +37,22 @@ Or target a specific Clawdbot agent by header:
 
 Advanced:
 - `x-clawdbot-session-key: <sessionKey>` to fully control session routing.
+
+## Enabling the endpoint
+
+Set `gateway.http.endpoints.chatCompletions.enabled` to `true`:
+
+```json5
+{
+  gateway: {
+    http: {
+      endpoints: {
+        chatCompletions: { enabled: true }
+      }
+    }
+  }
+}
+```
 
 ## Disabling the endpoint
 

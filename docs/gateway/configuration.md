@@ -1803,7 +1803,7 @@ Related docs:
 Notes:
 - `clawdbot gateway` refuses to start unless `gateway.mode` is set to `local` (or you pass the override flag).
 - `gateway.port` controls the single multiplexed port used for WebSocket + HTTP (control UI, hooks, A2UI).
-- Disable the OpenAI-compatible endpoint with `gateway.http.endpoints.chatCompletions.enabled: false`.
+- OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
 - Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.

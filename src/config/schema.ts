@@ -161,7 +161,7 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdbot).",
   "gateway.http.endpoints.chatCompletions.enabled":
-    "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: true).",
+    "Enable the OpenAI-compatible `POST /v1/chat/completions` endpoint (default: false).",
   "gateway.reload.mode":
     'Hot reload strategy for config changes ("hybrid" recommended).',
   "gateway.reload.debounceMs":

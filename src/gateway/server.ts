@@ -330,7 +330,7 @@ export type GatewayServerOptions = {
   controlUiEnabled?: boolean;
   /**
    * If false, do not serve `POST /v1/chat/completions`.
-   * Default: config `gateway.http.endpoints.chatCompletions.enabled` (or true when absent).
+   * Default: config `gateway.http.endpoints.chatCompletions.enabled` (or false when absent).
    */
   openAiChatCompletionsEnabled?: boolean;
   /**
@@ -440,7 +440,7 @@ export async function startGatewayServer(
   const openAiChatCompletionsEnabled =
     opts.openAiChatCompletionsEnabled ??
     cfgAtStart.gateway?.http?.endpoints?.chatCompletions?.enabled ??
-    true;
+    false;
   const controlUiBasePath = normalizeControlUiBasePath(
     cfgAtStart.gateway?.controlUi?.basePath,
   );
