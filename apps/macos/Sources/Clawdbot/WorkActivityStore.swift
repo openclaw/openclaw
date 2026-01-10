@@ -220,51 +220,6 @@ final class WorkActivityStore {
             return "\(display.label): \(detail)"
         }
 
-        // Fallback: If the shared tool display config isn't available in this runtime,
-        // still show a helpful one-liner for the most common tools.
-        if let args {
-            func stringArg(_ key: String) -> String? {
-                let raw = (args[key]?.value as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                return raw.isEmpty ? nil : raw
-            }
-
-            func shortenHome(_ value: String) -> String {
-                let home = NSHomeDirectory()
-                guard !home.isEmpty else { return value }
-                return value.replacingOccurrences(of: home, with: "~")
-            }
-
-            let toolKey = (name ?? "tool").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-
-            if toolKey == "bash" || toolKey == "shell" {
-                if let cmd = stringArg("command") {
-                    let firstLine = cmd.split(whereSeparator: \.isNewline).first.map(String.init) ?? cmd
-                    let trimmed = firstLine.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        return "\(display.label): \(trimmed)"
-                    }
-                }
-            }
-
-            if toolKey == "read" {
-                if let path = stringArg("path") {
-                    let offset = args["offset"]?.value as? Double ?? (args["offset"]?.value as? Int).map(Double.init)
-                    let limit = args["limit"]?.value as? Double ?? (args["limit"]?.value as? Int).map(Double.init)
-                    if let offset, let limit {
-                        let end = offset + limit
-                        return "\(display.label): \(shortenHome(path)):\(Int(offset))-\(Int(end))"
-                    }
-                    return "\(display.label): \(shortenHome(path))"
-                }
-            }
-
-            if toolKey == "write" || toolKey == "edit" || toolKey == "attach" {
-                if let path = stringArg("path") {
-                    return "\(display.label): \(shortenHome(path))"
-                }
-            }
-        }
-
         return display.label
     }
 
