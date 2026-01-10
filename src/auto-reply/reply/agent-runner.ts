@@ -574,7 +574,9 @@ export async function runReplyAgent(params: {
                     const blockPayload: ReplyPayload = applyReplyToMode({
                       ...taggedPayload,
                       text: cleaned,
-                      audioAsVoice: parsed.audioAsVoice || payload.audioAsVoice,
+                      audioAsVoice: Boolean(
+                        parsed.audioAsVoice || payload.audioAsVoice,
+                      ),
                       replyToId: taggedPayload.replyToId ?? parsed.replyToId,
                       replyToTag: taggedPayload.replyToTag || parsed.replyToTag,
                       replyToCurrent:
@@ -760,7 +762,7 @@ export async function runReplyAgent(params: {
           replyToId: payload.replyToId ?? parsed.replyToId,
           replyToTag: payload.replyToTag || parsed.replyToTag,
           replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
-          audioAsVoice: payload.audioAsVoice || parsed.audioAsVoice,
+          audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
         };
       })
       .filter(isRenderablePayload);
