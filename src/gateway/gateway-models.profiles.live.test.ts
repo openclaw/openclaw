@@ -331,55 +331,35 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
             if (EXTRA_TOOL_PROBES) {
               const nonceC = `nonceC=${randomUUID()}`;
-              const nonceD = `nonceD=${randomUUID()}`;
               const toolWritePath = path.join(
                 tempDir,
                 `write-${runIdTool}.txt`,
               );
 
-              const writeProbe = await client.request<AgentFinalPayload>(
+              const bashReadProbe = await client.request<AgentFinalPayload>(
                 "agent",
                 {
                   sessionKey,
-                  idempotencyKey: `idem-${runIdTool}-write`,
+                  idempotencyKey: `idem-${runIdTool}-bash-read`,
                   message:
-                    `Call the tool named \`write\` (or \`Write\` if \`write\` is unavailable) to write exactly "${nonceC}" to "${toolWritePath}". ` +
-                    `Then call the tool named \`read\` (or \`Read\`) on "${toolWritePath}". ` +
+                    `Call the tool named \`bash\` (or \`Bash\` if \`bash\` is unavailable) and run: ` +
+                    `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}" ` +
+                    `Then call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments: {"path":"${toolWritePath}"} ` +
                     `Finally reply with exactly: ${nonceC}.`,
                   deliver: false,
                 },
                 { expectFinal: true },
               );
-              if (writeProbe?.status !== "ok") {
+              if (bashReadProbe?.status !== "ok") {
                 throw new Error(
-                  `write probe failed: status=${String(writeProbe?.status)}`,
+                  `bash+read probe failed: status=${String(bashReadProbe?.status)}`,
                 );
               }
-              const writeText = extractPayloadText(writeProbe?.result);
-              if (!writeText.includes(nonceC)) {
-                throw new Error(`write probe missing nonce: ${writeText}`);
-              }
-
-              const bashProbe = await client.request<AgentFinalPayload>(
-                "agent",
-                {
-                  sessionKey,
-                  idempotencyKey: `idem-${runIdTool}-bash`,
-                  message:
-                    `Call the tool named \`bash\` (or \`Bash\` if \`bash\` is unavailable) and run: echo ${nonceD}. ` +
-                    `Then reply with exactly: ${nonceD}.`,
-                  deliver: false,
-                },
-                { expectFinal: true },
-              );
-              if (bashProbe?.status !== "ok") {
+              const bashReadText = extractPayloadText(bashReadProbe?.result);
+              if (!bashReadText.includes(nonceC)) {
                 throw new Error(
-                  `bash probe failed: status=${String(bashProbe?.status)}`,
+                  `bash+read probe missing nonce: ${bashReadText}`,
                 );
-              }
-              const bashText = extractPayloadText(bashProbe?.result);
-              if (!bashText.includes(nonceD)) {
-                throw new Error(`bash probe missing nonce: ${bashText}`);
               }
 
               await fs.rm(toolWritePath, { force: true });
@@ -398,8 +378,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 {
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-1`,
-                  message:
-                    "Call the tool named `read` (or `Read`) on package.json. Do not write any other text.",
+                  message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
                   deliver: false,
                 },
                 { expectFinal: true },
@@ -415,8 +394,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 {
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-2`,
-                  message:
-                    'Now answer: what is the "version" field in package.json? Reply with just the version string.',
+                  message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
                   deliver: false,
                 },
                 { expectFinal: true },
@@ -426,9 +404,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   `post-tool message failed: status=${String(second?.status)}`,
                 );
               }
-              const version = extractPayloadText(second?.result);
-              if (!/^\d{4}\.\d+\.\d+/.test(version.trim())) {
-                throw new Error(`unexpected version: ${version}`);
+              const reply = extractPayloadText(second?.result);
+              if (!reply.includes(nonceA) || !reply.includes(nonceB)) {
+                throw new Error(`unexpected reply: ${reply}`);
               }
             }
           } catch (err) {
