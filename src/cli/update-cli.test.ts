@@ -26,15 +26,13 @@ vi.mock("../runtime.js", () => ({
 }));
 
 describe("update-cli", () => {
-  it(
-    "exports updateCommand and registerUpdateCli",
-    async () => {
-      const { updateCommand, registerUpdateCli } = await import("./update-cli.js");
-      expect(typeof updateCommand).toBe("function");
-      expect(typeof registerUpdateCli).toBe("function");
-    },
-    20_000,
-  );
+  it("exports updateCommand and registerUpdateCli", async () => {
+    const { updateCommand, registerUpdateCli } = await import(
+      "./update-cli.js"
+    );
+    expect(typeof updateCommand).toBe("function");
+    expect(typeof registerUpdateCli).toBe("function");
+  }, 20_000);
 
   it("updateCommand runs update and outputs result", async () => {
     const { runGatewayUpdate } = await import("../infra/update-runner.js");
