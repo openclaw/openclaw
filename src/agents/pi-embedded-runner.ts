@@ -88,7 +88,6 @@ import {
   pickFallbackThinkingLevel,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
-  sanitizeToolUseResultPairing,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
@@ -106,6 +105,7 @@ import { makeToolPrunablePredicate } from "./pi-extensions/context-pruning/tools
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 import { resolveSandboxContext } from "./sandbox.js";
+import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
