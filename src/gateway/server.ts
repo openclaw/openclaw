@@ -1674,6 +1674,7 @@ export async function startGatewayServer(
               getHealthCache: () => healthCache,
               refreshHealthSnapshot,
               logHealth,
+              logGateway: log,
               incrementPresenceVersion: () => {
                 presenceVersion += 1;
                 return presenceVersion;

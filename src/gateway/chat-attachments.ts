@@ -1,3 +1,5 @@
+import { detectMime } from "../media/mime.js";
+
 export type ChatAttachment = {
   type?: string;
   mimeType?: string;
@@ -16,17 +18,50 @@ export type ParsedMessageWithImages = {
   images: ChatImageContent[];
 };
 
+type AttachmentLog = {
+  warn: (message: string) => void;
+};
+
+function normalizeMime(mime?: string): string | undefined {
+  if (!mime) return undefined;
+  const cleaned = mime.split(";")[0]?.trim().toLowerCase();
+  return cleaned || undefined;
+}
+
+async function sniffMimeFromBase64(
+  base64: string,
+): Promise<string | undefined> {
+  const trimmed = base64.trim();
+  if (!trimmed) return undefined;
+
+  const take = Math.min(256, trimmed.length);
+  const sliceLen = take - (take % 4);
+  if (sliceLen < 8) return undefined;
+
+  try {
+    const head = Buffer.from(trimmed.slice(0, sliceLen), "base64");
+    return await detectMime({ buffer: head });
+  } catch {
+    return undefined;
+  }
+}
+
+function isImageMime(mime?: string): boolean {
+  return typeof mime === "string" && mime.startsWith("image/");
+}
+
 /**
  * Parse attachments and extract images as structured content blocks.
  * Returns the message text and an array of image content blocks
  * compatible with Claude API's image format.
  */
-export function parseMessageWithAttachments(
+export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number },
-): ParsedMessageWithImages {
+  opts?: { maxBytes?: number; log?: AttachmentLog },
+): Promise<ParsedMessageWithImages> {
   const maxBytes = opts?.maxBytes ?? 5_000_000; // 5 MB
+  const log = opts?.log;
   if (!attachments || attachments.length === 0) {
     return { message, images: [] };
   }
@@ -41,9 +76,6 @@ export function parseMessageWithAttachments(
 
     if (typeof content !== "string") {
       throw new Error(`attachment ${label}: content must be base64 string`);
-    }
-    if (!mime.startsWith("image/")) {
-      throw new Error(`attachment ${label}: only image/* supported`);
     }
 
     let sizeBytes = 0;
@@ -68,10 +100,30 @@ export function parseMessageWithAttachments(
       );
     }
 
+    const providedMime = normalizeMime(mime);
+    const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
+    if (sniffedMime && !isImageMime(sniffedMime)) {
+      log?.warn(
+        `attachment ${label}: detected non-image (${sniffedMime}), dropping`,
+      );
+      continue;
+    }
+    if (!sniffedMime && !isImageMime(providedMime)) {
+      log?.warn(
+        `attachment ${label}: unable to detect image mime type, dropping`,
+      );
+      continue;
+    }
+    if (sniffedMime && providedMime && sniffedMime !== providedMime) {
+      log?.warn(
+        `attachment ${label}: mime mismatch (${providedMime} -> ${sniffedMime}), using sniffed`,
+      );
+    }
+
     images.push({
       type: "image",
       data: b64,
-      mimeType: mime,
+      mimeType: sniffedMime ?? providedMime ?? mime,
     });
   }
 

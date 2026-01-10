@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildMessageWithAttachments,
   type ChatAttachment,
+  parseMessageWithAttachments,
 } from "./chat-attachments.js";
 
 const PNG_1x1 =
@@ -54,5 +55,67 @@ describe("buildMessageWithAttachments", () => {
     expect(() =>
       buildMessageWithAttachments("x", [att], { maxBytes: 5_000_000 }),
     ).toThrow(/exceeds size limit/i);
+  });
+});
+
+describe("parseMessageWithAttachments", () => {
+  it("sniffs mime when missing", async () => {
+    const logs: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "see this",
+      [
+        {
+          type: "image",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      { log: { warn: (message) => logs.push(message) } },
+    );
+    expect(parsed.message).toBe("see this");
+    expect(parsed.images).toHaveLength(1);
+    expect(parsed.images[0]?.mimeType).toBe("image/png");
+    expect(parsed.images[0]?.data).toBe(PNG_1x1);
+    expect(logs).toHaveLength(0);
+  });
+
+  it("drops non-image payloads and logs", async () => {
+    const logs: string[] = [];
+    const pdf = Buffer.from("%PDF-1.4\n").toString("base64");
+    const parsed = await parseMessageWithAttachments(
+      "x",
+      [
+        {
+          type: "file",
+          mimeType: "image/png",
+          fileName: "not-image.pdf",
+          content: pdf,
+        },
+      ],
+      { log: { warn: (message) => logs.push(message) } },
+    );
+    expect(parsed.images).toHaveLength(0);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/non-image/i);
+  });
+
+  it("prefers sniffed mime type and logs mismatch", async () => {
+    const logs: string[] = [];
+    const parsed = await parseMessageWithAttachments(
+      "x",
+      [
+        {
+          type: "image",
+          mimeType: "image/jpeg",
+          fileName: "dot.png",
+          content: PNG_1x1,
+        },
+      ],
+      { log: { warn: (message) => logs.push(message) } },
+    );
+    expect(parsed.images).toHaveLength(1);
+    expect(parsed.images[0]?.mimeType).toBe("image/png");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatch(/mime mismatch/i);
   });
 });

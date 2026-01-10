@@ -200,15 +200,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                   ).toString("base64")
                 : undefined,
         }))
-        .filter((a) => a.content && a.mimeType) ?? [];
+        .filter((a) => a.content) ?? [];
     let parsedMessage = p.message;
     let parsedImages: ChatImageContent[] = [];
     if (normalizedAttachments.length > 0) {
       try {
-        const parsed = parseMessageWithAttachments(
+        const parsed = await parseMessageWithAttachments(
           p.message,
           normalizedAttachments,
-          { maxBytes: 5_000_000 },
+          { maxBytes: 5_000_000, log: context.logGateway },
         );
         parsedMessage = parsed.message;
         parsedImages = parsed.images;
