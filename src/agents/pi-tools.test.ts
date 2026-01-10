@@ -384,6 +384,7 @@ describe("createClawdbotCodingTools", () => {
       "$ref",
       "$defs",
       "definitions",
+      "examples",
     ]);
 
     const findUnsupportedKeywords = (
