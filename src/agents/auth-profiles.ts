@@ -716,6 +716,11 @@ function syncExternalCliCredentials(
       }
     }
 
+    // Avoid downgrading from oauth to token-only credentials.
+    if (existing?.type === "oauth" && claudeCreds.type === "token") {
+      shouldUpdate = false;
+    }
+
     if (shouldUpdate && !isEqual) {
       store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
       mutated = true;

@@ -946,6 +946,59 @@ describe("external CLI credential sync", () => {
     }
   });
 
+  it("does not downgrade store oauth to token when CLI lacks refresh token", async () => {
+    const agentDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "clawdbot-cli-no-downgrade-oauth-"),
+    );
+    try {
+      await withTempHome(
+        async (tempHome) => {
+          const claudeDir = path.join(tempHome, ".claude");
+          fs.mkdirSync(claudeDir, { recursive: true });
+          // CLI has token-only credentials (no refresh token)
+          fs.writeFileSync(
+            path.join(claudeDir, ".credentials.json"),
+            JSON.stringify({
+              claudeAiOauth: {
+                accessToken: "cli-token-access",
+                expiresAt: Date.now() + 30 * 60 * 1000,
+              },
+            }),
+          );
+
+          const authPath = path.join(agentDir, "auth-profiles.json");
+          // Store already has OAuth credentials with refresh token
+          fs.writeFileSync(
+            authPath,
+            JSON.stringify({
+              version: 1,
+              profiles: {
+                [CLAUDE_CLI_PROFILE_ID]: {
+                  type: "oauth",
+                  provider: "anthropic",
+                  access: "store-oauth-access",
+                  refresh: "store-refresh",
+                  expires: Date.now() + 60 * 60 * 1000,
+                },
+              },
+            }),
+          );
+
+          const store = ensureAuthProfileStore(agentDir);
+          // Keep oauth to preserve auto-refresh capability
+          const cliProfile = store.profiles[CLAUDE_CLI_PROFILE_ID];
+          expect(cliProfile.type).toBe("oauth");
+          expect((cliProfile as { access: string }).access).toBe(
+            "store-oauth-access",
+          );
+        },
+        { prefix: "clawdbot-home-" },
+      );
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("updates codex-cli profile when Codex CLI refresh token changes", async () => {
     const agentDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "clawdbot-codex-refresh-sync-"),
