@@ -117,6 +117,9 @@ function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   if (result.root) {
     defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
   }
+  if (result.reason) {
+    defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
+  }
 
   if (result.before?.version || result.before?.sha) {
     const before =
