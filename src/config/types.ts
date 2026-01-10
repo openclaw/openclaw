@@ -22,6 +22,12 @@ export type BlockStreamingCoalesceConfig = {
   idleMs?: number;
 };
 
+export type BlockStreamingChunkConfig = {
+  minChars?: number;
+  maxChars?: number;
+  breakPreference?: "paragraph" | "newline" | "sentence";
+};
+
 export type HumanDelayConfig = {
   /** Delay style for block replies (off|natural|custom). */
   mode?: "off" | "natural" | "custom";
@@ -345,6 +351,8 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
+  /** Chunking config for draft streaming in `streamMode: "block"`. */
+  draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   /** Draft streaming mode for Telegram (off|partial|block). Default: partial. */
@@ -1318,11 +1326,7 @@ export type AgentDefaultsConfig = {
    */
   blockStreamingBreak?: "text_end" | "message_end";
   /** Soft block chunking for streamed replies (min/max chars, prefer paragraph/newline). */
-  blockStreamingChunk?: {
-    minChars?: number;
-    maxChars?: number;
-    breakPreference?: "paragraph" | "newline" | "sentence";
-  };
+  blockStreamingChunk?: BlockStreamingChunkConfig;
   /**
    * Block reply coalescing (merge streamed chunks before send).
    * idleMs: wait time before flushing when idle.
