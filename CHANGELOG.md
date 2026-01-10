@@ -42,6 +42,7 @@
 - Commands: harden slash command registry and list text-only commands in `/commands`.
 - Models/Auth: show per-agent auth candidates in `/model status`, and add `clawdbot models auth order {get,set,clear}` (per-agent auth rotation overrides). — thanks @steipete
 - Telegram: keep streamMode draft-only; avoid forcing block streaming. (#619) — thanks @rubyrunsstuff
+- Telegram: add `[[audio_as_voice]]` tag support for voice notes with streaming-safe delivery. (#490) — thanks @jarvis-medmatic
 - Debugging: add raw model stream logging flags and document gateway watch mode.
 - Gateway: decode dns-sd escaped UTF-8 in discovery output and show scan progress immediately. — thanks @steipete
 - Agent: add claude-cli/opus-4.5 runner via Claude CLI with resume support (tools disabled).
