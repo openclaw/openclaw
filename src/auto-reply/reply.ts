@@ -219,7 +219,11 @@ function resolveElevatedPermissions(params: {
   agentId: string;
   ctx: MsgContext;
   provider: string;
-}): { enabled: boolean; allowed: boolean; failures: Array<{ gate: string; key: string }> } {
+}): {
+  enabled: boolean;
+  allowed: boolean;
+  failures: Array<{ gate: string; key: string }>;
+} {
   const globalConfig = params.cfg.tools?.elevated;
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId)?.tools
     ?.elevated;
@@ -227,9 +231,13 @@ function resolveElevatedPermissions(params: {
   const agentEnabled = agentConfig?.enabled !== false;
   const enabled = globalEnabled && agentEnabled;
   const failures: Array<{ gate: string; key: string }> = [];
-  if (!globalEnabled) failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
+  if (!globalEnabled)
+    failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
   if (!agentEnabled)
-    failures.push({ gate: "enabled", key: "agents.list[].tools.elevated.enabled" });
+    failures.push({
+      gate: "enabled",
+      key: "agents.list[].tools.elevated.enabled",
+    });
   if (!enabled) return { enabled, allowed: false, failures };
   if (!params.provider) {
     failures.push({ gate: "provider", key: "ctx.Provider" });

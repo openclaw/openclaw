@@ -197,9 +197,13 @@ export function createBashTool(
           const runtime = defaults?.sandbox ? "sandboxed" : "direct";
           const gates: string[] = [];
           if (!elevatedDefaults?.enabled) {
-            gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
+            gates.push(
+              "enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)",
+            );
           } else {
-            gates.push("allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)");
+            gates.push(
+              "allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)",
+            );
           }
           throw new Error(
             [

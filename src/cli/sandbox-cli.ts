@@ -144,7 +144,10 @@ export function registerSandboxCli(program: Command) {
   sandbox
     .command("explain")
     .description("Explain effective sandbox/tool policy for a session/agent")
-    .option("--session <key>", "Session key to inspect (defaults to agent main)")
+    .option(
+      "--session <key>",
+      "Session key to inspect (defaults to agent main)",
+    )
     .option("--agent <id>", "Agent id to inspect (defaults to derived agent)")
     .option("--json", "Output result as JSON", false)
     .addHelpText("after", EXAMPLES.explain)

@@ -1,3 +1,8 @@
+import { resolveAgentConfig } from "../agents/agent-scope.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxToolPolicyForAgent,
+} from "../agents/sandbox.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
@@ -14,11 +19,6 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveAgentConfig } from "../agents/agent-scope.js";
-import {
-  resolveSandboxConfigForAgent,
-  resolveSandboxToolPolicyForAgent,
-} from "../agents/sandbox.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -71,7 +71,9 @@ function inferProviderFromSessionKey(params: {
   const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
   if (parts[0] === configuredMainKey) return undefined;
   const candidate = parts[0]?.trim().toLowerCase();
-  return candidate && KNOWN_PROVIDER_KEYS.has(candidate) ? candidate : undefined;
+  return candidate && KNOWN_PROVIDER_KEYS.has(candidate)
+    ? candidate
+    : undefined;
 }
 
 function resolveActiveProvider(params: {
@@ -135,7 +137,9 @@ export async function sandboxExplainCommand(
 ): Promise<void> {
   const cfg = loadConfig();
 
-  const defaultAgentId = resolveAgentIdFromSessionKey(resolveMainSessionKey(cfg));
+  const defaultAgentId = resolveAgentIdFromSessionKey(
+    resolveMainSessionKey(cfg),
+  );
   const resolvedAgentId = normalizeAgentId(
     opts.agent?.trim()
       ? opts.agent
@@ -277,7 +281,8 @@ export async function sandboxExplainCommand(
       alwaysAllowedByConfig: elevatedAlwaysAllowedByConfig,
       allowFrom: {
         global: provider ? globalAllowTokens : undefined,
-        agent: elevatedAgent?.allowFrom && provider ? agentAllowTokens : undefined,
+        agent:
+          elevatedAgent?.allowFrom && provider ? agentAllowTokens : undefined,
       },
       failures: elevatedFailures,
     },
@@ -323,7 +328,10 @@ export async function sandboxExplainCommand(
         .join(", ")}`,
     );
   }
-  if (payload.sandbox.mode === "non-main" && payload.sandbox.sessionIsSandboxed) {
+  if (
+    payload.sandbox.mode === "non-main" &&
+    payload.sandbox.sessionIsSandboxed
+  ) {
     lines.push("");
     lines.push(
       `Hint: sandbox mode is non-main; use main session key to run direct: ${payload.mainSessionKey}`,

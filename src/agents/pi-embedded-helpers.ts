@@ -6,14 +6,13 @@ import type {
   AgentToolResult,
 } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
-import type { ClawdbotConfig } from "../config/config.js";
 import {
   normalizeThinkLevel,
   type ThinkLevel,
 } from "../auto-reply/thinking.js";
-
-import { sanitizeContentBlocksImages } from "./tool-images.js";
+import type { ClawdbotConfig } from "../config/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "./sandbox.js";
+import { sanitizeContentBlocksImages } from "./tool-images.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export type EmbeddedContextFile = { path: string; content: string };

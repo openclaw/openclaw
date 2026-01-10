@@ -28,14 +28,11 @@ describe("sandbox explain command", () => {
     const { sandboxExplainCommand } = await import("./sandbox-explain.js");
 
     const logs: string[] = [];
-    await sandboxExplainCommand(
-      { json: true, session: "agent:main:main" },
-      {
-        log: (msg: string) => logs.push(msg),
-        error: (msg: string) => logs.push(msg),
-        exit: (_code: number) => {},
-      } as unknown as Parameters<typeof sandboxExplainCommand>[1],
-    );
+    await sandboxExplainCommand({ json: true, session: "agent:main:main" }, {
+      log: (msg: string) => logs.push(msg),
+      error: (msg: string) => logs.push(msg),
+      exit: (_code: number) => {},
+    } as unknown as Parameters<typeof sandboxExplainCommand>[1]);
 
     const out = logs.join("");
     const parsed = JSON.parse(out);
