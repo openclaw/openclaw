@@ -206,15 +206,39 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       expect(candidates.length).toBeGreaterThan(0);
 
       // Build a temp config that allows all selected models, so session overrides stick.
+      const lmstudioProvider = cfg.models?.providers?.lmstudio;
       const nextCfg = {
         ...cfg,
         agents: {
           ...cfg.agents,
+          list: (cfg.agents?.list ?? []).map((entry) => ({
+            ...entry,
+            sandbox: { mode: "off" },
+          })),
           defaults: {
             ...cfg.agents?.defaults,
+            // Live tests should avoid Docker sandboxing so tool probes can
+            // operate on the temporary probe files we create in the host workspace.
+            sandbox: { mode: "off" },
             models: Object.fromEntries(
               candidates.map((m) => [`${m.provider}/${m.id}`, {}]),
             ),
+          },
+        },
+        models: {
+          ...cfg.models,
+          providers: {
+            ...cfg.models?.providers,
+            // LM Studio is most reliable via Chat Completions; its Responses API
+            // tool-calling behavior is inconsistent across releases.
+            ...(lmstudioProvider
+              ? {
+                  lmstudio: {
+                    ...lmstudioProvider,
+                    api: "openai-completions",
+                  },
+                }
+              : {}),
           },
         },
       };
@@ -275,8 +299,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             const text = extractPayloadText(payload?.result);
             if (!isMeaningful(text)) throw new Error(`not meaningful: ${text}`);
             if (
-              !/\\bmicrotask\\b/i.test(text) ||
-              !/\\bmacrotask\\b/i.test(text)
+              !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
+              !/\bmacro\s*-?\s*tasks?\b/i.test(text)
             ) {
               throw new Error(`missing required keywords: ${text}`);
             }
@@ -289,7 +313,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 sessionKey,
                 idempotencyKey: `idem-${runIdTool}-tool`,
                 message:
-                  `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) on "${toolProbePath}". ` +
+                  `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
                   `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
                 deliver: false,
               },
@@ -403,7 +427,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 );
               }
               const version = extractPayloadText(second?.result);
-              if (!/^\\d{4}\\.\\d+\\.\\d+/.test(version.trim())) {
+              if (!/^\d{4}\.\d+\.\d+/.test(version.trim())) {
                 throw new Error(`unexpected version: ${version}`);
               }
             }

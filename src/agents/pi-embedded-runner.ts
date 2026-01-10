@@ -374,6 +374,7 @@ async function sanitizeSessionHistory(params: {
   const sanitizedImages = await sanitizeSessionMessagesImages(
     params.messages,
     "session:history",
+    { sanitizeToolCallIds: isGoogleModelApi(params.modelApi) },
   );
   return applyGoogleTurnOrderingFix({
     messages: sanitizedImages,
@@ -762,8 +763,8 @@ export async function compactEmbeddedPiSession(params: {
       const provider =
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      await ensureClawdbotModelsJson(params.config);
       const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
+      await ensureClawdbotModelsJson(params.config, agentDir);
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
@@ -1065,8 +1066,8 @@ export async function runEmbeddedPiAgent(params: {
       const provider =
         (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       const modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      await ensureClawdbotModelsJson(params.config);
       const agentDir = params.agentDir ?? resolveClawdbotAgentDir();
+      await ensureClawdbotModelsJson(params.config, agentDir);
       const { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,

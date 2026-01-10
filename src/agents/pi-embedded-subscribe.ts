@@ -496,6 +496,21 @@ export function subscribeEmbeddedPiSession(params: {
           (evt as AgentEvent & { toolCallId: string }).toolCallId,
         );
         const args = (evt as AgentEvent & { args: unknown }).args;
+        if (toolName === "read") {
+          const record =
+            args && typeof args === "object"
+              ? (args as Record<string, unknown>)
+              : {};
+          const filePath =
+            typeof record.path === "string" ? record.path.trim() : "";
+          if (!filePath) {
+            const argsPreview =
+              typeof args === "string" ? args.slice(0, 200) : undefined;
+            log.warn(
+              `read tool called without path: toolCallId=${toolCallId} argsType=${typeof args}${argsPreview ? ` argsPreview=${argsPreview}` : ""}`,
+            );
+          }
+        }
         const meta = inferToolMetaFromArgs(toolName, args);
         toolMetaById.set(toolCallId, meta);
         log.debug(
