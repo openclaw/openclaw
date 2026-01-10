@@ -370,7 +370,15 @@ describe("subscribeEmbeddedPiSession", () => {
       message: { role: "assistant" },
       assistantMessageEvent: {
         type: "text_delta",
-        delta: "Final answer",
+        delta: "Final ",
+      },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "answer",
       },
     });
     handler?.({
