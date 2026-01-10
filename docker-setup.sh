@@ -3,7 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
+EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${CLAWDBOT_IMAGE:-clawdbot:local}"
+EXTRA_MOUNTS="${CLAWDBOT_EXTRA_MOUNTS:-}"
+HOME_VOLUME_NAME="${CLAWDBOT_HOME_VOLUME:-}"
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -40,6 +43,75 @@ PY
   fi
 fi
 export CLAWDBOT_GATEWAY_TOKEN
+
+COMPOSE_FILES=("$COMPOSE_FILE")
+COMPOSE_ARGS=()
+
+write_extra_compose() {
+  local mounts_csv="$1"
+  local home_volume="$2"
+  local -a mounts=()
+  local mount
+
+  # Split on commas; ignore empty entries.
+  IFS=',' read -r -a mounts <<<"$mounts_csv"
+
+  cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
+services:
+  clawdbot-gateway:
+    volumes:
+YAML
+
+  if [[ -n "$home_volume" ]]; then
+    printf '      - %s:/home/node\n' "$home_volume" >>"$EXTRA_COMPOSE_FILE"
+  fi
+
+  for mount in "${mounts[@]}"; do
+    mount="${mount#"${mount%%[![:space:]]*}"}"
+    mount="${mount%"${mount##*[![:space:]]}"}"
+    if [[ -z "$mount" ]]; then
+      continue
+    fi
+    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+  done
+
+  cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
+  clawdbot-cli:
+    volumes:
+YAML
+
+  if [[ -n "$home_volume" ]]; then
+    printf '      - %s:/home/node\n' "$home_volume" >>"$EXTRA_COMPOSE_FILE"
+  fi
+
+  for mount in "${mounts[@]}"; do
+    mount="${mount#"${mount%%[![:space:]]*}"}"
+    mount="${mount%"${mount##*[![:space:]]}"}"
+    if [[ -z "$mount" ]]; then
+      continue
+    fi
+    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+  done
+
+  if [[ -n "$home_volume" ]]; then
+    cat >>"$EXTRA_COMPOSE_FILE" <<YAML
+volumes:
+  ${home_volume}:
+YAML
+  fi
+}
+
+if [[ -n "$EXTRA_MOUNTS" || -n "$HOME_VOLUME_NAME" ]]; then
+  write_extra_compose "$EXTRA_MOUNTS" "$HOME_VOLUME_NAME"
+  COMPOSE_FILES+=("$EXTRA_COMPOSE_FILE")
+fi
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  COMPOSE_ARGS+=("-f" "$compose_file")
+done
+COMPOSE_HINT="docker compose"
+for compose_file in "${COMPOSE_FILES[@]}"; do
+  COMPOSE_HINT+=" -f ${compose_file}"
+done
 
 ENV_FILE="$ROOT_DIR/.env"
 upsert_env() {
@@ -84,7 +156,9 @@ upsert_env "$ENV_FILE" \
   CLAWDBOT_BRIDGE_PORT \
   CLAWDBOT_GATEWAY_BIND \
   CLAWDBOT_GATEWAY_TOKEN \
-  CLAWDBOT_IMAGE
+  CLAWDBOT_IMAGE \
+  CLAWDBOT_EXTRA_MOUNTS \
+  CLAWDBOT_HOME_VOLUME
 
 echo "==> Building Docker image: $IMAGE_NAME"
 docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
@@ -98,21 +172,21 @@ echo "  - Gateway token: $CLAWDBOT_GATEWAY_TOKEN"
 echo "  - Tailscale exposure: Off"
 echo "  - Install Gateway daemon: No"
 echo ""
-docker compose -f "$COMPOSE_FILE" run --rm clawdbot-cli onboard --no-install-daemon
+docker compose "${COMPOSE_ARGS[@]}" run --rm clawdbot-cli onboard --no-install-daemon
 
 echo ""
 echo "==> Provider setup (optional)"
 echo "WhatsApp (QR):"
-echo "  docker compose -f $COMPOSE_FILE run --rm clawdbot-cli providers login"
+echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers login"
 echo "Telegram (bot token):"
-echo "  docker compose -f $COMPOSE_FILE run --rm clawdbot-cli providers add --provider telegram --token <token>"
+echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers add --provider telegram --token <token>"
 echo "Discord (bot token):"
-echo "  docker compose -f $COMPOSE_FILE run --rm clawdbot-cli providers add --provider discord --token <token>"
+echo "  ${COMPOSE_HINT} run --rm clawdbot-cli providers add --provider discord --token <token>"
 echo "Docs: https://docs.clawd.bot/providers"
 
 echo ""
 echo "==> Starting gateway"
-docker compose -f "$COMPOSE_FILE" up -d clawdbot-gateway
+docker compose "${COMPOSE_ARGS[@]}" up -d clawdbot-gateway
 
 echo ""
 echo "Gateway running with host port mapping."
@@ -122,5 +196,5 @@ echo "Workspace: $CLAWDBOT_WORKSPACE_DIR"
 echo "Token: $CLAWDBOT_GATEWAY_TOKEN"
 echo ""
 echo "Commands:"
-echo "  docker compose -f $COMPOSE_FILE logs -f clawdbot-gateway"
-echo "  docker compose -f $COMPOSE_FILE exec clawdbot-gateway node dist/index.js health --token \"$CLAWDBOT_GATEWAY_TOKEN\""
+echo "  ${COMPOSE_HINT} logs -f clawdbot-gateway"
+echo "  ${COMPOSE_HINT} exec clawdbot-gateway node dist/index.js health --token \"$CLAWDBOT_GATEWAY_TOKEN\""
