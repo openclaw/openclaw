@@ -294,7 +294,7 @@ package_relay_node() {
     cp "$relay_node_build_dir/node-${BUILD_ARCHS[0]}" "$relay_node"
   fi
   chmod +x "$relay_node"
-  if [[ "${STRIP_NODE:-1}" == "1" ]]; then
+  if [[ "${STRIP_NODE:-0}" == "1" ]]; then
     /usr/bin/strip -x "$relay_node" 2>/dev/null || true
   fi
   rm -rf "$relay_node_build_dir"
