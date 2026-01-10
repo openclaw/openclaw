@@ -124,36 +124,42 @@ type SignalReactionTarget = {
   display: string;
 };
 
-function resolveSignalReactionTarget(
+function resolveSignalReactionTargets(
   reaction: SignalReactionMessage,
-): SignalReactionTarget | null {
+): SignalReactionTarget[] {
+  const targets: SignalReactionTarget[] = [];
   const uuid = reaction.targetAuthorUuid?.trim();
   if (uuid) {
-    return { kind: "uuid", id: uuid, display: `uuid:${uuid}` };
+    targets.push({ kind: "uuid", id: uuid, display: `uuid:${uuid}` });
   }
   const author = reaction.targetAuthor?.trim();
-  if (!author) return null;
-  const normalized = normalizeE164(author);
-  return { kind: "phone", id: normalized, display: normalized };
+  if (author) {
+    const normalized = normalizeE164(author);
+    targets.push({ kind: "phone", id: normalized, display: normalized });
+  }
+  return targets;
 }
 
 function shouldEmitSignalReactionNotification(params: {
   mode?: SignalReactionNotificationMode;
   account?: string | null;
-  target?: SignalReactionTarget | null;
+  targets?: SignalReactionTarget[];
   sender?: ReturnType<typeof resolveSignalSender> | null;
   allowlist?: string[];
 }) {
-  const { mode, account, target, sender, allowlist } = params;
+  const { mode, account, targets, sender, allowlist } = params;
   const effectiveMode = mode ?? "own";
   if (effectiveMode === "off") return false;
   if (effectiveMode === "own") {
     const accountId = account?.trim();
-    if (!accountId || !target) return false;
-    if (target.kind === "uuid") {
-      return accountId === target.id || accountId === `uuid:${target.id}`;
-    }
-    return normalizeE164(accountId) === target.id;
+    if (!accountId || !targets || targets.length === 0) return false;
+    const normalizedAccount = normalizeE164(accountId);
+    return targets.some((target) => {
+      if (target.kind === "uuid") {
+        return accountId === target.id || accountId === `uuid:${target.id}`;
+      }
+      return normalizedAccount === target.id;
+    });
   }
   if (effectiveMode === "allowlist") {
     if (!sender || !allowlist || allowlist.length === 0) return false;
@@ -401,11 +407,11 @@ export async function monitorSignalProvider(
         const senderDisplay = formatSignalSenderDisplay(sender);
         const senderName = envelope.sourceName ?? senderDisplay;
         logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
-        const target = resolveSignalReactionTarget(reaction);
+        const targets = resolveSignalReactionTargets(reaction);
         const shouldNotify = shouldEmitSignalReactionNotification({
           mode: reactionMode,
           account,
-          target,
+          targets,
           sender,
           allowlist: reactionAllowlist,
         });
@@ -433,7 +439,7 @@ export async function monitorSignalProvider(
           emojiLabel,
           actorLabel: senderName,
           messageId,
-          targetLabel: target?.display,
+          targetLabel: targets[0]?.display,
           groupLabel,
         });
         const senderId = formatSignalSenderId(sender);
