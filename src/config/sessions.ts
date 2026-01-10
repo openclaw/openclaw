@@ -113,6 +113,7 @@ export type SessionEntry = {
   model?: string;
   contextTokens?: number;
   compactionCount?: number;
+  cliSessionIds?: Record<string, string>;
   claudeCliSessionId?: string;
   label?: string;
   displayName?: string;

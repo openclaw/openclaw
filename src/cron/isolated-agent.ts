@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import { runClaudeCliAgent } from "../agents/claude-cli-runner.js";
+import { runCliAgent } from "../agents/cli-runner.js";
+import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { lookupContextTokens } from "../agents/context.js";
 import {
   DEFAULT_CONTEXT_TOKENS,
@@ -10,6 +11,7 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runWithModelFallback } from "../agents/model-fallback.js";
 import {
   getModelRefStatus,
+  isCliProvider,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
@@ -444,14 +446,17 @@ export async function runCronIsolatedAgentTurn(params: {
       verboseLevel: resolvedVerboseLevel,
     });
     const messageProvider = resolvedDelivery.provider;
-    const claudeSessionId = cronSession.sessionEntry.claudeCliSessionId?.trim();
     const fallbackResult = await runWithModelFallback({
       cfg: params.cfg,
       provider,
       model,
       run: (providerOverride, modelOverride) => {
-        if (providerOverride === "claude-cli") {
-          return runClaudeCliAgent({
+        if (isCliProvider(providerOverride, params.cfg)) {
+          const cliSessionId = getCliSessionId(
+            cronSession.sessionEntry,
+            providerOverride,
+          );
+          return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
             sessionKey: params.sessionKey,
             sessionFile,
@@ -463,7 +468,7 @@ export async function runCronIsolatedAgentTurn(params: {
             thinkLevel,
             timeoutMs,
             runId: cronSession.sessionEntry.sessionId,
-            claudeSessionId,
+            cliSessionId,
           });
         }
         return runEmbeddedPiAgent({
@@ -508,10 +513,10 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
-    if (providerUsed === "claude-cli") {
+    if (isCliProvider(providerUsed, params.cfg)) {
       const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
-        cronSession.sessionEntry.claudeCliSessionId = cliSessionId;
+        setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
       }
     }
     if (hasNonzeroUsage(usage)) {
