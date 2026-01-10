@@ -242,6 +242,16 @@ function extractMessagingToolSend(
       ? { tool: toolName, provider: "telegram", accountId, to }
       : undefined;
   }
+  if (toolName === "message") {
+    if (action !== "send" && action !== "thread-reply") return undefined;
+    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    if (!toRaw) return undefined;
+    const providerRaw =
+      typeof args.provider === "string" ? args.provider.trim() : "";
+    const provider = providerRaw || "message";
+    const to = toRaw.trim();
+    return to ? { tool: toolName, provider, accountId, to } : undefined;
+  }
   return undefined;
 }
 
@@ -310,6 +320,7 @@ export function subscribeEmbeddedPiSession(params: {
     "whatsapp",
     "discord",
     "slack",
+    "message",
     "sessions_send",
   ]);
   const messagingToolSentTexts: string[] = [];
@@ -548,12 +559,15 @@ export function subscribeEmbeddedPiSession(params: {
               : {};
           const action =
             typeof argsRecord.action === "string" ? argsRecord.action : "";
-          // Track send actions: sendMessage/threadReply for Discord/Slack, or sessions_send (no action field)
-          if (
+          // Track send actions: sendMessage/threadReply for Discord/Slack, sessions_send (no action field),
+          // and message/send or message/thread-reply for the generic message tool.
+          const isMessagingSend =
             action === "sendMessage" ||
             action === "threadReply" ||
-            toolName === "sessions_send"
-          ) {
+            toolName === "sessions_send" ||
+            (toolName === "message" &&
+              (action === "send" || action === "thread-reply"));
+          if (isMessagingSend) {
             const sendTarget = extractMessagingToolSend(toolName, argsRecord);
             if (sendTarget) {
               pendingMessagingTargets.set(toolCallId, sendTarget);
