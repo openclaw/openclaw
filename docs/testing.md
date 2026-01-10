@@ -162,6 +162,31 @@ clawdbot models auth paste-token --provider anthropic --profile-id anthropic:set
 CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
 ```
 
+## Live: CLI backend smoke (Claude CLI or other local CLIs)
+
+- Test: `src/gateway/gateway-cli-backend.live.test.ts`
+- Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
+- Enable:
+  - `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
+  - `CLAWDBOT_LIVE_CLI_BACKEND=1`
+- Defaults:
+  - Model: `claude-cli/claude-sonnet-4-5`
+  - Command: `claude`
+  - Args: `["-p","--output-format","json","--dangerously-skip-permissions"]`
+- Overrides (optional):
+  - `CLAWDBOT_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-5"`
+  - `CLAWDBOT_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
+  - `CLAWDBOT_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
+  - `CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY"]'`
+
+Example:
+
+```bash
+CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_CLI_BACKEND=1 \
+  CLAWDBOT_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-5" \
+  pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
+```
+
 ### Recommended live recipes
 
 Narrow, explicit allowlists are fastest and least flaky:

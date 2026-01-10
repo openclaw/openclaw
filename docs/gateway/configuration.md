@@ -1038,6 +1038,46 @@ is already present in `agents.defaults.models`:
 
 If you configure the same alias name (case-insensitive) yourself, your value wins (defaults never override).
 
+#### `agents.defaults.cliBackends` (CLI fallback)
+
+Optional CLI backends for text-only fallback runs (no tool calls). These are useful as a
+backup path when API providers fail. Image pass-through is supported when you configure
+an `imageArg` that accepts file paths.
+
+Notes:
+- CLI backends are **text-first**; tools are always disabled.
+- Sessions are supported when `sessionArg` is set; session ids are persisted per backend.
+- For `claude-cli`, defaults are wired in. Override the command path if PATH is minimal
+  (launchd/systemd).
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      cliBackends: {
+        "claude-cli": {
+          command: "/opt/homebrew/bin/claude"
+        },
+        "my-cli": {
+          command: "my-cli",
+          args: ["--json"],
+          output: "json",
+          modelArg: "--model",
+          sessionArg: "--session",
+          sessionMode: "existing",
+          systemPromptArg: "--system",
+          systemPromptWhen: "first",
+          imageArg: "--image",
+          imageMode: "repeat"
+        }
+      }
+    }
+  }
+}
+```
+
 ```json5
 {
   agents: {

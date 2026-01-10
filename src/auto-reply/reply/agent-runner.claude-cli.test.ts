@@ -6,7 +6,7 @@ import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
-const runClaudeCliAgentMock = vi.fn();
+const runCliAgentMock = vi.fn();
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: async ({
@@ -29,8 +29,8 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
-vi.mock("../../agents/claude-cli-runner.js", () => ({
-  runClaudeCliAgent: (params: unknown) => runClaudeCliAgentMock(params),
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (params: unknown) => runCliAgentMock(params),
 }));
 
 vi.mock("./queue.js", async () => {
@@ -112,7 +112,7 @@ describe("runReplyAgent claude-cli routing", () => {
       const phase = evt.data?.phase;
       if (typeof phase === "string") lifecyclePhases.push(phase);
     });
-    runClaudeCliAgentMock.mockResolvedValueOnce({
+    runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
       meta: {
         agentMeta: {
@@ -126,7 +126,7 @@ describe("runReplyAgent claude-cli routing", () => {
     unsubscribe();
     randomSpy.mockRestore();
 
-    expect(runClaudeCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
     expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     expect(lifecyclePhases).toEqual(["start", "end"]);
     expect(result).toMatchObject({ text: "ok" });
