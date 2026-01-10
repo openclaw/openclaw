@@ -144,8 +144,8 @@ export async function applySessionsPatchToStore(params: {
     } else if (raw !== undefined) {
       const normalized = normalizeElevatedLevel(String(raw));
       if (!normalized) return invalid('invalid elevatedLevel (use "on"|"off")');
-      if (normalized === "off") delete next.elevatedLevel;
-      else next.elevatedLevel = normalized;
+      // Persist "off" explicitly so patches can override defaults.
+      next.elevatedLevel = normalized;
     }
   }
 

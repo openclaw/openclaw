@@ -866,8 +866,9 @@ export async function handleDirectiveOnly(params: {
       else sessionEntry.reasoningLevel = directives.reasoningLevel;
     }
     if (directives.hasElevatedDirective && directives.elevatedLevel) {
-      if (directives.elevatedLevel === "off") delete sessionEntry.elevatedLevel;
-      else sessionEntry.elevatedLevel = directives.elevatedLevel;
+      // Unlike other toggles, elevated defaults can be "on".
+      // Persist "off" explicitly so `/elevated off` actually overrides defaults.
+      sessionEntry.elevatedLevel = directives.elevatedLevel;
     }
     if (modelSelection) {
       if (modelSelection.isDefault) {
@@ -1049,11 +1050,8 @@ export async function persistInlineDirectives(params: {
       elevatedEnabled &&
       elevatedAllowed
     ) {
-      if (directives.elevatedLevel === "off") {
-        delete sessionEntry.elevatedLevel;
-      } else {
-        sessionEntry.elevatedLevel = directives.elevatedLevel;
-      }
+      // Persist "off" explicitly so inline `/elevated off` overrides defaults.
+      sessionEntry.elevatedLevel = directives.elevatedLevel;
       updated = true;
     }
     const modelDirective =

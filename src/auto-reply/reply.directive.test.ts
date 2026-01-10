@@ -811,6 +811,7 @@ describe("directive behavior", () => {
   it("returns status alongside directive-only acks", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
 
       const res = await getReplyFromConfig(
         {
@@ -834,13 +835,21 @@ describe("directive behavior", () => {
             },
           },
           whatsapp: { allowFrom: ["+1222"] },
-          session: { store: path.join(home, "sessions.json") },
+          session: { store: storePath },
         },
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode disabled.");
       expect(text).toContain("Session: agent:main:main");
+      const optionsLine = text
+        ?.split("\n")
+        .find((line) => line.trim().startsWith("⚙️"));
+      expect(optionsLine).toBeTruthy();
+      expect(optionsLine).not.toContain("elevated");
+
+      const store = loadSessionStore(storePath);
+      expect(store["agent:main:main"]?.elevatedLevel).toBe("off");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
