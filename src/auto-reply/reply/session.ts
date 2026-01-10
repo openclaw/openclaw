@@ -90,10 +90,20 @@ export async function initSessionState(params: {
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
+  // "slash session" key, but should mutate the target chat session.
+  const targetSessionKey =
+    ctx.CommandSource === "native"
+      ? ctx.CommandTargetSessionKey?.trim()
+      : undefined;
+  const sessionCtxForState =
+    targetSessionKey && targetSessionKey !== ctx.SessionKey
+      ? { ...ctx, SessionKey: targetSessionKey }
+      : ctx;
   const sessionCfg = cfg.session;
   const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const agentId = resolveSessionAgentId({
-    sessionKey: ctx.SessionKey,
+    sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
   });
   const resetTriggers = sessionCfg?.resetTriggers?.length
@@ -122,7 +132,7 @@ export async function initSessionState(params: {
   let persistedModelOverride: string | undefined;
   let persistedProviderOverride: string | undefined;
 
-  const groupResolution = resolveGroupSessionKey(ctx) ?? undefined;
+  const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const isGroup =
     ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
   const triggerBodyNormalized = stripStructuralPrefixes(ctx.Body ?? "")
@@ -161,7 +171,7 @@ export async function initSessionState(params: {
     }
   }
 
-  sessionKey = resolveSessionKey(sessionScope, ctx, mainKey);
+  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey);
   if (groupResolution?.legacyKey && groupResolution.legacyKey !== sessionKey) {
     const legacyEntry = sessionStore[groupResolution.legacyKey];
     if (legacyEntry && !sessionStore[sessionKey]) {
