@@ -312,7 +312,7 @@ Details: [Security guide](https://docs.clawd.bot/security) · [Docker + sandboxi
 
 ### [WhatsApp](https://docs.clawd.bot/whatsapp)
 
-- Link the device: `pnpm clawdbot login` (stores creds in `~/.clawdbot/credentials`).
+- Link the device: `pnpm clawdbot providers login` (stores creds in `~/.clawdbot/credentials`).
 - Allowlist who can talk to the assistant via `whatsapp.allowFrom`.
 - If `whatsapp.groups` is set, it becomes a group allowlist; include `"*"` to allow all.
 
