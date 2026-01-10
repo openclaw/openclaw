@@ -33,7 +33,10 @@ import {
   type enqueueCommand,
   enqueueCommandInLane,
 } from "../process/command-queue.js";
-import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../routing/session-key.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
@@ -557,6 +560,19 @@ export function buildEmbeddedSandboxInfo(
   };
 }
 
+export function resolveSessionAgentIds(params: {
+  sessionKey?: string;
+  config?: ClawdbotConfig;
+}): { defaultAgentId: string; sessionAgentId: string } {
+  const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+  const sessionKey = params.sessionKey?.trim();
+  const parsed = sessionKey ? parseAgentSessionKey(sessionKey) : null;
+  const sessionAgentId = parsed?.agentId
+    ? normalizeAgentId(parsed.agentId)
+    : defaultAgentId;
+  return { defaultAgentId, sessionAgentId };
+}
+
 function buildEmbeddedSystemPrompt(params: {
   workspaceDir: string;
   defaultThinkLevel?: ThinkLevel;
@@ -885,8 +901,10 @@ export async function compactEmbeddedPiSession(params: {
         );
         const userTime = formatUserTime(new Date(), userTimezone);
         // Only include heartbeat prompt for the default agent
-        const sessionAgentId = resolveAgentIdFromSessionKey(params.sessionKey);
-        const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+        const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+          sessionKey: params.sessionKey,
+          config: params.config,
+        });
         const isDefaultAgent = sessionAgentId === defaultAgentId;
         const appendPrompt = buildEmbeddedSystemPrompt({
           workspaceDir: effectiveWorkspace,
@@ -1254,10 +1272,10 @@ export async function runEmbeddedPiAgent(params: {
           );
           const userTime = formatUserTime(new Date(), userTimezone);
           // Only include heartbeat prompt for the default agent
-          const sessionAgentId = resolveAgentIdFromSessionKey(
-            params.sessionKey,
-          );
-          const defaultAgentId = resolveDefaultAgentId(params.config ?? {});
+          const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+            sessionKey: params.sessionKey,
+            config: params.config,
+          });
           const isDefaultAgent = sessionAgentId === defaultAgentId;
           const appendPrompt = buildEmbeddedSystemPrompt({
             workspaceDir: effectiveWorkspace,
