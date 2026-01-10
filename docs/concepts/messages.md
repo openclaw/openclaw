@@ -61,6 +61,7 @@ Key settings:
 - `agents.defaults.blockStreamingBreak` (`text_end|message_end`)
 - `agents.defaults.blockStreamingChunk` (`minChars|maxChars|breakPreference`)
 - `agents.defaults.blockStreamingCoalesce` (idle-based batching)
+- `agents.defaults.humanDelay` (human-like pause between block replies)
 - Provider overrides: `*.blockStreaming` and `*.blockStreamingCoalesce` (non-Telegram providers require explicit `*.blockStreaming: true`)
 
 Details: [Streaming + chunking](/concepts/streaming).

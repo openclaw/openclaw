@@ -104,6 +104,9 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.model.fallbacks": "Model Fallbacks",
   "agents.defaults.imageModel.primary": "Image Model",
   "agents.defaults.imageModel.fallbacks": "Image Model Fallbacks",
+  "agents.defaults.humanDelay.mode": "Human Delay Mode",
+  "agents.defaults.humanDelay.minMs": "Human Delay Min (ms)",
+  "agents.defaults.humanDelay.maxMs": "Human Delay Max (ms)",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
   "commands.restart": "Allow Restart",
@@ -177,6 +180,12 @@ const FIELD_HELP: Record<string, string> = {
     "Optional image model (provider/model) used when the primary model lacks image input.",
   "agents.defaults.imageModel.fallbacks":
     "Ordered fallback image models (provider/model).",
+  "agents.defaults.humanDelay.mode":
+    'Delay style for block replies ("off", "natural", "custom").',
+  "agents.defaults.humanDelay.minMs":
+    "Minimum delay in ms for custom humanDelay (default: 800).",
+  "agents.defaults.humanDelay.maxMs":
+    "Maximum delay in ms for custom humanDelay (default: 2500).",
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",

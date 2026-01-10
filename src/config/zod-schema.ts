@@ -103,6 +103,14 @@ const BlockStreamingCoalesceSchema = z.object({
   idleMs: z.number().int().nonnegative().optional(),
 });
 
+const HumanDelaySchema = z.object({
+  mode: z
+    .union([z.literal("off"), z.literal("natural"), z.literal("custom")])
+    .optional(),
+  minMs: z.number().int().nonnegative().optional(),
+  maxMs: z.number().int().nonnegative().optional(),
+});
+
 const normalizeAllowFrom = (values?: Array<string | number>): string[] =>
   (values ?? []).map((v) => String(v).trim()).filter(Boolean);
 
@@ -775,6 +783,7 @@ const AgentEntrySchema = z.object({
   workspace: z.string().optional(),
   agentDir: z.string().optional(),
   model: z.string().optional(),
+  humanDelay: HumanDelaySchema.optional(),
   identity: IdentitySchema,
   groupChat: GroupChatSchema,
   subagents: z
@@ -1043,6 +1052,7 @@ const AgentDefaultsSchema = z
       })
       .optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    humanDelay: HumanDelaySchema.optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
@@ -1089,7 +1099,6 @@ const AgentDefaultsSchema = z
       .optional(),
   })
   .optional();
-
 export const ClawdbotSchema = z
   .object({
     env: z
