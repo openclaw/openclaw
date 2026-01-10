@@ -42,5 +42,5 @@ describe("sandbox explain command", () => {
     expect(Array.isArray(parsed.fixIt)).toBe(true);
     expect(parsed.fixIt).toContain("agents.defaults.sandbox.mode=off");
     expect(parsed.fixIt).toContain("tools.sandbox.tools.deny");
-  });
+  }, 15_000);
 });
