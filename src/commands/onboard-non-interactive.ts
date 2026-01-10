@@ -384,7 +384,11 @@ export async function runNonInteractiveOnboarding(
       ...nextConfig,
       gateway: {
         ...nextConfig.gateway,
-        auth: { ...nextConfig.gateway?.auth, mode: "token" },
+        auth: {
+          ...nextConfig.gateway?.auth,
+          mode: "token",
+          token: gatewayToken,
+        },
       },
     };
   }
