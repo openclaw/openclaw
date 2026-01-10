@@ -10,6 +10,7 @@
 - Auth: update Claude Code keychain credentials in-place during refresh sync; extract CLI sync helpers + coverage.
 - Onboarding/Gateway: persist non-interactive gateway token auth in config; add WS wizard + gateway tool-calling regression coverage.
 - CLI: `clawdbot sessions` now includes `elev:*` + `usage:*` flags in the table output.
+- CLI/Pairing: accept positional provider for `pairing list|approve` (npm-run compatible); update docs/bot hints.
 - Branding: normalize user-facing “ClawdBot”/“CLAWDBOT” → “Clawdbot” (CLI, status, docs).
 - Doctor: avoid false legacy workspace warning when install dir is `~/clawdbot`. (#660)
 - iMessage: fix reasoning persistence across DMs; avoid partial/duplicate replies when reasoning is enabled. (#655) — thanks @antons.
@@ -91,7 +92,7 @@
   - Previously, if you didn’t configure an allowlist, your bot could be **open to anyone** (especially discoverable Telegram bots).
   - New default: DM pairing (`dmPolicy="pairing"` / `discord.dm.policy="pairing"` / `slack.dm.policy="pairing"`).
   - To keep old “open to everyone” behavior: set `dmPolicy="open"` and include `"*"` in the relevant `allowFrom` (Discord/Slack: `discord.dm.allowFrom` / `slack.dm.allowFrom`).
-  - Approve requests via `clawdbot pairing list --provider <provider>` + `clawdbot pairing approve --provider <provider> <code>`.
+  - Approve requests via `clawdbot pairing list <provider>` + `clawdbot pairing approve <provider> <code>`.
 - Sandbox: default `agent.sandbox.scope` to `"agent"` (one container/workspace per agent). Use `"session"` for per-session isolation; `"shared"` disables cross-session isolation.
 - Timestamps in agent envelopes are now UTC (compact `YYYY-MM-DDTHH:mmZ`); removed `messages.timestampPrefix`. Add `agent.userTimezone` to tell the model the user’s local time (system prompt only).
 - Model config schema changes (auth profiles + model lists); doctor auto-migrates and the gateway rewrites legacy configs on startup.

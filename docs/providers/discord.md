@@ -22,7 +22,7 @@ Status: ready for DM and guild text channels via the official Discord bot gatewa
    - If you prefer env vars, still add `discord: { enabled: true }` to `~/.clawdbot/clawdbot.json` and set `DISCORD_BOT_TOKEN`.
 5. Direct chats: use `user:<id>` (or a `<@id>` mention) when delivering; all turns land in the shared `main` session. Bare numeric IDs are ambiguous and rejected.
 6. Guild channels: use `channel:<channelId>` for delivery. Mentions are required by default and can be set per guild or per channel.
-7. Direct chats: secure by default via `discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code (expires after 1 hour); approve via `clawdbot pairing approve --provider discord <code>`.
+7. Direct chats: secure by default via `discord.dm.policy` (default: `"pairing"`). Unknown senders get a pairing code (expires after 1 hour); approve via `clawdbot pairing approve discord <code>`.
    - To keep old “open to anyone” behavior: set `discord.dm.policy="open"` and `discord.dm.allowFrom=["*"]`.
    - To hard-allowlist: set `discord.dm.policy="allowlist"` and list senders in `discord.dm.allowFrom`.
    - To ignore all DMs: set `discord.dm.enabled=false` or `discord.dm.policy="disabled"`.

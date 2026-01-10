@@ -175,7 +175,7 @@ If `dmPolicy` is `pairing`, unknown senders should receive a code and their mess
 
 **Check 1:** Is a pending request already waiting?
 ```bash
-clawdbot pairing list --provider <provider>
+clawdbot pairing list <provider>
 ```
 
 Pending DM pairing requests are capped at **3 per provider** by default. If the list is full, new requests won’t generate a code until one is approved or expires.

@@ -631,8 +631,8 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
 - Default behavior on DM‑capable providers is **pairing**:
   - Unknown senders receive a pairing code; the bot does not process their message.
-  - Approve with: `clawdbot pairing approve --provider <provider> <code>`
-  - Pending requests are capped at **3 per provider**; check `clawdbot pairing list --provider <provider>` if a code didn’t arrive.
+  - Approve with: `clawdbot pairing approve <provider> <code>`
+  - Pending requests are capped at **3 per provider**; check `clawdbot pairing list <provider>` if a code didn’t arrive.
 - Opening DMs publicly requires explicit opt‑in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `clawdbot doctor` to surface risky DM policies.

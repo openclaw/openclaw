@@ -151,8 +151,8 @@ Private topics (DM forum mode) also include `message_thread_id`. Clawdbot:
 ### DM access
 - Default: `telegram.dmPolicy = "pairing"`. Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `clawdbot pairing list --provider telegram`
-  - `clawdbot pairing approve --provider telegram <CODE>`
+  - `clawdbot pairing list telegram`
+  - `clawdbot pairing approve telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
 
 ### Group access

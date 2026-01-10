@@ -86,8 +86,8 @@ DMs:
 - Default: `imessage.dmPolicy = "pairing"`.
 - Unknown senders receive a pairing code; messages are ignored until approved (codes expire after 1 hour).
 - Approve via:
-  - `clawdbot pairing list --provider imessage`
-  - `clawdbot pairing approve --provider imessage <CODE>`
+  - `clawdbot pairing list imessage`
+  - `clawdbot pairing approve imessage <CODE>`
 - Pairing is the default token exchange for iMessage DMs. Details: [Pairing](/start/pairing)
 
 Groups:

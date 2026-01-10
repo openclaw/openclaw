@@ -224,7 +224,7 @@ For fine-grained control, use these tags in agent responses:
 
 ## DM security (pairing)
 - Default: `slack.dm.policy="pairing"` — unknown DM senders get a pairing code (expires after 1 hour).
-- Approve via: `clawdbot pairing approve --provider slack <code>`.
+- Approve via: `clawdbot pairing approve slack <code>`.
 - To allow anyone: set `slack.dm.policy="open"` and `slack.dm.allowFrom=["*"]`.
 
 ## Group policy

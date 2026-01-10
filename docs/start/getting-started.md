@@ -128,8 +128,8 @@ Default posture: unknown DMs get a short code and messages are not processed unt
 If your first DM gets no reply, approve the pairing:
 
 ```bash
-clawdbot pairing list --provider whatsapp
-clawdbot pairing approve --provider whatsapp <code>
+clawdbot pairing list whatsapp
+clawdbot pairing approve whatsapp <code>
 ```
 
 Pairing doc: [Pairing](/start/pairing)

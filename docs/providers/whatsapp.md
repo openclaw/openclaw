@@ -39,7 +39,7 @@ Use a **separate phone number** for Clawdbot. Best UX, clean routing, no self-ch
 
 **Pairing mode (optional):**
 If you want pairing instead of allowlist, set `whatsapp.dmPolicy` to `pairing`. Unknown senders get a pairing code; approve with:
-`clawdbot pairing approve --provider whatsapp <code>`
+`clawdbot pairing approve whatsapp <code>`
 
 ### Personal number (fallback)
 Quick fallback: run Clawdbot on **your own number**. Message yourself (WhatsApp “Message yourself”) for testing so you don’t spam contacts. Expect to read verification codes on your main phone during setup and experiments. **Must enable self-chat mode.**
@@ -95,7 +95,7 @@ on outbound replies.
 - Status/broadcast chats are ignored.
 - Direct chats use E.164; groups use group JID.
 - **DM policy**: `whatsapp.dmPolicy` controls direct chat access (default: `pairing`).
-  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve --provider whatsapp <code>`; codes expire after 1 hour).
+  - Pairing: unknown senders get a pairing code (approve via `clawdbot pairing approve whatsapp <code>`; codes expire after 1 hour).
   - Open: requires `whatsapp.allowFrom` to include `"*"`.
   - Self messages are always allowed; “self-chat mode” still requires `whatsapp.allowFrom` to include your own number.
 
