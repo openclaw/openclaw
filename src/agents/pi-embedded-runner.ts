@@ -104,7 +104,6 @@ import {
 
 // Optional features can be implemented as Pi extensions that run in the same Node process.
 
-
 /**
  * Resolve provider-specific extraParams from model config.
  * Auto-enables thinking mode for GLM-4.x models unless explicitly disabled.
@@ -1530,8 +1529,7 @@ export async function runEmbeddedPiAgent(params: {
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
           const shouldRotate =
-            (!aborted &&
-              (failoverFailure || cloudCodeAssistFormatError)) ||
+            (!aborted && (failoverFailure || cloudCodeAssistFormatError)) ||
             timedOut;
 
           if (shouldRotate) {
