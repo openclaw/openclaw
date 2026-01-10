@@ -124,8 +124,30 @@ describe("web inbound helpers", () => {
       },
     } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
     expect(body).toBe(
-      "<contacts: Alice, +15555550101, Bob, +15555550102, Charlie, +15555550103 (+1 more), Dana, +15555550105>",
+      "<contacts: Alice, +15555550101, Bob, +15555550102, Charlie, +15555550103 (+1 more) +1 more>",
     );
+  });
+
+  it("counts empty WhatsApp contact cards in array summaries", () => {
+    const body = extractText({
+      contactsArrayMessage: {
+        contacts: [
+          {
+            displayName: "Alice",
+            vcard: [
+              "BEGIN:VCARD",
+              "VERSION:3.0",
+              "FN:Alice",
+              "TEL;TYPE=CELL:+15555550101",
+              "END:VCARD",
+            ].join("\n"),
+          },
+          {},
+          {},
+        ],
+      },
+    } as unknown as import("@whiskeysockets/baileys").proto.IMessage);
+    expect(body).toBe("<contacts: Alice, +15555550101 +2 more>");
   });
 
   it("summarizes empty WhatsApp contact cards with a count", () => {
