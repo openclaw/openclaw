@@ -832,7 +832,7 @@ struct ConfigSettings: View {
         if id.lowercased().hasPrefix("\(normalizedProvider)/") {
             return id
         }
-        return "\(provider)/\(id)"
+        return "\(normalizedProvider)/\(id)"
     }
 
     private func matchesConfigModel(_ choice: ModelChoice) -> Bool {
@@ -875,7 +875,14 @@ struct ConfigSettings: View {
     }
 
     private func selectManualModel(_ value: String) {
-        self.configModel = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let slash = trimmed.firstIndex(of: "/") {
+            let provider = trimmed[..<slash].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let model = trimmed[trimmed.index(after: slash)...].trimmingCharacters(in: .whitespacesAndNewlines)
+            self.configModel = provider.isEmpty ? String(model) : "\(provider)/\(model)"
+        } else {
+            self.configModel = trimmed
+        }
         self.autosaveConfig()
         self.isModelPickerOpen = false
     }
