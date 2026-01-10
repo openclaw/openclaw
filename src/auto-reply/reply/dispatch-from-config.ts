@@ -3,6 +3,7 @@ import { logVerbose } from "../../globals.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { tryFastAbortFromMessage } from "./abort.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
@@ -65,6 +66,37 @@ export async function dispatchReplyFromConfig(params: {
       );
     }
   };
+
+  const fastAbort = await tryFastAbortFromMessage({ ctx, cfg });
+  if (fastAbort.handled) {
+    const payload = { text: "⚙️ Agent was aborted." } satisfies ReplyPayload;
+    let queuedFinal = false;
+    let routedFinalCount = 0;
+    if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      const result = await routeReply({
+        payload,
+        channel: originatingChannel,
+        to: originatingTo,
+        sessionKey: ctx.SessionKey,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
+        cfg,
+      });
+      queuedFinal = result.ok;
+      if (result.ok) routedFinalCount += 1;
+      if (!result.ok) {
+        logVerbose(
+          `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
+        );
+      }
+    } else {
+      queuedFinal = dispatcher.sendFinalReply(payload);
+    }
+    await dispatcher.waitForIdle();
+    const counts = dispatcher.getQueuedCounts();
+    counts.final += routedFinalCount;
+    return { queuedFinal, counts };
+  }
 
   const replyResult = await (params.replyResolver ?? getReplyFromConfig)(
     ctx,

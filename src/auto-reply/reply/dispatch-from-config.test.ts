@@ -7,6 +7,7 @@ import type { ReplyDispatcher } from "./reply-dispatcher.js";
 
 const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(async () => ({ ok: true, messageId: "mock" })),
+  tryFastAbortFromMessage: vi.fn(async () => ({ handled: false, aborted: false })),
 }));
 
 vi.mock("./route-reply.js", () => ({
@@ -25,6 +26,10 @@ vi.mock("./route-reply.js", () => ({
   routeReply: mocks.routeReply,
 }));
 
+vi.mock("./abort.js", () => ({
+  tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
+}));
+
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 
 function createDispatcher(): ReplyDispatcher {
@@ -39,6 +44,10 @@ function createDispatcher(): ReplyDispatcher {
 
 describe("dispatchReplyFromConfig", () => {
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
     mocks.routeReply.mockClear();
     const cfg = {} as ClawdbotConfig;
     const dispatcher = createDispatcher();
@@ -60,6 +69,10 @@ describe("dispatchReplyFromConfig", () => {
   });
 
   it("routes when OriginatingChannel differs from Provider", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
     mocks.routeReply.mockClear();
     const cfg = {} as ClawdbotConfig;
     const dispatcher = createDispatcher();
@@ -87,5 +100,26 @@ describe("dispatchReplyFromConfig", () => {
         threadId: 123,
       }),
     );
+  });
+
+  it("fast-aborts without calling the reply resolver", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: true,
+      aborted: true,
+    });
+    const cfg = {} as ClawdbotConfig;
+    const dispatcher = createDispatcher();
+    const ctx: MsgContext = {
+      Provider: "telegram",
+      Body: "/stop",
+    };
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
+      text: "⚙️ Agent was aborted.",
+    });
   });
 });

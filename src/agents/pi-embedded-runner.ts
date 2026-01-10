@@ -853,6 +853,7 @@ export async function compactEmbeddedPiSession(params: {
           sessionKey: params.sessionKey ?? params.sessionId,
           agentDir,
           config: params.config,
+          abortSignal: runAbortController.signal,
           // No currentChannelId/currentThreadTs for compaction - not in message context
         });
         const machineName = await getMachineDisplayName();
@@ -1045,6 +1046,7 @@ export async function runEmbeddedPiAgent(params: {
   const enqueueGlobal =
     params.enqueue ??
     ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+  const runAbortController = new AbortController();
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
       const started = Date.now();
@@ -1223,6 +1225,7 @@ export async function runEmbeddedPiAgent(params: {
             sessionKey: params.sessionKey ?? params.sessionId,
             agentDir,
             config: params.config,
+            abortSignal: runAbortController.signal,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             replyToMode: params.replyToMode,
@@ -1326,6 +1329,7 @@ export async function runEmbeddedPiAgent(params: {
           const abortRun = (isTimeout = false) => {
             aborted = true;
             if (isTimeout) timedOut = true;
+            runAbortController.abort();
             void session.abort();
           };
           let subscription: ReturnType<typeof subscribeEmbeddedPiSession>;

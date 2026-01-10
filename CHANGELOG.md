@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Agent: fast abort on /stop and cancel tool calls between tool boundaries. (#617)
 - Models/Auth: add OpenCode Zen (multi-model proxy) onboarding. (#623) — thanks @magimetal
 - WhatsApp: refactor vCard parsing helper and improve empty contact card summaries. (#624) — thanks @steipete
 - WhatsApp: include phone numbers when multiple contacts are shared. (#625) — thanks @mahmoudashraf93
