@@ -61,6 +61,7 @@ export type BashToolDefaults = {
   elevated?: BashElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;
+  cwd?: string;
 };
 
 export type ProcessToolDefaults = {
@@ -202,7 +203,8 @@ export function createBashTool(
       }
 
       const sandbox = elevatedRequested ? undefined : defaults?.sandbox;
-      const rawWorkdir = params.workdir?.trim() || process.cwd();
+      const rawWorkdir =
+        params.workdir?.trim() || defaults?.cwd || process.cwd();
       let workdir = rawWorkdir;
       let containerWorkdir = sandbox?.containerWorkdir;
       if (sandbox) {
