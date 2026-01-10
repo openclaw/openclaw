@@ -11,6 +11,7 @@ import lockfile from "proper-lockfile";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.js";
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
@@ -115,25 +116,6 @@ function resolveAuthStorePath(agentDir?: string): string {
 function resolveLegacyAuthStorePath(agentDir?: string): string {
   const resolved = resolveUserPath(agentDir ?? resolveClawdbotAgentDir());
   return path.join(resolved, LEGACY_AUTH_FILENAME);
-}
-
-function loadJsonFile(pathname: string): unknown {
-  try {
-    if (!fs.existsSync(pathname)) return undefined;
-    const raw = fs.readFileSync(pathname, "utf8");
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return undefined;
-  }
-}
-
-function saveJsonFile(pathname: string, data: unknown) {
-  const dir = path.dirname(pathname);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
 }
 
 function ensureAuthStoreFile(pathname: string) {
