@@ -1,6 +1,7 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
 import { parseFenceSpans } from "../markdown/fences.js";
+import { parseAudioTag } from "./audio-tags.js";
 
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
@@ -31,10 +32,6 @@ function isInsideFence(
 ): boolean {
   return fenceSpans.some((span) => offset >= span.start && offset < span.end);
 }
-
-// Regex to detect [[audio_as_voice]] tag
-const AUDIO_AS_VOICE_RE = /\[\[audio_as_voice\]\]/gi;
-const AUDIO_AS_VOICE_TEST_RE = /\[\[audio_as_voice\]\]/i;
 
 export function splitMediaFromOutput(raw: string): {
   text: string;
@@ -124,13 +121,10 @@ export function splitMediaFromOutput(raw: string): {
     .trim();
 
   // Detect and strip [[audio_as_voice]] tag
-  const hasAudioAsVoice = AUDIO_AS_VOICE_TEST_RE.test(cleanedText);
-  if (hasAudioAsVoice) {
-    cleanedText = cleanedText
-      .replace(AUDIO_AS_VOICE_RE, "")
-      .replace(/[ \t]+/g, " ")
-      .replace(/\n{2,}/g, "\n")
-      .trim();
+  const audioTagResult = parseAudioTag(cleanedText);
+  const hasAudioAsVoice = audioTagResult.audioAsVoice;
+  if (audioTagResult.hadTag) {
+    cleanedText = audioTagResult.text.replace(/\n{2,}/g, "\n").trim();
   }
 
   if (media.length === 0) {

@@ -7,6 +7,7 @@ import {
   maxBytesForKind,
   mediaKindFromMime,
 } from "../media/constants.js";
+import { fetchRemoteMedia } from "../media/fetch.js";
 import { resizeToJpeg } from "../media/image-ops.js";
 import { detectMime, extensionForMime } from "../media/mime.js";
 
@@ -21,45 +22,6 @@ type WebMediaOptions = {
   maxBytes?: number;
   optimizeImages?: boolean;
 };
-
-function stripQuotes(value: string): string {
-  return value.replace(/^["']|["']$/g, "");
-}
-
-function parseContentDispositionFileName(
-  header?: string | null,
-): string | undefined {
-  if (!header) return undefined;
-  const starMatch = /filename\*\s*=\s*([^;]+)/i.exec(header);
-  if (starMatch?.[1]) {
-    const cleaned = stripQuotes(starMatch[1].trim());
-    const encoded = cleaned.split("''").slice(1).join("''") || cleaned;
-    try {
-      return path.basename(decodeURIComponent(encoded));
-    } catch {
-      return path.basename(encoded);
-    }
-  }
-  const match = /filename\s*=\s*([^;]+)/i.exec(header);
-  if (match?.[1]) return path.basename(stripQuotes(match[1].trim()));
-  return undefined;
-}
-
-async function readErrorBodySnippet(
-  res: Response,
-  maxChars = 200,
-): Promise<string | undefined> {
-  try {
-    const text = await res.text();
-    if (!text) return undefined;
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) return undefined;
-    if (collapsed.length <= maxChars) return collapsed;
-    return `${collapsed.slice(0, maxChars)}…`;
-  } catch {
-    return undefined;
-  }
-}
 
 async function loadWebMediaInternal(
   mediaUrl: string,
@@ -93,53 +55,8 @@ async function loadWebMediaInternal(
   };
 
   if (/^https?:\/\//i.test(mediaUrl)) {
-    let fileNameFromUrl: string | undefined;
-    try {
-      const url = new URL(mediaUrl);
-      const base = path.basename(url.pathname);
-      fileNameFromUrl = base || undefined;
-    } catch {
-      // ignore parse errors; leave undefined
-    }
-    let res: Response;
-    try {
-      res = await fetch(mediaUrl);
-    } catch (err) {
-      throw new Error(`Failed to fetch media from ${mediaUrl}: ${String(err)}`);
-    }
-    if (!res.ok || !res.body) {
-      const statusText = res.statusText ? ` ${res.statusText}` : "";
-      const redirected =
-        res.url && res.url !== mediaUrl ? ` (redirected to ${res.url})` : "";
-      let detail = `HTTP ${res.status}${statusText}`;
-      if (!res.body) {
-        detail = `HTTP ${res.status}${statusText}; empty response body`;
-      } else if (!res.ok) {
-        const snippet = await readErrorBodySnippet(res);
-        if (snippet) detail += `; body: ${snippet}`;
-      }
-      throw new Error(
-        `Failed to fetch media from ${mediaUrl}${redirected}: ${detail}`,
-      );
-    }
-    const array = Buffer.from(await res.arrayBuffer());
-    const headerFileName = parseContentDispositionFileName(
-      res.headers.get("content-disposition"),
-    );
-    let fileName = headerFileName || fileNameFromUrl || undefined;
-    const filePathForMime =
-      headerFileName && path.extname(headerFileName)
-        ? headerFileName
-        : mediaUrl;
-    const contentType = await detectMime({
-      buffer: array,
-      headerMime: res.headers.get("content-type"),
-      filePath: filePathForMime,
-    });
-    if (fileName && !path.extname(fileName) && contentType) {
-      const ext = extensionForMime(contentType);
-      if (ext) fileName = `${fileName}${ext}`;
-    }
+    const fetched = await fetchRemoteMedia({ url: mediaUrl });
+    const { buffer, contentType, fileName } = fetched;
     const kind = mediaKindFromMime(contentType);
     const cap = Math.min(
       maxBytes ?? maxBytesForKind(kind),
@@ -148,28 +65,28 @@ async function loadWebMediaInternal(
     if (kind === "image") {
       // Skip optimization for GIFs to preserve animation.
       if (contentType === "image/gif" || !optimizeImages) {
-        if (array.length > cap) {
+        if (buffer.length > cap) {
           throw new Error(
             `${
               contentType === "image/gif" ? "GIF" : "Media"
             } exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-              array.length / (1024 * 1024)
+              buffer.length / (1024 * 1024)
             ).toFixed(2)}MB)`,
           );
         }
-        return { buffer: array, contentType, kind, fileName };
+        return { buffer, contentType, kind, fileName };
       }
-      return { ...(await optimizeAndClampImage(array, cap)), fileName };
+      return { ...(await optimizeAndClampImage(buffer, cap)), fileName };
     }
-    if (array.length > cap) {
+    if (buffer.length > cap) {
       throw new Error(
         `Media exceeds ${(cap / (1024 * 1024)).toFixed(0)}MB limit (got ${(
-          array.length / (1024 * 1024)
+          buffer.length / (1024 * 1024)
         ).toFixed(2)}MB)`,
       );
     }
     return {
-      buffer: array,
+      buffer,
       contentType: contentType ?? undefined,
       kind,
       fileName,

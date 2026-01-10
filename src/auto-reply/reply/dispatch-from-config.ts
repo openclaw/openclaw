@@ -7,7 +7,7 @@ import { tryFastAbortFromMessage } from "./abort.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
-type DispatchFromConfigResult = {
+export type DispatchFromConfigResult = {
   queuedFinal: boolean;
   counts: Record<ReplyDispatchKind, number>;
 };

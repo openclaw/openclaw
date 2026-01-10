@@ -17,12 +17,11 @@ import {
   resolveHeartbeatPrompt,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
-import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
   buildMentionRegexes,
   normalizeMentionText,
 } from "../auto-reply/reply/mentions.js";
-import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1219,8 +1218,39 @@ export async function monitorWebProvider(
         cfg,
         route.agentId,
       ).responsePrefix;
-      const { dispatcher, replyOptions, markDispatchIdle } =
-        createReplyDispatcherWithTyping({
+      const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
+        ctx: {
+          Body: combinedBody,
+          From: msg.from,
+          To: msg.to,
+          SessionKey: route.sessionKey,
+          AccountId: route.accountId,
+          MessageSid: msg.id,
+          ReplyToId: msg.replyToId,
+          ReplyToBody: msg.replyToBody,
+          ReplyToSender: msg.replyToSender,
+          MediaPath: msg.mediaPath,
+          MediaUrl: msg.mediaUrl,
+          MediaType: msg.mediaType,
+          ChatType: msg.chatType,
+          GroupSubject: msg.groupSubject,
+          GroupMembers: formatGroupMembers(
+            msg.groupParticipants,
+            groupMemberNames.get(groupHistoryKey),
+            msg.senderE164,
+          ),
+          SenderName: msg.senderName,
+          SenderE164: msg.senderE164,
+          WasMentioned: msg.wasMentioned,
+          ...(msg.location ? toLocationContext(msg.location) : {}),
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: msg.from,
+        },
+        cfg,
+        replyResolver,
+        dispatcherOptions: {
           responsePrefix,
           onHeartbeatStrip: () => {
             if (!didLogHeartbeatStrip) {
@@ -1283,50 +1313,14 @@ export async function monitorWebProvider(
             );
           },
           onReplyStart: msg.sendComposing,
-        });
-
-      const { queuedFinal } = await dispatchReplyFromConfig({
-        ctx: {
-          Body: combinedBody,
-          From: msg.from,
-          To: msg.to,
-          SessionKey: route.sessionKey,
-          AccountId: route.accountId,
-          MessageSid: msg.id,
-          ReplyToId: msg.replyToId,
-          ReplyToBody: msg.replyToBody,
-          ReplyToSender: msg.replyToSender,
-          MediaPath: msg.mediaPath,
-          MediaUrl: msg.mediaUrl,
-          MediaType: msg.mediaType,
-          ChatType: msg.chatType,
-          GroupSubject: msg.groupSubject,
-          GroupMembers: formatGroupMembers(
-            msg.groupParticipants,
-            groupMemberNames.get(groupHistoryKey),
-            msg.senderE164,
-          ),
-          SenderName: msg.senderName,
-          SenderE164: msg.senderE164,
-          WasMentioned: msg.wasMentioned,
-          ...(msg.location ? toLocationContext(msg.location) : {}),
-          Provider: "whatsapp",
-          Surface: "whatsapp",
-          OriginatingChannel: "whatsapp",
-          OriginatingTo: msg.from,
         },
-        cfg,
-        dispatcher,
-        replyResolver,
         replyOptions: {
-          ...replyOptions,
           disableBlockStreaming:
             typeof cfg.whatsapp?.blockStreaming === "boolean"
               ? !cfg.whatsapp.blockStreaming
               : undefined,
         },
       });
-      markDispatchIdle();
       if (!queuedFinal) {
         if (shouldClearGroupHistory && didSendReply) {
           groupHistories.set(groupHistoryKey, []);

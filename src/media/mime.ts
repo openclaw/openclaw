@@ -36,6 +36,17 @@ const MIME_BY_EXT: Record<string, string> = Object.fromEntries(
   Object.entries(EXT_BY_MIME).map(([mime, ext]) => [ext, mime]),
 );
 
+const AUDIO_FILE_EXTENSIONS = new Set([
+  ".aac",
+  ".flac",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+  ".wav",
+]);
+
 function normalizeHeaderMime(mime?: string | null): string | undefined {
   if (!mime) return undefined;
   const cleaned = mime.split(";")[0]?.trim().toLowerCase();
@@ -52,7 +63,7 @@ async function sniffMime(buffer?: Buffer): Promise<string | undefined> {
   }
 }
 
-function extFromPath(filePath?: string): string | undefined {
+export function getFileExtension(filePath?: string | null): string | undefined {
   if (!filePath) return undefined;
   try {
     if (/^https?:\/\//i.test(filePath)) {
@@ -64,6 +75,12 @@ function extFromPath(filePath?: string): string | undefined {
   }
   const ext = path.extname(filePath).toLowerCase();
   return ext || undefined;
+}
+
+export function isAudioFileName(fileName?: string | null): boolean {
+  const ext = getFileExtension(fileName);
+  if (!ext) return false;
+  return AUDIO_FILE_EXTENSIONS.has(ext);
 }
 
 export function detectMime(opts: {
@@ -85,7 +102,7 @@ async function detectMimeImpl(opts: {
   headerMime?: string | null;
   filePath?: string;
 }): Promise<string | undefined> {
-  const ext = extFromPath(opts.filePath);
+  const ext = getFileExtension(opts.filePath);
   const extMime = ext ? MIME_BY_EXT[ext] : undefined;
 
   const headerMime = normalizeHeaderMime(opts.headerMime);
@@ -112,9 +129,7 @@ export function isGifMedia(opts: {
   fileName?: string | null;
 }): boolean {
   if (opts.contentType?.toLowerCase() === "image/gif") return true;
-  const ext = opts.fileName
-    ? path.extname(opts.fileName).toLowerCase()
-    : undefined;
+  const ext = getFileExtension(opts.fileName);
   return ext === ".gif";
 }
 

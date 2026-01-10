@@ -22,7 +22,7 @@ export type ReplyDispatcherOptions = {
   onError?: ReplyDispatchErrorHandler;
 };
 
-type ReplyDispatcherWithTypingOptions = Omit<
+export type ReplyDispatcherWithTypingOptions = Omit<
   ReplyDispatcherOptions,
   "onIdle"
 > & {

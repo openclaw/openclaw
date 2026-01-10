@@ -21,7 +21,7 @@ import {
   parseTelegramTarget,
   stripTelegramInternalPrefixes,
 } from "./targets.js";
-import { resolveTelegramVoiceDecision } from "./voice.js";
+import { resolveTelegramVoiceSend } from "./voice.js";
 
 type TelegramSendOpts = {
   token?: string;
@@ -239,16 +239,12 @@ export async function sendMessageTelegram(
         throw wrapChatNotFound(err);
       });
     } else if (kind === "audio") {
-      const { useVoice, reason } = resolveTelegramVoiceDecision({
+      const { useVoice } = resolveTelegramVoiceSend({
         wantsVoice: opts.asVoice === true, // default false (backward compatible)
         contentType: media.contentType,
         fileName,
+        logFallback: logVerbose,
       });
-      if (reason) {
-        logVerbose(
-          `Telegram voice requested but ${reason}; sending as audio file instead.`,
-        );
-      }
       if (useVoice) {
         result = await request(
           () => api.sendVoice(chatId, file, mediaParams),

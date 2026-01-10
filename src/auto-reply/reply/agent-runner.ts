@@ -22,6 +22,7 @@ import {
   emitAgentEvent,
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
+import { isAudioFileName } from "../../media/mime.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   estimateUsageCost,
@@ -34,8 +35,11 @@ import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { extractAudioTag } from "./audio-tags.js";
-import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { parseAudioTag } from "./audio-tags.js";
+import {
+  createAudioAsVoiceBuffer,
+  createBlockReplyPipeline,
+} from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
@@ -261,13 +265,12 @@ export async function runReplyAgent(params: {
   const blockReplyTimeoutMs =
     opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
-  // Buffer audio blocks to apply [[audio_as_voice]] tag that may come later
-  const bufferedAudioBlocks: ReplyPayload[] = [];
-  let seenAudioAsVoice = false;
-
-  const AUDIO_EXTENSIONS = /\.(opus|mp3|m4a|wav|ogg|aac|flac)$/i;
   const hasAudioMedia = (urls?: string[]): boolean =>
-    Boolean(urls?.some((u) => AUDIO_EXTENSIONS.test(u)));
+    Boolean(urls?.some((u) => isAudioFileName(u)));
+  const isAudioPayload = (payload: ReplyPayload) =>
+    hasAudioMedia(
+      payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : undefined),
+    );
   const replyToChannel =
     sessionCtx.OriginatingChannel ??
     ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
@@ -297,6 +300,7 @@ export async function runReplyAgent(params: {
           onBlockReply: opts.onBlockReply,
           timeoutMs: blockReplyTimeoutMs,
           coalescing: blockReplyCoalescing,
+          buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
 
@@ -546,8 +550,8 @@ export async function runReplyAgent(params: {
                       !payload.audioAsVoice
                     )
                       return;
-                    const audioTagResult = extractAudioTag(taggedPayload.text);
-                    const cleaned = audioTagResult.cleaned || undefined;
+                    const audioTagResult = parseAudioTag(taggedPayload.text);
+                    const cleaned = audioTagResult.text || undefined;
                     const hasMedia =
                       Boolean(taggedPayload.mediaUrl) ||
                       (taggedPayload.mediaUrls?.length ?? 0) > 0;
@@ -558,11 +562,6 @@ export async function runReplyAgent(params: {
                       !hasMedia
                     )
                       return;
-
-                    // Track if we've seen [[audio_as_voice]] from payload or text extraction
-                    if (payload.audioAsVoice || audioTagResult.audioAsVoice) {
-                      seenAudioAsVoice = true;
-                    }
 
                     const blockPayload: ReplyPayload = applyReplyToMode({
                       ...taggedPayload,
@@ -578,13 +577,6 @@ export async function runReplyAgent(params: {
                           `block reply typing signal failed: ${String(err)}`,
                         );
                       });
-
-                    // Buffer audio blocks to apply [[audio_as_voice]] that may come later
-                    const isAudioBlock = hasAudioMedia(taggedPayload.mediaUrls);
-                    if (isAudioBlock) {
-                      bufferedAudioBlocks.push(blockPayload);
-                      return; // Don't send immediately - wait for potential [[audio_as_voice]] tag
-                    }
 
                     blockReplyPipeline?.enqueue(blockPayload);
                   }
@@ -701,16 +693,6 @@ export async function runReplyAgent(params: {
 
     const payloadArray = runResult.payloads ?? [];
 
-    if (bufferedAudioBlocks.length > 0 && blockReplyPipeline) {
-      for (const audioPayload of bufferedAudioBlocks) {
-        const finalPayload = seenAudioAsVoice
-          ? { ...audioPayload, audioAsVoice: true }
-          : audioPayload;
-        blockReplyPipeline.enqueue(finalPayload);
-      }
-      bufferedAudioBlocks.length = 0;
-    }
-
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
@@ -753,10 +735,10 @@ export async function runReplyAgent(params: {
       currentMessageId: sessionCtx.MessageSid,
     })
       .map((payload) => {
-        const audioTagResult = extractAudioTag(payload.text);
+        const audioTagResult = parseAudioTag(payload.text);
         return {
           ...payload,
-          text: audioTagResult.cleaned ? audioTagResult.cleaned : undefined,
+          text: audioTagResult.text ? audioTagResult.text : undefined,
           audioAsVoice: audioTagResult.audioAsVoice,
         };
       })

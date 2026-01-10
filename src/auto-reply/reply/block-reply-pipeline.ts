@@ -13,6 +13,28 @@ export type BlockReplyPipeline = {
   hasSentPayload: (payload: ReplyPayload) => boolean;
 };
 
+export type BlockReplyBuffer = {
+  shouldBuffer: (payload: ReplyPayload) => boolean;
+  onEnqueue?: (payload: ReplyPayload) => void;
+  finalize?: (payload: ReplyPayload) => ReplyPayload;
+};
+
+export function createAudioAsVoiceBuffer(params: {
+  isAudioPayload: (payload: ReplyPayload) => boolean;
+}): BlockReplyBuffer {
+  let seenAudioAsVoice = false;
+  return {
+    onEnqueue: (payload) => {
+      if (payload.audioAsVoice) {
+        seenAudioAsVoice = true;
+      }
+    },
+    shouldBuffer: (payload) => params.isAudioPayload(payload),
+    finalize: (payload) =>
+      seenAudioAsVoice ? { ...payload, audioAsVoice: true } : payload,
+  };
+}
+
 export function createBlockReplyPayloadKey(payload: ReplyPayload): string {
   const text = payload.text?.trim() ?? "";
   const mediaList = payload.mediaUrls?.length
@@ -51,12 +73,15 @@ export function createBlockReplyPipeline(params: {
   ) => Promise<void> | void;
   timeoutMs: number;
   coalescing?: BlockStreamingCoalescing;
+  buffer?: BlockReplyBuffer;
 }): BlockReplyPipeline {
-  const { onBlockReply, timeoutMs, coalescing } = params;
+  const { onBlockReply, timeoutMs, coalescing, buffer } = params;
   const sentKeys = new Set<string>();
   const pendingKeys = new Set<string>();
   const seenKeys = new Set<string>();
   const bufferedKeys = new Set<string>();
+  const bufferedPayloadKeys = new Set<string>();
+  const bufferedPayloads: ReplyPayload[] = [];
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
   let didStream = false;
@@ -124,8 +149,37 @@ export function createBlockReplyPipeline(params: {
       })
     : null;
 
+  const bufferPayload = (payload: ReplyPayload) => {
+    buffer?.onEnqueue?.(payload);
+    if (!buffer?.shouldBuffer(payload)) return false;
+    const payloadKey = createBlockReplyPayloadKey(payload);
+    if (
+      seenKeys.has(payloadKey) ||
+      sentKeys.has(payloadKey) ||
+      pendingKeys.has(payloadKey) ||
+      bufferedPayloadKeys.has(payloadKey)
+    ) {
+      return true;
+    }
+    seenKeys.add(payloadKey);
+    bufferedPayloadKeys.add(payloadKey);
+    bufferedPayloads.push(payload);
+    return true;
+  };
+
+  const flushBuffered = () => {
+    if (!bufferedPayloads.length) return;
+    for (const payload of bufferedPayloads) {
+      const finalPayload = buffer?.finalize?.(payload) ?? payload;
+      sendPayload(finalPayload, true);
+    }
+    bufferedPayloads.length = 0;
+    bufferedPayloadKeys.clear();
+  };
+
   const enqueue = (payload: ReplyPayload) => {
     if (aborted) return;
+    if (bufferPayload(payload)) return;
     const hasMedia =
       Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
     if (hasMedia) {
@@ -151,6 +205,7 @@ export function createBlockReplyPipeline(params: {
 
   const flush = async (options?: { force?: boolean }) => {
     await coalescer?.flush(options);
+    flushBuffered();
     await sendChain;
   };
 
@@ -162,7 +217,8 @@ export function createBlockReplyPipeline(params: {
     enqueue,
     flush,
     stop,
-    hasBuffered: () => Boolean(coalescer?.hasBuffered()),
+    hasBuffered: () =>
+      Boolean(coalescer?.hasBuffered() || bufferedPayloads.length > 0),
     didStream: () => didStream,
     isAborted: () => aborted,
     hasSentPayload: (payload) => {
