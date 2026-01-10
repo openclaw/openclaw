@@ -30,14 +30,6 @@
       "destination": "/cron-jobs"
     },
     {
-      "source": "/sandbox",
-      "destination": "/gateway/sandbox-vs-tool-policy-vs-elevated"
-    },
-    {
-      "source": "/sandbox/",
-      "destination": "/gateway/sandbox-vs-tool-policy-vs-elevated"
-    },
-    {
       "source": "/model",
       "destination": "/models"
     },
