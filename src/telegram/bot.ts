@@ -238,6 +238,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   };
 
   const mediaGroupBuffer = new Map<string, MediaGroupEntry>();
+  let mediaGroupProcessing: Promise<void> = Promise.resolve();
 
   const cfg = opts.config ?? loadConfig();
   const account = resolveTelegramAccount({
@@ -1228,14 +1229,24 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           existing.messages.push({ msg, ctx });
           existing.timer = setTimeout(async () => {
             mediaGroupBuffer.delete(mediaGroupId);
-            await processMediaGroup(existing);
+            mediaGroupProcessing = mediaGroupProcessing
+              .then(async () => {
+                await processMediaGroup(existing);
+              })
+              .catch(() => undefined);
+            await mediaGroupProcessing;
           }, MEDIA_GROUP_TIMEOUT_MS);
         } else {
           const entry: MediaGroupEntry = {
             messages: [{ msg, ctx }],
             timer: setTimeout(async () => {
               mediaGroupBuffer.delete(mediaGroupId);
-              await processMediaGroup(entry);
+              mediaGroupProcessing = mediaGroupProcessing
+                .then(async () => {
+                  await processMediaGroup(entry);
+                })
+                .catch(() => undefined);
+              await mediaGroupProcessing;
             }, MEDIA_GROUP_TIMEOUT_MS),
           };
           mediaGroupBuffer.set(mediaGroupId, entry);
