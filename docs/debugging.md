@@ -54,11 +54,11 @@ debugging. There are **two** `--dev` flags:
 - **`gateway --dev`: tells the Gateway to auto-create a default config +
   workspace** when missing (and skip BOOTSTRAP.md).
 
-Recommended flow:
+Recommended flow (dev profile + dev bootstrap):
 
 ```bash
-pnpm clawdbot --dev gateway --dev
-pnpm clawdbot --dev tui
+pnpm gateway:dev
+CLAWDBOT_PROFILE=dev pnpm clawdbot tui
 ```
 
 What this does:
@@ -80,7 +80,14 @@ What this does:
 Reset flow (fresh start):
 
 ```bash
-pnpm clawdbot --dev gateway --dev --reset
+pnpm gateway:dev:reset
+```
+
+Note: `--dev` is a **global** profile flag and gets eaten by some runners.
+If you need to spell it out, use the env var form:
+
+```bash
+CLAWDBOT_PROFILE=dev pnpm clawdbot gateway --dev --reset
 ```
 
 `--reset` wipes config, credentials, sessions, and the dev workspace (using
