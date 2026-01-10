@@ -60,7 +60,11 @@ import {
   defaultGroupActivation,
   resolveGroupRequireMention,
 } from "./reply/groups.js";
-import { stripMentions, stripStructuralPrefixes } from "./reply/mentions.js";
+import {
+  CURRENT_MESSAGE_MARKER,
+  stripMentions,
+  stripStructuralPrefixes,
+} from "./reply/mentions.js";
 import {
   createModelSelectionState,
   resolveContextTokens,
@@ -336,7 +340,10 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
   } = sessionState;
 
-  const rawBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  // Prefer RawBody (clean message without structural context) for directive parsing.
+  // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
+  const rawBody =
+    sessionCtx.RawBody ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const clearInlineDirectives = (cleaned: string): InlineDirectives => ({
     cleaned,
     hasThinkDirective: false,
@@ -426,8 +433,37 @@ export async function getReplyFromConfig(
         hasQueueDirective: false,
         queueReset: false,
       };
-  sessionCtx.Body = parsedDirectives.cleaned;
-  sessionCtx.BodyStripped = parsedDirectives.cleaned;
+  const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const cleanedBody = (() => {
+    if (!existingBody) return parsedDirectives.cleaned;
+    if (!sessionCtx.RawBody) {
+      return parseInlineDirectives(existingBody, {
+        modelAliases: configuredAliases,
+      }).cleaned;
+    }
+
+    const markerIndex = existingBody.indexOf(CURRENT_MESSAGE_MARKER);
+    if (markerIndex < 0) {
+      return parseInlineDirectives(existingBody, {
+        modelAliases: configuredAliases,
+      }).cleaned;
+    }
+
+    const head = existingBody.slice(
+      0,
+      markerIndex + CURRENT_MESSAGE_MARKER.length,
+    );
+    const tail = existingBody.slice(
+      markerIndex + CURRENT_MESSAGE_MARKER.length,
+    );
+    const cleanedTail = parseInlineDirectives(tail, {
+      modelAliases: configuredAliases,
+    }).cleaned;
+    return `${head}${cleanedTail}`;
+  })();
+
+  sessionCtx.Body = cleanedBody;
+  sessionCtx.BodyStripped = cleanedBody;
 
   const messageProviderKey =
     sessionCtx.Provider?.trim().toLowerCase() ??
@@ -750,7 +786,8 @@ export async function getReplyFromConfig(
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const rawBodyTrimmed = (ctx.Body ?? "").trim();
+  // Use RawBody for bare reset detection (clean message without structural context).
+  const rawBodyTrimmed = (ctx.RawBody ?? ctx.Body ?? "").trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
     allowTextCommands &&

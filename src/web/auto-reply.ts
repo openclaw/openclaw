@@ -1221,6 +1221,7 @@ export async function monitorWebProvider(
       const { queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
         ctx: {
           Body: combinedBody,
+          RawBody: msg.body,
           From: msg.from,
           To: msg.to,
           SessionKey: route.sessionKey,

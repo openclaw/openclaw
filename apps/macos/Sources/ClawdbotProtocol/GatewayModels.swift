@@ -1629,11 +1629,11 @@ public struct ChatSendParams: Codable, Sendable {
 
 public struct ChatAbortParams: Codable, Sendable {
     public let sessionkey: String
-    public let runid: String
+    public let runid: String?
 
     public init(
         sessionkey: String,
-        runid: String
+        runid: String?
     ) {
         self.sessionkey = sessionkey
         self.runid = runid

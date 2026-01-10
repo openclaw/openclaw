@@ -1089,6 +1089,7 @@ export function createDiscordMessageHandler(params: {
       });
       const ctxPayload = {
         Body: combinedBody,
+        RawBody: baseText,
         From: isDirectMessage
           ? `discord:${author.id}`
           : `group:${message.channelId}`,
