@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { isSubagentSessionKey } from "../routing/session-key.js";
 import { resolveUserPath } from "../utils.js";
 
 export function resolveDefaultAgentWorkspaceDir(
@@ -361,4 +362,17 @@ export async function loadWorkspaceBootstrapFiles(
     }
   }
   return result;
+}
+
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+]);
+
+export function filterBootstrapFilesForSession(
+  files: WorkspaceBootstrapFile[],
+  sessionKey?: string,
+): WorkspaceBootstrapFile[] {
+  if (!sessionKey || !isSubagentSessionKey(sessionKey)) return files;
+  return files.filter((file) => SUBAGENT_BOOTSTRAP_ALLOWLIST.has(file.name));
 }

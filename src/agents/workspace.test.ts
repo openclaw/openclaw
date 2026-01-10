@@ -2,7 +2,18 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { ensureAgentWorkspace } from "./workspace.js";
+import type { WorkspaceBootstrapFile } from "./workspace.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_HEARTBEAT_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_USER_FILENAME,
+  ensureAgentWorkspace,
+  filterBootstrapFilesForSession,
+} from "./workspace.js";
 
 describe("ensureAgentWorkspace", () => {
   it("creates directory and bootstrap files when missing", async () => {
@@ -50,5 +61,73 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir, ensureBootstrapFiles: true });
 
     await expect(fs.stat(bootstrapPath)).rejects.toBeDefined();
+  });
+});
+
+describe("filterBootstrapFilesForSession", () => {
+  const files: WorkspaceBootstrapFile[] = [
+    {
+      name: DEFAULT_AGENTS_FILENAME,
+      path: "/tmp/AGENTS.md",
+      content: "agents",
+      missing: false,
+    },
+    {
+      name: DEFAULT_SOUL_FILENAME,
+      path: "/tmp/SOUL.md",
+      content: "soul",
+      missing: false,
+    },
+    {
+      name: DEFAULT_TOOLS_FILENAME,
+      path: "/tmp/TOOLS.md",
+      content: "tools",
+      missing: false,
+    },
+    {
+      name: DEFAULT_IDENTITY_FILENAME,
+      path: "/tmp/IDENTITY.md",
+      content: "identity",
+      missing: false,
+    },
+    {
+      name: DEFAULT_USER_FILENAME,
+      path: "/tmp/USER.md",
+      content: "user",
+      missing: false,
+    },
+    {
+      name: DEFAULT_HEARTBEAT_FILENAME,
+      path: "/tmp/HEARTBEAT.md",
+      content: "heartbeat",
+      missing: false,
+    },
+    {
+      name: DEFAULT_BOOTSTRAP_FILENAME,
+      path: "/tmp/BOOTSTRAP.md",
+      content: "bootstrap",
+      missing: false,
+    },
+  ];
+
+  it("keeps full bootstrap set for non-subagent sessions", () => {
+    const result = filterBootstrapFilesForSession(
+      files,
+      "agent:main:session:abc",
+    );
+    expect(result.map((file) => file.name)).toEqual(
+      files.map((file) => file.name),
+    );
+  });
+
+  it("limits bootstrap files for subagent sessions", () => {
+    const result = filterBootstrapFilesForSession(
+      files,
+      "agent:main:subagent:abc",
+    );
+    expect(result.map((file) => file.name)).toEqual([
+      DEFAULT_AGENTS_FILENAME,
+      DEFAULT_TOOLS_FILENAME,
+    ]);
   });
 });

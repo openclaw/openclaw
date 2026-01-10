@@ -18,7 +18,10 @@ import {
 } from "./pi-embedded-helpers.js";
 import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
-import { loadWorkspaceBootstrapFiles } from "./workspace.js";
+import {
+  filterBootstrapFilesForSession,
+  loadWorkspaceBootstrapFiles,
+} from "./workspace.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
 const CLAUDE_CLI_QUEUE_KEY = "global";
@@ -366,7 +369,10 @@ export async function runClaudeCliAgent(params: {
     .filter(Boolean)
     .join("\n");
 
-  const bootstrapFiles = await loadWorkspaceBootstrapFiles(workspaceDir);
+  const bootstrapFiles = filterBootstrapFilesForSession(
+    await loadWorkspaceBootstrapFiles(workspaceDir),
+    params.sessionKey ?? params.sessionId,
+  );
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
   const systemPrompt = buildSystemPrompt({
     workspaceDir,

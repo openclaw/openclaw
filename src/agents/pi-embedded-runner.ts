@@ -96,9 +96,13 @@ import {
 } from "./skills.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
-import { loadWorkspaceBootstrapFiles } from "./workspace.js";
+import {
+  filterBootstrapFilesForSession,
+  loadWorkspaceBootstrapFiles,
+} from "./workspace.js";
 
 // Optional features can be implemented as Pi extensions that run in the same Node process.
+
 
 /**
  * Resolve provider-specific extraParams from model config.
@@ -855,8 +859,10 @@ export async function compactEmbeddedPiSession(params: {
           workspaceDir: effectiveWorkspace,
         });
 
-        const bootstrapFiles =
-          await loadWorkspaceBootstrapFiles(effectiveWorkspace);
+        const bootstrapFiles = filterBootstrapFilesForSession(
+          await loadWorkspaceBootstrapFiles(effectiveWorkspace),
+          params.sessionKey ?? params.sessionId,
+        );
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
         const tools = createClawdbotCodingTools({
           bash: {
@@ -1194,8 +1200,10 @@ export async function runEmbeddedPiAgent(params: {
             workspaceDir: effectiveWorkspace,
           });
 
-          const bootstrapFiles =
-            await loadWorkspaceBootstrapFiles(effectiveWorkspace);
+          const bootstrapFiles = filterBootstrapFilesForSession(
+            await loadWorkspaceBootstrapFiles(effectiveWorkspace),
+            params.sessionKey ?? params.sessionId,
+          );
           const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
           // Tool schemas must be provider-compatible (OpenAI requires top-level `type: "object"`).
           // `createClawdbotCodingTools()` normalizes schemas so the session can pass them through unchanged.
