@@ -32,7 +32,8 @@ export function parseVcard(vcard?: string): ParsedVcard {
       continue;
     }
     if (baseKey === "TEL") {
-      phones.push(value);
+      const phone = normalizeVcardPhone(value);
+      if (phone) phones.push(phone);
     }
   }
   return { name: nameFromFn ?? nameFromN, phones };
@@ -55,4 +56,13 @@ function cleanVcardValue(value: string): string {
 
 function normalizeVcardName(value: string): string {
   return value.replace(/;/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function normalizeVcardPhone(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return "";
+  if (trimmed.toLowerCase().startsWith("tel:")) {
+    return trimmed.slice(4).trim();
+  }
+  return trimmed;
 }
