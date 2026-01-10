@@ -13,6 +13,7 @@ import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../agents/models-config.js";
 import { loadConfig } from "../config/config.js";
+import { resolveUserPath } from "../utils.js";
 import { GatewayClient } from "./client.js";
 import { startGatewayServer } from "./server.js";
 import { getFreePort } from "./test-helpers.js";
@@ -116,6 +117,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
       const cfg = loadConfig();
       await ensureClawdbotModelsJson(cfg);
+
+      const workspaceDir = resolveUserPath(
+        cfg.agents?.defaults?.workspace ?? path.join(os.homedir(), "clawd"),
+      );
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const nonceA = randomUUID();
+      const nonceB = randomUUID();
+      const toolProbePath = path.join(
+        workspaceDir,
+        `.clawdbot-live-tool-probe.${nonceA}.txt`,
+      );
+      await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
       const agentDir = resolveClawdbotAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
@@ -222,6 +235,30 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               throw new Error(`missing required keywords: ${text}`);
             }
 
+            // Real tool invocation: force the agent to Read a local file and echo a nonce.
+            const runIdTool = randomUUID();
+            const toolProbe = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runIdTool}-tool`,
+                message:
+                  `Call the Read tool on "${toolProbePath}". ` +
+                  `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
+                deliver: false,
+              },
+              { expectFinal: true },
+            );
+            if (toolProbe?.status !== "ok") {
+              throw new Error(
+                `tool probe failed: status=${String(toolProbe?.status)}`,
+              );
+            }
+            const toolText = extractPayloadText(toolProbe?.result);
+            if (!toolText.includes(nonceA) || !toolText.includes(nonceB)) {
+              throw new Error(`tool probe missing nonce: ${toolText}`);
+            }
+
             // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
             if (
               (model.provider === "openai" &&
@@ -236,7 +273,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   sessionKey,
                   idempotencyKey: `idem-${runId2}-1`,
                   message:
-                    "Call the read tool on package.json. Do not write any other text.",
+                    "Call the Read tool on package.json. Do not write any other text.",
                   deliver: false,
                 },
                 { expectFinal: true },
@@ -285,6 +322,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       } finally {
         client.stop();
         await server.close({ reason: "live test complete" });
+        await fs.rm(toolProbePath, { force: true });
         await fs.rm(tempDir, { recursive: true, force: true });
 
         process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
