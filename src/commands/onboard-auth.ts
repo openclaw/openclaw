@@ -1,6 +1,11 @@
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
+import {
+  getOpencodeZenStaticFallbackModels,
+  OPENCODE_ZEN_API_BASE_URL,
+  OPENCODE_ZEN_DEFAULT_MODEL_REF,
+} from "../agents/opencode-zen-models.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 
@@ -376,6 +381,81 @@ export function applyMinimaxApiConfig(
               }
             : undefined),
           primary: `minimax/${modelId}`,
+        },
+      },
+    },
+  };
+}
+
+export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "opencode-zen:default",
+    credential: {
+      type: "api_key",
+      provider: "opencode-zen",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
+export function applyOpencodeZenProviderConfig(
+  cfg: ClawdbotConfig,
+): ClawdbotConfig {
+  const opencodeModels = getOpencodeZenStaticFallbackModels();
+
+  const providers = { ...cfg.models?.providers };
+  providers["opencode-zen"] = {
+    baseUrl: OPENCODE_ZEN_API_BASE_URL,
+    apiKey: "opencode-zen",
+    api: "openai-completions",
+    models: opencodeModels,
+  };
+
+  const models = { ...cfg.agents?.defaults?.models };
+  for (const model of opencodeModels) {
+    const key = `opencode-zen/${model.id}`;
+    models[key] = models[key] ?? {};
+  }
+  models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
+    ...models[OPENCODE_ZEN_DEFAULT_MODEL_REF],
+    alias: models[OPENCODE_ZEN_DEFAULT_MODEL_REF]?.alias ?? "Opus",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyOpencodeZenConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyOpencodeZenProviderConfig(cfg);
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(next.agents?.defaults?.model &&
+          "fallbacks" in (next.agents.defaults.model as Record<string, unknown>)
+            ? {
+                fallbacks: (
+                  next.agents.defaults.model as { fallbacks?: string[] }
+                ).fallbacks,
+              }
+            : undefined),
+          primary: OPENCODE_ZEN_DEFAULT_MODEL_REF,
         },
       },
     },

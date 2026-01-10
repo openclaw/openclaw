@@ -17,6 +17,7 @@ export type AuthChoice =
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
+  | "opencode-zen"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
@@ -43,6 +44,7 @@ export type OnboardOptions = {
   openaiApiKey?: string;
   geminiApiKey?: string;
   minimaxApiKey?: string;
+  opencodeZenApiKey?: string;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

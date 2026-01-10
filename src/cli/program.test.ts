@@ -133,6 +133,29 @@ describe("cli program", () => {
     expect(setupCommand).not.toHaveBeenCalled();
   });
 
+  it("passes opencode-zen api key to onboard", async () => {
+    const program = buildProgram();
+    await program.parseAsync(
+      [
+        "onboard",
+        "--non-interactive",
+        "--auth-choice",
+        "opencode-zen",
+        "--opencode-zen-api-key",
+        "sk-opencode-zen-test",
+      ],
+      { from: "user" },
+    );
+    expect(onboardCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nonInteractive: true,
+        authChoice: "opencode-zen",
+        opencodeZenApiKey: "sk-opencode-zen-test",
+      }),
+      runtime,
+    );
+  });
+
   it("runs providers login", async () => {
     const program = buildProgram();
     await program.parseAsync(["providers", "login", "--account", "work"], {

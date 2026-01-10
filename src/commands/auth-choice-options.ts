@@ -99,6 +99,11 @@ export function buildAuthChoiceOptions(params: {
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
+  options.push({
+    value: "opencode-zen",
+    label: "OpenCode Zen (multi-model proxy)",
+    hint: "Claude, GPT, Gemini via opencode.ai/zen",
+  });
   options.push({ value: "minimax-cloud", label: "MiniMax M2.1 (minimax.io)" });
   options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
   options.push({

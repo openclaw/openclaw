@@ -9,6 +9,8 @@ import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
+  applyOpencodeZenConfig,
+  applyOpencodeZenProviderConfig,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 
@@ -248,5 +250,63 @@ describe("applyMinimaxApiProviderConfig", () => {
     expect(cfg.agents?.defaults?.model?.primary).toBe(
       "anthropic/claude-opus-4-5",
     );
+  });
+});
+
+describe("applyOpencodeZenProviderConfig", () => {
+  it("adds opencode-zen provider with correct settings", () => {
+    const cfg = applyOpencodeZenProviderConfig({});
+    expect(cfg.models?.providers?.["opencode-zen"]).toMatchObject({
+      baseUrl: "https://opencode.ai/zen/v1",
+      apiKey: "opencode-zen",
+      api: "openai-completions",
+    });
+    expect(
+      cfg.models?.providers?.["opencode-zen"]?.models.length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("adds allowlist entries for fallback models", () => {
+    const cfg = applyOpencodeZenProviderConfig({});
+    const models = cfg.agents?.defaults?.models ?? {};
+    expect(Object.keys(models)).toContain("opencode-zen/claude-opus-4-5");
+    expect(Object.keys(models)).toContain("opencode-zen/gpt-5.2");
+  });
+
+  it("preserves existing alias for the default model", () => {
+    const cfg = applyOpencodeZenProviderConfig({
+      agents: {
+        defaults: {
+          models: {
+            "opencode-zen/claude-opus-4-5": { alias: "My Opus" },
+          },
+        },
+      },
+    });
+    expect(
+      cfg.agents?.defaults?.models?.["opencode-zen/claude-opus-4-5"]?.alias,
+    ).toBe("My Opus");
+  });
+});
+
+describe("applyOpencodeZenConfig", () => {
+  it("sets correct primary model", () => {
+    const cfg = applyOpencodeZenConfig({});
+    expect(cfg.agents?.defaults?.model?.primary).toBe(
+      "opencode-zen/claude-opus-4-5",
+    );
+  });
+
+  it("preserves existing model fallbacks", () => {
+    const cfg = applyOpencodeZenConfig({
+      agents: {
+        defaults: {
+          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual([
+      "anthropic/claude-opus-4-5",
+    ]);
   });
 });
