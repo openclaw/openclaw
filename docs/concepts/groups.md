@@ -108,6 +108,7 @@ Notes:
 - Per-agent override: `agents.list[].groupChat.mentionPatterns` (useful when multiple agents share a group).
 - Mention gating is only enforced when mention detection is possible (native mentions or `mentionPatterns` are configured).
 - Discord defaults live in `discord.guilds."*"` (overridable per guild/channel).
+- Group history context is wrapped uniformly across providers; use `messages.groupChat.historyLimit` for the global default and `<provider>.historyLimit` (or `<provider>.accounts.*.historyLimit`) for overrides. Set `0` to disable.
 
 ## Group allowlists
 When `whatsapp.groups`, `telegram.groups`, or `imessage.groups` is configured, the keys act as a group allowlist. Use `"*"` to allow all groups while still setting default mention behavior.
