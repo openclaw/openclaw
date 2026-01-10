@@ -1607,7 +1607,10 @@ export async function runEmbeddedPiAgent(params: {
               const message =
                 lastAssistant?.errorMessage?.trim() ||
                 (lastAssistant
-                  ? formatAssistantErrorText(lastAssistant)
+                  ? formatAssistantErrorText(lastAssistant, {
+                      cfg: params.config,
+                      sessionKey: params.sessionKey ?? params.sessionId,
+                    })
                   : "") ||
                 (timedOut
                   ? "LLM request timed out."
@@ -1648,7 +1651,10 @@ export async function runEmbeddedPiAgent(params: {
           }> = [];
 
           const errorText = lastAssistant
-            ? formatAssistantErrorText(lastAssistant)
+            ? formatAssistantErrorText(lastAssistant, {
+                cfg: params.config,
+                sessionKey: params.sessionKey ?? params.sessionId,
+              })
             : undefined;
 
           if (errorText) replyItems.push({ text: errorText, isError: true });

@@ -15,7 +15,10 @@ import {
   isEmbeddedPiRunStreaming,
   resolveEmbeddedSessionLane,
 } from "../agents/pi-embedded.js";
-import { ensureSandboxWorkspaceForSession } from "../agents/sandbox.js";
+import {
+  ensureSandboxWorkspaceForSession,
+  resolveSandboxRuntimeStatus,
+} from "../agents/sandbox.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import {
   DEFAULT_AGENT_WORKSPACE_DIR,
@@ -216,15 +219,22 @@ function resolveElevatedPermissions(params: {
   agentId: string;
   ctx: MsgContext;
   provider: string;
-}): { enabled: boolean; allowed: boolean } {
+}): { enabled: boolean; allowed: boolean; failures: Array<{ gate: string; key: string }> } {
   const globalConfig = params.cfg.tools?.elevated;
   const agentConfig = resolveAgentConfig(params.cfg, params.agentId)?.tools
     ?.elevated;
   const globalEnabled = globalConfig?.enabled !== false;
   const agentEnabled = agentConfig?.enabled !== false;
   const enabled = globalEnabled && agentEnabled;
-  if (!enabled) return { enabled, allowed: false };
-  if (!params.provider) return { enabled, allowed: false };
+  const failures: Array<{ gate: string; key: string }> = [];
+  if (!globalEnabled) failures.push({ gate: "enabled", key: "tools.elevated.enabled" });
+  if (!agentEnabled)
+    failures.push({ gate: "enabled", key: "agents.list[].tools.elevated.enabled" });
+  if (!enabled) return { enabled, allowed: false, failures };
+  if (!params.provider) {
+    failures.push({ gate: "provider", key: "ctx.Provider" });
+    return { enabled, allowed: false, failures };
+  }
 
   const discordFallback =
     params.provider === "discord"
@@ -236,7 +246,16 @@ function resolveElevatedPermissions(params: {
     allowFrom: globalConfig?.allowFrom,
     discordFallback,
   });
-  if (!globalAllowed) return { enabled, allowed: false };
+  if (!globalAllowed) {
+    failures.push({
+      gate: "allowFrom",
+      key:
+        params.provider === "discord" && discordFallback
+          ? "tools.elevated.allowFrom.discord (or discord.dm.allowFrom fallback)"
+          : `tools.elevated.allowFrom.${params.provider}`,
+    });
+    return { enabled, allowed: false, failures };
+  }
 
   const agentAllowed = agentConfig?.allowFrom
     ? isApprovedElevatedSender({
@@ -245,7 +264,44 @@ function resolveElevatedPermissions(params: {
         allowFrom: agentConfig.allowFrom,
       })
     : true;
-  return { enabled, allowed: globalAllowed && agentAllowed };
+  if (!agentAllowed) {
+    failures.push({
+      gate: "allowFrom",
+      key: `agents.list[].tools.elevated.allowFrom.${params.provider}`,
+    });
+  }
+  return { enabled, allowed: globalAllowed && agentAllowed, failures };
+}
+
+function formatElevatedUnavailableMessage(params: {
+  runtimeSandboxed: boolean;
+  failures: Array<{ gate: string; key: string }>;
+  sessionKey?: string;
+}): string {
+  const lines: string[] = [];
+  lines.push(
+    `elevated is not available right now (runtime=${params.runtimeSandboxed ? "sandboxed" : "direct"}).`,
+  );
+  if (params.failures.length > 0) {
+    lines.push(
+      `Failing gates: ${params.failures
+        .map((f) => `${f.gate} (${f.key})`)
+        .join(", ")}`,
+    );
+  } else {
+    lines.push(
+      "Failing gates: enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled), allowFrom (tools.elevated.allowFrom.<provider>).",
+    );
+  }
+  lines.push("Fix-it keys:");
+  lines.push("- tools.elevated.enabled");
+  lines.push("- tools.elevated.allowFrom.<provider>");
+  lines.push("- agents.list[].tools.elevated.enabled");
+  lines.push("- agents.list[].tools.elevated.allowFrom.<provider>");
+  if (params.sessionKey) {
+    lines.push(`See: clawdbot sandbox explain --session ${params.sessionKey}`);
+  }
+  return lines.join("\n");
 }
 
 export async function getReplyFromConfig(
@@ -473,19 +529,31 @@ export async function getReplyFromConfig(
     sessionCtx.Provider?.trim().toLowerCase() ??
     ctx.Provider?.trim().toLowerCase() ??
     "";
-  const { enabled: elevatedEnabled, allowed: elevatedAllowed } =
-    resolveElevatedPermissions({
-      cfg,
-      agentId,
-      ctx,
-      provider: messageProviderKey,
-    });
+  const elevated = resolveElevatedPermissions({
+    cfg,
+    agentId,
+    ctx,
+    provider: messageProviderKey,
+  });
+  const elevatedEnabled = elevated.enabled;
+  const elevatedAllowed = elevated.allowed;
+  const elevatedFailures = elevated.failures;
   if (
     directives.hasElevatedDirective &&
     (!elevatedEnabled || !elevatedAllowed)
   ) {
     typing.cleanup();
-    return { text: "elevated is not available right now." };
+    const runtimeSandboxed = resolveSandboxRuntimeStatus({
+      cfg,
+      sessionKey: ctx.SessionKey,
+    }).sandboxed;
+    return {
+      text: formatElevatedUnavailableMessage({
+        runtimeSandboxed,
+        failures: elevatedFailures,
+        sessionKey: ctx.SessionKey,
+      }),
+    };
   }
 
   const requireMention = resolveGroupRequireMention({
@@ -621,6 +689,8 @@ export async function getReplyFromConfig(
       storePath,
       elevatedEnabled,
       elevatedAllowed,
+      elevatedFailures,
+      messageProviderKey,
       defaultProvider,
       defaultModel,
       aliasIndex,

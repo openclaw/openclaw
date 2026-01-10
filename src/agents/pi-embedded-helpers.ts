@@ -6,12 +6,14 @@ import type {
   AgentToolResult,
 } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import type { ClawdbotConfig } from "../config/config.js";
 import {
   normalizeThinkLevel,
   type ThinkLevel,
 } from "../auto-reply/thinking.js";
 
 import { sanitizeContentBlocksImages } from "./tool-images.js";
+import { formatSandboxToolPolicyBlockedMessage } from "./sandbox.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export type EmbeddedContextFile = { path: string; content: string };
@@ -431,10 +433,25 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
+  opts?: { cfg?: ClawdbotConfig; sessionKey?: string },
 ): string | undefined {
   if (msg.stopReason !== "error") return undefined;
   const raw = (msg.errorMessage ?? "").trim();
   if (!raw) return "LLM request failed with an unknown error.";
+
+  const unknownTool =
+    raw.match(/unknown tool[:\s]+["']?([a-z0-9_-]+)["']?/i) ??
+    raw.match(
+      /tool\s+["']?([a-z0-9_-]+)["']?\s+(?:not found|is not available)/i,
+    );
+  if (unknownTool?.[1]) {
+    const rewritten = formatSandboxToolPolicyBlockedMessage({
+      cfg: opts?.cfg,
+      sessionKey: opts?.sessionKey,
+      toolName: unknownTool[1],
+    });
+    if (rewritten) return rewritten;
+  }
 
   // Check for context overflow (413) errors
   if (isContextOverflowError(raw)) {

@@ -194,7 +194,24 @@ export function createBashTool(
           : elevatedDefaultOn;
       if (elevatedRequested) {
         if (!elevatedDefaults?.enabled || !elevatedDefaults.allowed) {
-          throw new Error("elevated is not available right now.");
+          const runtime = defaults?.sandbox ? "sandboxed" : "direct";
+          const gates: string[] = [];
+          if (!elevatedDefaults?.enabled) {
+            gates.push("enabled (tools.elevated.enabled / agents.list[].tools.elevated.enabled)");
+          } else {
+            gates.push("allowFrom (tools.elevated.allowFrom.<provider> / agents.list[].tools.elevated.allowFrom.<provider>)");
+          }
+          throw new Error(
+            [
+              `elevated is not available right now (runtime=${runtime}).`,
+              `Failing gates: ${gates.join(", ")}`,
+              "Fix-it keys:",
+              "- tools.elevated.enabled",
+              "- tools.elevated.allowFrom.<provider>",
+              "- agents.list[].tools.elevated.enabled",
+              "- agents.list[].tools.elevated.allowFrom.<provider>",
+            ].join("\n"),
+          );
         }
         logInfo(
           `bash: elevated command (${sessionId.slice(0, 8)}) ${truncateMiddle(
