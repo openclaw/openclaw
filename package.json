@@ -25,6 +25,7 @@
     "dist/infra/**",
     "dist/macos/**",
     "dist/media/**",
+    "dist/msteams/**",
     "dist/process/**",
     "dist/sessions/**",
     "dist/providers/**",
