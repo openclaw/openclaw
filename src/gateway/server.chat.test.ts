@@ -188,6 +188,12 @@ describe("gateway server chat", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
+
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+
     const reqId = "chat-img";
     ws.send(
       JSON.stringify({
@@ -203,8 +209,7 @@ describe("gateway server chat", () => {
               type: "image",
               mimeType: "image/png",
               fileName: "dot.png",
-              content:
-                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=",
+              content: `data:image/png;base64,${pngB64}`,
             },
           ],
         },
@@ -218,6 +223,14 @@ describe("gateway server chat", () => {
     );
     expect(res.ok).toBe(true);
     expect(res.payload?.runId).toBeDefined();
+
+    await waitFor(() => spy.mock.calls.length > callsBefore, 8000);
+    const call = spy.mock.calls.at(-1)?.[0] as
+      | { images?: Array<{ type: string; data: string; mimeType: string }> }
+      | undefined;
+    expect(call?.images).toEqual([
+      { type: "image", data: pngB64, mimeType: "image/png" },
+    ]);
 
     ws.close();
     await server.close();
