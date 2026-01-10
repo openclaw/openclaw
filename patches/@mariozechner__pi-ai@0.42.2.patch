@@ -18,22 +18,6 @@ diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-co
 index 188a829..4555c9f 100644
 --- a/dist/providers/openai-codex-responses.js
 +++ b/dist/providers/openai-codex-responses.js
-@@ -433,9 +433,15 @@ function convertMessages(model, context) {
-         }
-         else if (msg.role === "assistant") {
-             const output = [];
-+            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`.
-+            // Tool-call-only turns (thinking + function_call) are valid assistant turns, but
-+            // their stored reasoning items must not be replayed as standalone `reasoning` input.
-+            const hasTextBlock = msg.content.some((b) => b.type === "text");
-             for (const block of msg.content) {
-                 if (block.type === "thinking" && msg.stopReason !== "error") {
-                     if (block.thinkingSignature) {
-+                        if (!hasTextBlock)
-+                            continue;
-                         const reasoningItem = JSON.parse(block.thinkingSignature);
-                         output.push(reasoningItem);
-                     }
 @@ -515,7 +521,7 @@ function convertTools(tools) {
          name: tool.name,
          description: tool.description,
@@ -126,24 +110,3 @@ index 5d0813a..e0ef676 100644
                                  stream.push({
                                      type: "toolcall_delta",
                                      contentIndex: blockIndex(),
-diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
-index f07085c..f3b01ee 100644
---- a/dist/providers/openai-responses.js
-+++ b/dist/providers/openai-responses.js
-@@ -396,10 +396,16 @@ function convertMessages(model, context) {
-         }
-         else if (msg.role === "assistant") {
-             const output = [];
-+            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`.
-+            // Tool-call-only turns (thinking + function_call) are valid assistant turns, but
-+            // their stored reasoning items must not be replayed as standalone `reasoning` input.
-+            const hasTextBlock = msg.content.some((b) => b.type === "text");
-             for (const block of msg.content) {
-                 // Do not submit thinking blocks if the completion had an error (i.e. abort)
-                 if (block.type === "thinking" && msg.stopReason !== "error") {
-                     if (block.thinkingSignature) {
-+                        if (!hasTextBlock)
-+                            continue;
-                         const reasoningItem = JSON.parse(block.thinkingSignature);
-                         output.push(reasoningItem);
-                     }
