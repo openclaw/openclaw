@@ -209,6 +209,9 @@ Config:
   - `partial`: update the draft bubble with the latest streaming text.
   - `block`: update the draft bubble in larger blocks (chunked).
   - `off`: disable draft streaming.
+- Optional (only for `streamMode: "block"`):
+  - `telegram.draftChunk: { minChars?, maxChars?, breakPreference? }`
+    - defaults: `minChars: 200`, `maxChars: 800`, `breakPreference: "paragraph"` (clamped to `telegram.textChunkLimit`).
 
 Note: draft streaming is separate from **block streaming** (provider messages).
 Block streaming is off by default and requires `telegram.blockStreaming: true`

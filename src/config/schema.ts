@@ -120,6 +120,10 @@ const FIELD_LABELS: Record<string, string> = {
   "telegram.botToken": "Telegram Bot Token",
   "telegram.dmPolicy": "Telegram DM Policy",
   "telegram.streamMode": "Telegram Draft Stream Mode",
+  "telegram.draftChunk.minChars": "Telegram Draft Chunk Min Chars",
+  "telegram.draftChunk.maxChars": "Telegram Draft Chunk Max Chars",
+  "telegram.draftChunk.breakPreference":
+    "Telegram Draft Chunk Break Preference",
   "telegram.retry.attempts": "Telegram Retry Attempts",
   "telegram.retry.minDelayMs": "Telegram Retry Min Delay (ms)",
   "telegram.retry.maxDelayMs": "Telegram Retry Max Delay (ms)",
@@ -203,6 +207,12 @@ const FIELD_HELP: Record<string, string> = {
     'Direct message access control ("pairing" recommended). "open" requires telegram.allowFrom=["*"].',
   "telegram.streamMode":
     "Draft streaming mode for Telegram replies (off | partial | block). Separate from block streaming; requires private topics + sendMessageDraft.",
+  "telegram.draftChunk.minChars":
+    'Minimum chars before emitting a Telegram draft update when telegram.streamMode="block" (default: 200).',
+  "telegram.draftChunk.maxChars":
+    'Target max size for a Telegram draft update chunk when telegram.streamMode="block" (default: 800; clamped to telegram.textChunkLimit).',
+  "telegram.draftChunk.breakPreference":
+    "Preferred breakpoints for Telegram draft chunks (paragraph | newline | sentence). Default: paragraph.",
   "telegram.retry.attempts":
     "Max retry attempts for outbound Telegram API calls (default: 3).",
   "telegram.retry.minDelayMs":
