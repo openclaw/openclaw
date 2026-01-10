@@ -5,6 +5,83 @@ export type ChatAttachment = {
   content?: unknown;
 };
 
+export type ChatImageContent = {
+  type: "image";
+  data: string;
+  mimeType: string;
+};
+
+export type ParsedMessageWithImages = {
+  message: string;
+  images: ChatImageContent[];
+};
+
+/**
+ * Parse attachments and extract images as structured content blocks.
+ * Returns the message text and an array of image content blocks
+ * compatible with Claude API's image format.
+ */
+export function parseMessageWithAttachments(
+  message: string,
+  attachments: ChatAttachment[] | undefined,
+  opts?: { maxBytes?: number },
+): ParsedMessageWithImages {
+  const maxBytes = opts?.maxBytes ?? 5_000_000; // 5 MB
+  if (!attachments || attachments.length === 0) {
+    return { message, images: [] };
+  }
+
+  const images: ChatImageContent[] = [];
+
+  for (const [idx, att] of attachments.entries()) {
+    if (!att) continue;
+    const mime = att.mimeType ?? "";
+    const content = att.content;
+    const label = att.fileName || att.type || `attachment-${idx + 1}`;
+
+    if (typeof content !== "string") {
+      throw new Error(`attachment ${label}: content must be base64 string`);
+    }
+    if (!mime.startsWith("image/")) {
+      throw new Error(`attachment ${label}: only image/* supported`);
+    }
+
+    let sizeBytes = 0;
+    let b64 = content.trim();
+    // Strip data URL prefix if present (e.g., "data:image/jpeg;base64,...")
+    const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(b64);
+    if (dataUrlMatch) {
+      b64 = dataUrlMatch[1];
+    }
+    // Basic base64 sanity: length multiple of 4 and charset check.
+    if (b64.length % 4 !== 0 || /[^A-Za-z0-9+/=]/.test(b64)) {
+      throw new Error(`attachment ${label}: invalid base64 content`);
+    }
+    try {
+      sizeBytes = Buffer.from(b64, "base64").byteLength;
+    } catch {
+      throw new Error(`attachment ${label}: invalid base64 content`);
+    }
+    if (sizeBytes <= 0 || sizeBytes > maxBytes) {
+      throw new Error(
+        `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
+      );
+    }
+
+    images.push({
+      type: "image",
+      data: b64,
+      mimeType: mime,
+    });
+  }
+
+  return { message, images };
+}
+
+/**
+ * @deprecated Use parseMessageWithAttachments instead.
+ * This function converts images to markdown data URLs which Claude API cannot process as images.
+ */
 export function buildMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,

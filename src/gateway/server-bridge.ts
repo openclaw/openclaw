@@ -43,7 +43,10 @@ import {
   isChatStopCommandText,
   resolveChatRunExpiresAtMs,
 } from "./chat-abort.js";
-import { buildMessageWithAttachments } from "./chat-attachments.js";
+import {
+  type ChatImageContent,
+  parseMessageWithAttachments,
+} from "./chat-attachments.js";
 import {
   ErrorCodes,
   errorShape,
@@ -793,32 +796,37 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           };
           const stopCommand = isChatStopCommandText(p.message);
           const normalizedAttachments =
-            p.attachments?.map((a) => ({
-              type: typeof a?.type === "string" ? a.type : undefined,
-              mimeType:
-                typeof a?.mimeType === "string" ? a.mimeType : undefined,
-              fileName:
-                typeof a?.fileName === "string" ? a.fileName : undefined,
-              content:
-                typeof a?.content === "string"
-                  ? a.content
-                  : ArrayBuffer.isView(a?.content)
-                    ? Buffer.from(
-                        a.content.buffer,
-                        a.content.byteOffset,
-                        a.content.byteLength,
-                      ).toString("base64")
-                    : undefined,
-            })) ?? [];
+            p.attachments
+              ?.map((a) => ({
+                type: typeof a?.type === "string" ? a.type : undefined,
+                mimeType:
+                  typeof a?.mimeType === "string" ? a.mimeType : undefined,
+                fileName:
+                  typeof a?.fileName === "string" ? a.fileName : undefined,
+                content:
+                  typeof a?.content === "string"
+                    ? a.content
+                    : ArrayBuffer.isView(a?.content)
+                      ? Buffer.from(
+                          a.content.buffer,
+                          a.content.byteOffset,
+                          a.content.byteLength,
+                        ).toString("base64")
+                      : undefined,
+              }))
+              .filter((a) => a.content && a.mimeType) ?? [];
 
-          let messageWithAttachments = p.message;
+          let parsedMessage = p.message;
+          let parsedImages: ChatImageContent[] = [];
           if (normalizedAttachments.length > 0) {
             try {
-              messageWithAttachments = buildMessageWithAttachments(
+              const parsed = parseMessageWithAttachments(
                 p.message,
                 normalizedAttachments,
                 { maxBytes: 5_000_000 },
               );
+              parsedMessage = parsed.message;
+              parsedImages = parsed.images;
             } catch (err) {
               return {
                 ok: false,
@@ -922,7 +930,8 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             };
             void agentCommand(
               {
-                message: messageWithAttachments,
+                message: parsedMessage,
+                images: parsedImages.length > 0 ? parsedImages : undefined,
                 sessionId,
                 sessionKey: p.sessionKey,
                 runId: clientRunId,
