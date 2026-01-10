@@ -783,11 +783,13 @@ export async function handleCommands(params: {
           reply: { text: "⚙️ Debug overrides: (none)" },
         };
       }
+      const effectiveConfig = cfg ?? {};
       const json = JSON.stringify(overrides, null, 2);
+      const effectiveJson = JSON.stringify(effectiveConfig, null, 2);
       return {
         shouldContinue: false,
         reply: {
-          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\``,
+          text: `⚙️ Debug overrides (memory-only):\n\`\`\`json\n${json}\n\`\`\`\n⚙️ Effective config (with overrides):\n\`\`\`json\n${effectiveJson}\n\`\`\``,
         },
       };
     }
