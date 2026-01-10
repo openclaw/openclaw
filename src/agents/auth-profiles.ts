@@ -136,6 +136,133 @@ function saveJsonFile(pathname: string, data: unknown) {
   fs.chmodSync(pathname, 0o600);
 }
 
+/**
+ * Write refreshed OAuth credentials back to Claude CLI's credential storage.
+ * This ensures Claude Code continues to work after ClawdBot refreshes the token.
+ *
+ * On macOS: Updates keychain entry "Claude Code-credentials" (primary storage).
+ * On Linux/Windows: Updates ~/.claude/.credentials.json file.
+ *
+ * Only writes if Claude CLI credentials exist (Claude Code is installed).
+ */
+function writeClaudeCliCredentials(newCredentials: OAuthCredentials): boolean {
+  // On macOS, Claude Code uses keychain as primary storage
+  if (process.platform === "darwin") {
+    return writeClaudeCliKeychainCredentials(newCredentials);
+  }
+
+  // On Linux/Windows, use file storage
+  return writeClaudeCliFileCredentials(newCredentials);
+}
+
+/**
+ * Write credentials to macOS keychain.
+ */
+function writeClaudeCliKeychainCredentials(
+  newCredentials: OAuthCredentials,
+): boolean {
+  try {
+    // First read existing keychain entry to preserve other fields
+    const existingResult = execSync(
+      'security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null',
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    const existingData = JSON.parse(existingResult.trim());
+    const existingOauth = existingData?.claudeAiOauth;
+    if (!existingOauth || typeof existingOauth !== "object") {
+      return false;
+    }
+
+    // Update with new tokens while preserving other fields
+    existingData.claudeAiOauth = {
+      ...existingOauth,
+      accessToken: newCredentials.access,
+      refreshToken: newCredentials.refresh,
+      expiresAt: newCredentials.expires,
+    };
+
+    const newValue = JSON.stringify(existingData);
+
+    // Delete old entry and add new one (keychain doesn't support update)
+    try {
+      execSync(
+        'security delete-generic-password -s "Claude Code-credentials"',
+        {
+          encoding: "utf8",
+          timeout: 5000,
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      );
+    } catch {
+      // Entry might not exist, continue
+    }
+
+    execSync(
+      `security add-generic-password -s "Claude Code-credentials" -a "Claude Code" -w '${newValue.replace(/'/g, "'\"'\"'")}'`,
+      { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] },
+    );
+
+    log.info("wrote refreshed credentials to claude cli keychain", {
+      expires: new Date(newCredentials.expires).toISOString(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to claude cli keychain", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    // Fall back to file storage on macOS
+    return writeClaudeCliFileCredentials(newCredentials);
+  }
+}
+
+/**
+ * Write credentials to file storage (~/.claude/.credentials.json).
+ */
+function writeClaudeCliFileCredentials(
+  newCredentials: OAuthCredentials,
+): boolean {
+  const credPath = path.join(
+    resolveUserPath("~"),
+    CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
+  );
+
+  // Only update if Claude CLI credentials file exists
+  if (!fs.existsSync(credPath)) {
+    return false;
+  }
+
+  try {
+    const raw = loadJsonFile(credPath);
+    if (!raw || typeof raw !== "object") return false;
+
+    const data = raw as Record<string, unknown>;
+    const existingOauth = data.claudeAiOauth as
+      | Record<string, unknown>
+      | undefined;
+    if (!existingOauth || typeof existingOauth !== "object") return false;
+
+    // Update with new tokens while preserving other fields (scopes, subscriptionType, etc.)
+    data.claudeAiOauth = {
+      ...existingOauth,
+      accessToken: newCredentials.access,
+      refreshToken: newCredentials.refresh,
+      expiresAt: newCredentials.expires,
+    };
+
+    saveJsonFile(credPath, data);
+    log.info("wrote refreshed credentials to claude cli file", {
+      expires: new Date(newCredentials.expires).toISOString(),
+    });
+    return true;
+  } catch (error) {
+    log.warn("failed to write credentials to claude cli file", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
+}
+
 function ensureAuthStoreFile(pathname: string) {
   if (fs.existsSync(pathname)) return;
   const payload: AuthProfileStore = {
@@ -235,6 +362,16 @@ async function refreshOAuthTokenWithLock(params: {
       type: "oauth",
     };
     saveAuthProfileStore(store, params.agentDir);
+
+    // Sync refreshed credentials back to Claude CLI if this is the claude-cli profile
+    // This ensures Claude Code continues to work after ClawdBot refreshes the token
+    if (
+      params.profileId === CLAUDE_CLI_PROFILE_ID &&
+      cred.provider === "anthropic"
+    ) {
+      writeClaudeCliCredentials(result.newCredentials);
+    }
+
     return result;
   } finally {
     if (release) {
@@ -345,14 +482,19 @@ function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
  *
  * On macOS, Claude Code stores credentials in keychain "Claude Code-credentials".
  * On Linux/Windows, it uses ~/.claude/.credentials.json
+ *
+ * Returns OAuthCredential when refreshToken is available (enables auto-refresh),
+ * or TokenCredential as fallback for backward compatibility.
  */
 function readClaudeCliCredentials(options?: {
   allowKeychainPrompt?: boolean;
-}): TokenCredential | null {
+}): OAuthCredential | TokenCredential | null {
   if (process.platform === "darwin" && options?.allowKeychainPrompt !== false) {
     const keychainCreds = readClaudeCliKeychainCredentials();
     if (keychainCreds) {
-      log.info("read anthropic credentials from claude cli keychain");
+      log.info("read anthropic credentials from claude cli keychain", {
+        type: keychainCreds.type,
+      });
       return keychainCreds;
     }
   }
@@ -369,11 +511,24 @@ function readClaudeCliCredentials(options?: {
   if (!claudeOauth || typeof claudeOauth !== "object") return null;
 
   const accessToken = claudeOauth.accessToken;
+  const refreshToken = claudeOauth.refreshToken;
   const expiresAt = claudeOauth.expiresAt;
 
   if (typeof accessToken !== "string" || !accessToken) return null;
   if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
 
+  // Return OAuthCredential when refreshToken is available (enables auto-refresh)
+  if (typeof refreshToken === "string" && refreshToken) {
+    return {
+      type: "oauth",
+      provider: "anthropic",
+      access: accessToken,
+      refresh: refreshToken,
+      expires: expiresAt,
+    };
+  }
+
+  // Fallback to TokenCredential for backward compatibility (no auto-refresh)
   return {
     type: "token",
     provider: "anthropic",
@@ -385,8 +540,14 @@ function readClaudeCliCredentials(options?: {
 /**
  * Read Claude Code credentials from macOS keychain.
  * Uses the `security` CLI to access keychain without native dependencies.
+ *
+ * Returns OAuthCredential when refreshToken is available (enables auto-refresh),
+ * or TokenCredential as fallback for backward compatibility.
  */
-function readClaudeCliKeychainCredentials(): TokenCredential | null {
+function readClaudeCliKeychainCredentials():
+  | OAuthCredential
+  | TokenCredential
+  | null {
   try {
     const result = execSync(
       'security find-generic-password -s "Claude Code-credentials" -w',
@@ -398,11 +559,24 @@ function readClaudeCliKeychainCredentials(): TokenCredential | null {
     if (!claudeOauth || typeof claudeOauth !== "object") return null;
 
     const accessToken = claudeOauth.accessToken;
+    const refreshToken = claudeOauth.refreshToken;
     const expiresAt = claudeOauth.expiresAt;
 
     if (typeof accessToken !== "string" || !accessToken) return null;
     if (typeof expiresAt !== "number" || expiresAt <= 0) return null;
 
+    // Return OAuthCredential when refreshToken is available (enables auto-refresh)
+    if (typeof refreshToken === "string" && refreshToken) {
+      return {
+        type: "oauth",
+        provider: "anthropic",
+        access: accessToken,
+        refresh: refreshToken,
+        expires: expiresAt,
+      };
+    }
+
+    // Fallback to TokenCredential for backward compatibility (no auto-refresh)
     return {
       type: "token",
       provider: "anthropic",
@@ -501,28 +675,53 @@ function syncExternalCliCredentials(
   let mutated = false;
   const now = Date.now();
 
-  // Sync from Claude CLI
+  // Sync from Claude CLI (supports both OAuth and Token credentials)
   const claudeCreds = readClaudeCliCredentials(options);
   if (claudeCreds) {
     const existing = store.profiles[CLAUDE_CLI_PROFILE_ID];
-    const existingToken = existing?.type === "token" ? existing : undefined;
+    const claudeCredsExpires = claudeCreds.expires ?? 0;
 
-    // Update if: no existing profile, existing is not oauth, or CLI has newer/valid token
-    const shouldUpdate =
-      !existingToken ||
-      existingToken.provider !== "anthropic" ||
-      (existingToken.expires ?? 0) <= now ||
-      ((claudeCreds.expires ?? 0) > now &&
-        (claudeCreds.expires ?? 0) > (existingToken.expires ?? 0));
+    // Determine if we should update based on credential comparison
+    let shouldUpdate = false;
+    let isEqual = false;
 
-    if (
-      shouldUpdate &&
-      !shallowEqualTokenCredentials(existingToken, claudeCreds)
-    ) {
+    if (claudeCreds.type === "oauth") {
+      const existingOAuth = existing?.type === "oauth" ? existing : undefined;
+      isEqual = shallowEqualOAuthCredentials(existingOAuth, claudeCreds);
+      // Update if: no existing profile, type changed to oauth, expired, or CLI has newer token
+      shouldUpdate =
+        !existingOAuth ||
+        existingOAuth.provider !== "anthropic" ||
+        existingOAuth.expires <= now ||
+        (claudeCredsExpires > now &&
+          claudeCredsExpires > existingOAuth.expires);
+    } else {
+      const existingToken = existing?.type === "token" ? existing : undefined;
+      isEqual = shallowEqualTokenCredentials(existingToken, claudeCreds);
+      // Update if: no existing profile, expired, or CLI has newer token
+      shouldUpdate =
+        !existingToken ||
+        existingToken.provider !== "anthropic" ||
+        (existingToken.expires ?? 0) <= now ||
+        (claudeCredsExpires > now &&
+          claudeCredsExpires > (existingToken.expires ?? 0));
+    }
+
+    // Also update if credential type changed (token -> oauth upgrade)
+    if (existing && existing.type !== claudeCreds.type) {
+      // Prefer oauth over token (enables auto-refresh)
+      if (claudeCreds.type === "oauth") {
+        shouldUpdate = true;
+        isEqual = false;
+      }
+    }
+
+    if (shouldUpdate && !isEqual) {
       store.profiles[CLAUDE_CLI_PROFILE_ID] = claudeCreds;
       mutated = true;
       log.info("synced anthropic credentials from claude cli", {
         profileId: CLAUDE_CLI_PROFILE_ID,
+        type: claudeCreds.type,
         expires:
           typeof claudeCreds.expires === "number"
             ? new Date(claudeCreds.expires).toISOString()
