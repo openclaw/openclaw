@@ -76,7 +76,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { resetLogger, setLoggerOverride } from "../logging.js";
-import { monitorWebInbox } from "./inbound.js";
+import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
 
 const ACCOUNT_ID = "default";
 let authDir: string;
@@ -89,6 +89,7 @@ describe("web monitor inbox", () => {
       code: "PAIRCODE",
       created: true,
     });
+    resetWebInboundDedupe();
     authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "clawdbot-auth-"));
   });
 
@@ -147,6 +148,39 @@ describe("web monitor inbox", () => {
     expect(sock.sendMessage).toHaveBeenCalledWith("999@s.whatsapp.net", {
       text: "pong",
     });
+
+    await listener.close();
+  });
+
+  it("deduplicates redelivered messages by id", async () => {
+    const onMessage = vi.fn(async () => {
+      return;
+    });
+
+    const listener = await monitorWebInbox({
+      verbose: false,
+      onMessage,
+      accountId: ACCOUNT_ID,
+      authDir,
+    });
+    const sock = await createWaSocket();
+    const upsert = {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "abc", fromMe: false, remoteJid: "999@s.whatsapp.net" },
+          message: { conversation: "ping" },
+          messageTimestamp: 1_700_000_000,
+          pushName: "Tester",
+        },
+      ],
+    };
+
+    sock.ev.emit("messages.upsert", upsert);
+    sock.ev.emit("messages.upsert", upsert);
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(onMessage).toHaveBeenCalledTimes(1);
 
     await listener.close();
   });

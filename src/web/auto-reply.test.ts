@@ -17,6 +17,7 @@ vi.mock("../agents/pi-embedded.js", () => ({
 }));
 
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
@@ -57,6 +58,7 @@ const rmDirWithRetries = async (dir: string): Promise<void> => {
 };
 
 beforeEach(async () => {
+  resetInboundDedupe();
   previousHome = process.env.HOME;
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-web-home-"));
   process.env.HOME = tempHome;

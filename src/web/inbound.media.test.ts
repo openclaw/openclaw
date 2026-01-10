@@ -106,11 +106,12 @@ vi.mock("./session.js", () => {
   };
 });
 
-import { monitorWebInbox } from "./inbound.js";
+import { monitorWebInbox, resetWebInboundDedupe } from "./inbound.js";
 
 describe("web inbound media saves with extension", () => {
   beforeEach(() => {
     saveMediaBufferSpy.mockClear();
+    resetWebInboundDedupe();
   });
 
   beforeAll(async () => {

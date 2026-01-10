@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import {
   peekSystemEvents,
@@ -61,6 +62,7 @@ vi.mock("./daemon.js", () => ({
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 beforeEach(() => {
+  resetInboundDedupe();
   config = {
     messages: { responsePrefix: "PFX" },
     signal: { autoStart: false, dmPolicy: "open", allowFrom: ["*"] },

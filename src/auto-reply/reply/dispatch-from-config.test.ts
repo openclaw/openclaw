@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
@@ -34,6 +34,7 @@ vi.mock("./abort.js", () => ({
 }));
 
 const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
+const { resetInboundDedupe } = await import("./inbound-dedupe.js");
 
 function createDispatcher(): ReplyDispatcher {
   return {
@@ -46,6 +47,9 @@ function createDispatcher(): ReplyDispatcher {
 }
 
 describe("dispatchReplyFromConfig", () => {
+  beforeEach(() => {
+    resetInboundDedupe();
+  });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     mocks.tryFastAbortFromMessage.mockResolvedValue({
       handled: false,
@@ -124,5 +128,35 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
       text: "⚙️ Agent was aborted.",
     });
+  });
+
+  it("deduplicates inbound messages by MessageSid and origin", async () => {
+    mocks.tryFastAbortFromMessage.mockResolvedValue({
+      handled: false,
+      aborted: false,
+    });
+    const cfg = {} as ClawdbotConfig;
+    const ctx: MsgContext = {
+      Provider: "whatsapp",
+      OriginatingChannel: "whatsapp",
+      OriginatingTo: "whatsapp:+15555550123",
+      MessageSid: "msg-1",
+    };
+    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher: createDispatcher(),
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 });
