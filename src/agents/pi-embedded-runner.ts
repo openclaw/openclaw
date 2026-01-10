@@ -62,6 +62,10 @@ import {
   resolveModelAuthMode,
 } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
+import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+
+export type { MessagingToolSend } from "./pi-embedded-messaging.js";
+
 import {
   buildBootstrapContextFiles,
   classifyFailoverReason,
@@ -264,13 +268,6 @@ type ApiKeyInfo = {
   apiKey: string;
   profileId?: string;
   source: string;
-};
-
-export type MessagingToolSend = {
-  tool: string;
-  provider: string;
-  accountId?: string;
-  to?: string;
 };
 
 export type EmbeddedPiRunResult = {
