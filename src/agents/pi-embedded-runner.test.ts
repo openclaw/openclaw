@@ -61,6 +61,47 @@ describe("buildEmbeddedSandboxInfo", () => {
       browserNoVncUrl: "http://localhost:6080",
     });
   });
+
+  it("includes elevated info when allowed", () => {
+    const sandbox = {
+      enabled: true,
+      sessionKey: "session:test",
+      workspaceDir: "/tmp/clawdbot-sandbox",
+      agentWorkspaceDir: "/tmp/clawdbot-workspace",
+      workspaceAccess: "none",
+      containerName: "clawdbot-sbx-test",
+      containerWorkdir: "/workspace",
+      docker: {
+        image: "clawdbot-sandbox:bookworm-slim",
+        containerPrefix: "clawdbot-sbx-",
+        workdir: "/workspace",
+        readOnlyRoot: true,
+        tmpfs: ["/tmp"],
+        network: "none",
+        user: "1000:1000",
+        capDrop: ["ALL"],
+        env: { LANG: "C.UTF-8" },
+      },
+      tools: {
+        allow: ["bash"],
+        deny: ["browser"],
+      },
+    } satisfies SandboxContext;
+
+    expect(
+      buildEmbeddedSandboxInfo(sandbox, {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "on",
+      }),
+    ).toEqual({
+      enabled: true,
+      workspaceDir: "/tmp/clawdbot-sandbox",
+      workspaceAccess: "none",
+      agentWorkspaceMount: undefined,
+      elevated: { allowed: true, defaultLevel: "on" },
+    });
+  });
 });
 
 describe("resolveSessionAgentIds", () => {

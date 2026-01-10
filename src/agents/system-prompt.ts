@@ -31,6 +31,10 @@ export function buildAgentSystemPrompt(params: {
     agentWorkspaceMount?: string;
     browserControlUrl?: string;
     browserNoVncUrl?: string;
+    elevated?: {
+      allowed: boolean;
+      defaultLevel: "on" | "off";
+    };
   };
 }) {
   const toolSummaries: Record<string, string> = {
@@ -219,7 +223,7 @@ export function buildAgentSystemPrompt(params: {
     params.sandboxInfo?.enabled ? "## Sandbox" : "",
     params.sandboxInfo?.enabled
       ? [
-          "Tool execution is isolated in a Docker sandbox.",
+          "You are running in a sandboxed runtime (tools execute in Docker).",
           "Some tools may be unavailable due to sandbox policy.",
           params.sandboxInfo.workspaceDir
             ? `Sandbox workspace: ${params.sandboxInfo.workspaceDir}`
@@ -236,6 +240,20 @@ export function buildAgentSystemPrompt(params: {
             : "",
           params.sandboxInfo.browserNoVncUrl
             ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
+            : "",
+          params.sandboxInfo.elevated?.allowed
+            ? "Elevated bash is available for this session."
+            : "",
+          params.sandboxInfo.elevated?.allowed
+            ? "User can toggle with /elevated on|off."
+            : "",
+          params.sandboxInfo.elevated?.allowed
+            ? "You may also send /elevated on|off when needed."
+            : "",
+          params.sandboxInfo.elevated?.allowed
+            ? `Current elevated level: ${
+                params.sandboxInfo.elevated.defaultLevel
+              } (on runs bash on host; off runs in sandbox).`
             : "",
         ]
           .filter(Boolean)
