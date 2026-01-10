@@ -13,6 +13,7 @@
 - Docker: allow optional home volume + extra bind mounts in `docker-setup.sh`. (#679) — thanks @gabriel-trigo.
 
 ### Fixes
+- Agents: recognize "usage limit" errors as rate limits for failover. (#687) — thanks @evalexpr.
 - CLI: avoid success message when daemon restart is skipped. (#685) — thanks @carlulsoe.
 - Gateway: disable the OpenAI-compatible `/v1/chat/completions` endpoint by default; enable via `gateway.http.endpoints.chatCompletions.enabled=true`.
 - macOS: stabilize bridge tunnels, guard invoke senders on disconnect, and drain stdout/stderr to avoid deadlocks. (#676) — thanks @ngutman.
