@@ -98,6 +98,58 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
     }
   });
 
+  it("routes to a specific agent via model (no custom headers)", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postChatCompletions(port, {
+        model: "clawdbot:beta",
+        messages: [{ role: "user", content: "hi" }],
+      });
+      expect(res.status).toBe(200);
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect(
+        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
+      ).toMatch(/^agent:beta:/);
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
+  it("prefers explicit header agent over model agent", async () => {
+    agentCommand.mockResolvedValueOnce({
+      payloads: [{ text: "hello" }],
+    } as never);
+
+    const port = await getFreePort();
+    const server = await startServer(port);
+    try {
+      const res = await postChatCompletions(
+        port,
+        {
+          model: "clawdbot:beta",
+          messages: [{ role: "user", content: "hi" }],
+        },
+        { "x-clawdbot-agent-id": "alpha" },
+      );
+      expect(res.status).toBe(200);
+
+      expect(agentCommand).toHaveBeenCalledTimes(1);
+      const [opts] = agentCommand.mock.calls[0] ?? [];
+      expect(
+        (opts as { sessionKey?: string } | undefined)?.sessionKey ?? "",
+      ).toMatch(/^agent:alpha:/);
+    } finally {
+      await server.close({ reason: "test done" });
+    }
+  });
+
   it("honors x-clawdbot-session-key override", async () => {
     agentCommand.mockResolvedValueOnce({
       payloads: [{ text: "hello" }],

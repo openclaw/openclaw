@@ -111,12 +111,38 @@ function buildAgentPrompt(messagesUnknown: unknown): {
   };
 }
 
-function resolveAgentId(req: IncomingMessage): string {
+function resolveAgentIdFromHeader(
+  req: IncomingMessage,
+): string | undefined {
   const raw =
     getHeader(req, "x-clawdbot-agent-id")?.trim() ||
     getHeader(req, "x-clawdbot-agent")?.trim() ||
-    "main";
+    "";
+  if (!raw) return undefined;
   return normalizeAgentId(raw);
+}
+
+function resolveAgentIdFromModel(model: string | undefined): string | undefined {
+  const raw = model?.trim();
+  if (!raw) return undefined;
+
+  const m =
+    raw.match(/^clawdbot[:/](?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i) ??
+    raw.match(/^agent:(?<agentId>[a-z0-9][a-z0-9_-]{0,63})$/i);
+  const agentId = m?.groups?.agentId;
+  if (!agentId) return undefined;
+  return normalizeAgentId(agentId);
+}
+
+function resolveAgentIdForRequest(params: {
+  req: IncomingMessage;
+  model: string | undefined;
+}): string {
+  const fromHeader = resolveAgentIdFromHeader(params.req);
+  if (fromHeader) return fromHeader;
+
+  const fromModel = resolveAgentIdFromModel(params.model);
+  return fromModel ?? "main";
 }
 
 function resolveSessionKey(params: {
@@ -183,7 +209,7 @@ export async function handleOpenAiHttpRequest(
   const model = typeof payload.model === "string" ? payload.model : "clawdbot";
   const user = typeof payload.user === "string" ? payload.user : undefined;
 
-  const agentId = resolveAgentId(req);
+  const agentId = resolveAgentIdForRequest({ req, model });
   const sessionKey = resolveSessionKey({ req, agentId, user });
   const prompt = buildAgentPrompt(payload.messages);
   if (!prompt.message) {
