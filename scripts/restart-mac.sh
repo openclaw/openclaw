@@ -68,14 +68,8 @@ acquire_lock() {
 }
 
 check_signing_keys() {
-  local available_identities
-  available_identities="$(security find-identity -p codesigning -v 2>/dev/null | grep -E '(Developer ID Application|Apple Distribution|Apple Development)' || true)"
-  
-  if [ -n "$available_identities" ]; then
-    return 0
-  else
-    return 1
-  fi
+  security find-identity -p codesigning -v 2>/dev/null \
+    | grep -Eq '(Developer ID Application|Apple Distribution|Apple Development)'
 }
 
 trap cleanup EXIT INT TERM
@@ -97,6 +91,10 @@ for arg in "$@"; do
     *) ;;
   esac
 done
+
+if [[ "$NO_SIGN" -eq 1 && "$SIGN" -eq 1 ]]; then
+  fail "Cannot use --sign and --no-sign together"
+fi
 
 mkdir -p "$(dirname "$LOG_PATH")"
 rm -f "$LOG_PATH"
@@ -153,6 +151,9 @@ if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
 elif [ "$SIGN" -eq 1 ]; then
+  if ! check_signing_keys; then
+    fail "No signing identity found. Use --no-sign or install a signing key."
+  fi
   unset ALLOW_ADHOC_SIGNING
   unset SIGN_IDENTITY
 fi
