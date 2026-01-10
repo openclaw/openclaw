@@ -6,6 +6,7 @@ import {
   type UpdateRunResult,
 } from "../infra/update-runner.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { runDaemonRestart } from "./daemon-cli.js";
 
@@ -195,7 +196,8 @@ export function registerUpdateCli(program: Command) {
     )
     .addHelpText(
       "after",
-      `
+      () =>
+        `
 Examples:
   clawdbot update                   # Update a source checkout (git)
   clawdbot update --restart         # Update and restart the daemon
@@ -206,7 +208,8 @@ Notes:
   - For git installs: fetches, rebases, installs deps, builds, and runs doctor
   - For npm installs: use npm/pnpm to reinstall (see docs/install/updating.md)
   - Skips update if the working directory has uncommitted changes
-`,
+
+${theme.muted("Docs:")} ${formatDocsLink("/updating", "docs.clawd.bot/updating")}`,
     )
     .action(async (opts) => {
       try {

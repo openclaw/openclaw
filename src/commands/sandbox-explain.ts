@@ -19,6 +19,8 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -294,38 +296,61 @@ export async function sandboxExplainCommand(
     return;
   }
 
+  const rich = isRich();
+  const heading = (value: string) => colorize(rich, theme.heading, value);
+  const key = (value: string) => colorize(rich, theme.muted, value);
+  const value = (val: string) => colorize(rich, theme.info, val);
+  const ok = (val: string) => colorize(rich, theme.success, val);
+  const warn = (val: string) => colorize(rich, theme.warn, val);
+  const err = (val: string) => colorize(rich, theme.error, val);
+  const bool = (flag: boolean) => (flag ? ok("true") : err("false"));
+
   const lines: string[] = [];
-  lines.push("Effective sandbox:");
-  lines.push(`  agentId: ${payload.agentId}`);
-  lines.push(`  sessionKey: ${payload.sessionKey}`);
-  lines.push(`  mainSessionKey: ${payload.mainSessionKey}`);
+  lines.push(heading("Effective sandbox:"));
+  lines.push(`  ${key("agentId:")} ${value(payload.agentId)}`);
+  lines.push(`  ${key("sessionKey:")} ${value(payload.sessionKey)}`);
+  lines.push(`  ${key("mainSessionKey:")} ${value(payload.mainSessionKey)}`);
   lines.push(
-    `  runtime: ${payload.sandbox.sessionIsSandboxed ? "sandboxed" : "direct"}`,
+    `  ${key("runtime:")} ${
+      payload.sandbox.sessionIsSandboxed ? warn("sandboxed") : ok("direct")
+    }`,
   );
   lines.push(
-    `  mode=${payload.sandbox.mode} scope=${payload.sandbox.scope} perSession=${payload.sandbox.perSession}`,
+    `  ${key("mode:")} ${value(payload.sandbox.mode)} ${key("scope:")} ${value(
+      payload.sandbox.scope,
+    )} ${key("perSession:")} ${bool(payload.sandbox.perSession)}`,
   );
   lines.push(
-    `  workspaceAccess=${payload.sandbox.workspaceAccess} workspaceRoot=${payload.sandbox.workspaceRoot}`,
-  );
-  lines.push("");
-  lines.push("Sandbox tool policy:");
-  lines.push(
-    `  allow (${payload.sandbox.tools.sources.allow.source}): ${payload.sandbox.tools.allow.join(", ") || "(empty)"}`,
-  );
-  lines.push(
-    `  deny  (${payload.sandbox.tools.sources.deny.source}): ${payload.sandbox.tools.deny.join(", ") || "(empty)"}`,
+    `  ${key("workspaceAccess:")} ${value(
+      payload.sandbox.workspaceAccess,
+    )} ${key("workspaceRoot:")} ${value(payload.sandbox.workspaceRoot)}`,
   );
   lines.push("");
-  lines.push("Elevated:");
-  lines.push(`  enabled: ${payload.elevated.enabled}`);
-  lines.push(`  provider: ${payload.elevated.provider ?? "(unknown)"}`);
-  lines.push(`  allowedByConfig: ${payload.elevated.allowedByConfig}`);
+  lines.push(heading("Sandbox tool policy:"));
+  lines.push(
+    `  ${key(`allow (${payload.sandbox.tools.sources.allow.source}):`)} ${value(
+      payload.sandbox.tools.allow.join(", ") || "(empty)",
+    )}`,
+  );
+  lines.push(
+    `  ${key(`deny  (${payload.sandbox.tools.sources.deny.source}):`)} ${value(
+      payload.sandbox.tools.deny.join(", ") || "(empty)",
+    )}`,
+  );
+  lines.push("");
+  lines.push(heading("Elevated:"));
+  lines.push(`  ${key("enabled:")} ${bool(payload.elevated.enabled)}`);
+  lines.push(
+    `  ${key("provider:")} ${value(payload.elevated.provider ?? "(unknown)")}`,
+  );
+  lines.push(
+    `  ${key("allowedByConfig:")} ${bool(payload.elevated.allowedByConfig)}`,
+  );
   if (payload.elevated.failures.length > 0) {
     lines.push(
-      `  failing gates: ${payload.elevated.failures
-        .map((f) => `${f.gate} (${f.key})`)
-        .join(", ")}`,
+      `  ${key("failing gates:")} ${warn(
+        payload.elevated.failures.map((f) => `${f.gate} (${f.key})`).join(", "),
+      )}`,
     );
   }
   if (
@@ -334,14 +359,18 @@ export async function sandboxExplainCommand(
   ) {
     lines.push("");
     lines.push(
-      `Hint: sandbox mode is non-main; use main session key to run direct: ${payload.mainSessionKey}`,
+      `${warn("Hint:")} sandbox mode is non-main; use main session key to run direct: ${value(
+        payload.mainSessionKey,
+      )}`,
     );
   }
   lines.push("");
-  lines.push("Fix-it:");
+  lines.push(heading("Fix-it:"));
   for (const key of payload.fixIt) lines.push(`  - ${key}`);
   lines.push("");
-  lines.push(`Docs: ${payload.docsUrl}`);
+  lines.push(
+    `${key("Docs:")} ${formatDocsLink("/sandbox", "docs.clawd.bot/sandbox")}`,
+  );
 
   runtime.log(`${lines.join("\n")}\n`);
 }

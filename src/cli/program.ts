@@ -27,6 +27,7 @@ import {
 import { danger, setVerbose } from "../globals.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
 import { isRich, theme } from "../terminal/theme.js";
 import { VERSION } from "../version.js";
 import {
@@ -186,10 +187,12 @@ export function buildProgram() {
     .map(([cmd, desc]) => `  ${theme.command(cmd)}\n    ${theme.muted(desc)}`)
     .join("\n");
 
-  program.addHelpText(
-    "afterAll",
-    `\n${theme.heading("Examples:")}\n${fmtExamples}\n`,
-  );
+  program.addHelpText("afterAll", () => {
+    const docs = formatDocsLink("/cli", "docs.clawd.bot/cli");
+    return `\n${theme.heading("Examples:")}\n${fmtExamples}\n\n${theme.muted(
+      "Docs:",
+    )} ${docs}\n`;
+  });
 
   program
     .command("setup")
@@ -500,12 +503,15 @@ export function buildProgram() {
     .description("Send messages and provider actions")
     .addHelpText(
       "after",
-      `
+      () =>
+        `
 Examples:
   clawdbot message send --to +15555550123 --message "Hi"
   clawdbot message send --to +15555550123 --message "Hi" --media photo.jpg
   clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
-  clawdbot message react --provider discord --to 123 --message-id 456 --emoji "✅"`,
+  clawdbot message react --provider discord --to 123 --message-id 456 --emoji "✅"
+
+${theme.muted("Docs:")} ${formatDocsLink("/message", "docs.clawd.bot/message")}`,
     )
     .action(() => {
       message.help({ error: true });
@@ -1002,13 +1008,18 @@ Examples:
     )
     .addHelpText(
       "after",
-      `
+      () =>
+        `
 Examples:
   clawdbot agent --to +15555550123 --message "status update"
   clawdbot agent --session-id 1234 --message "Summarize inbox" --thinking medium
   clawdbot agent --to +15555550123 --message "Trace logs" --verbose on --json
   clawdbot agent --to +15555550123 --message "Summon reply" --deliver
-`,
+
+${theme.muted("Docs:")} ${formatDocsLink(
+          "/agent-send",
+          "docs.clawd.bot/agent-send",
+        )}`,
     )
     .action(async (opts) => {
       const verboseLevel =

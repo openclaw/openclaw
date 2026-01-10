@@ -6,6 +6,8 @@ import {
 } from "../commands/sandbox.js";
 import { sandboxExplainCommand } from "../commands/sandbox-explain.js";
 import { defaultRuntime } from "../runtime.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 
 // --- Types ---
 
@@ -89,6 +91,14 @@ export function registerSandboxCli(program: Command) {
     .command("sandbox")
     .description("Manage sandbox containers (Docker-based agent isolation)")
     .addHelpText("after", EXAMPLES.main)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink(
+          "/sandbox",
+          "docs.clawd.bot/sandbox",
+        )}\n`,
+    )
     .action(() => {
       sandbox.help({ error: true });
     });
