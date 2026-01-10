@@ -197,7 +197,7 @@ describe("monitorSignalProvider tool results", () => {
     expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 
-  it("ignores reaction-only messages when reactions live in dataMessage", async () => {
+  it("ignores reaction-only dataMessage.reaction events (don’t treat as broken attachments)", async () => {
     const abortController = new AbortController();
 
     streamMock.mockImplementation(async ({ onEvent }) => {
