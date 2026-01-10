@@ -754,6 +754,8 @@ export function resolvePreferredProviderForAuthChoice(
       return "minimax";
     case "minimax":
       return "lmstudio";
+    case "opencode-zen":
+      return "opencode-zen";
     default:
       return undefined;
   }
