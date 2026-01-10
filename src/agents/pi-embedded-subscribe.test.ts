@@ -347,6 +347,53 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(combined).toBe("Final answer");
   });
 
+  it("keeps assistantTexts to the final answer when block replies are disabled", () => {
+    let handler: ((evt: unknown) => void) | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      reasoningMode: "on",
+    });
+
+    handler?.({ type: "message_start", message: { role: "assistant" } });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Final answer",
+      },
+    });
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_end",
+      },
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because it helps" },
+        { type: "text", text: "Final answer" },
+      ],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(subscription.assistantTexts).toEqual(["Final answer"]);
+  });
+
   it("emits block replies on text_end and does not duplicate on message_end", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
@@ -572,6 +619,37 @@ describe("subscribeEmbeddedPiSession", () => {
     const assistantMessage = {
       role: "assistant",
       content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+
+    handler?.({ type: "message_end", message: assistantMessage });
+    handler?.({ type: "message_end", message: assistantMessage });
+
+    expect(subscription.assistantTexts).toEqual(["Hello world"]);
+  });
+
+  it("does not duplicate assistantTexts when message_end repeats with reasoning blocks", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const subscription = subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run",
+      reasoningMode: "on",
+    });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "Because" },
+        { type: "text", text: "Hello world" },
+      ],
     } as AssistantMessage;
 
     handler?.({ type: "message_end", message: assistantMessage });
