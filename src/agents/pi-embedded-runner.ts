@@ -8,7 +8,12 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
-import type { Api, AssistantMessage, Model } from "@mariozechner/pi-ai";
+import type {
+  Api,
+  AssistantMessage,
+  ImageContent,
+  Model,
+} from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   discoverAuthStorage,
@@ -1009,6 +1014,8 @@ export async function runEmbeddedPiAgent(params: {
   config?: ClawdbotConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
+  /** Optional image attachments for multimodal messages. */
+  images?: ImageContent[];
   provider?: string;
   model?: string;
   authProfileId?: string;
@@ -1434,7 +1441,9 @@ export async function runEmbeddedPiAgent(params: {
               `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
             );
             try {
-              await session.prompt(params.prompt);
+              await session.prompt(params.prompt, {
+                images: params.images,
+              });
             } catch (err) {
               promptError = err;
             } finally {

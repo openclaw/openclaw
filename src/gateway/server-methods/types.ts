@@ -32,6 +32,7 @@ export type GatewayRequestContext = {
   getHealthCache: () => HealthSummary | null;
   refreshHealthSnapshot: (opts?: { probe?: boolean }) => Promise<HealthSummary>;
   logHealth: { error: (message: string) => void };
+  logGateway: { warn: (message: string) => void };
   incrementPresenceVersion: () => number;
   getHealthVersion: () => number;
   broadcast: (
