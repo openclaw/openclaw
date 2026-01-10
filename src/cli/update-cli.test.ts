@@ -7,11 +7,10 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
-// Mock the doctor command to avoid loading heavy dependencies
+// Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
 }));
-
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
   runDaemonRestart: vi.fn(),
@@ -30,11 +29,9 @@ describe("update-cli", () => {
   it(
     "exports updateCommand and registerUpdateCli",
     async () => {
-    const { updateCommand, registerUpdateCli } = await import(
-      "./update-cli.js"
-    );
-    expect(typeof updateCommand).toBe("function");
-    expect(typeof registerUpdateCli).toBe("function");
+      const { updateCommand, registerUpdateCli } = await import("./update-cli.js");
+      expect(typeof updateCommand).toBe("function");
+      expect(typeof registerUpdateCli).toBe("function");
     },
     20_000,
   );

@@ -1,6 +1,5 @@
 import type { Command } from "commander";
 
-import { doctorCommand } from "../commands/doctor.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import {
   runGatewayUpdate,
@@ -9,7 +8,6 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { runDaemonRestart } from "./daemon-cli.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -157,12 +155,14 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.log(theme.heading("Restarting daemon..."));
     }
     try {
+      const { runDaemonRestart } = await import("./daemon-cli.js");
       const restarted = await runDaemonRestart();
       if (!opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
         process.env.CLAWDBOT_UPDATE_IN_PROGRESS = "1";
         try {
+          const { doctorCommand } = await import("../commands/doctor.js");
           await doctorCommand(defaultRuntime, { nonInteractive: true });
         } catch (err) {
           defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
