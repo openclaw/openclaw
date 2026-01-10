@@ -1,3 +1,4 @@
+import ClawdbotDiscovery
 import ClawdbotKit
 import Foundation
 import Network
@@ -315,7 +316,9 @@ final class MacNodeModeCoordinator {
                    let port = NWEndpoint.Port(rawValue: localPort)
                 {
                     self.logger.info(
-                        "mac node bridge tunnel ready localPort=\(localPort, privacy: .public) remotePort=\(remotePort, privacy: .public)")
+                        "mac node bridge tunnel ready " +
+                            "localPort=\(localPort, privacy: .public) " +
+                            "remotePort=\(remotePort, privacy: .public)")
                     return .hostPort(host: "127.0.0.1", port: port)
                 }
             } catch {
