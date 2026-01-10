@@ -98,6 +98,12 @@ Full setup walkthrough (28m) by VelvetShark.
   <img src="/assets/showcase/wienerlinien.png" alt="Wiener Linien skill on ClawdHub" />
 </Card>
 
+<Card title="Multi-Agent Swarm (14+ Agents)" icon="robot" href="https://github.com/adam91holt/clawdspace">
+  **@adam91holt** • `multi-agent` `slack` `orchestration` `swarm`
+
+  14+ Clawdbot agents under one gateway. Opus 4.5 orchestrator delegates to Codex workers. Self-maintaining agents that continuously improve. Open-sourced clawdspace for agent sandboxing.
+</Card>
+
 </CardGroup>
 
 ## 🤖 Automation & Workflows
