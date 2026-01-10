@@ -12,6 +12,7 @@
 - Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680) — thanks @steipete.
 
 ### Fixes
+- Block Streaming: enable for all providers, not just Telegram. (#684) — thanks @rubyrunsstuff.
 - Agents/System: clarify sandboxed runtime in system prompt and surface elevated availability when sandboxed.
 - Agents/System: add reasoning visibility hint + /reasoning and /status guidance in system prompt.
 - Auto-reply: prefer `RawBody` for command/directive parsing (WhatsApp + Discord) and prevent fallback runs from clobbering concurrent session updates. (#643) — thanks @mcinteerj.
