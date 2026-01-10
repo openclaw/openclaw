@@ -20,6 +20,12 @@ patchedDependencies:
   '@mariozechner/pi-coding-agent':
     hash: 58af7c712ebe270527c2ad9d3351fac39d6cd4b81cc475a258d87840b446b90e
     path: patches/@mariozechner__pi-coding-agent.patch
+  'playwright-core@1.57.0':
+    hash: 66f1f266424dbe354068aaa5bba87bfb0e1d7d834a938c25dd70d43cdf1c1b02
+    path: patches/playwright-core@1.57.0.patch
+  qrcode-terminal:
+    hash: ed82029850dbdf551f5df1de320945af52b8ea8500cc7bd4f39258e7a3d92e12
+    path: patches/qrcode-terminal.patch
 
 importers:
 
