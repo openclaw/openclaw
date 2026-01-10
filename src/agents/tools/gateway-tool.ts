@@ -5,44 +5,52 @@ import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { type AnyAgentTool, jsonResult, readStringParam } from "./common.js";
 import { callGatewayTool } from "./gateway.js";
 
-const GatewayToolSchema = Type.Union([
-  Type.Object({
-    action: Type.Literal("restart"),
-    delayMs: Type.Optional(Type.Number()),
-    reason: Type.Optional(Type.String()),
+const GATEWAY_ACTIONS = [
+  "restart",
+  "config.get",
+  "config.schema",
+  "config.apply",
+  "update.run",
+] as const;
+
+type GatewayAction = (typeof GATEWAY_ACTIONS)[number];
+
+// NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
+// because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
+// The discriminator (action) determines which properties are relevant; runtime validates.
+const GatewayToolSchema = Type.Object({
+  action: Type.Unsafe<GatewayAction>({
+    type: "string",
+    enum: [...GATEWAY_ACTIONS],
   }),
-  Type.Object({
-    action: Type.Literal("config.get"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("config.schema"),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("config.apply"),
-    raw: Type.String(),
-    sessionKey: Type.Optional(Type.String()),
-    note: Type.Optional(Type.String()),
-    restartDelayMs: Type.Optional(Type.Number()),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-    timeoutMs: Type.Optional(Type.Number()),
-  }),
-  Type.Object({
-    action: Type.Literal("update.run"),
-    sessionKey: Type.Optional(Type.String()),
-    note: Type.Optional(Type.String()),
-    restartDelayMs: Type.Optional(Type.Number()),
-    timeoutMs: Type.Optional(Type.Number()),
-    gatewayUrl: Type.Optional(Type.String()),
-    gatewayToken: Type.Optional(Type.String()),
-  }),
-]);
+  // restart
+  delayMs: Type.Optional(Type.Number()),
+  reason: Type.Optional(Type.String()),
+  // config.get, config.schema, config.apply, update.run
+  gatewayUrl: Type.Optional(Type.String()),
+  gatewayToken: Type.Optional(Type.String()),
+  timeoutMs: Type.Optional(Type.Number()),
+  // config.apply
+  raw: Type.Optional(Type.String()),
+  // config.apply, update.run
+  sessionKey: Type.Optional(Type.String()),
+  note: Type.Optional(Type.String()),
+  restartDelayMs: Type.Optional(Type.Number()),
+});
+// Keep top-level object schemas while enforcing conditional requirements.
+(GatewayToolSchema as typeof GatewayToolSchema & { allOf?: unknown[] }).allOf =
+  [
+    {
+      if: {
+        properties: {
+          action: { const: "config.apply" },
+        },
+        required: ["action"],
+      },
+      // biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword.
+      then: { required: ["raw"] },
+    },
+  ];
 
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;
