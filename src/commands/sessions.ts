@@ -26,6 +26,8 @@ type SessionRow = {
   thinkingLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
+  elevatedLevel?: string;
+  responseUsage?: string;
   groupActivation?: string;
   inputTokens?: number;
   outputTokens?: number;
@@ -98,6 +100,8 @@ const formatFlagsCell = (row: SessionRow, rich: boolean) => {
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
     row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
     row.reasoningLevel ? `reasoning:${row.reasoningLevel}` : null,
+    row.elevatedLevel ? `elev:${row.elevatedLevel}` : null,
+    row.responseUsage ? `usage:${row.responseUsage}` : null,
     row.groupActivation ? `activation:${row.groupActivation}` : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
@@ -147,6 +151,8 @@ function toRows(store: Record<string, SessionEntry>): SessionRow[] {
         thinkingLevel: entry?.thinkingLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
+        elevatedLevel: entry?.elevatedLevel,
+        responseUsage: entry?.responseUsage,
         groupActivation: entry?.groupActivation,
         inputTokens: entry?.inputTokens,
         outputTokens: entry?.outputTokens,
