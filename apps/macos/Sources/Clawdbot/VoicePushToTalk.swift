@@ -24,9 +24,9 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
         self.endAction = endAction
     }
 
-    func setEnabled(_ enabled: Bool) {
+    func setEnabled(_ enabled: Bool) async {
         if ProcessInfo.processInfo.isRunningTests { return }
-        self.withMainThread { [weak self] in
+        await self.withMainThread { [weak self] in
             guard let self else { return }
             if enabled {
                 self.startMonitoring()
@@ -37,7 +37,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func startMonitoring() {
-        assert(Thread.isMainThread)
+        MainActor.assertIsolated()
         guard self.globalMonitor == nil, self.localMonitor == nil else { return }
         // Listen-only global monitor; we rely on Input Monitoring permission to receive events.
         self.globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -55,7 +55,7 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func stopMonitoring() {
-        assert(Thread.isMainThread)
+        MainActor.assertIsolated()
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
             self.globalMonitor = nil
@@ -69,21 +69,19 @@ final class VoicePushToTalkHotkey: @unchecked Sendable {
     }
 
     private func handleFlagsChanged(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        self.withMainThread { [weak self] in
-            self?.updateModifierState(keyCode: keyCode, modifierFlags: modifierFlags)
+        Task {
+            await self.withMainThread { [weak self] in
+                self?.updateModifierState(keyCode: keyCode, modifierFlags: modifierFlags)
+            }
         }
     }
 
-    private func withMainThread(_ block: @escaping @Sendable () -> Void) {
-        if Thread.isMainThread {
-            block()
-        } else {
-            DispatchQueue.main.async(execute: block)
-        }
+    private func withMainThread(_ block: @escaping @Sendable () -> Void) async {
+        await MainActor.run { block() }
     }
 
     private func updateModifierState(keyCode: UInt16, modifierFlags: NSEvent.ModifierFlags) {
-        assert(Thread.isMainThread)
+        MainActor.assertIsolated()
         // Right Option (keyCode 61) acts as a hold-to-talk modifier.
         if keyCode == 61 {
             self.optionDown = modifierFlags.contains(.option)

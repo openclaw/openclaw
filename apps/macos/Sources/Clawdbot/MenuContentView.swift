@@ -137,10 +137,12 @@ struct MenuContent: View {
             }
         }
         .task {
-            VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
+            await VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && self.state.voicePushToTalkEnabled)
         }
         .onChange(of: self.state.voicePushToTalkEnabled) { _, enabled in
-            VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && enabled)
+            Task {
+                await VoicePushToTalkHotkey.shared.setEnabled(voiceWakeSupported && enabled)
+            }
         }
         .task(id: self.state.connectionMode) {
             await self.loadBrowserControlEnabled()
