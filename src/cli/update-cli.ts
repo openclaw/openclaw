@@ -1,3 +1,4 @@
+import { spinner } from "@clack/prompts";
 import type { Command } from "commander";
 
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
@@ -10,7 +11,6 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
-import { createCliProgress, type ProgressReporter } from "./progress.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
@@ -38,24 +38,50 @@ function getStepLabel(step: UpdateStepInfo): string {
   return `${friendlyLabel} (${commandHint})`;
 }
 
-function createUpdateProgress(enabled: boolean): {
+type ProgressController = {
   progress: UpdateStepProgress;
-  reporter: ProgressReporter;
-} {
-  const reporter = createCliProgress({
-    label: "Preparing update...",
-    indeterminate: true,
-    enabled,
-    delayMs: 0,
-  });
+  stop: () => void;
+};
+
+function createUpdateProgress(enabled: boolean): ProgressController {
+  if (!enabled) {
+    return {
+      progress: {},
+      stop: () => {},
+    };
+  }
+
+  let currentSpinner: ReturnType<typeof spinner> | null = null;
 
   const progress: UpdateStepProgress = {
     onStepStart: (step) => {
-      reporter.setLabel(getStepLabel(step));
+      currentSpinner = spinner();
+      currentSpinner.start(theme.accent(getStepLabel(step)));
+    },
+    onStepComplete: (step) => {
+      if (!currentSpinner) return;
+
+      const label = getStepLabel(step);
+      const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
+
+      if (step.exitCode === 0) {
+        currentSpinner.stop(`${theme.success("\u2713")} ${label} ${duration}`);
+      } else {
+        currentSpinner.stop(`${theme.error("\u2717")} ${label} ${duration}`);
+      }
+      currentSpinner = null;
     },
   };
 
-  return { progress, reporter };
+  return {
+    progress,
+    stop: () => {
+      if (currentSpinner) {
+        currentSpinner.stop();
+        currentSpinner = null;
+      }
+    },
+  };
 }
 
 function formatDuration(ms: number): string {
@@ -156,7 +182,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       cwd: process.cwd(),
     })) ?? process.cwd();
 
-  const { progress, reporter } = createUpdateProgress(showProgress);
+  const { progress, stop } = createUpdateProgress(showProgress);
 
   const result = await runGatewayUpdate({
     cwd: root,
@@ -165,7 +191,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     progress,
   });
 
-  reporter.done();
+  stop();
 
   printResult(result, opts);
 
