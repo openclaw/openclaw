@@ -228,8 +228,10 @@ describe("telegram inbound media", () => {
 });
 
 describe("telegram media groups", () => {
-  const MEDIA_GROUP_POLL_TIMEOUT_MS = 15_000;
-  const MEDIA_GROUP_TEST_TIMEOUT_MS = 20_000;
+  const MEDIA_GROUP_POLL_TIMEOUT_MS =
+    process.platform === "win32" ? 30_000 : 15_000;
+  const MEDIA_GROUP_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 45_000 : 20_000;
 
   const waitForMediaGroupProcessing = async (
     replySpy: ReturnType<typeof vi.fn>,
