@@ -61,7 +61,10 @@ import { startNodeBridgeServer } from "../infra/bridge/server.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
-import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
+import {
+  runHeartbeatOnce,
+  startHeartbeatRunner,
+} from "../infra/heartbeat-runner.js";
 import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { resolveOutboundTarget } from "../infra/outbound/targets.js";
@@ -715,6 +718,14 @@ export async function startGatewayServer(
         enqueueSystemEvent(text, { sessionKey: resolveMainSessionKey(cfg) });
       },
       requestHeartbeatNow,
+      runHeartbeatOnce: async (opts) => {
+        const runtimeConfig = loadConfig();
+        return await runHeartbeatOnce({
+          cfg: runtimeConfig,
+          reason: opts?.reason,
+          deps: { runtime },
+        });
+      },
       runIsolatedAgentJob: async ({ job, message }) => {
         const runtimeConfig = loadConfig();
         return await runCronIsolatedAgentTurn({

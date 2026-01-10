@@ -37,6 +37,11 @@ export type CronServiceDeps = {
   cronEnabled: boolean;
   enqueueSystemEvent: (text: string) => void;
   requestHeartbeatNow: (opts?: { reason?: string }) => void;
+  runHeartbeatOnce?: (opts?: { reason?: string }) => Promise<{
+    status: "ran" | "skipped" | "failed";
+    durationMs: number;
+    reason?: string;
+  }>;
   runIsolatedAgentJob: (params: { job: CronJob; message: string }) => Promise<{
     status: "ok" | "error" | "skipped";
     summary?: string;
@@ -514,10 +519,31 @@ export class CronService {
           return;
         }
         this.deps.enqueueSystemEvent(text);
-        if (job.wakeMode === "now") {
+        if (job.wakeMode === "now" && this.deps.runHeartbeatOnce) {
+          const heartbeatResult = await this.deps.runHeartbeatOnce({
+            reason: `cron:${job.id}`,
+          });
+          // Map heartbeat status to cron status
+          if (heartbeatResult.status === "ran") {
+            await finish("ok", undefined, text);
+          } else if (heartbeatResult.status === "skipped") {
+            await finish(
+              "skipped",
+              heartbeatResult.reason ?? "heartbeat skipped",
+              text,
+            );
+          } else if (heartbeatResult.status === "failed") {
+            await finish(
+              "error",
+              heartbeatResult.reason ?? "heartbeat failed",
+              text,
+            );
+          }
+        } else {
+          // wakeMode is "next-heartbeat" or runHeartbeatOnce not available
           this.deps.requestHeartbeatNow({ reason: `cron:${job.id}` });
+          await finish("ok", undefined, text);
         }
-        await finish("ok", undefined, text);
         return;
       }
 
