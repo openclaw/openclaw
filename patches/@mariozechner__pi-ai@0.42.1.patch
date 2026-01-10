@@ -55,16 +55,3 @@ index 20fb0a22aaa28f7ff7c2f44a8b628fa1d9d7d936..0bf46bfb4a6fac5a0304652e42566b2c
                          const reasoningItem = JSON.parse(block.thinkingSignature);
                          output.push(reasoningItem);
                      }
-
-diff --git a/dist/stream.js b/dist/stream.js
-index 0000000..2222222 100644
---- a/dist/stream.js
-+++ b/dist/stream.js
-@@ -43,6 +43,7 @@ export function getEnvApiKey(provider) {
-         xai: "XAI_API_KEY",
-         openrouter: "OPENROUTER_API_KEY",
-         zai: "ZAI_API_KEY",
-+        minimax: "MINIMAX_API_KEY",
-         mistral: "MISTRAL_API_KEY",
-     };
-     const envVar = envMap[provider];
