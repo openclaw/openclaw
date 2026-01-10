@@ -29,7 +29,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 22.x
           check-latest: true
 
       - name: Runtime versions
@@ -105,7 +105,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 22.x
           check-latest: true
 
       - name: Setup Bun
@@ -184,7 +184,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 22.x
           check-latest: true
 
       - name: Setup Bun
@@ -251,7 +251,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 22.12.0
+          node-version: 22.x
           check-latest: true
 
       - name: Runtime versions
