@@ -315,7 +315,8 @@ describe("telegram media groups", () => {
         getFile: async () => ({ file_path: "photos/photo2.jpg" }),
       });
 
-      await Promise.all([first, second]);
+      await first;
+      await second;
 
       expect(replySpy).not.toHaveBeenCalled();
       await waitForMediaGroupProcessing(replySpy, 1);
