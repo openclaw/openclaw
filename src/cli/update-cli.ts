@@ -1,0 +1,205 @@
+import type { Command } from "commander";
+
+import {
+  runGatewayUpdate,
+  type UpdateRunResult,
+} from "../infra/update-runner.js";
+import { defaultRuntime } from "../runtime.js";
+import { theme } from "../terminal/theme.js";
+import { runDaemonRestart } from "./daemon-cli.js";
+
+export type UpdateCommandOptions = {
+  json?: boolean;
+  restart?: boolean;
+  timeout?: string;
+};
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = (ms / 1000).toFixed(1);
+  return `${seconds}s`;
+}
+
+function formatStepStatus(exitCode: number | null): string {
+  if (exitCode === 0) return theme.success("\u2713");
+  if (exitCode === null) return theme.warn("?");
+  return theme.error("\u2717");
+}
+
+function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
+  if (opts.json) {
+    defaultRuntime.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  const statusColor =
+    result.status === "ok"
+      ? theme.success
+      : result.status === "skipped"
+        ? theme.warn
+        : theme.error;
+
+  defaultRuntime.log("");
+  defaultRuntime.log(
+    `${theme.heading("Update Result:")} ${statusColor(result.status.toUpperCase())}`,
+  );
+  defaultRuntime.log(`  Mode: ${theme.muted(result.mode)}`);
+  if (result.root) {
+    defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
+  }
+  if (result.reason) {
+    defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
+  }
+
+  if (result.before?.version || result.before?.sha) {
+    const before =
+      result.before.version ?? result.before.sha?.slice(0, 8) ?? "";
+    defaultRuntime.log(`  Before: ${theme.muted(before)}`);
+  }
+  if (result.after?.version || result.after?.sha) {
+    const after = result.after.version ?? result.after.sha?.slice(0, 8) ?? "";
+    defaultRuntime.log(`  After: ${theme.muted(after)}`);
+  }
+
+  if (result.steps.length > 0) {
+    defaultRuntime.log("");
+    defaultRuntime.log(theme.heading("Steps:"));
+    for (const step of result.steps) {
+      const status = formatStepStatus(step.exitCode);
+      const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
+      defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
+
+      // Show stderr for failed steps
+      if (step.exitCode !== 0 && step.stderrTail) {
+        const lines = step.stderrTail.split("\n").slice(0, 5);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`      ${theme.error(line)}`);
+          }
+        }
+      }
+    }
+  }
+
+  defaultRuntime.log("");
+  defaultRuntime.log(
+    `Total time: ${theme.muted(formatDuration(result.durationMs))}`,
+  );
+}
+
+export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
+  const timeoutMs = opts.timeout
+    ? Number.parseInt(opts.timeout, 10) * 1000
+    : undefined;
+
+  if (timeoutMs !== undefined && (Number.isNaN(timeoutMs) || timeoutMs <= 0)) {
+    defaultRuntime.error("--timeout must be a positive integer (seconds)");
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  if (!opts.json) {
+    defaultRuntime.log(theme.heading("Updating Clawdbot..."));
+    defaultRuntime.log("");
+  }
+
+  const result = await runGatewayUpdate({
+    cwd: process.cwd(),
+    argv1: process.argv[1],
+    timeoutMs,
+  });
+
+  printResult(result, opts);
+
+  if (result.status === "error") {
+    defaultRuntime.exit(1);
+    return;
+  }
+
+  if (result.status === "skipped") {
+    if (result.reason === "dirty") {
+      defaultRuntime.log(
+        theme.warn(
+          "Skipped: working directory has uncommitted changes. Commit or stash them first.",
+        ),
+      );
+    }
+    defaultRuntime.exit(0);
+    return;
+  }
+
+  // Restart daemon if requested
+  if (opts.restart) {
+    if (!opts.json) {
+      defaultRuntime.log("");
+      defaultRuntime.log(theme.heading("Restarting daemon..."));
+    }
+    try {
+      await runDaemonRestart();
+      if (!opts.json) {
+        defaultRuntime.log(theme.success("Daemon restarted successfully."));
+      }
+    } catch (err) {
+      if (!opts.json) {
+        defaultRuntime.log(
+          theme.warn(`Daemon restart failed: ${String(err)}`),
+        );
+        defaultRuntime.log(
+          theme.muted(
+            "You may need to restart the daemon manually: clawdbot daemon restart",
+          ),
+        );
+      }
+    }
+  } else if (!opts.json) {
+    defaultRuntime.log("");
+    defaultRuntime.log(
+      theme.muted(
+        "Tip: Run `clawdbot daemon restart` to apply updates to a running gateway.",
+      ),
+    );
+  }
+}
+
+export function registerUpdateCli(program: Command) {
+  program
+    .command("update")
+    .description("Update Clawdbot to the latest version")
+    .option("--json", "Output result as JSON", false)
+    .option(
+      "--restart",
+      "Restart the gateway daemon after a successful update",
+      false,
+    )
+    .option(
+      "--timeout <seconds>",
+      "Timeout for each update step in seconds (default: 1200)",
+    )
+    .addHelpText(
+      "after",
+      `
+Examples:
+  clawdbot update                   # Update from git or package manager
+  clawdbot update --restart         # Update and restart the daemon
+  clawdbot update --json            # Output result as JSON
+  clawdbot --update                 # Shorthand for clawdbot update
+
+Notes:
+  - For git installs: fetches, rebases, installs deps, builds, and runs doctor
+  - For npm installs: runs package manager update command
+  - Skips update if the working directory has uncommitted changes
+`,
+    )
+    .action(async (opts) => {
+      try {
+        await updateCommand({
+          json: Boolean(opts.json),
+          restart: Boolean(opts.restart),
+          timeout: opts.timeout as string | undefined,
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+}

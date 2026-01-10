@@ -53,6 +53,7 @@ import { registerProvidersCli } from "./providers-cli.js";
 import { registerSandboxCli } from "./sandbox-cli.js";
 import { registerSkillsCli } from "./skills-cli.js";
 import { registerTuiCli } from "./tui-cli.js";
+import { registerUpdateCli } from "./update-cli.js";
 
 export { forceFreePort };
 
@@ -1132,6 +1133,7 @@ Examples:
   registerPairingCli(program);
   registerProvidersCli(program);
   registerSkillsCli(program);
+  registerUpdateCli(program);
 
   program
     .command("status")
