@@ -7,7 +7,7 @@ index 93aa26c395e9bd0df64376408a13d15ee9e7cce7..beb585e2f2c13eec3bca98acade76110
                      }
                      const errorText = await response.text();
 +                    // Fail immediately on 429 for Antigravity to let callers rotate accounts.
-+                    // Antigravity rate limits can have very long retry delays (10+ minutes). Repro: LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_PROVIDERS=\"google-antigravity\" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
++                    // Antigravity rate limits can have very long retry delays (10+ minutes).
 +                    if (isAntigravity && response.status === 429) {
 +                        throw new Error(`Cloud Code Assist API error (${response.status}): ${errorText}`);
 +                    }
@@ -56,7 +56,7 @@ index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c
          description: tool.description,
          parameters: tool.parameters,
 -        strict: null,
-+        strict: false, // Repro: LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_MODELS=\"openai-codex/gpt-5.2\" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
++        strict: false,
      }));
  }
  function mapStopReason(status) {
