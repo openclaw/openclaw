@@ -32,10 +32,11 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
-const THINKING_TAG_RE = /<\s*\/?\s*think(?:ing)?\s*>/gi;
-const THINKING_OPEN_RE = /<\s*think(?:ing)?\s*>/i;
-const THINKING_CLOSE_RE = /<\s*\/\s*think(?:ing)?\s*>/i;
-const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*think(?:ing)?\s*>/gi;
+const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+const THINKING_OPEN_RE = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+const THINKING_CLOSE_RE = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+const THINKING_TAG_SCAN_RE =
+  /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
 const RAW_STREAM_ENABLED = process.env.CLAWDBOT_RAW_STREAM === "1";

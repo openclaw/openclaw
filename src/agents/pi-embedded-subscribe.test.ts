@@ -10,6 +10,12 @@ type StubSession = {
 type SessionEventHandler = (evt: unknown) => void;
 
 describe("subscribeEmbeddedPiSession", () => {
+  const THINKING_TAG_CASES = [
+    { tag: "think", open: "<think>", close: "</think>" },
+    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
+    { tag: "thought", open: "<thought>", close: "</thought>" },
+    { tag: "antthinking", open: "<antthinking>", close: "</antthinking>" },
+  ] as const;
   it("filters to <final> and falls back when tags are malformed", () => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
@@ -167,7 +173,12 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
   });
 
-  it("promotes <think> tags to thinking blocks at write-time", () => {
+  it.each(
+    THINKING_TAG_CASES,
+  )("promotes <%s> tags to thinking blocks at write-time", ({
+    open,
+    close,
+  }) => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -193,7 +204,7 @@ describe("subscribeEmbeddedPiSession", () => {
       content: [
         {
           type: "text",
-          text: "<think>\nBecause it helps\n</think>\n\nFinal answer",
+          text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
         },
       ],
     } as AssistantMessage;
@@ -212,7 +223,12 @@ describe("subscribeEmbeddedPiSession", () => {
     ]);
   });
 
-  it("streams <think> reasoning via onReasoningStream without leaking into final text", () => {
+  it.each(
+    THINKING_TAG_CASES,
+  )("streams <%s> reasoning via onReasoningStream without leaking into final text", ({
+    open,
+    close,
+  }) => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
@@ -240,7 +256,7 @@ describe("subscribeEmbeddedPiSession", () => {
       message: { role: "assistant" },
       assistantMessageEvent: {
         type: "text_delta",
-        delta: "<think>\nBecause",
+        delta: `${open}\nBecause`,
       },
     });
 
@@ -249,7 +265,7 @@ describe("subscribeEmbeddedPiSession", () => {
       message: { role: "assistant" },
       assistantMessageEvent: {
         type: "text_delta",
-        delta: " it helps\n</think>\n\nFinal answer",
+        delta: ` it helps\n${close}\n\nFinal answer`,
       },
     });
 
@@ -258,7 +274,7 @@ describe("subscribeEmbeddedPiSession", () => {
       content: [
         {
           type: "text",
-          text: "<think>\nBecause it helps\n</think>\n\nFinal answer",
+          text: `${open}\nBecause it helps\n${close}\n\nFinal answer`,
         },
       ],
     } as AssistantMessage;
@@ -279,10 +295,9 @@ describe("subscribeEmbeddedPiSession", () => {
     ]);
   });
 
-  it.each([
-    { tag: "think", open: "<think>", close: "</think>" },
-    { tag: "thinking", open: "<thinking>", close: "</thinking>" },
-  ])("suppresses <%s> blocks across chunk boundaries", ({ open, close }) => {
+  it.each(
+    THINKING_TAG_CASES,
+  )("suppresses <%s> blocks across chunk boundaries", ({ open, close }) => {
     let handler: ((evt: unknown) => void) | undefined;
     const session: StubSession = {
       subscribe: (fn) => {
