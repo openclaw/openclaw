@@ -1,4 +1,3 @@
-import { fetchRemoteMedia } from "../media/fetch.js";
 import { detectMime } from "../media/mime.js";
 import { saveMediaBuffer } from "../media/store.js";
 
@@ -741,28 +740,22 @@ export async function downloadMSTeamsImageAttachments(params: {
   for (const candidate of candidates) {
     if (!isUrlAllowed(candidate.url, allowHosts)) continue;
     try {
-      const fetchImpl: typeof fetch = (input) => {
-        const url =
-          typeof input === "string"
-            ? input
-            : input instanceof URL
-              ? input.toString()
-              : input.url;
-        return fetchWithAuthFallback({
-          url,
-          tokenProvider: params.tokenProvider,
-          fetchFn: params.fetchFn,
-        });
-      };
-      const fetched = await fetchRemoteMedia({
+      const res = await fetchWithAuthFallback({
         url: candidate.url,
-        fetchImpl,
-        filePathHint: candidate.fileHint,
+        tokenProvider: params.tokenProvider,
+        fetchFn: params.fetchFn,
       });
-      if (fetched.buffer.byteLength > params.maxBytes) continue;
+      if (!res.ok) continue;
+      const buffer = Buffer.from(await res.arrayBuffer());
+      if (buffer.byteLength > params.maxBytes) continue;
+      const mime = await detectMime({
+        buffer,
+        headerMime: res.headers.get("content-type"),
+        filePath: candidate.fileHint ?? candidate.url,
+      });
       const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType ?? candidate.contentTypeHint,
+        buffer,
+        mime ?? candidate.contentTypeHint,
         "inbound",
         params.maxBytes,
       );
