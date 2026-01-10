@@ -718,6 +718,7 @@
       {
         "group": "Reference & Templates",
         "pages": [
+          "testing",
           "scripts",
           "reference/rpc",
           "reference/device-models",
