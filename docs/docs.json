@@ -639,6 +639,7 @@
           "gateway/configuration",
           "gateway/configuration-examples",
           "gateway/authentication",
+          "gateway/openai-http-api",
           "gateway/background-process",
           "gateway/health",
           "gateway/heartbeat",
