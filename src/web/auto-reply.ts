@@ -189,6 +189,7 @@ function buildMentionConfig(
 function isBotMentioned(
   msg: WebInboundMsg,
   mentionCfg: MentionConfig,
+  authDir?: string,
 ): boolean {
   const clean = (text: string) =>
     // Remove zero-width and directionality markers WhatsApp injects around display names
@@ -198,7 +199,7 @@ function isBotMentioned(
 
   if (msg.mentionedJids?.length && !isSelfChat) {
     const normalizedMentions = msg.mentionedJids
-      .map((jid) => jidToE164(jid) ?? jid)
+      .map((jid) => jidToE164(jid, authDir ? { authDir } : undefined) ?? jid)
       .filter(Boolean);
     if (msg.selfE164 && normalizedMentions.includes(msg.selfE164)) return true;
     if (msg.selfJid && msg.selfE164) {
@@ -230,8 +231,9 @@ function isBotMentioned(
 function debugMention(
   msg: WebInboundMsg,
   mentionCfg: MentionConfig,
+  authDir?: string,
 ): { wasMentioned: boolean; details: Record<string, unknown> } {
-  const result = isBotMentioned(msg, mentionCfg);
+  const result = isBotMentioned(msg, mentionCfg, authDir);
   const details = {
     from: msg.from,
     body: msg.body,
@@ -1584,7 +1586,7 @@ export async function monitorWebProvider(
             groupHistories.set(groupHistoryKey, history);
           }
 
-          const mentionDebug = debugMention(msg, mentionConfig);
+          const mentionDebug = debugMention(msg, mentionConfig, account.authDir);
           replyLogger.debug(
             {
               conversationId,
