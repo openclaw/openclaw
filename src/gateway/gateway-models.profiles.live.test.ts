@@ -209,9 +209,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const nextCfg = {
         ...cfg,
         agents: {
-          ...(cfg.agents ?? {}),
+          ...cfg.agents,
           defaults: {
-            ...(cfg.agents?.defaults ?? {}),
+            ...cfg.agents?.defaults,
             models: Object.fromEntries(
               candidates.map((m) => [`${m.provider}/${m.id}`, {}]),
             ),
