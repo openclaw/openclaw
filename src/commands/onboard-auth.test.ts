@@ -177,7 +177,7 @@ describe("applyMinimaxApiConfig", () => {
     ).toMatchObject({ alias: "Minimax", params: { custom: "value" } });
   });
 
-  it("replaces existing minimax provider entirely", () => {
+  it("merges existing minimax provider models", () => {
     const cfg = applyMinimaxApiConfig({
       models: {
         providers: {
@@ -204,7 +204,11 @@ describe("applyMinimaxApiConfig", () => {
       "https://api.minimax.io/anthropic",
     );
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
-    expect(cfg.models?.providers?.minimax?.models[0]?.id).toBe("MiniMax-M2.1");
+    expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
+      "old-model",
+      "MiniMax-M2.1",
+    ]);
   });
 
   it("preserves other providers when adding minimax", () => {

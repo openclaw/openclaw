@@ -334,11 +334,27 @@ export function applyMinimaxApiProviderConfig(
   modelId: string = "MiniMax-M2.1",
 ): ClawdbotConfig {
   const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.minimax;
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  const apiModel = buildMinimaxApiModelDefinition(modelId);
+  const hasApiModel = existingModels.some((model) => model.id === modelId);
+  const mergedModels = hasApiModel
+    ? existingModels
+    : [...existingModels, apiModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    (existingProvider ?? {}) as Record<string, unknown> as { apiKey?: string };
+  const resolvedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey =
+    resolvedApiKey?.trim() === "minimax" ? "" : resolvedApiKey;
   providers.minimax = {
+    ...existingProviderRest,
     baseUrl: MINIMAX_API_BASE_URL,
-    // apiKey omitted: resolved via MINIMAX_API_KEY env var or auth profile by default.
     api: "anthropic-messages",
-    models: [buildMinimaxApiModelDefinition(modelId)],
+    ...(normalizedApiKey?.trim() ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [apiModel],
   };
 
   const models = { ...cfg.agents?.defaults?.models };
