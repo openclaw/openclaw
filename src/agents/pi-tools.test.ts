@@ -31,35 +31,19 @@ describe("createClawdbotCodingTools", () => {
     expect(parameters.required ?? []).toContain("action");
   });
 
-  it("requires raw for gateway config.apply tool calls", () => {
+  it("exposes raw for gateway config.apply tool calls", () => {
     const tools = createClawdbotCodingTools();
     const gateway = tools.find((tool) => tool.name === "gateway");
     expect(gateway).toBeDefined();
 
     const parameters = gateway?.parameters as {
-      allOf?: Array<Record<string, unknown>>;
+      type?: unknown;
+      required?: string[];
+      properties?: Record<string, unknown>;
     };
-    const conditional = parameters.allOf?.find(
-      (entry) => "if" in entry && "then" in entry,
-    ) as
-      | { if?: Record<string, unknown>; then?: Record<string, unknown> }
-      | undefined;
-
-    expect(conditional).toBeDefined();
-    const thenRequired = conditional?.then?.required as string[] | undefined;
-    expect(thenRequired ?? []).toContain("raw");
-
-    const action = (
-      conditional?.if?.properties as Record<string, unknown> | undefined
-    )?.action as { const?: unknown; enum?: unknown[] } | undefined;
-    const values = new Set<string>();
-    if (typeof action?.const === "string") values.add(action.const);
-    if (Array.isArray(action?.enum)) {
-      for (const value of action.enum) {
-        if (typeof value === "string") values.add(value);
-      }
-    }
-    expect(values.has("config.apply")).toBe(true);
+    expect(parameters.type).toBe("object");
+    expect(parameters.properties?.raw).toBeDefined();
+    expect(parameters.required ?? []).not.toContain("raw");
   });
 
   it("flattens anyOf-of-literals to enum for provider compatibility", () => {
@@ -172,6 +156,24 @@ describe("createClawdbotCodingTools", () => {
     const tools = createClawdbotCodingTools();
     expect(tools.some((tool) => tool.name === "bash")).toBe(true);
     expect(tools.some((tool) => tool.name === "process")).toBe(true);
+  });
+
+  it("renames blocked tool names only for Anthropic OAuth", () => {
+    const tools = createClawdbotCodingTools({
+      modelProvider: "anthropic",
+      modelAuthMode: "oauth",
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("Bash")).toBe(true);
+    expect(names.has("Read")).toBe(true);
+    expect(names.has("Write")).toBe(true);
+    expect(names.has("Edit")).toBe(true);
+
+    // Ensure the blocked lowercase variants are not present in the schema.
+    expect(names.has("bash")).toBe(false);
+    expect(names.has("read")).toBe(false);
+    expect(names.has("write")).toBe(false);
+    expect(names.has("edit")).toBe(false);
   });
 
   it("provides top-level object schemas for all tools", () => {

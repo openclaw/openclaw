@@ -23,6 +23,7 @@ import {
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
+import type { ModelAuthMode } from "./model-auth.js";
 import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
@@ -283,6 +284,28 @@ function normalizeToolNames(list?: string[]) {
   return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
 }
 
+/**
+ * Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
+ * Renaming to capitalized versions bypasses the block while maintaining compatibility
+ * with Anthropic API keys and other providers.
+ */
+const OAUTH_BLOCKED_TOOL_NAMES: Record<string, string> = {
+  bash: "Bash",
+  read: "Read",
+  write: "Write",
+  edit: "Edit",
+};
+
+function renameBlockedToolsForOAuth(tools: AnyAgentTool[]): AnyAgentTool[] {
+  return tools.map((tool) => {
+    const newName = OAUTH_BLOCKED_TOOL_NAMES[tool.name];
+    if (newName) {
+      return { ...tool, name: newName };
+    }
+    return tool;
+  });
+}
+
 const DEFAULT_SUBAGENT_TOOL_DENY = [
   "sessions_list",
   "sessions_history",
@@ -532,6 +555,16 @@ export function createClawdbotCodingTools(options?: {
   agentDir?: string;
   config?: ClawdbotConfig;
   abortSignal?: AbortSignal;
+  /**
+   * Provider of the currently selected model (used for provider-specific tool quirks).
+   * Example: "anthropic", "openai", "google", "openai-codex".
+   */
+  modelProvider?: string;
+  /**
+   * Auth mode for the current provider. We only need this for Anthropic OAuth
+   * tool-name blocking quirks.
+   */
+  modelAuthMode?: ModelAuthMode;
   /** Current channel ID for auto-threading (Slack). */
   currentChannelId?: string;
   /** Current thread timestamp for auto-threading (Slack). */
@@ -634,8 +667,11 @@ export function createClawdbotCodingTools(options?: {
       )
     : normalized;
 
-  // NOTE: Keep canonical (lowercase) tool names here.
-  // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names
-  // on the wire and maps them back for tool dispatch.
-  return withAbort;
+  // Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
+  // Only apply the rename when we are actually using (or likely using) Anthropic OAuth.
+  const provider = options?.modelProvider?.trim();
+  const authMode = options?.modelAuthMode;
+  const isAnthropicOAuth =
+    provider === "anthropic" && (authMode === "oauth" || authMode === "mixed");
+  return isAnthropicOAuth ? renameBlockedToolsForOAuth(withAbort) : withAbort;
 }

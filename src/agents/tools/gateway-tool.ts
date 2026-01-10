@@ -37,20 +37,10 @@ const GatewayToolSchema = Type.Object({
   note: Type.Optional(Type.String()),
   restartDelayMs: Type.Optional(Type.Number()),
 });
-// Keep top-level object schemas while enforcing conditional requirements.
-(GatewayToolSchema as typeof GatewayToolSchema & { allOf?: unknown[] }).allOf =
-  [
-    {
-      if: {
-        properties: {
-          action: { const: "config.apply" },
-        },
-        required: ["action"],
-      },
-      // biome-ignore lint/suspicious/noThenProperty: JSON Schema keyword.
-      then: { required: ["raw"] },
-    },
-  ];
+// NOTE: We intentionally avoid top-level `allOf`/`anyOf`/`oneOf` conditionals here:
+// - OpenAI rejects tool schemas that include these keywords at the *top-level*.
+// - Claude/Vertex has other JSON Schema quirks.
+// Conditional requirements (like `raw` for config.apply) are enforced at runtime.
 
 export function createGatewayTool(opts?: {
   agentSessionKey?: string;

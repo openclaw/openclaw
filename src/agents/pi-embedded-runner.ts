@@ -59,6 +59,7 @@ import {
   ensureAuthProfileStore,
   getApiKeyForModel,
   resolveAuthProfileOrder,
+  resolveModelAuthMode,
 } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import {
@@ -853,6 +854,8 @@ export async function compactEmbeddedPiSession(params: {
           agentDir,
           config: params.config,
           abortSignal: runAbortController.signal,
+          modelProvider: model.provider,
+          modelAuthMode: resolveModelAuthMode(model.provider, params.config),
           // No currentChannelId/currentThreadTs for compaction - not in message context
         });
         const machineName = await getMachineDisplayName();
@@ -1234,6 +1237,8 @@ export async function runEmbeddedPiAgent(params: {
             agentDir,
             config: params.config,
             abortSignal: runAbortController.signal,
+            modelProvider: model.provider,
+            modelAuthMode: resolveModelAuthMode(model.provider, params.config),
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             replyToMode: params.replyToMode,
