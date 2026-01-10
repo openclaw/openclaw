@@ -12,9 +12,8 @@
 - Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680) — thanks @steipete.
 
 ### Fixes
-- Block Streaming: enable for all providers, not just Telegram. (#684) — thanks @rubyrunsstuff.
+- macOS: stabilize bridge tunnels, guard invoke senders on disconnect, and drain stdout/stderr to avoid deadlocks. (#676) — thanks @ngutman.
 - Agents/System: clarify sandboxed runtime in system prompt and surface elevated availability when sandboxed.
-- Agents/System: add reasoning visibility hint + /reasoning and /status guidance in system prompt.
 - Auto-reply: prefer `RawBody` for command/directive parsing (WhatsApp + Discord) and prevent fallback runs from clobbering concurrent session updates. (#643) — thanks @mcinteerj.
 - WhatsApp: fix group reactions by preserving message IDs and sender JIDs in history; normalize participant phone numbers to JIDs in outbound reactions. (#640) — thanks @mcinteerj.
 - WhatsApp: expose group participant IDs to the model so reactions can target the right sender.
