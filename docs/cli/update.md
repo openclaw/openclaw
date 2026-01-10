@@ -9,7 +9,7 @@ read_when:
 
 Safely update a **source checkout** (git install) of Clawdbot.
 
-If you installed via **npm/pnpm** (global install, no git metadata), use the package manager flow in [Updating](/install/updating).
+If you installed via **npm/pnpm/bun** (global install, no git metadata), use the package manager flow in [Updating](/install/updating).
 
 ## Usage
 
@@ -42,6 +42,6 @@ High-level:
 
 ## See also
 
+- `clawdbot doctor` (offers to run update first on git checkouts)
 - [Updating](/install/updating)
 - [CLI reference](/cli)
-

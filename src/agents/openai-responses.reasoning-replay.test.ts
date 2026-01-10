@@ -52,7 +52,7 @@ function installFailingFetchCapture() {
 }
 
 describe("openai-responses reasoning replay", () => {
-  it("replays reasoning for tool-call-only turns", async () => {
+  it("does not replay reasoning for tool-call-only turns", async () => {
     const cap = installFailingFetchCapture();
     try {
       const model = buildModel();
