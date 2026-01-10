@@ -163,8 +163,7 @@ if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
   mkdir -p "${HOME}/.clawdbot"
-  run_step "disable launchagent writes (unsigned)" \
-    /usr/bin/touch "${HOME}/.clawdbot/disable-launchagent"
+  run_step "disable launchagent writes" /usr/bin/touch "${HOME}/.clawdbot/disable-launchagent"
 elif [ "$SIGN" -eq 1 ]; then
   if ! check_signing_keys; then
     fail "No signing identity found. Use --no-sign or install a signing key."
@@ -203,7 +202,7 @@ choose_app_bundle
 if [ "$NO_SIGN" -eq 1 ]; then
   APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true)"
   if [[ -n "${APP_BUNDLE_ID}" ]]; then
-    run_step "set attach-existing-only (unsigned)" \
+    run_step "set attach-existing-only" \
       /usr/bin/defaults write "${APP_BUNDLE_ID}" clawdbot.gateway.attachExistingOnly -bool YES
   fi
 fi
