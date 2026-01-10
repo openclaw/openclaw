@@ -1,45 +1,42 @@
 import { parseConfigValue } from "./config-value.js";
 
-export type DebugCommand =
-  | { action: "show" }
-  | { action: "reset" }
+export type ConfigCommand =
+  | { action: "show"; path?: string }
   | { action: "set"; path: string; value: unknown }
   | { action: "unset"; path: string }
   | { action: "error"; message: string };
 
-export function parseDebugCommand(raw: string): DebugCommand | null {
+export function parseConfigCommand(raw: string): ConfigCommand | null {
   const trimmed = raw.trim();
-  if (!trimmed.toLowerCase().startsWith("/debug")) return null;
-  const rest = trimmed.slice("/debug".length).trim();
+  if (!trimmed.toLowerCase().startsWith("/config")) return null;
+  const rest = trimmed.slice("/config".length).trim();
   if (!rest) return { action: "show" };
 
   const match = rest.match(/^(\S+)(?:\s+([\s\S]+))?$/);
-  if (!match) return { action: "error", message: "Invalid /debug syntax." };
+  if (!match) return { action: "error", message: "Invalid /config syntax." };
   const action = match[1].toLowerCase();
   const args = (match[2] ?? "").trim();
 
   switch (action) {
     case "show":
-      return { action: "show" };
-    case "reset":
-      return { action: "reset" };
+      return { action: "show", path: args || undefined };
     case "unset": {
       if (!args)
-        return { action: "error", message: "Usage: /debug unset path" };
+        return { action: "error", message: "Usage: /config unset path" };
       return { action: "unset", path: args };
     }
     case "set": {
       if (!args) {
         return {
           action: "error",
-          message: "Usage: /debug set path=value",
+          message: "Usage: /config set path=value",
         };
       }
       const eqIndex = args.indexOf("=");
       if (eqIndex <= 0) {
         return {
           action: "error",
-          message: "Usage: /debug set path=value",
+          message: "Usage: /config set path=value",
         };
       }
       const path = args.slice(0, eqIndex).trim();
@@ -47,7 +44,7 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
       if (!path) {
         return {
           action: "error",
-          message: "Usage: /debug set path=value",
+          message: "Usage: /config set path=value",
         };
       }
       const parsed = parseConfigValue(rawValue);
@@ -59,7 +56,7 @@ export function parseDebugCommand(raw: string): DebugCommand | null {
     default:
       return {
         action: "error",
-        message: "Usage: /debug show|set|unset|reset",
+        message: "Usage: /config show|set|unset",
       };
   }
 }

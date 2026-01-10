@@ -39,6 +39,7 @@ Text + native (when enabled):
 - `/status`
 - `/status` (show current status; includes a short usage line when available)
 - `/usage` (alias: `/status`)
+- `/config show|set|unset` (persist config to disk, owner-only)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only)
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
@@ -81,6 +82,23 @@ Examples:
 Notes:
 - Overrides apply immediately to new config reads, but do **not** write to `clawdbot.json`.
 - Use `/debug reset` to clear all overrides and return to the on-disk config.
+
+## Config updates
+
+`/config` writes to your on-disk config (`clawdbot.json`). Owner-only.
+
+Examples:
+
+```
+/config show
+/config show messages.responsePrefix
+/config set messages.responsePrefix="[clawdbot]"
+/config unset messages.responsePrefix
+```
+
+Notes:
+- Config is validated before write; invalid changes are rejected.
+- `/config` updates persist across restarts.
 
 ## Surface notes
 
