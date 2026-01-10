@@ -9,6 +9,7 @@ import {
   waitForEmbeddedPiRunEnd,
 } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { isAbortTrigger } from "../auto-reply/reply/abort.js";
 import type { CliDeps } from "../cli/deps.js";
 import { agentCommand } from "../commands/agent.js";
 import type { HealthSummary } from "../commands/health.js";
@@ -764,6 +765,12 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
             timeoutMs?: number;
             idempotencyKey: string;
           };
+          const stopCommand = (() => {
+            const msg = p.message.trim();
+            if (!msg) return false;
+            const normalized = msg.toLowerCase();
+            return normalized === "/stop" || isAbortTrigger(msg);
+          })();
           const normalizedAttachments =
             p.attachments?.map((a) => ({
               type: typeof a?.type === "string" ? a.type : undefined,
@@ -818,6 +825,35 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
           const clientRunId = p.idempotencyKey;
           registerAgentRunContext(clientRunId, { sessionKey: p.sessionKey });
 
+          if (stopCommand) {
+            const runIds: string[] = [];
+            for (const [runId, active] of ctx.chatAbortControllers) {
+              if (active.sessionKey !== p.sessionKey) continue;
+              active.controller.abort();
+              ctx.chatAbortControllers.delete(runId);
+              ctx.chatRunBuffers.delete(runId);
+              ctx.chatDeltaSentAt.delete(runId);
+              ctx.removeChatRun(runId, runId, p.sessionKey);
+              const payload = {
+                runId,
+                sessionKey: p.sessionKey,
+                seq: (ctx.agentRunSeq.get(runId) ?? 0) + 1,
+                state: "aborted" as const,
+              };
+              ctx.broadcast("chat", payload);
+              ctx.bridgeSendToSession(p.sessionKey, "chat", payload);
+              runIds.push(runId);
+            }
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                ok: true,
+                aborted: runIds.length > 0,
+                runIds,
+              }),
+            };
+          }
+
           const cached = ctx.dedupe.get(`chat:${clientRunId}`);
           if (cached) {
             if (cached.ok) {
@@ -829,6 +865,17 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 code: ErrorCodes.UNAVAILABLE,
                 message: "request failed",
               },
+            };
+          }
+
+          const activeExisting = ctx.chatAbortControllers.get(clientRunId);
+          if (activeExisting) {
+            return {
+              ok: true,
+              payloadJSON: JSON.stringify({
+                runId: clientRunId,
+                status: "in_flight",
+              }),
             };
           }
 
@@ -851,7 +898,11 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               }
             }
 
-            await agentCommand(
+            const ackPayload = {
+              runId: clientRunId,
+              status: "started" as const,
+            };
+            void agentCommand(
               {
                 message: messageWithAttachments,
                 sessionId,
@@ -865,17 +916,32 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               },
               defaultRuntime,
               ctx.deps,
-            );
-            const payload = {
-              runId: clientRunId,
-              status: "ok" as const,
-            };
-            ctx.dedupe.set(`chat:${clientRunId}`, {
-              ts: Date.now(),
-              ok: true,
-              payload,
-            });
-            return { ok: true, payloadJSON: JSON.stringify(payload) };
+            )
+              .then(() => {
+                ctx.dedupe.set(`chat:${clientRunId}`, {
+                  ts: Date.now(),
+                  ok: true,
+                  payload: { runId: clientRunId, status: "ok" as const },
+                });
+              })
+              .catch((err) => {
+                const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+                ctx.dedupe.set(`chat:${clientRunId}`, {
+                  ts: Date.now(),
+                  ok: false,
+                  payload: {
+                    runId: clientRunId,
+                    status: "error" as const,
+                    summary: String(err),
+                  },
+                  error,
+                });
+              })
+              .finally(() => {
+                ctx.chatAbortControllers.delete(clientRunId);
+              });
+
+            return { ok: true, payloadJSON: JSON.stringify(ackPayload) };
           } catch (err) {
             const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
             const payload = {
@@ -896,8 +962,6 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
                 message: String(err),
               },
             };
-          } finally {
-            ctx.chatAbortControllers.delete(clientRunId);
           }
         }
         default:

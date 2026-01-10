@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
+import { isAbortTrigger } from "../../auto-reply/reply/abort.js";
 import { agentCommand } from "../../commands/agent.js";
 import { mergeSessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -157,6 +158,12 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
+    const stopCommand = (() => {
+      const msg = p.message.trim();
+      if (!msg) return false;
+      const normalized = msg.toLowerCase();
+      return normalized === "/stop" || isAbortTrigger(msg);
+    })();
     const normalizedAttachments =
       p.attachments?.map((a) => ({
         type: typeof a?.type === "string" ? a.type : undefined,
@@ -223,11 +230,49 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
+    if (stopCommand) {
+      const runIds: string[] = [];
+      for (const [runId, active] of context.chatAbortControllers) {
+        if (active.sessionKey !== p.sessionKey) continue;
+        active.controller.abort();
+        context.chatAbortControllers.delete(runId);
+        context.chatRunBuffers.delete(runId);
+        context.chatDeltaSentAt.delete(runId);
+        context.removeChatRun(runId, runId, p.sessionKey);
+        const payload = {
+          runId,
+          sessionKey: p.sessionKey,
+          seq: (context.agentRunSeq.get(runId) ?? 0) + 1,
+          state: "aborted" as const,
+        };
+        context.broadcast("chat", payload);
+        context.bridgeSendToSession(p.sessionKey, "chat", payload);
+        runIds.push(runId);
+      }
+      respond(true, {
+        ok: true,
+        aborted: runIds.length > 0,
+        runIds,
+      });
+      return;
+    }
+
     const cached = context.dedupe.get(`chat:${clientRunId}`);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
       });
+      return;
+    }
+
+    const activeExisting = context.chatAbortControllers.get(clientRunId);
+    if (activeExisting) {
+      respond(
+        true,
+        { runId: clientRunId, status: "in_flight" as const },
+        undefined,
+        { cached: true, runId: clientRunId },
+      );
       return;
     }
 
@@ -250,7 +295,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         }
       }
 
-      await agentCommand(
+      const ackPayload = {
+        runId: clientRunId,
+        status: "started" as const,
+      };
+      respond(true, ackPayload, undefined, { runId: clientRunId });
+
+      void agentCommand(
         {
           message: messageWithAttachments,
           sessionId,
@@ -264,17 +315,30 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
         defaultRuntime,
         context.deps,
-      );
-      const payload = {
-        runId: clientRunId,
-        status: "ok" as const,
-      };
-      context.dedupe.set(`chat:${clientRunId}`, {
-        ts: Date.now(),
-        ok: true,
-        payload,
-      });
-      respond(true, payload, undefined, { runId: clientRunId });
+      )
+        .then(() => {
+          context.dedupe.set(`chat:${clientRunId}`, {
+            ts: Date.now(),
+            ok: true,
+            payload: { runId: clientRunId, status: "ok" as const },
+          });
+        })
+        .catch((err) => {
+          const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+          context.dedupe.set(`chat:${clientRunId}`, {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: String(err),
+            },
+            error,
+          });
+        })
+        .finally(() => {
+          context.chatAbortControllers.delete(clientRunId);
+        });
     } catch (err) {
       const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
       const payload = {
@@ -292,8 +356,6 @@ export const chatHandlers: GatewayRequestHandlers = {
         runId: clientRunId,
         error: formatForLog(err),
       });
-    } finally {
-      context.chatAbortControllers.delete(clientRunId);
     }
   },
 };

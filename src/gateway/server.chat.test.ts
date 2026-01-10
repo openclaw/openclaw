@@ -17,6 +17,15 @@ import {
 
 installGatewayTestHooks();
 
+async function waitFor(condition: () => boolean, timeoutMs = 1500) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (condition()) return;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  throw new Error("timeout waiting for condition");
+}
+
 describe("gateway server chat", () => {
   test("webchat can chat.send without a mobile node", async () => {
     const { server, ws } = await startServerWithClient();
@@ -45,6 +54,8 @@ describe("gateway server chat", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
     const res = await rpcReq(ws, "chat.send", {
       sessionKey: "main",
       message: "hello",
@@ -52,9 +63,8 @@ describe("gateway server chat", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = vi.mocked(agentCommand).mock.calls.at(-1)?.[0] as
-      | { timeout?: string }
-      | undefined;
+    await waitFor(() => spy.mock.calls.length > callsBefore);
+    const call = spy.mock.calls.at(-1)?.[0] as { timeout?: string } | undefined;
     expect(call?.timeout).toBe("123");
 
     ws.close();
@@ -65,6 +75,8 @@ describe("gateway server chat", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
+    const spy = vi.mocked(agentCommand);
+    const callsBefore = spy.mock.calls.length;
     const res = await rpcReq(ws, "chat.send", {
       sessionKey: "agent:main:subagent:abc",
       message: "hello",
@@ -72,7 +84,8 @@ describe("gateway server chat", () => {
     });
     expect(res.ok).toBe(true);
 
-    const call = vi.mocked(agentCommand).mock.calls.at(-1)?.[0] as
+    await waitFor(() => spy.mock.calls.length > callsBefore);
+    const call = spy.mock.calls.at(-1)?.[0] as
       | { sessionKey?: string }
       | undefined;
     expect(call?.sessionKey).toBe("agent:main:subagent:abc");
@@ -607,6 +620,9 @@ describe("gateway server chat", () => {
           }),
         );
 
+        const sendRes = await sendResP;
+        expect(sendRes.ok).toBe(true);
+
         await new Promise<void>((resolve, reject) => {
           const deadline = Date.now() + 1000;
           const tick = () => {
@@ -629,9 +645,6 @@ describe("gateway server chat", () => {
 
         const abortRes = await abortResP;
         expect(abortRes.ok).toBe(true);
-
-        const sendRes = await sendResP;
-        expect(sendRes.ok).toBe(true);
 
         const evt = await abortedEventP;
         expect(evt.payload?.runId).toBe("idem-abort-1");
@@ -730,6 +743,98 @@ describe("gateway server chat", () => {
     ws.close();
     await server.close();
   });
+
+  test(
+    "chat.send treats /stop as an out-of-band abort",
+    { timeout: 15000 },
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      await fs.writeFile(
+        testState.sessionStorePath,
+        JSON.stringify(
+          { main: { sessionId: "sess-main", updatedAt: Date.now() } },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      const { server, ws } = await startServerWithClient();
+      await connectOk(ws);
+
+      const spy = vi.mocked(agentCommand);
+      const callsBefore = spy.mock.calls.length;
+      spy.mockImplementationOnce(async (opts) => {
+        const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+        await new Promise<void>((resolve) => {
+          if (!signal) return resolve();
+          if (signal.aborted) return resolve();
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        });
+      });
+
+      const sendResP = onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "send-stop-1",
+        8000,
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "send-stop-1",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-stop-run",
+          },
+        }),
+      );
+      const sendRes = await sendResP;
+      expect(sendRes.ok).toBe(true);
+
+      await waitFor(() => spy.mock.calls.length > callsBefore);
+
+      const abortedEventP = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "aborted" &&
+          o.payload?.runId === "idem-stop-run",
+        8000,
+      );
+
+      const stopResP = onceMessage(
+        ws,
+        (o) => o.type === "res" && o.id === "send-stop-2",
+        8000,
+      );
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "send-stop-2",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "/stop",
+            idempotencyKey: "idem-stop-req",
+          },
+        }),
+      );
+      const stopRes = await stopResP;
+      expect(stopRes.ok).toBe(true);
+
+      const evt = await abortedEventP;
+      expect(evt.payload?.sessionKey).toBe("main");
+
+      expect(spy.mock.calls.length).toBe(callsBefore + 1);
+
+      ws.close();
+      await server.close();
+    },
+  );
 
   test("chat.abort returns aborted=false for unknown runId", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
@@ -875,6 +980,28 @@ describe("gateway server chat", () => {
       (o) => o.type === "res" && o.id === "send-complete-1",
     );
     expect(sendRes.ok).toBe(true);
+
+    // chat.send returns before the run ends; wait until dedupe is populated
+    // (meaning the run completed and the abort controller was cleared).
+    let completed = false;
+    for (let i = 0; i < 50; i++) {
+      const again = await rpcReq<{ runId?: string; status?: string }>(
+        ws,
+        "chat.send",
+        {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-complete-1",
+          timeoutMs: 30_000,
+        },
+      );
+      if (again.ok && again.payload?.status === "ok") {
+        completed = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(completed).toBe(true);
 
     const abortRes = await rpcReq(ws, "chat.abort", {
       sessionKey: "main",
