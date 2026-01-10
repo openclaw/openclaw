@@ -158,22 +158,16 @@ describe("createClawdbotCodingTools", () => {
     expect(tools.some((tool) => tool.name === "process")).toBe(true);
   });
 
-  it("renames blocked tool names only for Anthropic OAuth", () => {
+  it("keeps canonical tool names for Anthropic OAuth (pi-ai remaps on the wire)", () => {
     const tools = createClawdbotCodingTools({
       modelProvider: "anthropic",
       modelAuthMode: "oauth",
     });
     const names = new Set(tools.map((tool) => tool.name));
-    expect(names.has("Bash")).toBe(true);
-    expect(names.has("Read")).toBe(true);
-    expect(names.has("Write")).toBe(true);
-    expect(names.has("Edit")).toBe(true);
-
-    // Ensure the blocked lowercase variants are not present in the schema.
-    expect(names.has("bash")).toBe(false);
-    expect(names.has("read")).toBe(false);
-    expect(names.has("write")).toBe(false);
-    expect(names.has("edit")).toBe(false);
+    expect(names.has("bash")).toBe(true);
+    expect(names.has("read")).toBe(true);
+    expect(names.has("write")).toBe(true);
+    expect(names.has("edit")).toBe(true);
   });
 
   it("provides top-level object schemas for all tools", () => {
