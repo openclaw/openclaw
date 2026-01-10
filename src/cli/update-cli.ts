@@ -4,16 +4,59 @@ import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import {
   runGatewayUpdate,
   type UpdateRunResult,
+  type UpdateStepInfo,
+  type UpdateStepProgress,
 } from "../infra/update-runner.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
+import { createCliProgress, type ProgressReporter } from "./progress.js";
 
 export type UpdateCommandOptions = {
   json?: boolean;
   restart?: boolean;
   timeout?: string;
 };
+
+const STEP_LABELS: Record<string, string> = {
+  "git status": "Checking for uncommitted changes",
+  "git upstream": "Checking upstream branch",
+  "git fetch": "Fetching latest changes",
+  "git rebase": "Rebasing onto upstream",
+  "deps install": "Installing dependencies",
+  build: "Building",
+  "ui:build": "Building UI",
+  "clawdbot doctor": "Running doctor checks",
+  "git rev-parse HEAD (after)": "Verifying update",
+};
+
+function getStepLabel(step: UpdateStepInfo): string {
+  const friendlyLabel = STEP_LABELS[step.name] ?? step.name;
+  const commandHint = step.command.startsWith("git ")
+    ? step.command.split(" ").slice(0, 2).join(" ")
+    : step.command.split(" ")[0];
+  return `${friendlyLabel} (${commandHint})`;
+}
+
+function createUpdateProgress(enabled: boolean): {
+  progress: UpdateStepProgress;
+  reporter: ProgressReporter;
+} {
+  const reporter = createCliProgress({
+    label: "Preparing update...",
+    indeterminate: true,
+    enabled,
+    delayMs: 0,
+  });
+
+  const progress: UpdateStepProgress = {
+    onStepStart: (step) => {
+      reporter.setLabel(getStepLabel(step));
+    },
+  };
+
+  return { progress, reporter };
+}
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -99,6 +142,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  const showProgress = !opts.json && process.stderr.isTTY;
+
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating Clawdbot..."));
     defaultRuntime.log("");
@@ -111,11 +156,16 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       cwd: process.cwd(),
     })) ?? process.cwd();
 
+  const { progress, reporter } = createUpdateProgress(showProgress);
+
   const result = await runGatewayUpdate({
     cwd: root,
     argv1: process.argv[1],
     timeoutMs,
+    progress,
   });
+
+  reporter.done();
 
   printResult(result, opts);
 
