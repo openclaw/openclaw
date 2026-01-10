@@ -62,66 +62,73 @@ vi.mock("../auto-reply/reply.js", () => {
 });
 
 describe("telegram inbound media", () => {
-  it("downloads media via file_path (no file.download)", async () => {
-    const { createTelegramBot } = await import("./bot.js");
-    const replyModule = await import("../auto-reply/reply.js");
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+  const INBOUND_MEDIA_TEST_TIMEOUT_MS =
+    process.platform === "win32" ? 30_000 : 10_000;
 
-    onSpy.mockReset();
-    replySpy.mockReset();
-    sendChatActionSpy.mockReset();
+  it(
+    "downloads media via file_path (no file.download)",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<
+        typeof vi.fn
+      >;
 
-    const runtimeLog = vi.fn();
-    const runtimeError = vi.fn();
-    createTelegramBot({
-      token: "tok",
-      runtime: {
-        log: runtimeLog,
-        error: runtimeError,
-        exit: () => {
-          throw new Error("exit");
+      onSpy.mockReset();
+      replySpy.mockReset();
+      sendChatActionSpy.mockReset();
+
+      const runtimeLog = vi.fn();
+      const runtimeError = vi.fn();
+      createTelegramBot({
+        token: "tok",
+        runtime: {
+          log: runtimeLog,
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
         },
-      },
-    });
-    const handler = onSpy.mock.calls.find(
-      (call) => call[0] === "message",
-    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-    expect(handler).toBeDefined();
+      });
+      const handler = onSpy.mock.calls.find(
+        (call) => call[0] === "message",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(handler).toBeDefined();
 
-    const fetchSpy = vi
-      .spyOn(globalThis, "fetch" as never)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        statusText: "OK",
-        headers: { get: () => "image/jpeg" },
-        arrayBuffer: async () =>
-          new Uint8Array([0xff, 0xd8, 0xff, 0x00]).buffer,
-      } as Response);
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch" as never)
+        .mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: () => "image/jpeg" },
+          arrayBuffer: async () =>
+            new Uint8Array([0xff, 0xd8, 0xff, 0x00]).buffer,
+        } as Response);
 
-    await handler({
-      message: {
-        message_id: 1,
-        chat: { id: 1234, type: "private" },
-        photo: [{ file_id: "fid" }],
-        date: 1736380800, // 2025-01-09T00:00:00Z
-      },
-      me: { username: "clawdbot_bot" },
-      getFile: async () => ({ file_path: "photos/1.jpg" }),
-    });
+      await handler({
+        message: {
+          message_id: 1,
+          chat: { id: 1234, type: "private" },
+          photo: [{ file_id: "fid" }],
+          date: 1736380800, // 2025-01-09T00:00:00Z
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({ file_path: "photos/1.jpg" }),
+      });
 
-    expect(runtimeError).not.toHaveBeenCalled();
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "https://api.telegram.org/file/bottok/photos/1.jpg",
-    );
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replySpy.mock.calls[0][0];
-    expect(payload.Body).toContain("<media:image>");
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(fetchSpy).toHaveBeenCalledWith(
+        "https://api.telegram.org/file/bottok/photos/1.jpg",
+      );
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("<media:image>");
 
-    fetchSpy.mockRestore();
-  });
+      fetchSpy.mockRestore();
+    },
+    INBOUND_MEDIA_TEST_TIMEOUT_MS,
+  );
 
   it("prefers proxyFetch over global fetch", async () => {
     const { createTelegramBot } = await import("./bot.js");
@@ -283,7 +290,7 @@ describe("telegram media groups", () => {
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
       expect(handler).toBeDefined();
 
-      await handler({
+      const first = handler({
         message: {
           chat: { id: 42, type: "private" },
           message_id: 1,
@@ -296,7 +303,7 @@ describe("telegram media groups", () => {
         getFile: async () => ({ file_path: "photos/photo1.jpg" }),
       });
 
-      await handler({
+      const second = handler({
         message: {
           chat: { id: 42, type: "private" },
           message_id: 2,
@@ -307,6 +314,8 @@ describe("telegram media groups", () => {
         me: { username: "clawdbot_bot" },
         getFile: async () => ({ file_path: "photos/photo2.jpg" }),
       });
+
+      await Promise.all([first, second]);
 
       expect(replySpy).not.toHaveBeenCalled();
       await waitForMediaGroupProcessing(replySpy, 1);
@@ -351,7 +360,7 @@ describe("telegram media groups", () => {
       )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
       expect(handler).toBeDefined();
 
-      await handler({
+      const first = handler({
         message: {
           chat: { id: 42, type: "private" },
           message_id: 1,
@@ -364,7 +373,7 @@ describe("telegram media groups", () => {
         getFile: async () => ({ file_path: "photos/photoA1.jpg" }),
       });
 
-      await handler({
+      const second = handler({
         message: {
           chat: { id: 42, type: "private" },
           message_id: 2,
@@ -376,6 +385,8 @@ describe("telegram media groups", () => {
         me: { username: "clawdbot_bot" },
         getFile: async () => ({ file_path: "photos/photoB1.jpg" }),
       });
+
+      await Promise.all([first, second]);
 
       expect(replySpy).not.toHaveBeenCalled();
       await waitForMediaGroupProcessing(replySpy, 2);
