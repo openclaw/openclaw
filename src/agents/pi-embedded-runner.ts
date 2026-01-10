@@ -860,6 +860,7 @@ export async function compactEmbeddedPiSession(params: {
           params.sessionKey ?? params.sessionId,
         );
         const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+        const runAbortController = new AbortController();
         const tools = createClawdbotCodingTools({
           bash: {
             ...params.config?.tools?.bash,

@@ -651,7 +651,9 @@ export function createClawdbotCodingTools(options?: {
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   const normalized = subagentFiltered.map(normalizeToolParameters);
   const withAbort = options?.abortSignal
-    ? normalized.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
+    ? normalized.map((tool) =>
+        wrapToolWithAbortSignal(tool, options.abortSignal),
+      )
     : normalized;
 
   // Anthropic blocks specific lowercase tool names (bash, read, write, edit) with OAuth tokens.
