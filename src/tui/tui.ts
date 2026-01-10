@@ -152,6 +152,9 @@ export async function runTui(opts: TuiOptions) {
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
+  let activityStatus = "idle";
+  let connectionStatus = "connecting";
+  let statusTimeout: NodeJS.Timeout | null = null;
 
   const client = new GatewayChatClient({
     url: opts.url,
@@ -218,6 +221,30 @@ export async function runTui(opts: TuiOptions) {
     status.setText(theme.dim(text));
   };
 
+  const renderStatus = () => {
+    const text = activityStatus
+      ? `${connectionStatus} | ${activityStatus}`
+      : connectionStatus;
+    setStatus(text);
+  };
+
+  const setConnectionStatus = (text: string, ttlMs?: number) => {
+    connectionStatus = text;
+    renderStatus();
+    if (statusTimeout) clearTimeout(statusTimeout);
+    if (ttlMs && ttlMs > 0) {
+      statusTimeout = setTimeout(() => {
+        connectionStatus = isConnected ? "connected" : "disconnected";
+        renderStatus();
+      }, ttlMs);
+    }
+  };
+
+  const setActivityStatus = (text: string) => {
+    activityStatus = text;
+    renderStatus();
+  };
+
   const updateFooter = () => {
     const connection = isConnected ? "connected" : "disconnected";
     const sessionKeyLabel = formatSessionKey(currentSessionKey);
@@ -246,7 +273,7 @@ export async function runTui(opts: TuiOptions) {
     const deliver = deliverDefault ? "on" : "off";
     footer.setText(
       theme.dim(
-        `${connection} | agent ${agentLabel} | session ${sessionLabel} | model ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens} | deliver ${deliver}`,
+        `${connection} | agent ${agentLabel} | session ${sessionLabel} | ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens} | deliver ${deliver}`,
       ),
     );
   };
@@ -440,10 +467,10 @@ export async function runTui(opts: TuiOptions) {
         sessionKey: currentSessionKey,
         runId: activeChatRunId,
       });
-      setStatus("aborted");
+      setActivityStatus("aborted");
     } catch (err) {
       chatLog.addSystem(`abort failed: ${String(err)}`);
-      setStatus("abort failed");
+      setActivityStatus("abort failed");
     }
     tui.requestRender();
   };
@@ -478,7 +505,7 @@ export async function runTui(opts: TuiOptions) {
       });
       if (!text) return;
       chatLog.updateAssistant(text, evt.runId);
-      setStatus("streaming");
+      setActivityStatus("streaming");
     }
     if (evt.state === "final") {
       const text = extractTextFromMessage(evt.message, {
@@ -487,17 +514,17 @@ export async function runTui(opts: TuiOptions) {
       chatLog.finalizeAssistant(text || "(no output)", evt.runId);
       noteFinalizedRun(evt.runId);
       activeChatRunId = null;
-      setStatus("idle");
+      setActivityStatus("idle");
     }
     if (evt.state === "aborted") {
       chatLog.addSystem("run aborted");
       activeChatRunId = null;
-      setStatus("aborted");
+      setActivityStatus("aborted");
     }
     if (evt.state === "error") {
       chatLog.addSystem(`run error: ${evt.errorMessage ?? "unknown"}`);
       activeChatRunId = null;
-      setStatus("error");
+      setActivityStatus("error");
     }
     tui.requestRender();
   };
@@ -528,9 +555,9 @@ export async function runTui(opts: TuiOptions) {
     }
     if (evt.stream === "lifecycle") {
       const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
-      if (phase === "start") setStatus("running");
-      if (phase === "end") setStatus("idle");
-      if (phase === "error") setStatus("error");
+      if (phase === "start") setActivityStatus("running");
+      if (phase === "end") setActivityStatus("idle");
+      if (phase === "error") setActivityStatus("error");
       tui.requestRender();
     }
   };
@@ -895,7 +922,7 @@ export async function runTui(opts: TuiOptions) {
     try {
       chatLog.addUser(text);
       tui.requestRender();
-      setStatus("sending");
+      setActivityStatus("sending");
       const { runId } = await client.sendChat({
         sessionKey: currentSessionKey,
         message: text,
@@ -904,10 +931,10 @@ export async function runTui(opts: TuiOptions) {
         timeoutMs: opts.timeoutMs,
       });
       activeChatRunId = runId;
-      setStatus("waiting");
+      setActivityStatus("waiting");
     } catch (err) {
       chatLog.addSystem(`send failed: ${String(err)}`);
-      setStatus("error");
+      setActivityStatus("error");
     }
     tui.requestRender();
   };
@@ -933,7 +960,7 @@ export async function runTui(opts: TuiOptions) {
     const now = Date.now();
     if (editor.getText().trim().length > 0) {
       editor.setText("");
-      setStatus("cleared input");
+      setActivityStatus("cleared input");
       tui.requestRender();
       return;
     }
@@ -943,7 +970,7 @@ export async function runTui(opts: TuiOptions) {
       process.exit(0);
     }
     lastCtrlCAt = now;
-    setStatus("press ctrl+c again to exit");
+    setActivityStatus("press ctrl+c again to exit");
     tui.requestRender();
   };
   editor.onCtrlD = () => {
@@ -954,7 +981,7 @@ export async function runTui(opts: TuiOptions) {
   editor.onCtrlO = () => {
     toolsExpanded = !toolsExpanded;
     chatLog.setToolsExpanded(toolsExpanded);
-    setStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
+    setActivityStatus(toolsExpanded ? "tools expanded" : "tools collapsed");
     tui.requestRender();
   };
   editor.onCtrlL = () => {
@@ -978,20 +1005,20 @@ export async function runTui(opts: TuiOptions) {
 
   client.onConnected = () => {
     isConnected = true;
-    setStatus("connected");
+    setConnectionStatus("connected");
     void (async () => {
       await refreshAgents();
       updateHeader();
       if (!historyLoaded) {
         await loadHistory();
-        chatLog.addSystem("gateway connected");
+        setConnectionStatus("gateway connected", 4000);
         tui.requestRender();
         if (!autoMessageSent && autoMessage) {
           autoMessageSent = true;
           await sendMessage(autoMessage);
         }
       } else {
-        chatLog.addSystem("gateway reconnected");
+        setConnectionStatus("gateway reconnected", 4000);
       }
       updateFooter();
       tui.requestRender();
@@ -1000,23 +1027,24 @@ export async function runTui(opts: TuiOptions) {
 
   client.onDisconnected = (reason) => {
     isConnected = false;
-    chatLog.addSystem(`gateway disconnected: ${reason || "closed"}`);
-    setStatus("disconnected");
+    const reasonLabel = reason?.trim() ? reason.trim() : "closed";
+    setConnectionStatus(`gateway disconnected: ${reasonLabel}`, 5000);
+    setActivityStatus("idle");
     updateFooter();
     tui.requestRender();
   };
 
   client.onGap = (info) => {
-    chatLog.addSystem(
+    setConnectionStatus(
       `event gap: expected ${info.expected}, got ${info.received}`,
+      5000,
     );
     tui.requestRender();
   };
 
   updateHeader();
-  setStatus("connecting");
+  setConnectionStatus("connecting");
   updateFooter();
-  chatLog.addSystem("connecting...");
   tui.start();
   client.start();
 }
