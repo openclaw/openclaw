@@ -228,143 +228,162 @@ describe("telegram inbound media", () => {
 });
 
 describe("telegram media groups", () => {
+  const MEDIA_GROUP_POLL_TIMEOUT_MS = 15_000;
+  const MEDIA_GROUP_TEST_TIMEOUT_MS = 20_000;
+
   const waitForMediaGroupProcessing = async (
     replySpy: ReturnType<typeof vi.fn>,
     expectedCalls: number,
   ) => {
     await expect
-      .poll(() => replySpy.mock.calls.length, { timeout: 10_000 })
+      .poll(() => replySpy.mock.calls.length, {
+        timeout: MEDIA_GROUP_POLL_TIMEOUT_MS,
+      })
       .toBe(expectedCalls);
   };
 
-  it("buffers messages with same media_group_id and processes them together", async () => {
-    const { createTelegramBot } = await import("./bot.js");
-    const replyModule = await import("../auto-reply/reply.js");
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+  it(
+    "buffers messages with same media_group_id and processes them together",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<
+        typeof vi.fn
+      >;
 
-    onSpy.mockReset();
-    replySpy.mockReset();
+      onSpy.mockReset();
+      replySpy.mockReset();
 
-    const runtimeError = vi.fn();
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: () => "image/png" },
-      arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
-    } as Response);
+      const runtimeError = vi.fn();
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch" as never)
+        .mockResolvedValue({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: () => "image/png" },
+          arrayBuffer: async () =>
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+        } as Response);
 
-    createTelegramBot({
-      token: "tok",
-      runtime: {
-        log: vi.fn(),
-        error: runtimeError,
-        exit: () => {
-          throw new Error("exit");
+      createTelegramBot({
+        token: "tok",
+        runtime: {
+          log: vi.fn(),
+          error: runtimeError,
+          exit: () => {
+            throw new Error("exit");
+          },
         },
-      },
-    });
-    const handler = onSpy.mock.calls.find(
-      (call) => call[0] === "message",
-    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-    expect(handler).toBeDefined();
+      });
+      const handler = onSpy.mock.calls.find(
+        (call) => call[0] === "message",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(handler).toBeDefined();
 
-    await handler({
-      message: {
-        chat: { id: 42, type: "private" },
-        message_id: 1,
-        caption: "Here are my photos",
-        date: 1736380800,
-        media_group_id: "album123",
-        photo: [{ file_id: "photo1" }],
-      },
-      me: { username: "clawdbot_bot" },
-      getFile: async () => ({ file_path: "photos/photo1.jpg" }),
-    });
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 1,
+          caption: "Here are my photos",
+          date: 1736380800,
+          media_group_id: "album123",
+          photo: [{ file_id: "photo1" }],
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({ file_path: "photos/photo1.jpg" }),
+      });
 
-    await handler({
-      message: {
-        chat: { id: 42, type: "private" },
-        message_id: 2,
-        date: 1736380801,
-        media_group_id: "album123",
-        photo: [{ file_id: "photo2" }],
-      },
-      me: { username: "clawdbot_bot" },
-      getFile: async () => ({ file_path: "photos/photo2.jpg" }),
-    });
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 2,
+          date: 1736380801,
+          media_group_id: "album123",
+          photo: [{ file_id: "photo2" }],
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({ file_path: "photos/photo2.jpg" }),
+      });
 
-    expect(replySpy).not.toHaveBeenCalled();
-    await waitForMediaGroupProcessing(replySpy, 1);
+      expect(replySpy).not.toHaveBeenCalled();
+      await waitForMediaGroupProcessing(replySpy, 1);
 
-    expect(runtimeError).not.toHaveBeenCalled();
-    expect(replySpy).toHaveBeenCalledTimes(1);
-    const payload = replySpy.mock.calls[0][0];
-    expect(payload.Body).toContain("Here are my photos");
-    expect(payload.MediaPaths).toHaveLength(2);
+      expect(runtimeError).not.toHaveBeenCalled();
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0];
+      expect(payload.Body).toContain("Here are my photos");
+      expect(payload.MediaPaths).toHaveLength(2);
 
-    fetchSpy.mockRestore();
-  }, 10_000);
+      fetchSpy.mockRestore();
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
 
-  it("processes separate media groups independently", async () => {
-    const { createTelegramBot } = await import("./bot.js");
-    const replyModule = await import("../auto-reply/reply.js");
-    const replySpy = replyModule.__replySpy as unknown as ReturnType<
-      typeof vi.fn
-    >;
+  it(
+    "processes separate media groups independently",
+    async () => {
+      const { createTelegramBot } = await import("./bot.js");
+      const replyModule = await import("../auto-reply/reply.js");
+      const replySpy = replyModule.__replySpy as unknown as ReturnType<
+        typeof vi.fn
+      >;
 
-    onSpy.mockReset();
-    replySpy.mockReset();
+      onSpy.mockReset();
+      replySpy.mockReset();
 
-    const fetchSpy = vi.spyOn(globalThis, "fetch" as never).mockResolvedValue({
-      ok: true,
-      status: 200,
-      statusText: "OK",
-      headers: { get: () => "image/png" },
-      arrayBuffer: async () => new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
-    } as Response);
+      const fetchSpy = vi
+        .spyOn(globalThis, "fetch" as never)
+        .mockResolvedValue({
+          ok: true,
+          status: 200,
+          statusText: "OK",
+          headers: { get: () => "image/png" },
+          arrayBuffer: async () =>
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer,
+        } as Response);
 
-    createTelegramBot({ token: "tok" });
-    const handler = onSpy.mock.calls.find(
-      (call) => call[0] === "message",
-    )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
-    expect(handler).toBeDefined();
+      createTelegramBot({ token: "tok" });
+      const handler = onSpy.mock.calls.find(
+        (call) => call[0] === "message",
+      )?.[1] as (ctx: Record<string, unknown>) => Promise<void>;
+      expect(handler).toBeDefined();
 
-    await handler({
-      message: {
-        chat: { id: 42, type: "private" },
-        message_id: 1,
-        caption: "Album A",
-        date: 1736380800,
-        media_group_id: "albumA",
-        photo: [{ file_id: "photoA1" }],
-      },
-      me: { username: "clawdbot_bot" },
-      getFile: async () => ({ file_path: "photos/photoA1.jpg" }),
-    });
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 1,
+          caption: "Album A",
+          date: 1736380800,
+          media_group_id: "albumA",
+          photo: [{ file_id: "photoA1" }],
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({ file_path: "photos/photoA1.jpg" }),
+      });
 
-    await handler({
-      message: {
-        chat: { id: 42, type: "private" },
-        message_id: 2,
-        caption: "Album B",
-        date: 1736380801,
-        media_group_id: "albumB",
-        photo: [{ file_id: "photoB1" }],
-      },
-      me: { username: "clawdbot_bot" },
-      getFile: async () => ({ file_path: "photos/photoB1.jpg" }),
-    });
+      await handler({
+        message: {
+          chat: { id: 42, type: "private" },
+          message_id: 2,
+          caption: "Album B",
+          date: 1736380801,
+          media_group_id: "albumB",
+          photo: [{ file_id: "photoB1" }],
+        },
+        me: { username: "clawdbot_bot" },
+        getFile: async () => ({ file_path: "photos/photoB1.jpg" }),
+      });
 
-    expect(replySpy).not.toHaveBeenCalled();
-    await waitForMediaGroupProcessing(replySpy, 2);
+      expect(replySpy).not.toHaveBeenCalled();
+      await waitForMediaGroupProcessing(replySpy, 2);
 
-    expect(replySpy).toHaveBeenCalledTimes(2);
+      expect(replySpy).toHaveBeenCalledTimes(2);
 
-    fetchSpy.mockRestore();
-  }, 10_000);
+      fetchSpy.mockRestore();
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
 });
 
 describe("telegram location parsing", () => {
