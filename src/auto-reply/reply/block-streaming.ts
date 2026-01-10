@@ -58,9 +58,7 @@ export function resolveBlockStreamingChunking(
     Math.floor(chunkCfg?.maxChars ?? DEFAULT_BLOCK_STREAM_MAX),
   );
   const maxChars = Math.max(1, Math.min(maxRequested, textLimit));
-  const telegramBlockStreaming =
-    providerKey === "telegram" && cfg?.telegram?.streamMode === "block";
-  const minFallback = telegramBlockStreaming ? 1 : DEFAULT_BLOCK_STREAM_MIN;
+  const minFallback = DEFAULT_BLOCK_STREAM_MIN;
   const minRequested = Math.max(
     1,
     Math.floor(chunkCfg?.minChars ?? minFallback),
@@ -135,13 +133,6 @@ export function resolveBlockStreamingCoalescing(
   })();
   const coalesceCfg =
     providerCfg ?? cfg?.agents?.defaults?.blockStreamingCoalesce;
-  if (
-    providerKey === "telegram" &&
-    cfg?.telegram?.streamMode === "block" &&
-    !coalesceCfg
-  ) {
-    return undefined;
-  }
   const minRequested = Math.max(
     1,
     Math.floor(
