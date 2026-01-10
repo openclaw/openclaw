@@ -962,6 +962,7 @@ const HooksGmailSchema = z
           .union([z.literal("off"), z.literal("serve"), z.literal("funnel")])
           .optional(),
         path: z.string().optional(),
+        target: z.string().optional(),
       })
       .optional(),
     model: z.string().optional(),

@@ -2021,6 +2021,8 @@ Gateway auto-start:
 
 Note: when `tailscale.mode` is on, Clawdbot defaults `serve.path` to `/` so
 Tailscale can proxy `/gmail-pubsub` correctly (it strips the set-path prefix).
+If you need the backend to receive the prefixed path, set
+`hooks.gmail.tailscale.target` to a full URL (and align `serve.path`).
 
 ### `canvasHost` (LAN/tailnet Canvas file server + live reload)
 
