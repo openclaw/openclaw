@@ -591,28 +591,31 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
       return false;
     };
-    let didAddAckReaction = false;
-    if (shouldAckReaction() && msg.message_id) {
-      const api = bot.api as unknown as {
-        setMessageReaction?: (
-          chatId: number | string,
-          messageId: number,
-          reactions: Array<{ type: "emoji"; emoji: string }>,
-        ) => Promise<void>;
-      };
-      if (typeof api.setMessageReaction === "function") {
-        api
-          .setMessageReaction(chatId, msg.message_id, [
+    const api = bot.api as unknown as {
+      setMessageReaction?: (
+        chatId: number | string,
+        messageId: number,
+        reactions: Array<{ type: "emoji"; emoji: string }>,
+      ) => Promise<void>;
+    };
+    const reactionApi =
+      typeof api.setMessageReaction === "function"
+        ? api.setMessageReaction.bind(api)
+        : null;
+    const ackReactionPromise =
+      shouldAckReaction() && msg.message_id && reactionApi
+        ? reactionApi(chatId, msg.message_id, [
             { type: "emoji", emoji: ackReaction },
-          ])
-          .catch((err) => {
-            logVerbose(
-              `telegram react failed for chat ${chatId}: ${String(err)}`,
-            );
-          });
-        didAddAckReaction = true;
-      }
-    }
+          ]).then(
+            () => true,
+            (err) => {
+              logVerbose(
+                `telegram react failed for chat ${chatId}: ${String(err)}`,
+              );
+              return false;
+            },
+          )
+        : null;
 
     let placeholder = "";
     if (msg.photo) placeholder = "<media:image>";
@@ -857,21 +860,20 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     markDispatchIdle();
     draftStream?.stop();
     if (!queuedFinal) return;
-    if (removeAckAfterReply && didAddAckReaction && msg.message_id) {
-      const api = bot.api as unknown as {
-        setMessageReaction?: (
-          chatId: number | string,
-          messageId: number,
-          reactions: Array<{ type: "emoji"; emoji: string }>,
-        ) => Promise<void>;
-      };
-      if (typeof api.setMessageReaction === "function") {
-        api.setMessageReaction(chatId, msg.message_id, []).catch((err) => {
+    if (
+      removeAckAfterReply &&
+      ackReactionPromise &&
+      msg.message_id &&
+      reactionApi
+    ) {
+      void ackReactionPromise.then((didAck) => {
+        if (!didAck) return;
+        reactionApi(chatId, msg.message_id, []).catch((err) => {
           logVerbose(
             `telegram: failed to remove ack reaction from ${chatId}/${msg.message_id}: ${String(err)}`,
           );
         });
-      }
+      });
     }
   };
 

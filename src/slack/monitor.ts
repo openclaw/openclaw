@@ -913,6 +913,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     const rawBody = (message.text ?? "").trim() || media?.placeholder || "";
     if (!rawBody) return;
     const ackReaction = resolveAckReaction(cfg, route.agentId);
+    const ackReactionValue = ackReaction ?? "";
     const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
     const shouldAckReaction = () => {
       if (!ackReaction) return false;
@@ -928,18 +929,27 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       }
       return false;
     };
-    let didAddAckReaction = false;
-    if (shouldAckReaction() && message.ts) {
-      reactSlackMessage(message.channel, message.ts, ackReaction, {
-        token: botToken,
-        client: app.client,
-      }).catch((err) => {
-        logVerbose(
-          `slack react failed for channel ${message.channel}: ${String(err)}`,
-        );
-      });
-      didAddAckReaction = true;
-    }
+    const ackReactionMessageTs = message.ts;
+    const ackReactionPromise =
+      shouldAckReaction() && ackReactionMessageTs && ackReactionValue
+        ? reactSlackMessage(
+            message.channel,
+            ackReactionMessageTs,
+            ackReactionValue,
+            {
+              token: botToken,
+              client: app.client,
+            },
+          ).then(
+            () => true,
+            (err) => {
+              logVerbose(
+                `slack react failed for channel ${message.channel}: ${String(err)}`,
+              );
+              return false;
+            },
+          )
+        : null;
 
     const roomLabel = channelName ? `#${channelName}` : `#${message.channel}`;
 
@@ -1160,14 +1170,18 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         `slack: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
       );
     }
-    if (removeAckAfterReply && didAddAckReaction && ackReaction && message.ts) {
-      removeSlackReaction(message.channel, message.ts, ackReaction, {
-        token: botToken,
-        client: app.client,
-      }).catch((err) => {
-        logVerbose(
-          `slack: failed to remove ack reaction from ${message.channel}/${message.ts}: ${String(err)}`,
-        );
+    if (removeAckAfterReply && ackReactionPromise && ackReactionMessageTs) {
+      const messageTs = ackReactionMessageTs;
+      void ackReactionPromise.then((didAck) => {
+        if (!didAck) return;
+        removeSlackReaction(message.channel, messageTs, ackReactionValue, {
+          token: botToken,
+          client: app.client,
+        }).catch((err) => {
+          logVerbose(
+            `slack: failed to remove ack reaction from ${message.channel}/${message.ts}: ${String(err)}`,
+          );
+        });
       });
     }
   };
