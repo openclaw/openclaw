@@ -4,6 +4,7 @@ import path from "node:path";
 
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 
+import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -38,23 +39,26 @@ export type CodexCliCredential = {
   expires: number;
 };
 
-function loadJsonFile(pathname: string): unknown {
-  try {
-    if (!fs.existsSync(pathname)) return undefined;
-    const raw = fs.readFileSync(pathname, "utf8");
-    return JSON.parse(raw) as unknown;
-  } catch {
-    return undefined;
-  }
+type ClaudeCliFileOptions = {
+  homeDir?: string;
+};
+
+type ClaudeCliWriteOptions = ClaudeCliFileOptions & {
+  platform?: NodeJS.Platform;
+  writeKeychain?: (credentials: OAuthCredentials) => boolean;
+  writeFile?: (
+    credentials: OAuthCredentials,
+    options?: ClaudeCliFileOptions,
+  ) => boolean;
+};
+
+function resolveClaudeCliCredentialsPath(homeDir?: string) {
+  const baseDir = homeDir ?? resolveUserPath("~");
+  return path.join(baseDir, CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH);
 }
 
-function saveJsonFile(pathname: string, data: unknown) {
-  const dir = path.dirname(pathname);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  }
-  fs.writeFileSync(pathname, `${JSON.stringify(data, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+function resolveCodexCliAuthPath() {
+  return path.join(resolveUserPath("~"), CODEX_CLI_AUTH_RELATIVE_PATH);
 }
 
 function readClaudeCliKeychainCredentials(): ClaudeCliCredential | null {
@@ -109,10 +113,7 @@ export function readClaudeCliCredentials(options?: {
     }
   }
 
-  const credPath = path.join(
-    resolveUserPath("~"),
-    CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
-  );
+  const credPath = resolveClaudeCliCredentialsPath();
   const raw = loadJsonFile(credPath);
   if (!raw || typeof raw !== "object") return null;
 
@@ -188,11 +189,9 @@ export function writeClaudeCliKeychainCredentials(
 
 export function writeClaudeCliFileCredentials(
   newCredentials: OAuthCredentials,
+  options?: ClaudeCliFileOptions,
 ): boolean {
-  const credPath = path.join(
-    resolveUserPath("~"),
-    CLAUDE_CLI_CREDENTIALS_RELATIVE_PATH,
-  );
+  const credPath = resolveClaudeCliCredentialsPath(options?.homeDir);
 
   if (!fs.existsSync(credPath)) {
     return false;
@@ -230,22 +229,28 @@ export function writeClaudeCliFileCredentials(
 
 export function writeClaudeCliCredentials(
   newCredentials: OAuthCredentials,
+  options?: ClaudeCliWriteOptions,
 ): boolean {
-  if (process.platform === "darwin") {
-    const didWriteKeychain = writeClaudeCliKeychainCredentials(newCredentials);
+  const platform = options?.platform ?? process.platform;
+  const writeKeychain =
+    options?.writeKeychain ?? writeClaudeCliKeychainCredentials;
+  const writeFile =
+    options?.writeFile ??
+    ((credentials, fileOptions) =>
+      writeClaudeCliFileCredentials(credentials, fileOptions));
+
+  if (platform === "darwin") {
+    const didWriteKeychain = writeKeychain(newCredentials);
     if (didWriteKeychain) {
       return true;
     }
   }
 
-  return writeClaudeCliFileCredentials(newCredentials);
+  return writeFile(newCredentials, { homeDir: options?.homeDir });
 }
 
 export function readCodexCliCredentials(): CodexCliCredential | null {
-  const authPath = path.join(
-    resolveUserPath("~"),
-    CODEX_CLI_AUTH_RELATIVE_PATH,
-  );
+  const authPath = resolveCodexCliAuthPath();
   const raw = loadJsonFile(authPath);
   if (!raw || typeof raw !== "object") return null;
 

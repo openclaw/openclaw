@@ -1,3 +1,7 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const execSyncMock = vi.hoisted(() => vi.fn());
@@ -50,5 +54,59 @@ describe("cli credentials", () => {
       cmd.includes("add-generic-password"),
     );
     expect(updateCommand).toContain("-U");
+  });
+
+  it("falls back to the file store when the keychain update fails", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-"));
+    const credPath = path.join(tempDir, ".claude", ".credentials.json");
+
+    fs.mkdirSync(path.dirname(credPath), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      credPath,
+      `${JSON.stringify(
+        {
+          claudeAiOauth: {
+            accessToken: "old-access",
+            refreshToken: "old-refresh",
+            expiresAt: Date.now() + 60_000,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const writeKeychain = vi.fn(() => false);
+
+    const { writeClaudeCliCredentials } = await import("./cli-credentials.js");
+
+    const ok = writeClaudeCliCredentials(
+      {
+        access: "new-access",
+        refresh: "new-refresh",
+        expires: Date.now() + 120_000,
+      },
+      {
+        platform: "darwin",
+        homeDir: tempDir,
+        writeKeychain,
+      },
+    );
+
+    expect(ok).toBe(true);
+    expect(writeKeychain).toHaveBeenCalledTimes(1);
+
+    const updated = JSON.parse(fs.readFileSync(credPath, "utf8")) as {
+      claudeAiOauth?: {
+        accessToken?: string;
+        refreshToken?: string;
+        expiresAt?: number;
+      };
+    };
+
+    expect(updated.claudeAiOauth?.accessToken).toBe("new-access");
+    expect(updated.claudeAiOauth?.refreshToken).toBe("new-refresh");
+    expect(updated.claudeAiOauth?.expiresAt).toBeTypeOf("number");
   });
 });
