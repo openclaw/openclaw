@@ -1153,9 +1153,15 @@ export async function monitorWebProvider(
       // Send ack reaction immediately upon message receipt
       if (msg.id) {
         const ackConfig = cfg.whatsapp?.ackReaction;
-        // Backward compatibility: support old messages.ackReaction format
-        const legacyEmoji = (cfg.messages as any)?.ackReaction;
-        const legacyScope = (cfg.messages as any)?.ackReactionScope;
+        // Backward compatibility: support old messages.ackReaction format (legacy, undocumented)
+        const messages = cfg.messages as
+          | undefined
+          | (typeof cfg.messages & {
+              ackReaction?: string;
+              ackReactionScope?: string;
+            });
+        const legacyEmoji = messages?.ackReaction;
+        const legacyScope = messages?.ackReactionScope;
         let emoji = (ackConfig?.emoji ?? "").trim();
         let directEnabled = ackConfig?.direct ?? true;
         let groupMode = ackConfig?.group ?? "mentions";
