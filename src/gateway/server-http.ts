@@ -22,6 +22,7 @@ import {
   resolveHookProvider,
 } from "./hooks.js";
 import { applyHookMappings } from "./hooks-mapping.js";
+import { handleOpenAiHttpRequest } from "./openai-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -206,12 +207,14 @@ export function createGatewayHttpServer(opts: {
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   handleHooksRequest: HooksRequestHandler;
+  resolvedAuth: import("./auth.js").ResolvedGatewayAuth;
 }): HttpServer {
   const {
     canvasHost,
     controlUiEnabled,
     controlUiBasePath,
     handleHooksRequest,
+    resolvedAuth,
   } = opts;
   const httpServer: HttpServer = createHttpServer((req, res) => {
     // Don't interfere with WebSocket upgrades; ws handles the 'upgrade' event.
@@ -219,6 +222,8 @@ export function createGatewayHttpServer(opts: {
 
     void (async () => {
       if (await handleHooksRequest(req, res)) return;
+      if (await handleOpenAiHttpRequest(req, res, { auth: resolvedAuth }))
+        return;
       if (canvasHost) {
         if (await handleA2uiHttpRequest(req, res)) return;
         if (await canvasHost.handleHttpRequest(req, res)) return;

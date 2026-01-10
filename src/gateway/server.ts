@@ -616,6 +616,7 @@ export async function startGatewayServer(
     controlUiEnabled,
     controlUiBasePath,
     handleHooksRequest,
+    resolvedAuth,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
   let bridge: Awaited<ReturnType<typeof startNodeBridgeServer>> | null = null;
