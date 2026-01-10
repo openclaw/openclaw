@@ -31,8 +31,11 @@ import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
+import { runGatewayUpdate } from "../infra/update-runner.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
@@ -95,6 +98,25 @@ function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+async function detectClawdbotGitCheckout(
+  root: string,
+): Promise<"git" | "not-git" | "unknown"> {
+  const res = await runCommandWithTimeout(
+    ["git", "-C", root, "rev-parse", "--show-toplevel"],
+    { timeoutMs: 5000 },
+  ).catch(() => null);
+  if (!res) return "unknown";
+  if (res.code !== 0) {
+    // Avoid noisy "Update via package manager" notes when git is missing/broken,
+    // but do show it when this is clearly not a git checkout.
+    if (res.stderr.toLowerCase().includes("not a git repository")) {
+      return "not-git";
+    }
+    return "unknown";
+  }
+  return res.stdout.trim() === root ? "git" : "not-git";
+}
+
 export async function doctorCommand(
   runtime: RuntimeEnv = defaultRuntime,
   options: DoctorOptions = {},
@@ -102,6 +124,68 @@ export async function doctorCommand(
   const prompter = createDoctorPrompter({ runtime, options });
   printWizardHeader(runtime);
   intro("Clawdbot doctor");
+
+  const updateInProgress = process.env.CLAWDBOT_UPDATE_IN_PROGRESS === "1";
+  const canOfferUpdate =
+    !updateInProgress &&
+    options.nonInteractive !== true &&
+    options.yes !== true &&
+    options.repair !== true &&
+    Boolean(process.stdin.isTTY);
+  if (canOfferUpdate) {
+    const root = await resolveClawdbotPackageRoot({
+      moduleUrl: import.meta.url,
+      argv1: process.argv[1],
+      cwd: process.cwd(),
+    });
+    if (root) {
+      const git = await detectClawdbotGitCheckout(root);
+      if (git === "git") {
+        const shouldUpdate = await prompter.confirm({
+          message: "Update Clawdbot from git before running doctor?",
+          initialValue: true,
+        });
+        if (shouldUpdate) {
+          note(
+            "Running update (fetch/rebase/build/ui:build/doctor)…",
+            "Update",
+          );
+          const result = await runGatewayUpdate({
+            cwd: root,
+            argv1: process.argv[1],
+          });
+          note(
+            [
+              `Status: ${result.status}`,
+              `Mode: ${result.mode}`,
+              result.root ? `Root: ${result.root}` : null,
+              result.reason ? `Reason: ${result.reason}` : null,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+            "Update result",
+          );
+          if (result.status === "ok") {
+            outro(
+              "Update completed (doctor already ran as part of the update).",
+            );
+            return;
+          }
+        }
+      } else if (git === "not-git") {
+        note(
+          [
+            "This install is not a git checkout.",
+            "Update via your package manager, then rerun doctor:",
+            "- npm i -g clawdbot@latest",
+            "- pnpm add -g clawdbot@latest",
+            "- bun add -g clawdbot@latest",
+          ].join("\n"),
+          "Update",
+        );
+      }
+    }
+  }
 
   await maybeMigrateLegacyConfigFile(runtime);
 

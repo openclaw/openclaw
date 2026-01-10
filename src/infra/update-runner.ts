@@ -148,9 +148,10 @@ async function runStep(
   argv: string[],
   cwd: string,
   timeoutMs: number,
+  env?: NodeJS.ProcessEnv,
 ): Promise<UpdateStepResult> {
   const started = Date.now();
-  const result = await runCommand(argv, { cwd, timeoutMs });
+  const result = await runCommand(argv, { cwd, timeoutMs, env });
   const durationMs = Date.now() - started;
   return {
     name,
@@ -346,6 +347,7 @@ export async function runGatewayUpdate(
         managerScriptArgs(manager, "clawdbot", ["doctor"]),
         gitRoot,
         timeoutMs,
+        { CLAWDBOT_UPDATE_IN_PROGRESS: "1" },
       ),
     );
 

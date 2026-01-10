@@ -1,5 +1,5 @@
 ---
-summary: "Updating Clawdbot safely (npm or source), plus rollback strategy"
+summary: "Updating Clawdbot safely (global install or source), plus rollback strategy"
 read_when:
   - Updating Clawdbot
   - Something breaks after an update
@@ -11,14 +11,14 @@ Clawdbot is moving fast (pre “1.0”). Treat updates like shipping infra: upda
 
 ## Before you update
 
-- Know how you installed: **npm** (global) vs **from source** (git clone).
+- Know how you installed: **global** (npm/pnpm/bun) vs **from source** (git clone).
 - Know how your Gateway is running: **foreground terminal** vs **supervised service** (launchd/systemd).
 - Snapshot your tailoring:
   - Config: `~/.clawdbot/clawdbot.json`
   - Credentials: `~/.clawdbot/credentials/`
   - Workspace: `~/clawd`
 
-## Update (npm install)
+## Update (global install)
 
 Global install (pick one):
 
@@ -28,6 +28,10 @@ npm i -g clawdbot@latest
 
 ```bash
 pnpm add -g clawdbot@latest
+```
+
+```bash
+bun add -g clawdbot@latest
 ```
 
 Then:
@@ -55,7 +59,7 @@ It runs a safe-ish update flow:
 - Fetches + rebases against the configured upstream.
 - Installs deps, builds, builds the Control UI, and runs `clawdbot doctor`.
 
-If you installed via **npm/pnpm** (no git metadata), `clawdbot update` will skip. Use “Update (npm install)” instead.
+If you installed via **npm/pnpm/bun** (no git metadata), `clawdbot update` will skip. Use “Update (global install)” instead.
 
 ## Update (Control UI / RPC)
 
@@ -90,11 +94,13 @@ pnpm clawdbot health
 Notes:
 - `pnpm build` matters when you run the packaged `clawdbot` binary ([`dist/entry.js`](https://github.com/clawdbot/clawdbot/blob/main/dist/entry.js)) or use Node to run `dist/`.
 - If you run directly from TypeScript (`pnpm clawdbot ...` / `bun run clawdbot ...`), a rebuild is usually unnecessary, but **config migrations still apply** → run doctor.
-- Switching between npm and git installs is easy: install the other flavor, then run `clawdbot doctor` so the gateway service entrypoint is rewritten to the current install.
+- Switching between global and git installs is easy: install the other flavor, then run `clawdbot doctor` so the gateway service entrypoint is rewritten to the current install.
 
 ## Always run: `clawdbot doctor`
 
 Doctor is the “safe update” command. It’s intentionally boring: repair + migrate + warn.
+
+Note: if you’re on a **source install** (git checkout), `clawdbot doctor` will offer to run `clawdbot update` first.
 
 Typical things it does:
 - Migrate deprecated config keys / legacy config file locations.
@@ -127,12 +133,20 @@ Runbook + exact service labels: [Gateway runbook](/gateway)
 
 ## Rollback / pinning (when something breaks)
 
-### Pin (npm)
+### Pin (global install)
 
 Install a known-good version:
 
 ```bash
 npm i -g clawdbot@2026.1.9
+```
+
+```bash
+pnpm add -g clawdbot@2026.1.9
+```
+
+```bash
+bun add -g clawdbot@2026.1.9
 ```
 
 Then restart + re-run doctor:
