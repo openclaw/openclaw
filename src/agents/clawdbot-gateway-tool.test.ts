@@ -14,9 +14,7 @@ describe("gateway tool", () => {
     vi.useFakeTimers();
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
-    const stateDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-test-"),
-    );
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-test-"));
     process.env.CLAWDBOT_STATE_DIR = stateDir;
 
     try {
