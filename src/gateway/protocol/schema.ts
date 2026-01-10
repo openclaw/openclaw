@@ -903,7 +903,7 @@ export const ChatSendParamsSchema = Type.Object(
 export const ChatAbortParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
-    runId: NonEmptyString,
+    runId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

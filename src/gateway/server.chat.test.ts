@@ -836,6 +836,136 @@ describe("gateway server chat", () => {
     },
   );
 
+  test("chat.send idempotency returns started → in_flight → ok", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const spy = vi.mocked(agentCommand);
+    let resolveRun: (() => void) | undefined;
+    const runDone = new Promise<void>((resolve) => {
+      resolveRun = resolve;
+    });
+    spy.mockImplementationOnce(async () => {
+      await runDone;
+    });
+
+    const started = await rpcReq<{ runId?: string; status?: string }>(
+      ws,
+      "chat.send",
+      {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-status-1",
+      },
+    );
+    expect(started.ok).toBe(true);
+    expect(started.payload?.status).toBe("started");
+
+    const inFlight = await rpcReq<{ runId?: string; status?: string }>(
+      ws,
+      "chat.send",
+      {
+        sessionKey: "main",
+        message: "hello",
+        idempotencyKey: "idem-status-1",
+      },
+    );
+    expect(inFlight.ok).toBe(true);
+    expect(inFlight.payload?.status).toBe("in_flight");
+
+    resolveRun?.();
+
+    let completed = false;
+    for (let i = 0; i < 50; i++) {
+      const again = await rpcReq<{ runId?: string; status?: string }>(
+        ws,
+        "chat.send",
+        {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-status-1",
+        },
+      );
+      if (again.ok && again.payload?.status === "ok") {
+        completed = true;
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(completed).toBe(true);
+
+    ws.close();
+    await server.close();
+  });
+
+  test("chat.abort without runId aborts active runs and suppresses chat events after abort", async () => {
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    const spy = vi.mocked(agentCommand);
+    spy.mockImplementationOnce(async (opts) => {
+      const signal = (opts as { abortSignal?: AbortSignal }).abortSignal;
+      await new Promise<void>((resolve) => {
+        if (!signal) return resolve();
+        if (signal.aborted) return resolve();
+        signal.addEventListener("abort", () => resolve(), { once: true });
+      });
+    });
+
+    const abortedEventP = onceMessage(
+      ws,
+      (o) =>
+        o.type === "event" &&
+        o.event === "chat" &&
+        o.payload?.state === "aborted" &&
+        o.payload?.runId === "idem-abort-all-1",
+    );
+
+    const started = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "hello",
+      idempotencyKey: "idem-abort-all-1",
+    });
+    expect(started.ok).toBe(true);
+
+    const abortRes = await rpcReq<{
+      ok?: boolean;
+      aborted?: boolean;
+      runIds?: string[];
+    }>(ws, "chat.abort", { sessionKey: "main" });
+    expect(abortRes.ok).toBe(true);
+    expect(abortRes.payload?.aborted).toBe(true);
+    expect(abortRes.payload?.runIds ?? []).toContain("idem-abort-all-1");
+
+    await abortedEventP;
+
+    const noDeltaP = onceMessage(
+      ws,
+      (o) =>
+        o.type === "event" &&
+        o.event === "chat" &&
+        (o.payload?.state === "delta" || o.payload?.state === "final") &&
+        o.payload?.runId === "idem-abort-all-1",
+      250,
+    );
+
+    emitAgentEvent({
+      runId: "idem-abort-all-1",
+      stream: "assistant",
+      data: { text: "should be suppressed" },
+    });
+    emitAgentEvent({
+      runId: "idem-abort-all-1",
+      stream: "lifecycle",
+      data: { phase: "end" },
+    });
+
+    await expect(noDeltaP).rejects.toThrow(/timeout/i);
+
+    ws.close();
+    await server.close();
+  });
+
   test("chat.abort returns aborted=false for unknown runId", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-gw-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");

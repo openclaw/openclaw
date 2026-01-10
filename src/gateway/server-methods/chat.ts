@@ -2,12 +2,17 @@ import { randomUUID } from "node:crypto";
 
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
-import { isAbortTrigger } from "../../auto-reply/reply/abort.js";
 import { agentCommand } from "../../commands/agent.js";
 import { mergeSessionEntry, saveSessionStore } from "../../config/sessions.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  abortChatRunById,
+  abortChatRunsForSessionKey,
+  isChatStopCommandText,
+  resolveChatRunExpiresAtMs,
+} from "../chat-abort.js";
 import { buildMessageWithAttachments } from "../chat-attachments.js";
 import {
   ErrorCodes,
@@ -97,11 +102,32 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
     const { sessionKey, runId } = params as {
       sessionKey: string;
-      runId: string;
+      runId?: string;
     };
+
+    const ops = {
+      chatAbortControllers: context.chatAbortControllers,
+      chatRunBuffers: context.chatRunBuffers,
+      chatDeltaSentAt: context.chatDeltaSentAt,
+      chatAbortedRuns: context.chatAbortedRuns,
+      removeChatRun: context.removeChatRun,
+      agentRunSeq: context.agentRunSeq,
+      broadcast: context.broadcast,
+      bridgeSendToSession: context.bridgeSendToSession,
+    };
+
+    if (!runId) {
+      const res = abortChatRunsForSessionKey(ops, {
+        sessionKey,
+        stopReason: "rpc",
+      });
+      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
+      return;
+    }
+
     const active = context.chatAbortControllers.get(runId);
     if (!active) {
-      respond(true, { ok: true, aborted: false });
+      respond(true, { ok: true, aborted: false, runIds: [] });
       return;
     }
     if (active.sessionKey !== sessionKey) {
@@ -116,21 +142,16 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    active.controller.abort();
-    context.chatAbortControllers.delete(runId);
-    context.chatRunBuffers.delete(runId);
-    context.chatDeltaSentAt.delete(runId);
-    context.removeChatRun(runId, runId, sessionKey);
-
-    const payload = {
+    const res = abortChatRunById(ops, {
       runId,
       sessionKey,
-      seq: (context.agentRunSeq.get(runId) ?? 0) + 1,
-      state: "aborted" as const,
-    };
-    context.broadcast("chat", payload);
-    context.bridgeSendToSession(sessionKey, "chat", payload);
-    respond(true, { ok: true, aborted: true });
+      stopReason: "rpc",
+    });
+    respond(true, {
+      ok: true,
+      aborted: res.aborted,
+      runIds: res.aborted ? [runId] : [],
+    });
   },
   "chat.send": async ({ params, respond, context }) => {
     if (!validateChatSendParams(params)) {
@@ -158,12 +179,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       idempotencyKey: string;
     };
-    const stopCommand = (() => {
-      const msg = p.message.trim();
-      if (!msg) return false;
-      const normalized = msg.toLowerCase();
-      return normalized === "/stop" || isAbortTrigger(msg);
-    })();
+    const stopCommand = isChatStopCommandText(p.message);
     const normalizedAttachments =
       p.attachments?.map((a) => ({
         type: typeof a?.type === "string" ? a.type : undefined,
@@ -231,29 +247,20 @@ export const chatHandlers: GatewayRequestHandlers = {
     }
 
     if (stopCommand) {
-      const runIds: string[] = [];
-      for (const [runId, active] of context.chatAbortControllers) {
-        if (active.sessionKey !== p.sessionKey) continue;
-        active.controller.abort();
-        context.chatAbortControllers.delete(runId);
-        context.chatRunBuffers.delete(runId);
-        context.chatDeltaSentAt.delete(runId);
-        context.removeChatRun(runId, runId, p.sessionKey);
-        const payload = {
-          runId,
-          sessionKey: p.sessionKey,
-          seq: (context.agentRunSeq.get(runId) ?? 0) + 1,
-          state: "aborted" as const,
-        };
-        context.broadcast("chat", payload);
-        context.bridgeSendToSession(p.sessionKey, "chat", payload);
-        runIds.push(runId);
-      }
-      respond(true, {
-        ok: true,
-        aborted: runIds.length > 0,
-        runIds,
-      });
+      const res = abortChatRunsForSessionKey(
+        {
+          chatAbortControllers: context.chatAbortControllers,
+          chatRunBuffers: context.chatRunBuffers,
+          chatDeltaSentAt: context.chatDeltaSentAt,
+          chatAbortedRuns: context.chatAbortedRuns,
+          removeChatRun: context.removeChatRun,
+          agentRunSeq: context.agentRunSeq,
+          broadcast: context.broadcast,
+          bridgeSendToSession: context.bridgeSendToSession,
+        },
+        { sessionKey: p.sessionKey, stopReason: "stop" },
+      );
+      respond(true, { ok: true, aborted: res.aborted, runIds: res.runIds });
       return;
     }
 
@@ -282,6 +289,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         controller: abortController,
         sessionId,
         sessionKey: p.sessionKey,
+        startedAtMs: now,
+        expiresAtMs: resolveChatRunExpiresAtMs({ now, timeoutMs }),
       });
       context.addChatRun(clientRunId, {
         sessionKey: p.sessionKey,

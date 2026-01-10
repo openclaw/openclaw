@@ -1033,13 +1033,19 @@ export class ClawdbotApp extends LitElement {
     const trimmed = text.trim();
     if (!trimmed) return false;
     const normalized = trimmed.toLowerCase();
-    return normalized === "/stop" || normalized === "stop" || normalized === "abort";
+    if (normalized === "/stop") return true;
+    return (
+      normalized === "stop" ||
+      normalized === "esc" ||
+      normalized === "abort" ||
+      normalized === "wait" ||
+      normalized === "exit"
+    );
   }
 
   async handleAbortChat() {
     if (!this.connected) return;
     this.chatMessage = "";
-    if (!this.chatRunId) return;
     await abortChatRun(this);
   }
 

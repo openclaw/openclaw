@@ -111,6 +111,10 @@ import {
   resolveGatewayAuth,
 } from "./auth.js";
 import {
+  abortChatRunById,
+  type ChatAbortControllerEntry,
+} from "./chat-abort.js";
+import {
   type GatewayReloadPlan,
   type ProviderKind,
   startGatewayConfigReloader,
@@ -685,10 +689,7 @@ export async function startGatewayServer(
     }
     return sessionKey;
   };
-  const chatAbortControllers = new Map<
-    string,
-    { controller: AbortController; sessionId: string; sessionKey: string }
-  >();
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
   setCommandLaneConcurrency("cron", cfgAtStart.cron?.maxConcurrentRuns ?? 1);
   setCommandLaneConcurrency(
     "main",
@@ -967,6 +968,7 @@ export async function startGatewayServer(
     addChatRun,
     removeChatRun,
     chatAbortControllers,
+    chatAbortedRuns: chatRunState.abortedRuns,
     chatRunBuffers,
     chatDeltaSentAt,
     dedupe,
@@ -1191,6 +1193,31 @@ export async function startGatewayServer(
       for (let i = 0; i < dedupe.size - DEDUPE_MAX; i++) {
         dedupe.delete(entries[i][0]);
       }
+    }
+
+    for (const [runId, entry] of chatAbortControllers) {
+      if (now <= entry.expiresAtMs) continue;
+      abortChatRunById(
+        {
+          chatAbortControllers,
+          chatRunBuffers,
+          chatDeltaSentAt,
+          chatAbortedRuns: chatRunState.abortedRuns,
+          removeChatRun,
+          agentRunSeq,
+          broadcast,
+          bridgeSendToSession,
+        },
+        { runId, sessionKey: entry.sessionKey, stopReason: "timeout" },
+      );
+    }
+
+    const ABORTED_RUN_TTL_MS = 60 * 60_000;
+    for (const [runId, abortedAt] of chatRunState.abortedRuns) {
+      if (now - abortedAt <= ABORTED_RUN_TTL_MS) continue;
+      chatRunState.abortedRuns.delete(runId);
+      chatRunBuffers.delete(runId);
+      chatDeltaSentAt.delete(runId);
     }
   }, 60_000);
 
@@ -1647,6 +1674,7 @@ export async function startGatewayServer(
               hasConnectedMobileNode,
               agentRunSeq,
               chatAbortControllers,
+              chatAbortedRuns: chatRunState.abortedRuns,
               chatRunBuffers,
               chatDeltaSentAt,
               addChatRun,
