@@ -23,6 +23,23 @@ Related:
 - `agents.defaults.models` is the allowlist/catalog of models Clawdbot can use (plus aliases).
 - `agents.defaults.imageModel` is used **only when** the primary model can’t accept images.
 
+## Quick model picks (anecdotal)
+
+- **GLM**: a bit better for coding/tool calling.
+- **MiniMax**: better for writing and vibes.
+
+## Setup wizard (recommended)
+
+If you don’t want to hand-edit config, run the onboarding wizard:
+
+```bash
+clawdbot onboard
+```
+
+It can set up model + auth for common providers, including **OpenAI Code (Codex)
+subscription** (OAuth) and **Anthropic** (API key recommended; `claude
+setup-token` also supported).
+
 ## Config keys (overview)
 
 - `agents.defaults.model.primary` and `agents.defaults.model.fallbacks`
