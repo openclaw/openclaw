@@ -45,7 +45,7 @@ import {
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
-import { fetchRemoteMedia } from "../media/fetch.js";
+import { fetchRemoteMedia, type FetchLike } from "../media/fetch.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { buildPairingReply } from "../pairing/pairing-messages.js";
 import {
@@ -355,7 +355,7 @@ async function resolveSlackMedia(params: {
     const url = file.url_private_download ?? file.url_private;
     if (!url) continue;
     try {
-      const fetchImpl: typeof fetch = (input, init) => {
+      const fetchImpl: FetchLike = (input, init) => {
         const headers = new Headers(init?.headers);
         headers.set("Authorization", `Bearer ${params.token}`);
         return fetch(input, { ...init, headers });

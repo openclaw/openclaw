@@ -8,9 +8,14 @@ type FetchMediaResult = {
   fileName?: string;
 };
 
+export type FetchLike = (
+  input: RequestInfo | URL,
+  init?: RequestInit,
+) => Promise<Response>;
+
 type FetchMediaOptions = {
   url: string;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchLike;
   filePathHint?: string;
 };
 
@@ -57,7 +62,7 @@ export async function fetchRemoteMedia(
   options: FetchMediaOptions,
 ): Promise<FetchMediaResult> {
   const { url, fetchImpl, filePathHint } = options;
-  const fetcher = fetchImpl ?? globalThis.fetch;
+  const fetcher: FetchLike | undefined = fetchImpl ?? globalThis.fetch;
   if (!fetcher) {
     throw new Error("fetch is not available");
   }
