@@ -249,6 +249,7 @@ describe("isFailoverErrorMessage", () => {
       "429 rate limit exceeded",
       "Your credit balance is too low",
       "request timed out",
+      "invalid request format",
     ];
     for (const sample of samples) {
       expect(isFailoverErrorMessage(sample)).toBe(true);
@@ -263,9 +264,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("resource has been exhausted")).toBe(
       "rate_limit",
     );
+    expect(classifyFailoverReason("invalid request format")).toBe("format");
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
-    expect(classifyFailoverReason("string should match pattern")).toBeNull();
+    expect(classifyFailoverReason("string should match pattern")).toBe(
+      "format",
+    );
     expect(classifyFailoverReason("bad request")).toBeNull();
   });
 });

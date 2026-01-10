@@ -1533,9 +1533,7 @@ export async function runEmbeddedPiAgent(params: {
             : false;
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate =
-            (!aborted && (failoverFailure || cloudCodeAssistFormatError)) ||
-            timedOut;
+          const shouldRotate = (!aborted && failoverFailure) || timedOut;
 
           if (shouldRotate) {
             // Mark current profile for cooldown before rotating

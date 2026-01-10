@@ -15,6 +15,14 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
   });
 
+  it("infers format errors from error messages", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "invalid request format: messages.1.content.1.tool_use.id",
+      }),
+    ).toBe("format");
+  });
+
   it("infers timeout from common node error codes", () => {
     expect(resolveFailoverReasonFromError({ code: "ETIMEDOUT" })).toBe(
       "timeout",
@@ -34,6 +42,15 @@ describe("failover-error", () => {
     expect(err?.status).toBe(402);
     expect(err?.provider).toBe("anthropic");
     expect(err?.model).toBe("claude-opus-4-5");
+  });
+
+  it("coerces format errors with a 400 status", () => {
+    const err = coerceToFailoverError("invalid request format", {
+      provider: "google",
+      model: "cloud-code-assist",
+    });
+    expect(err?.reason).toBe("format");
+    expect(err?.status).toBe(400);
   });
 
   it("describes non-Error values consistently", () => {

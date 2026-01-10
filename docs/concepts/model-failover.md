@@ -58,6 +58,8 @@ If you have both an OAuth profile and an API key profile for the same provider, 
 
 When a profile fails due to auth/rate‑limit errors (or a timeout that looks
 like rate limiting), Clawdbot marks it in cooldown and moves to the next profile.
+Format/invalid‑request errors (for example Cloud Code Assist tool call ID
+validation failures) are treated as failover‑worthy and use the same cooldowns.
 
 Cooldowns use exponential backoff:
 - 1 minute

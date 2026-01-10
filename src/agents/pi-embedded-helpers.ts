@@ -276,47 +276,84 @@ export function isRateLimitAssistantError(
   msg: AssistantMessage | undefined,
 ): boolean {
   if (!msg || msg.stopReason !== "error") return false;
-  const raw = (msg.errorMessage ?? "").toLowerCase();
+  return isRateLimitErrorMessage(msg.errorMessage ?? "");
+}
+
+type ErrorPattern = RegExp | string;
+
+const ERROR_PATTERNS = {
+  rateLimit: [
+    /rate[_ ]limit|too many requests|429/,
+    "exceeded your current quota",
+    "resource has been exhausted",
+    "quota exceeded",
+    "resource_exhausted",
+  ],
+  timeout: [
+    "timeout",
+    "timed out",
+    "deadline exceeded",
+    "context deadline exceeded",
+  ],
+  billing: [
+    /\b402\b/,
+    "payment required",
+    "insufficient credits",
+    "credit balance",
+    "plans & billing",
+  ],
+  auth: [
+    /invalid[_ ]?api[_ ]?key/,
+    "incorrect api key",
+    "invalid token",
+    "authentication",
+    "unauthorized",
+    "forbidden",
+    "access denied",
+    "expired",
+    "token has expired",
+    /\b401\b/,
+    /\b403\b/,
+  ],
+  format: [
+    "invalid_request_error",
+    "string should match pattern",
+    "tool_use.id",
+    "tool_use_id",
+    "messages.1.content.1.tool_use.id",
+    "invalid request format",
+  ],
+} as const;
+
+function matchesErrorPatterns(
+  raw: string,
+  patterns: readonly ErrorPattern[],
+): boolean {
   if (!raw) return false;
-  return isRateLimitErrorMessage(raw);
+  const value = raw.toLowerCase();
+  return patterns.some((pattern) =>
+    pattern instanceof RegExp ? pattern.test(value) : value.includes(pattern),
+  );
 }
 
 export function isRateLimitErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
-  return (
-    /rate[_ ]limit|too many requests|429/.test(value) ||
-    value.includes("exceeded your current quota") ||
-    value.includes("resource has been exhausted") ||
-    value.includes("quota exceeded") ||
-    value.includes("resource_exhausted")
-  );
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.rateLimit);
 }
 
 export function isTimeoutErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
-  if (!value) return false;
-  return (
-    value.includes("timeout") ||
-    value.includes("timed out") ||
-    value.includes("deadline exceeded") ||
-    value.includes("context deadline exceeded")
-  );
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
 }
 
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) return false;
+  if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) return true;
   return (
-    /\b402\b/.test(value) ||
-    value.includes("payment required") ||
-    value.includes("insufficient credits") ||
-    value.includes("credit balance") ||
-    value.includes("plans & billing") ||
-    (value.includes("billing") &&
-      (value.includes("upgrade") ||
-        value.includes("credits") ||
-        value.includes("payment") ||
-        value.includes("plan")))
+    value.includes("billing") &&
+    (value.includes("upgrade") ||
+      value.includes("credits") ||
+      value.includes("payment") ||
+      value.includes("plan"))
   );
 }
 
@@ -328,34 +365,11 @@ export function isBillingAssistantError(
 }
 
 export function isAuthErrorMessage(raw: string): boolean {
-  const value = raw.toLowerCase();
-  if (!value) return false;
-  return (
-    /invalid[_ ]?api[_ ]?key/.test(value) ||
-    value.includes("incorrect api key") ||
-    value.includes("invalid token") ||
-    value.includes("authentication") ||
-    value.includes("unauthorized") ||
-    value.includes("forbidden") ||
-    value.includes("access denied") ||
-    value.includes("expired") ||
-    value.includes("token has expired") ||
-    /\b401\b/.test(value) ||
-    /\b403\b/.test(value)
-  );
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.auth);
 }
 
 export function isCloudCodeAssistFormatError(raw: string): boolean {
-  const value = raw.toLowerCase();
-  if (!value) return false;
-  return (
-    value.includes("invalid_request_error") ||
-    value.includes("string should match pattern") ||
-    value.includes("tool_use.id") ||
-    value.includes("tool_use_id") ||
-    value.includes("messages.1.content.1.tool_use.id") ||
-    value.includes("invalid request format")
-  );
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.format);
 }
 
 export function isAuthAssistantError(
@@ -367,16 +381,18 @@ export function isAuthAssistantError(
 
 export type FailoverReason =
   | "auth"
+  | "format"
   | "rate_limit"
   | "billing"
   | "timeout"
   | "unknown";
 
 export function classifyFailoverReason(raw: string): FailoverReason | null {
-  if (isAuthErrorMessage(raw)) return "auth";
   if (isRateLimitErrorMessage(raw)) return "rate_limit";
+  if (isCloudCodeAssistFormatError(raw)) return "format";
   if (isBillingErrorMessage(raw)) return "billing";
   if (isTimeoutErrorMessage(raw)) return "timeout";
+  if (isAuthErrorMessage(raw)) return "auth";
   return null;
 }
 

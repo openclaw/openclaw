@@ -50,6 +50,8 @@ export function resolveFailoverStatus(
       return 401;
     case "timeout":
       return 408;
+    case "format":
+      return 400;
     default:
       return undefined;
   }

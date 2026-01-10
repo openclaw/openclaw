@@ -74,6 +74,7 @@ export type AuthProfileCredential =
 
 export type AuthProfileFailureReason =
   | "auth"
+  | "format"
   | "rate_limit"
   | "billing"
   | "timeout"
