@@ -98,6 +98,39 @@ function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
+  const providers = cfg.models?.providers;
+  if (!providers) return;
+
+  // 2026-01-10: warn when OpenCode Zen overrides mask built-in routing/costs (8a194b4abc360c6098f157956bb9322576b44d51, 2d105d16f8a099276114173836d46b46cdfbdbae).
+  const overrides: string[] = [];
+  if (providers.opencode) overrides.push("opencode");
+  if (providers["opencode-zen"]) overrides.push("opencode-zen");
+  if (overrides.length === 0) return;
+
+  const lines = overrides.flatMap((id) => {
+    const providerEntry = providers[id];
+    const api =
+      isRecord(providerEntry) && typeof providerEntry.api === "string"
+        ? providerEntry.api
+        : undefined;
+    return [
+      `- models.providers.${id} is set; this overrides the built-in OpenCode Zen catalog.`,
+      api ? `- models.providers.${id}.api=${api}` : null,
+    ].filter((line): line is string => Boolean(line));
+  });
+
+  lines.push(
+    "- Remove these entries to restore per-model API routing + costs (then re-run onboarding if needed).",
+  );
+
+  note(lines.join("\n"), "OpenCode Zen");
+}
+
 async function detectClawdbotGitCheckout(
   root: string,
 ): Promise<"git" | "not-git" | "unknown"> {
@@ -232,6 +265,8 @@ export async function doctorCommand(
     note(normalized.changes.join("\n"), "Doctor changes");
     cfg = normalized.config;
   }
+
+  noteOpencodeProviderOverrides(cfg);
 
   cfg = await maybeRepairAnthropicOAuthProfileId(cfg, prompter);
   await noteAuthProfileHealth({
