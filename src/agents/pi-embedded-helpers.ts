@@ -106,11 +106,19 @@ export async function sanitizeSessionMessagesImages(
       const sanitizedToolCallId = toolMsg.toolCallId
         ? sanitizeToolCallId(toolMsg.toolCallId)
         : undefined;
+      const toolUseId = (toolMsg as { toolUseId?: unknown }).toolUseId;
+      const sanitizedToolUseId =
+        typeof toolUseId === "string" && toolUseId
+          ? sanitizeToolCallId(toolUseId)
+          : undefined;
       const sanitizedMsg = {
         ...toolMsg,
         content: nextContent,
         ...(sanitizedToolCallId && {
           toolCallId: sanitizedToolCallId,
+        }),
+        ...(sanitizedToolUseId && {
+          toolUseId: sanitizedToolUseId,
         }),
       };
       out.push(sanitizedMsg);
@@ -146,18 +154,24 @@ export async function sanitizeSessionMessagesImages(
         // Also sanitize tool call IDs in assistant messages (function call blocks)
         const sanitizedContent = await Promise.all(
           filteredContent.map(async (block) => {
+            if (!block || typeof block !== "object") return block;
+
+            const type = (block as { type?: unknown }).type;
+            const id = (block as { id?: unknown }).id;
+            if (typeof id !== "string" || !id) return block;
+
+            // Cloud Code Assist tool blocks require ids matching ^[a-zA-Z0-9_-]+$.
             if (
-              block &&
-              typeof block === "object" &&
-              (block as { type?: unknown }).type === "functionCall" &&
-              (block as { id?: unknown }).id
+              type === "functionCall" ||
+              type === "toolUse" ||
+              type === "toolCall"
             ) {
-              const functionBlock = block as { type: string; id: string };
               return {
-                ...functionBlock,
-                id: sanitizeToolCallId(functionBlock.id),
+                ...(block as unknown as Record<string, unknown>),
+                id: sanitizeToolCallId(id),
               };
             }
+
             return block;
           }),
         );
