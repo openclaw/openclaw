@@ -136,10 +136,12 @@ describe("cli credentials", () => {
     const first = readClaudeCliCredentialsCached({
       allowKeychainPrompt: true,
       ttlMs: 15 * 60 * 1000,
+      platform: "darwin",
     });
     const second = readClaudeCliCredentialsCached({
       allowKeychainPrompt: false,
       ttlMs: 15 * 60 * 1000,
+      platform: "darwin",
     });
 
     expect(first).toBeTruthy();
@@ -167,6 +169,7 @@ describe("cli credentials", () => {
     const first = readClaudeCliCredentialsCached({
       allowKeychainPrompt: true,
       ttlMs: 15 * 60 * 1000,
+      platform: "darwin",
     });
 
     vi.advanceTimersByTime(15 * 60 * 1000 + 1);
@@ -174,6 +177,7 @@ describe("cli credentials", () => {
     const second = readClaudeCliCredentialsCached({
       allowKeychainPrompt: true,
       ttlMs: 15 * 60 * 1000,
+      platform: "darwin",
     });
 
     expect(first).toBeTruthy();
