@@ -13,6 +13,7 @@ import {
   type GatewayDaemonRuntime,
 } from "../commands/daemon-runtime.js";
 import { healthCommand } from "../commands/health.js";
+import { formatHealthCheckFailure } from "../commands/health-format.js";
 import {
   applyWizardMetadata,
   DEFAULT_WORKSPACE,
@@ -664,7 +665,7 @@ export async function runOnboardingWizard(
     try {
       await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
     } catch (err) {
-      runtime.error(`Health check failed: ${String(err)}`);
+      runtime.error(formatHealthCheckFailure(err));
       await prompter.note(
         [
           "Docs:",
@@ -740,7 +741,7 @@ export async function runOnboardingWizard(
         "Start TUI (best option!)",
       );
       const wantsTui = await prompter.confirm({
-        message: "Start TUI now? (best option!)",
+        message: "Do you want to hatch your bot now?",
         initialValue: true,
       });
       if (wantsTui) {

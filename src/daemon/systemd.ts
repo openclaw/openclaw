@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
+import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   GATEWAY_SYSTEMD_SERVICE_NAME,
   LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
@@ -12,6 +13,11 @@ import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 const execFileAsync = promisify(execFile);
+
+const formatLine = (label: string, value: string) => {
+  const rich = isRich();
+  return `${colorize(rich, theme.muted, `${label}:`)} ${colorize(rich, theme.command, value)}`;
+};
 
 function resolveHomeDir(env: Record<string, string | undefined>): string {
   const home = env.HOME?.trim() || env.USERPROFILE?.trim();
@@ -410,7 +416,7 @@ export async function installSystemdService({
     );
   }
 
-  stdout.write(`Installed systemd service: ${unitPath}\n`);
+  stdout.write(`${formatLine("Installed systemd service", unitPath)}\n`);
   return { unitPath };
 }
 
@@ -428,7 +434,7 @@ export async function uninstallSystemdService({
   const unitPath = resolveSystemdUnitPath(env);
   try {
     await fs.unlink(unitPath);
-    stdout.write(`Removed systemd service: ${unitPath}\n`);
+    stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
   } catch {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }
@@ -447,7 +453,7 @@ export async function stopSystemdService({
       `systemctl stop failed: ${res.stderr || res.stdout}`.trim(),
     );
   }
-  stdout.write(`Stopped systemd service: ${unitName}\n`);
+  stdout.write(`${formatLine("Stopped systemd service", unitName)}\n`);
 }
 
 export async function restartSystemdService({
@@ -463,7 +469,7 @@ export async function restartSystemdService({
       `systemctl restart failed: ${res.stderr || res.stdout}`.trim(),
     );
   }
-  stdout.write(`Restarted systemd service: ${unitName}\n`);
+  stdout.write(`${formatLine("Restarted systemd service", unitName)}\n`);
 }
 
 export async function isSystemdServiceEnabled(): Promise<boolean> {
@@ -584,7 +590,9 @@ export async function uninstallLegacySystemdUnits({
 
     try {
       await fs.unlink(unit.unitPath);
-      stdout.write(`Removed legacy systemd service: ${unit.unitPath}\n`);
+      stdout.write(
+        `${formatLine("Removed legacy systemd service", unit.unitPath)}\n`,
+      );
     } catch {
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
     }

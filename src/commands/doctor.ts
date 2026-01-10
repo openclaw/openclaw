@@ -80,6 +80,7 @@ import {
   shouldSuggestMemorySystem,
 } from "./doctor-workspace.js";
 import { healthCommand } from "./health.js";
+import { formatHealthCheckFailure } from "./health-format.js";
 import { applyWizardMetadata, printWizardHeader } from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
@@ -310,7 +311,7 @@ export async function doctorCommand(
       note("Gateway not running.", "Gateway");
       note(gatewayDetails.message, "Gateway connection");
     } else {
-      runtime.error(`Health check failed: ${message}`);
+      runtime.error(formatHealthCheckFailure(err));
     }
   }
 
@@ -455,7 +456,7 @@ export async function doctorCommand(
               note("Gateway not running.", "Gateway");
               note(gatewayDetails.message, "Gateway connection");
             } else {
-              runtime.error(`Health check failed: ${message}`);
+              runtime.error(formatHealthCheckFailure(err));
             }
           }
         }

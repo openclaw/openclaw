@@ -67,6 +67,7 @@ import {
   GOOGLE_GEMINI_DEFAULT_MODEL,
 } from "./google-gemini-model-default.js";
 import { healthCommand } from "./health.js";
+import { formatHealthCheckFailure } from "./health-format.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxConfig,
@@ -1286,7 +1287,7 @@ export async function runConfigureWizard(
     try {
       await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
     } catch (err) {
-      runtime.error(`Health check failed: ${String(err)}`);
+      runtime.error(formatHealthCheckFailure(err));
       note(
         [
           "Docs:",
