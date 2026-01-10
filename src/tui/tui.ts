@@ -9,6 +9,7 @@ import {
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeUsageDisplay } from "../auto-reply/thinking.js";
 import { loadConfig } from "../config/config.js";
+import { formatAge } from "../infra/provider-summary.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -74,6 +75,30 @@ type AgentSummary = {
   name?: string;
 };
 
+type GatewayStatusSummary = {
+  web?: { linked?: boolean; authAgeMs?: number | null };
+  heartbeatSeconds?: number;
+  providerSummary?: string[];
+  queuedSystemEvents?: string[];
+  sessions?: {
+    path?: string;
+    count?: number;
+    defaults?: { model?: string | null; contextTokens?: number | null };
+    recent?: Array<{
+      key: string;
+      kind?: string;
+      updatedAt?: number | null;
+      age?: number | null;
+      model?: string | null;
+      totalTokens?: number | null;
+      contextTokens?: number | null;
+      remainingTokens?: number | null;
+      percentUsed?: number | null;
+      flags?: string[];
+    }>;
+  };
+};
+
 function extractTextBlocks(
   content: unknown,
   opts?: { includeThinking?: boolean },
@@ -120,6 +145,29 @@ function formatTokens(total?: number | null, context?: number | null) {
   }`;
 }
 
+function formatContextUsageLine(params: {
+  total?: number | null;
+  context?: number | null;
+  remaining?: number | null;
+  percent?: number | null;
+}) {
+  const totalLabel =
+    typeof params.total === "number" ? formatTokenCount(params.total) : "?";
+  const ctxLabel =
+    typeof params.context === "number" ? formatTokenCount(params.context) : "?";
+  const pct =
+    typeof params.percent === "number"
+      ? Math.min(999, Math.round(params.percent))
+      : null;
+  const remainingLabel =
+    typeof params.remaining === "number"
+      ? `${formatTokenCount(params.remaining)} left`
+      : null;
+  const pctLabel = pct !== null ? `${pct}%` : null;
+  const extra = [remainingLabel, pctLabel].filter(Boolean).join(", ");
+  return `tokens ${totalLabel}/${ctxLabel}${extra ? ` (${extra})` : ""}`;
+}
+
 function asString(value: unknown, fallback = ""): string {
   if (typeof value === "string") return value;
   if (typeof value === "number" || typeof value === "boolean") {
@@ -147,7 +195,7 @@ export async function runTui(opts: TuiOptions) {
   let isConnected = false;
   let toolsExpanded = false;
   let showThinking = false;
-  let deliverDefault = Boolean(opts.deliver);
+  const deliverDefault = opts.deliver ?? true;
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
@@ -246,7 +294,6 @@ export async function runTui(opts: TuiOptions) {
   };
 
   const updateFooter = () => {
-    const connection = isConnected ? "connected" : "disconnected";
     const sessionKeyLabel = formatSessionKey(currentSessionKey);
     const sessionLabel = sessionInfo.displayName
       ? `${sessionKeyLabel} (${sessionInfo.displayName})`
@@ -270,12 +317,87 @@ export async function runTui(opts: TuiOptions) {
         : reasoning === "stream"
           ? "reasoning:stream"
           : null;
-    const deliver = deliverDefault ? "on" : "off";
     footer.setText(
       theme.dim(
-        `${connection} | agent ${agentLabel} | session ${sessionLabel} | ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens} | deliver ${deliver}`,
+        `agent ${agentLabel} | session ${sessionLabel} | ${modelLabel} | think ${think} | verbose ${verbose}${reasoningLabel ? ` | ${reasoningLabel}` : ""} | ${tokens}`,
       ),
     );
+  };
+
+  const formatStatusSummary = (summary: GatewayStatusSummary) => {
+    const lines: string[] = [];
+    lines.push("Gateway status");
+
+    const webLinked = summary.web?.linked === true;
+    const authAge =
+      webLinked && typeof summary.web?.authAgeMs === "number"
+        ? ` (last refreshed ${formatAge(summary.web.authAgeMs)})`
+        : "";
+    lines.push(`Web session: ${webLinked ? "linked" : "not linked"}${authAge}`);
+
+    const providerSummary = Array.isArray(summary.providerSummary)
+      ? summary.providerSummary
+      : [];
+    if (providerSummary.length > 0) {
+      lines.push("");
+      lines.push("System:");
+      for (const line of providerSummary) {
+        lines.push(`  ${line}`);
+      }
+    }
+
+    if (typeof summary.heartbeatSeconds === "number") {
+      lines.push("");
+      lines.push(`Heartbeat: ${summary.heartbeatSeconds}s`);
+    }
+
+    const sessionPath = summary.sessions?.path;
+    if (sessionPath) lines.push(`Session store: ${sessionPath}`);
+
+    const defaults = summary.sessions?.defaults;
+    const defaultModel = defaults?.model ?? "unknown";
+    const defaultCtx =
+      typeof defaults?.contextTokens === "number"
+        ? ` (${formatTokenCount(defaults.contextTokens)} ctx)`
+        : "";
+    lines.push(`Default model: ${defaultModel}${defaultCtx}`);
+
+    const sessionCount = summary.sessions?.count ?? 0;
+    lines.push(`Active sessions: ${sessionCount}`);
+
+    const recent = Array.isArray(summary.sessions?.recent)
+      ? summary.sessions?.recent
+      : [];
+    if (recent.length > 0) {
+      lines.push("Recent sessions:");
+      for (const entry of recent) {
+        const ageLabel =
+          typeof entry.age === "number" ? formatAge(entry.age) : "no activity";
+        const model = entry.model ?? "unknown";
+        const usage = formatContextUsageLine({
+          total: entry.totalTokens ?? null,
+          context: entry.contextTokens ?? null,
+          remaining: entry.remainingTokens ?? null,
+          percent: entry.percentUsed ?? null,
+        });
+        const flags = entry.flags?.length
+          ? ` | flags: ${entry.flags.join(", ")}`
+          : "";
+        lines.push(
+          `- ${entry.key}${entry.kind ? ` [${entry.kind}]` : ""} | ${ageLabel} | model ${model} | ${usage}${flags}`,
+        );
+      }
+    }
+
+    const queued = Array.isArray(summary.queuedSystemEvents)
+      ? summary.queuedSystemEvents
+      : [];
+    if (queued.length > 0) {
+      const preview = queued.slice(0, 3).join(" | ");
+      lines.push(`Queued system events (${queued.length}): ${preview}`);
+    }
+
+    return lines;
   };
 
   const closeOverlay = () => {
@@ -676,12 +798,6 @@ export async function runTui(opts: TuiOptions) {
   const openSettings = () => {
     const items = [
       {
-        id: "deliver",
-        label: "Deliver replies",
-        currentValue: deliverDefault ? "on" : "off",
-        values: ["off", "on"],
-      },
-      {
         id: "tools",
         label: "Tool output",
         currentValue: toolsExpanded ? "expanded" : "collapsed",
@@ -697,10 +813,6 @@ export async function runTui(opts: TuiOptions) {
     const settings = createSettingsList(
       items,
       (id, value) => {
-        if (id === "deliver") {
-          deliverDefault = value === "on";
-          updateFooter();
-        }
         if (id === "tools") {
           toolsExpanded = value === "expanded";
           chatLog.setToolsExpanded(toolsExpanded);
@@ -730,11 +842,16 @@ export async function runTui(opts: TuiOptions) {
       case "status":
         try {
           const status = await client.getStatus();
-          chatLog.addSystem(
-            typeof status === "string"
-              ? status
-              : JSON.stringify(status, null, 2),
-          );
+          if (typeof status === "string") {
+            chatLog.addSystem(status);
+            break;
+          }
+          if (status && typeof status === "object") {
+            const lines = formatStatusSummary(status as GatewayStatusSummary);
+            for (const line of lines) chatLog.addSystem(line);
+            break;
+          }
+          chatLog.addSystem("status: unknown response");
         } catch (err) {
           chatLog.addSystem(`status failed: ${String(err)}`);
         }
@@ -879,15 +996,6 @@ export async function runTui(opts: TuiOptions) {
         } catch (err) {
           chatLog.addSystem(`activation failed: ${String(err)}`);
         }
-        break;
-      case "deliver":
-        if (!args) {
-          chatLog.addSystem("usage: /deliver <on|off>");
-          break;
-        }
-        deliverDefault = args === "on";
-        updateFooter();
-        chatLog.addSystem(`deliver ${deliverDefault ? "on" : "off"}`);
         break;
       case "new":
       case "reset":

@@ -96,14 +96,6 @@ export function getSlashCommands(): SlashCommand[] {
           (value) => ({ value, label: value }),
         ),
     },
-    {
-      name: "deliver",
-      description: "Toggle delivery of assistant replies",
-      getArgumentCompletions: (prefix) =>
-        TOGGLE.filter((v) => v.startsWith(prefix.toLowerCase())).map(
-          (value) => ({ value, label: value }),
-        ),
-    },
     { name: "abort", description: "Abort active run" },
     { name: "new", description: "Reset the session" },
     { name: "reset", description: "Reset the session" },
@@ -128,7 +120,6 @@ export function helpText(): string {
     "/elevated <on|off>",
     "/elev <on|off>",
     "/activation <mention|always>",
-    "/deliver <on|off>",
     "/new or /reset",
     "/abort",
     "/settings",
