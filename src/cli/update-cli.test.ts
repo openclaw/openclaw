@@ -7,6 +7,11 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
+// Mock the doctor command to avoid loading heavy dependencies
+vi.mock("../commands/doctor.js", () => ({
+  doctorCommand: vi.fn(),
+}));
+
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
   runDaemonRestart: vi.fn(),
