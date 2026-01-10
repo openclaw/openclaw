@@ -31,6 +31,37 @@ describe("createClawdbotCodingTools", () => {
     expect(parameters.required ?? []).toContain("action");
   });
 
+  it("requires raw for gateway config.apply tool calls", () => {
+    const tools = createClawdbotCodingTools();
+    const gateway = tools.find((tool) => tool.name === "gateway");
+    expect(gateway).toBeDefined();
+
+    const parameters = gateway?.parameters as {
+      allOf?: Array<Record<string, unknown>>;
+    };
+    const conditional = parameters.allOf?.find(
+      (entry) => "if" in entry && "then" in entry,
+    ) as
+      | { if?: Record<string, unknown>; then?: Record<string, unknown> }
+      | undefined;
+
+    expect(conditional).toBeDefined();
+    const thenRequired = conditional?.then?.required as string[] | undefined;
+    expect(thenRequired ?? []).toContain("raw");
+
+    const action = (
+      conditional?.if?.properties as Record<string, unknown> | undefined
+    )?.action as { const?: unknown; enum?: unknown[] } | undefined;
+    const values = new Set<string>();
+    if (typeof action?.const === "string") values.add(action.const);
+    if (Array.isArray(action?.enum)) {
+      for (const value of action.enum) {
+        if (typeof value === "string") values.add(value);
+      }
+    }
+    expect(values.has("config.apply")).toBe(true);
+  });
+
   it("flattens anyOf-of-literals to enum for provider compatibility", () => {
     const tools = createClawdbotCodingTools();
     const browser = tools.find((tool) => tool.name === "browser");
