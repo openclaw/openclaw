@@ -4,7 +4,11 @@ import type {
   DeliverableMessageProvider,
   GatewayMessageProvider,
 } from "../../utils/message-provider.js";
-import { normalizeE164 } from "../../utils.js";
+import {
+  isWhatsAppGroupJid,
+  normalizeE164,
+  normalizeWhatsAppTarget,
+} from "../../utils.js";
 
 export type OutboundProvider = DeliverableMessageProvider | "none";
 
@@ -28,16 +32,28 @@ export function resolveOutboundTarget(params: {
   const trimmed = params.to?.trim() || "";
   if (params.provider === "whatsapp") {
     if (trimmed) {
-      return { ok: true, to: normalizeE164(trimmed) };
+      const normalized = normalizeWhatsAppTarget(trimmed);
+      if (!normalized) {
+        return {
+          ok: false,
+          error: new Error(
+            "Delivering to WhatsApp requires --to <E.164|group JID> or whatsapp.allowFrom[0]",
+          ),
+        };
+      }
+      return { ok: true, to: normalized };
     }
     const fallback = params.allowFrom?.[0]?.trim();
     if (fallback) {
-      return { ok: true, to: fallback };
+      const normalized = normalizeWhatsAppTarget(fallback);
+      if (normalized) {
+        return { ok: true, to: normalized };
+      }
     }
     return {
       ok: false,
       error: new Error(
-        "Delivering to WhatsApp requires --to <E.164> or whatsapp.allowFrom[0]",
+        "Delivering to WhatsApp requires --to <E.164|group JID> or whatsapp.allowFrom[0]",
       ),
     };
   }
@@ -194,6 +210,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
     return { provider: "none", reason: "no-target" };
   }
   if (rawAllow.includes("*")) return { provider, to: resolved.to };
+  if (isWhatsAppGroupJid(resolved.to)) return { provider, to: resolved.to };
   const allowFrom = rawAllow
     .map((val) => normalizeE164(val))
     .filter((val) => val.length > 1);
