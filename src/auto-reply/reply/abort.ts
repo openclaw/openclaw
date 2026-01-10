@@ -6,7 +6,6 @@ import {
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
-  type SessionEntry,
 } from "../../config/sessions.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
