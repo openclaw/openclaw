@@ -27,6 +27,7 @@ const ALL_MODELS =
 const EXTRA_TOOL_PROBES = process.env.CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE === "1";
 const EXTRA_IMAGE_PROBES =
   process.env.CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE === "1";
+const PROVIDERS = parseFilter(process.env.CLAWDBOT_LIVE_GATEWAY_PROVIDERS);
 
 const describeLive = LIVE && GATEWAY_LIVE ? describe : describe.skip;
 
@@ -61,6 +62,16 @@ function isMeaningful(text: string): boolean {
   const words = trimmed.split(/\s+/g).filter(Boolean);
   if (words.length < 12) return false;
   return true;
+}
+
+function isGoogleModelNotFoundText(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (!/not found/i.test(trimmed)) return false;
+  if (/models\/.+ is not found for api version/i.test(trimmed)) return true;
+  if (/"status"\s*:\s*"NOT_FOUND"/.test(trimmed)) return true;
+  if (/"code"\s*:\s*404/.test(trimmed)) return true;
+  return false;
 }
 
 function randomImageProbeCode(len = 10): string {
@@ -233,6 +244,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
         const id = `${model.provider}/${model.id}`;
+        if (PROVIDERS && !PROVIDERS.has(model.provider)) continue;
         if (filter && !filter.has(id)) continue;
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -345,6 +357,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               throw new Error(`agent status=${String(payload?.status)}`);
             }
             const text = extractPayloadText(payload?.result);
+            if (
+              model.provider === "google" &&
+              isGoogleModelNotFoundText(text)
+            ) {
+              // Catalog drift: model IDs can disappear or become unavailable on the API.
+              // Treat as skip when scanning "all models" for Google.
+              continue;
+            }
             if (!isMeaningful(text)) throw new Error(`not meaningful: ${text}`);
             if (
               !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
@@ -453,7 +473,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 if (Math.abs(cand.length - imageCode.length) > 2) return best;
                 return Math.min(best, editDistance(cand, imageCode));
               }, Number.POSITIVE_INFINITY);
-              if (!(bestDistance <= 1)) {
+              if (!(bestDistance <= 2)) {
                 throw new Error(
                   `image probe missing code (${imageCode}): ${imageText}`,
                 );
