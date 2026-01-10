@@ -74,7 +74,11 @@ import {
   waitForDiscordGatewayStop,
 } from "./monitor.gateway.js";
 import { fetchDiscordApplicationId } from "./probe.js";
-import { reactMessageDiscord, sendMessageDiscord } from "./send.js";
+import {
+  reactMessageDiscord,
+  removeReactionDiscord,
+  sendMessageDiscord,
+} from "./send.js";
 import { normalizeDiscordToken } from "./token.js";
 
 export type MonitorDiscordOpts = {
@@ -958,6 +962,7 @@ export function createDiscordMessageHandler(params: {
         return;
       }
       const ackReaction = resolveAckReaction(cfg, route.agentId);
+      const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
       const shouldAckReaction = () => {
         if (!ackReaction) return false;
         if (ackReactionScope === "all") return true;
@@ -972,6 +977,7 @@ export function createDiscordMessageHandler(params: {
         }
         return false;
       };
+      let didAddAckReaction = false;
       if (shouldAckReaction()) {
         reactMessageDiscord(message.channelId, message.id, ackReaction, {
           rest: client.rest,
@@ -980,6 +986,7 @@ export function createDiscordMessageHandler(params: {
             `discord react failed for channel ${message.channelId}: ${String(err)}`,
           );
         });
+        didAddAckReaction = true;
       }
 
       const fromLabel = isDirectMessage
@@ -1200,6 +1207,15 @@ export function createDiscordMessageHandler(params: {
         logVerbose(
           `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
         );
+      }
+      if (removeAckAfterReply && didAddAckReaction && ackReaction) {
+        removeReactionDiscord(message.channelId, message.id, ackReaction, {
+          rest: client.rest,
+        }).catch((err) => {
+          logVerbose(
+            `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
+          );
+        });
       }
       if (
         isGuildMessage &&
