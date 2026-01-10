@@ -138,12 +138,13 @@ struct ConfigSettings: View {
         .contentShape(Rectangle())
         .background(
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color(nsColor: .textBackgroundColor))
-        )
+                .fill(
+                    Color(nsColor: .textBackgroundColor)))
         .overlay(
             RoundedRectangle(cornerRadius: 6)
-                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-        )
+                .stroke(
+                    Color.secondary.opacity(0.25),
+                    lineWidth: 1))
         .popover(isPresented: self.$isModelPickerOpen, arrowEdge: .bottom) {
             self.modelPickerPopover
         }
@@ -783,8 +784,8 @@ struct ConfigSettings: View {
                 choice.provider,
                 self.modelRef(for: choice),
             ]
-            .joined(separator: " ")
-            .lowercased()
+                .joined(separator: " ")
+                .lowercased()
             return tokens.allSatisfy { haystack.contains($0) }
         }
     }
