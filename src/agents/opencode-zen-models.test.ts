@@ -51,16 +51,19 @@ describe("getOpencodeZenStaticFallbackModels", () => {
   it("returns an array of models", () => {
     const models = getOpencodeZenStaticFallbackModels();
     expect(Array.isArray(models)).toBe(true);
-    expect(models.length).toBeGreaterThan(0);
+    expect(models.length).toBe(11);
   });
 
-  it("includes Claude, GPT, and Gemini models", () => {
+  it("includes Claude, GPT, Gemini, GLM, and MiniMax models", () => {
     const models = getOpencodeZenStaticFallbackModels();
     const ids = models.map((m) => m.id);
 
     expect(ids).toContain("claude-opus-4-5");
     expect(ids).toContain("gpt-5.2");
+    expect(ids).toContain("gpt-5.1-codex");
     expect(ids).toContain("gemini-3-pro");
+    expect(ids).toContain("glm-4.7-free");
+    expect(ids).toContain("minimax-m2.1-free");
   });
 
   it("returns valid ModelDefinitionConfig objects", () => {
@@ -80,9 +83,10 @@ describe("getOpencodeZenStaticFallbackModels", () => {
 describe("OPENCODE_ZEN_MODEL_ALIASES", () => {
   it("has expected aliases", () => {
     expect(OPENCODE_ZEN_MODEL_ALIASES.opus).toBe("claude-opus-4-5");
-    expect(OPENCODE_ZEN_MODEL_ALIASES.sonnet).toBe("claude-sonnet-4-20250514");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.codex).toBe("gpt-5.1-codex");
     expect(OPENCODE_ZEN_MODEL_ALIASES.gpt5).toBe("gpt-5.2");
-    expect(OPENCODE_ZEN_MODEL_ALIASES.o1).toBe("o1-2025-04-16");
     expect(OPENCODE_ZEN_MODEL_ALIASES.gemini).toBe("gemini-3-pro");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.glm).toBe("glm-4.7-free");
+    expect(OPENCODE_ZEN_MODEL_ALIASES.minimax).toBe("minimax-m2.1-free");
   });
 });
