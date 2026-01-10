@@ -343,6 +343,7 @@ const ERROR_PATTERNS = {
     "resource has been exhausted",
     "quota exceeded",
     "resource_exhausted",
+    "usage limit",
   ],
   timeout: [
     "timeout",
