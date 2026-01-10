@@ -387,15 +387,15 @@ enum GatewayEnvironment {
 
     private static func bundledGatewayStatusMessage(
         gatewayVersion: String,
-        nodeVersion: String?
-    ) -> String {
+        nodeVersion: String?) -> String
+    {
         "\(self.bundledGatewayLabel) \(gatewayVersion) (node \(nodeVersion ?? "unknown"))"
     }
 
     private static func bundledGatewayIncompatibleMessage(
         installed: Semver,
-        expected: Semver
-    ) -> String {
+        expected: Semver) -> String
+    {
         "\(self.bundledGatewayLabel) \(installed.description) is incompatible with app " +
             "\(expected.description); rebuild the app bundle."
     }
