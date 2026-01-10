@@ -123,6 +123,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
   }
 
+  if (provider === "zai") {
+    return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
+  }
+
   if (provider === "google-vertex") {
     const envKey = getEnvApiKey(provider);
     if (!envKey) return null;
@@ -137,7 +141,6 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     xai: "XAI_API_KEY",
     openrouter: "OPENROUTER_API_KEY",
     minimax: "MINIMAX_API_KEY",
-    zai: "ZAI_API_KEY",
     mistral: "MISTRAL_API_KEY",
     "opencode-zen": "OPENCODE_ZEN_API_KEY",
   };
