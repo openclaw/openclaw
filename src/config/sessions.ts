@@ -553,6 +553,15 @@ async function withSessionStoreLock<T>(
         err && typeof err === "object" && "code" in err
           ? String((err as { code?: unknown }).code)
           : null;
+      if (code === "ENOENT") {
+        // Store directory may be deleted/recreated in tests while writes are in-flight.
+        // Best-effort: recreate the parent dir and retry until timeout.
+        await fs.promises
+          .mkdir(path.dirname(storePath), { recursive: true })
+          .catch(() => undefined);
+        await new Promise((r) => setTimeout(r, pollIntervalMs));
+        continue;
+      }
       if (code !== "EEXIST") throw err;
 
       const now = Date.now();
