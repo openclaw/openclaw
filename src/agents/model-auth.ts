@@ -2,7 +2,6 @@ import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
-import { normalizeProviderId } from "./model-selection.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -10,6 +9,7 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
+import { normalizeProviderId } from "./model-selection.js";
 
 export {
   ensureAuthProfileStore,
