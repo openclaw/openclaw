@@ -10,6 +10,8 @@ Clawdbot’s Gateway can serve a small OpenAI-compatible endpoint:
 - `POST /v1/chat/completions`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/v1/chat/completions`
 
+Under the hood, requests are executed as a normal Gateway agent run (same codepath as `clawdbot agent`), so routing/permissions/config match your Gateway.
+
 ## Authentication
 
 Uses the Gateway auth configuration. Send a bearer token:
@@ -22,7 +24,12 @@ Notes:
 
 ## Choosing an agent
 
-Target a specific Clawdbot agent by id:
+No custom headers required: encode the agent id in the OpenAI `model` field:
+
+- `model: "clawdbot:<agentId>"` (example: `"clawdbot:main"`, `"clawdbot:beta"`)
+- `model: "agent:<agentId>"` (alias)
+
+Or target a specific Clawdbot agent by header:
 
 - `x-clawdbot-agent-id: <agentId>` (default: `main`)
 
@@ -69,4 +76,3 @@ curl -N http://127.0.0.1:18789/v1/chat/completions \
     "messages": [{"role":"user","content":"hi"}]
   }'
 ```
-
