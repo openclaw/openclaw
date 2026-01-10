@@ -34,6 +34,7 @@ function isInsideFence(
 
 // Regex to detect [[audio_as_voice]] tag
 const AUDIO_AS_VOICE_RE = /\[\[audio_as_voice\]\]/gi;
+const AUDIO_AS_VOICE_TEST_RE = /\[\[audio_as_voice\]\]/i;
 
 export function splitMediaFromOutput(raw: string): {
   text: string;
@@ -123,7 +124,7 @@ export function splitMediaFromOutput(raw: string): {
     .trim();
 
   // Detect and strip [[audio_as_voice]] tag
-  const hasAudioAsVoice = AUDIO_AS_VOICE_RE.test(cleanedText);
+  const hasAudioAsVoice = AUDIO_AS_VOICE_TEST_RE.test(cleanedText);
   if (hasAudioAsVoice) {
     cleanedText = cleanedText
       .replace(AUDIO_AS_VOICE_RE, "")

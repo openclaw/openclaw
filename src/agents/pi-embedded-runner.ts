@@ -776,6 +776,7 @@ export async function compactEmbeddedPiSession(params: {
   const enqueueGlobal =
     params.enqueue ??
     ((task, opts) => enqueueCommandInLane(globalLane, task, opts));
+  const runAbortController = new AbortController();
   return enqueueCommandInLane(sessionLane, () =>
     enqueueGlobal(async () => {
       const resolvedWorkspace = resolveUserPath(params.workspaceDir);

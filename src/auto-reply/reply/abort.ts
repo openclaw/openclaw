@@ -3,6 +3,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
+  type SessionEntry,
   saveSessionStore,
 } from "../../config/sessions.js";
 import {
@@ -35,7 +36,7 @@ export function setAbortMemory(key: string, value: boolean): void {
 }
 
 function resolveSessionEntryForKey(
-  store: Record<string, { sessionId: string; updatedAt: number }> | undefined,
+  store: Record<string, SessionEntry> | undefined,
   sessionKey: string | undefined,
 ) {
   if (!store || !sessionKey) return {};

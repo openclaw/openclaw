@@ -7,7 +7,10 @@ import type { ReplyDispatcher } from "./reply-dispatcher.js";
 
 const mocks = vi.hoisted(() => ({
   routeReply: vi.fn(async () => ({ ok: true, messageId: "mock" })),
-  tryFastAbortFromMessage: vi.fn(async () => ({ handled: false, aborted: false })),
+  tryFastAbortFromMessage: vi.fn(async () => ({
+    handled: false,
+    aborted: false,
+  })),
 }));
 
 vi.mock("./route-reply.js", () => ({
