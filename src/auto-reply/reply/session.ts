@@ -136,15 +136,15 @@ export async function initSessionState(params: {
     resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const isGroup =
     ctx.ChatType?.trim().toLowerCase() === "group" || Boolean(groupResolution);
-  // Prefer RawBody (clean message) for command detection; fall back to Body
-  // which may contain structural context (history, sender labels).
-  const commandSource = ctx.RawBody ?? ctx.Body ?? "";
+  // Prefer CommandBody/RawBody (clean message) for command detection; fall back
+  // to Body which may contain structural context (history, sender labels).
+  const commandSource = ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = stripStructuralPrefixes(commandSource)
     .trim()
     .toLowerCase();
 
-  // Use RawBody for reset trigger matching (clean message without structural context).
-  const rawBody = ctx.RawBody ?? ctx.Body ?? "";
+  // Use CommandBody/RawBody for reset trigger matching (clean message without structural context).
+  const rawBody = commandSource;
   const trimmedBody = rawBody.trim();
   const resetAuthorized = resolveCommandAuthorization({
     ctx,
@@ -290,7 +290,7 @@ export async function initSessionState(params: {
     ...ctx,
     // Keep BodyStripped aligned with Body (best default for agent prompts).
     // RawBody is reserved for command/directive parsing and may omit context.
-    BodyStripped: bodyStripped ?? ctx.Body ?? ctx.RawBody,
+    BodyStripped: bodyStripped ?? ctx.Body ?? ctx.CommandBody ?? ctx.RawBody,
     SessionId: sessionId,
     IsNewSession: isNewSession ? "true" : "false",
   };

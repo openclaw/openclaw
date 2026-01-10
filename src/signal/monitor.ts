@@ -5,6 +5,12 @@ import {
 import { chunkText, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
+import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  appendHistoryEntry,
+  buildHistoryContextFromEntries,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
 import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -328,6 +334,13 @@ export async function monitorSignalProvider(
     cfg,
     accountId: opts.accountId,
   });
+  const historyLimit = Math.max(
+    0,
+    accountInfo.config.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(cfg, "signal", accountInfo.accountId);
   const baseUrl = opts.baseUrl?.trim() || accountInfo.baseUrl;
   const account = opts.account?.trim() || accountInfo.config.account?.trim();
@@ -619,6 +632,38 @@ export async function monitorSignalProvider(
         timestamp: envelope.timestamp ?? undefined,
         body: bodyText,
       });
+      let combinedBody = body;
+      const historyKey = isGroup ? String(groupId ?? "unknown") : undefined;
+      if (isGroup && historyKey && historyLimit > 0) {
+        appendHistoryEntry({
+          historyMap: groupHistories,
+          historyKey,
+          limit: historyLimit,
+          entry: {
+            sender: envelope.sourceName ?? senderDisplay,
+            body: bodyText,
+            timestamp: envelope.timestamp ?? undefined,
+            messageId:
+              typeof envelope.timestamp === "number"
+                ? String(envelope.timestamp)
+                : undefined,
+          },
+        });
+        const history = groupHistories.get(historyKey) ?? [];
+        combinedBody = buildHistoryContextFromEntries({
+          entries: history,
+          currentMessage: combinedBody,
+          formatEntry: (entry) =>
+            formatAgentEnvelope({
+              provider: "Signal",
+              from: fromLabel,
+              timestamp: entry.timestamp,
+              body: `${entry.sender}: ${entry.body}${
+                entry.messageId ? ` [id:${entry.messageId}]` : ""
+              }`,
+            }),
+        });
+      }
 
       const route = resolveAgentRoute({
         cfg,
@@ -633,7 +678,9 @@ export async function monitorSignalProvider(
         ? `group:${groupId}`
         : `signal:${senderRecipient}`;
       const ctxPayload = {
-        Body: body,
+        Body: combinedBody,
+        RawBody: bodyText,
+        CommandBody: bodyText,
         From: isGroup
           ? `group:${groupId ?? "unknown"}`
           : `signal:${senderRecipient}`,
@@ -678,6 +725,7 @@ export async function monitorSignalProvider(
         );
       }
 
+      let didSendReply = false;
       const dispatcher = createReplyDispatcher({
         responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
           .responsePrefix,
@@ -693,6 +741,7 @@ export async function monitorSignalProvider(
             maxBytes: mediaMaxBytes,
             textLimit,
           });
+          didSendReply = true;
         },
         onError: (err, info) => {
           runtime.error?.(
@@ -712,7 +761,15 @@ export async function monitorSignalProvider(
               : undefined,
         },
       });
-      if (!queuedFinal) return;
+      if (!queuedFinal) {
+        if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+          groupHistories.set(historyKey, []);
+        }
+        return;
+      }
+      if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+        groupHistories.set(historyKey, []);
+      }
     };
 
     await runSignalSseLoop({

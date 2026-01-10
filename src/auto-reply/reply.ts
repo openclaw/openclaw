@@ -340,10 +340,14 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
   } = sessionState;
 
-  // Prefer RawBody (clean message without structural context) for directive parsing.
+  // Prefer CommandBody/RawBody (clean message without structural context) for directive parsing.
   // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
-  const rawBody =
-    sessionCtx.RawBody ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
+  const commandSource =
+    sessionCtx.CommandBody ??
+    sessionCtx.RawBody ??
+    sessionCtx.BodyStripped ??
+    sessionCtx.Body ??
+    "";
   const clearInlineDirectives = (cleaned: string): InlineDirectives => ({
     cleaned,
     hasThinkDirective: false,
@@ -382,7 +386,7 @@ export async function getReplyFromConfig(
     .map((entry) => entry.alias?.trim())
     .filter((alias): alias is string => Boolean(alias))
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
-  let parsedDirectives = parseInlineDirectives(rawBody, {
+  let parsedDirectives = parseInlineDirectives(commandSource, {
     modelAliases: configuredAliases,
   });
   if (
@@ -436,7 +440,7 @@ export async function getReplyFromConfig(
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const cleanedBody = (() => {
     if (!existingBody) return parsedDirectives.cleaned;
-    if (!sessionCtx.RawBody) {
+    if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
       }).cleaned;
@@ -786,14 +790,19 @@ export async function getReplyFromConfig(
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  // Use RawBody for bare reset detection (clean message without structural context).
-  const rawBodyTrimmed = (ctx.RawBody ?? ctx.Body ?? "").trim();
+  // Use CommandBody/RawBody for bare reset detection (clean message without structural context).
+  const rawBodyTrimmed = (
+    ctx.CommandBody ??
+    ctx.RawBody ??
+    ctx.Body ??
+    ""
+  ).trim();
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
     allowTextCommands &&
     !commandAuthorized &&
     !baseBodyTrimmedRaw &&
-    hasControlCommand(rawBody)
+    hasControlCommand(commandSource)
   ) {
     typing.cleanup();
     return undefined;
@@ -863,18 +872,18 @@ export async function getReplyFromConfig(
   const mediaReplyHint = mediaNote
     ? "To send an image back, add a line like: MEDIA:https://example.com/image.jpg (no spaces). Keep caption in the text body."
     : undefined;
-  let commandBody = mediaNote
+  let prefixedCommandBody = mediaNote
     ? [mediaNote, mediaReplyHint, prefixedBody ?? ""]
         .filter(Boolean)
         .join("\n")
         .trim()
     : prefixedBody;
-  if (!resolvedThinkLevel && commandBody) {
-    const parts = commandBody.split(/\s+/);
+  if (!resolvedThinkLevel && prefixedCommandBody) {
+    const parts = prefixedCommandBody.split(/\s+/);
     const maybeLevel = normalizeThinkLevel(parts[0]);
     if (maybeLevel) {
       resolvedThinkLevel = maybeLevel;
-      commandBody = parts.slice(1).join(" ").trim();
+      prefixedCommandBody = parts.slice(1).join(" ").trim();
     }
   }
   if (!resolvedThinkLevel) {
@@ -968,7 +977,7 @@ export async function getReplyFromConfig(
   }
 
   return runReplyAgent({
-    commandBody,
+    commandBody: prefixedCommandBody,
     followupRun,
     queueKey,
     resolvedQueue,

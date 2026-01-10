@@ -7,6 +7,12 @@ import { hasControlCommand } from "../auto-reply/command-detection.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import { dispatchReplyFromConfig } from "../auto-reply/reply/dispatch-from-config.js";
 import {
+  DEFAULT_GROUP_HISTORY_LIMIT,
+  appendHistoryEntry,
+  buildHistoryContextFromEntries,
+  type HistoryEntry,
+} from "../auto-reply/reply/history.js";
+import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
@@ -140,6 +146,13 @@ export async function monitorIMessageProvider(
     accountId: opts.accountId,
   });
   const imessageCfg = accountInfo.config;
+  const historyLimit = Math.max(
+    0,
+    imessageCfg.historyLimit ??
+      cfg.messages?.groupChat?.historyLimit ??
+      DEFAULT_GROUP_HISTORY_LIMIT,
+  );
+  const groupHistories = new Map<string, HistoryEntry[]>();
   const textLimit = resolveTextChunkLimit(
     cfg,
     "imessage",
@@ -391,10 +404,43 @@ export async function monitorIMessageProvider(
       timestamp: createdAt,
       body: bodyText,
     });
+    let combinedBody = body;
+    const historyKey = isGroup
+      ? String(chatId ?? chatGuid ?? chatIdentifier ?? "unknown")
+      : undefined;
+    if (isGroup && historyKey && historyLimit > 0) {
+      appendHistoryEntry({
+        historyMap: groupHistories,
+        historyKey,
+        limit: historyLimit,
+        entry: {
+          sender: normalizeIMessageHandle(sender),
+          body: bodyText,
+          timestamp: createdAt,
+          messageId: message.id ? String(message.id) : undefined,
+        },
+      });
+      const history = groupHistories.get(historyKey) ?? [];
+      combinedBody = buildHistoryContextFromEntries({
+        entries: history,
+        currentMessage: combinedBody,
+        formatEntry: (entry) =>
+          formatAgentEnvelope({
+            provider: "iMessage",
+            from: fromLabel,
+            timestamp: entry.timestamp,
+            body: `${entry.sender}: ${entry.body}${
+              entry.messageId ? ` [id:${entry.messageId}]` : ""
+            }`,
+          }),
+      });
+    }
 
     const imessageTo = chatTarget || `imessage:${sender}`;
     const ctxPayload = {
-      Body: body,
+      Body: combinedBody,
+      RawBody: bodyText,
+      CommandBody: bodyText,
       From: isGroup ? `group:${chatId}` : `imessage:${sender}`,
       To: imessageTo,
       SessionKey: route.sessionKey,
@@ -444,6 +490,7 @@ export async function monitorIMessageProvider(
       );
     }
 
+    let didSendReply = false;
     const dispatcher = createReplyDispatcher({
       responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
         .responsePrefix,
@@ -458,6 +505,7 @@ export async function monitorIMessageProvider(
           maxBytes: mediaMaxBytes,
           textLimit,
         });
+        didSendReply = true;
       },
       onError: (err, info) => {
         runtime.error?.(
@@ -477,7 +525,15 @@ export async function monitorIMessageProvider(
             : undefined,
       },
     });
-    if (!queuedFinal) return;
+    if (!queuedFinal) {
+      if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+        groupHistories.set(historyKey, []);
+      }
+      return;
+    }
+    if (isGroup && historyKey && historyLimit > 0 && didSendReply) {
+      groupHistories.set(historyKey, []);
+    }
   };
 
   const client = await createIMessageRpcClient({

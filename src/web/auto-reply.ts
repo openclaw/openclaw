@@ -21,6 +21,10 @@ import {
   buildMentionRegexes,
   normalizeMentionText,
 } from "../auto-reply/reply/mentions.js";
+import {
+  buildHistoryContext,
+  DEFAULT_GROUP_HISTORY_LIMIT,
+} from "../auto-reply/reply/history.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
@@ -75,7 +79,6 @@ import {
 } from "./reconnect.js";
 import { formatError, getWebAuthAgeMs, readWebSelfId } from "./session.js";
 
-const DEFAULT_GROUP_HISTORY_LIMIT = 50;
 const whatsappLog = createSubsystemLogger("gateway/providers/whatsapp");
 const whatsappInboundLog = whatsappLog.child("inbound");
 const whatsappOutboundLog = whatsappLog.child("outbound");
@@ -817,7 +820,10 @@ export async function monitorWebProvider(
     buildMentionConfig(cfg, agentId);
   const baseMentionConfig = resolveMentionConfig();
   const groupHistoryLimit =
-    cfg.messages?.groupChat?.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
+    cfg.whatsapp?.accounts?.[tuning.accountId ?? ""]?.historyLimit ??
+    cfg.whatsapp?.historyLimit ??
+    cfg.messages?.groupChat?.historyLimit ??
+    DEFAULT_GROUP_HISTORY_LIMIT;
   const groupHistories = new Map<
     string,
     Array<{ sender: string; body: string; timestamp?: number }>
@@ -1115,6 +1121,7 @@ export async function monitorWebProvider(
         const historyWithoutCurrent =
           history.length > 0 ? history.slice(0, -1) : [];
         if (historyWithoutCurrent.length > 0) {
+          const lineBreak = "\\n";
           const historyText = historyWithoutCurrent
             .map((m) =>
               formatAgentEnvelope({
@@ -1124,11 +1131,12 @@ export async function monitorWebProvider(
                 body: `${m.sender}: ${m.body}`,
               }),
             )
-            .join("\\n");
-          combinedBody = `[Chat messages since your last reply - for context]\\n${historyText}\\n\\n[Current message - respond to this]\\n${buildLine(
-            msg,
-            route.agentId,
-          )}`;
+            .join(lineBreak);
+          combinedBody = buildHistoryContext({
+            historyText,
+            currentMessage: buildLine(msg, route.agentId),
+            lineBreak,
+          });
         }
         // Always surface who sent the triggering message so the agent can address them.
         const senderLabel =
@@ -1222,6 +1230,7 @@ export async function monitorWebProvider(
         ctx: {
           Body: combinedBody,
           RawBody: msg.body,
+          CommandBody: msg.body,
           From: msg.from,
           To: msg.to,
           SessionKey: route.sessionKey,
