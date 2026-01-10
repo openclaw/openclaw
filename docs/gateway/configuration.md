@@ -1439,6 +1439,47 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 }
 ```
 
+### OpenCode Zen (multi-model proxy)
+
+OpenCode Zen is an OpenAI-compatible proxy at `https://opencode.ai/zen/v1`. Get an API key at https://opencode.ai/auth and set `OPENCODE_ZEN_API_KEY`.
+
+Notes:
+- Model refs use `opencode-zen/<modelId>` (example: `opencode-zen/claude-opus-4-5`).
+- If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
+- Shortcut: `clawdbot onboard --auth-choice opencode-zen`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "opencode-zen/claude-opus-4-5" },
+      models: { "opencode-zen/claude-opus-4-5": { alias: "Opus" } }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      "opencode-zen": {
+        baseUrl: "https://opencode.ai/zen/v1",
+        apiKey: "${OPENCODE_ZEN_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "claude-opus-4-5",
+            name: "Claude Opus 4.5",
+            reasoning: true,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 200000,
+            maxTokens: 32000
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
 ### Z.AI (GLM-4.7) — provider alias support
 
 Z.AI models are available via the built-in `zai` provider. Set `ZAI_API_KEY`

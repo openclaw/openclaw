@@ -33,6 +33,9 @@ Related:
 Model refs are normalized to lowercase. Provider aliases like `z.ai/*` normalize
 to `zai/*`.
 
+Provider configuration examples (including OpenCode Zen) live in
+[/gateway/configuration](/gateway/configuration#opencode-zen-multi-model-proxy).
+
 ## “Model is not allowed” (and why replies stop)
 
 If `agents.defaults.models` is set, it becomes the **allowlist** for `/model` and for
