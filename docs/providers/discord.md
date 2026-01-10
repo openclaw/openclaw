@@ -225,7 +225,8 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
 ```
 
 Ack reactions are controlled globally via `messages.ackReaction` +
-`messages.ackReactionScope`.
+`messages.ackReactionScope`. Use `messages.removeAckAfterReply` to clear the
+ack reaction after the bot replies.
 
 - `dm.enabled`: set `false` to ignore all DMs (default `true`).
 - `dm.policy`: DM access control (`pairing` recommended). `"open"` requires `dm.allowFrom=["*"]`.

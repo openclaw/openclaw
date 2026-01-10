@@ -287,4 +287,4 @@ Related global options:
 - `agents.list[].groupChat.mentionPatterns` (mention gating patterns).
 - `messages.groupChat.mentionPatterns` (global fallback).
 - `commands.native`, `commands.text`, `commands.useAccessGroups` (command behavior).
-- `messages.responsePrefix`, `messages.ackReaction`, `messages.ackReactionScope`.
+- `messages.responsePrefix`, `messages.ackReaction`, `messages.ackReactionScope`, `messages.removeAckAfterReply`.

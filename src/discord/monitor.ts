@@ -977,17 +977,19 @@ export function createDiscordMessageHandler(params: {
         }
         return false;
       };
-      let didAddAckReaction = false;
-      if (shouldAckReaction()) {
-        reactMessageDiscord(message.channelId, message.id, ackReaction, {
-          rest: client.rest,
-        }).catch((err) => {
-          logVerbose(
-            `discord react failed for channel ${message.channelId}: ${String(err)}`,
-          );
-        });
-        didAddAckReaction = true;
-      }
+      const ackReactionPromise = shouldAckReaction()
+        ? reactMessageDiscord(message.channelId, message.id, ackReaction, {
+            rest: client.rest,
+          }).then(
+            () => true,
+            (err) => {
+              logVerbose(
+                `discord react failed for channel ${message.channelId}: ${String(err)}`,
+              );
+              return false;
+            },
+          )
+        : null;
 
       const fromLabel = isDirectMessage
         ? buildDirectLabel(author)
@@ -1208,13 +1210,22 @@ export function createDiscordMessageHandler(params: {
           `discord: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
         );
       }
-      if (removeAckAfterReply && didAddAckReaction && ackReaction) {
-        removeReactionDiscord(message.channelId, message.id, ackReaction, {
-          rest: client.rest,
-        }).catch((err) => {
-          logVerbose(
-            `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
-          );
+      if (removeAckAfterReply && ackReactionPromise && ackReaction) {
+        const ackReactionValue = ackReaction;
+        void ackReactionPromise.then((didAck) => {
+          if (!didAck) return;
+          removeReactionDiscord(
+            message.channelId,
+            message.id,
+            ackReactionValue,
+            {
+              rest: client.rest,
+            },
+          ).catch((err) => {
+            logVerbose(
+              `discord: failed to remove ack reaction from ${message.channelId}/${message.id}: ${String(err)}`,
+            );
+          });
         });
       }
       if (

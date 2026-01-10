@@ -27,6 +27,7 @@
 - Providers: add Microsoft Teams provider with polling, attachments, and CLI send support. (#404) — thanks @onutc
 - Slack: honor reply tags + replyToMode while keeping threaded replies in-thread. (#574) — thanks @bolismauro
 - Slack: configurable reply threading (`slack.replyToMode`) + proper mrkdwn formatting for outbound messages. (#464) — thanks @austinm911
+- Providers: remove ack reactions after reply on Discord/Slack/Telegram. (#633) — thanks @levifig
 - Discord: avoid category parent overrides for channel allowlists and refactor thread context helpers. (#588) — thanks @steipete
 - Discord: fix forum thread starters and cache channel lookups for thread context. (#585) — thanks @thewilloftheshadow
 - Discord: log gateway disconnect/reconnect events at info and add verbose gateway metrics. (#595) — thanks @steipete
