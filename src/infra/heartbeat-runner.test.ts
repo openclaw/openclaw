@@ -126,6 +126,36 @@ describe("resolveHeartbeatDeliveryTarget", () => {
     });
   });
 
+  it("keeps WhatsApp group targets even with allowFrom set", () => {
+    const cfg: ClawdbotConfig = {
+      whatsapp: { allowFrom: ["+1555"] },
+    };
+    const entry = {
+      ...baseEntry,
+      lastProvider: "whatsapp" as const,
+      lastTo: "120363401234567890@g.us",
+    };
+    expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
+      provider: "whatsapp",
+      to: "120363401234567890@g.us",
+    });
+  });
+
+  it("normalizes prefixed WhatsApp group targets for heartbeat delivery", () => {
+    const cfg: ClawdbotConfig = {
+      whatsapp: { allowFrom: ["+1555"] },
+    };
+    const entry = {
+      ...baseEntry,
+      lastProvider: "whatsapp" as const,
+      lastTo: "whatsapp:group:120363401234567890@G.US",
+    };
+    expect(resolveHeartbeatDeliveryTarget({ cfg, entry })).toEqual({
+      provider: "whatsapp",
+      to: "120363401234567890@g.us",
+    });
+  });
+
   it("keeps explicit telegram targets", () => {
     const cfg: ClawdbotConfig = {
       agents: { defaults: { heartbeat: { target: "telegram", to: "123" } } },

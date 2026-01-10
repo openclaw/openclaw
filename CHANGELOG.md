@@ -8,6 +8,7 @@
 - Models/Auth: add OpenCode Zen (multi-model proxy) onboarding. (#623) — thanks @magimetal
 - WhatsApp: refactor vCard parsing helper and improve empty contact card summaries. (#624) — thanks @steipete
 - WhatsApp: include phone numbers when multiple contacts are shared. (#625) — thanks @mahmoudashraf93
+- WhatsApp: preserve group JIDs when normalizing delivery targets. (#631) — thanks @imfing
 - Agents: warn on small context windows (<32k) and block unusable ones (<16k). — thanks @steipete
 - Pairing: cap pending DM pairing requests at 3 per provider and avoid pairing replies for outbound DMs. — thanks @steipete
 - macOS: replace relay smoke test with version check in packaging script. (#615) — thanks @YuriNachos
