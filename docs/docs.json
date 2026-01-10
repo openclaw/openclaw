@@ -239,7 +239,11 @@
     },
     {
       "source": "/mac/bun",
-      "destination": "/platforms/mac/bun"
+      "destination": "/platforms/mac/bundled-gateway"
+    },
+    {
+      "source": "/platforms/mac/bun",
+      "destination": "/platforms/mac/bundled-gateway"
     },
     {
       "source": "/mac/canvas",
@@ -709,7 +713,7 @@
           "platforms/mac/remote",
           "platforms/mac/signing",
           "platforms/mac/release",
-          "platforms/mac/bun",
+          "platforms/mac/bundled-gateway",
           "platforms/mac/xpc",
           "platforms/mac/skills",
           "platforms/mac/peekaboo"

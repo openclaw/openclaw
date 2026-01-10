@@ -198,25 +198,35 @@ download_node_binary() {
   rm -rf "$tmp_dir"
 }
 
-stage_relay_payload() {
+stage_relay_deps() {
   local relay_dir="$1"
 
-  if [[ "${SKIP_RELAY_DEPS:-0}" != "1" ]]; then
-    local stage_dir="$relay_dir/.relay-deploy"
-    rm -rf "$stage_dir"
-    mkdir -p "$stage_dir"
-    echo "📦 Staging relay dependencies (pnpm deploy --prod --no-optional --legacy)"
-    (cd "$ROOT_DIR" && pnpm --filter . deploy "$stage_dir" --prod --no-optional --legacy)
-    rm -rf "$relay_dir/node_modules"
-    cp -a "$stage_dir/node_modules" "$relay_dir/node_modules"
-    rm -rf "$stage_dir"
-  else
+  if [[ "${SKIP_RELAY_DEPS:-0}" == "1" ]]; then
     echo "📦 Skipping relay dependency staging (SKIP_RELAY_DEPS=1)"
+    return
   fi
 
+  local stage_dir="$relay_dir/.relay-deploy"
+  rm -rf "$stage_dir"
+  mkdir -p "$stage_dir"
+  echo "📦 Staging relay dependencies (pnpm deploy --prod --no-optional --legacy)"
+  (cd "$ROOT_DIR" && pnpm --filter . deploy "$stage_dir" --prod --no-optional --legacy)
+  rm -rf "$relay_dir/node_modules"
+  cp -a "$stage_dir/node_modules" "$relay_dir/node_modules"
+  rm -rf "$stage_dir"
+}
+
+stage_relay_dist() {
+  local relay_dir="$1"
   echo "📦 Copying relay dist payload"
   rm -rf "$relay_dir/dist"
   cp -R "$ROOT_DIR/dist" "$relay_dir/dist"
+}
+
+stage_relay_payload() {
+  local relay_dir="$1"
+  stage_relay_deps "$relay_dir"
+  stage_relay_dist "$relay_dir"
 }
 
 write_relay_wrapper() {
@@ -235,6 +245,61 @@ export NODE_PATH
 exec "\$NODE" "\$REL" "\$@"
 SH
   chmod +x "$wrapper"
+}
+
+package_relay_bun() {
+  local relay_dir="$1"
+  RELAY_CMD="$relay_dir/clawdbot"
+
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "ERROR: bun missing. Install bun or set BUNDLED_RUNTIME=node." >&2
+    exit 1
+  fi
+
+  echo "🧰 Building bundled relay (bun --compile)"
+  local relay_build_dir="$relay_dir/.relay-build"
+  rm -rf "$relay_build_dir"
+  mkdir -p "$relay_build_dir"
+  for arch in "${BUILD_ARCHS[@]}"; do
+    local relay_arch_out="$relay_build_dir/clawdbot-$arch"
+    build_relay_binary "$arch" "$relay_arch_out"
+    chmod +x "$relay_arch_out"
+  done
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    /usr/bin/lipo -create "$relay_build_dir"/clawdbot-* -output "$RELAY_CMD"
+  else
+    cp "$relay_build_dir/clawdbot-${BUILD_ARCHS[0]}" "$RELAY_CMD"
+  fi
+  rm -rf "$relay_build_dir"
+}
+
+package_relay_node() {
+  local relay_dir="$1"
+  RELAY_CMD="$relay_dir/clawdbot"
+
+  local node_version
+  node_version="$(resolve_node_version)"
+  echo "🧰 Preparing bundled Node runtime (v${node_version})"
+  local relay_node="$relay_dir/node"
+  local relay_node_build_dir="$relay_dir/.node-build"
+  rm -rf "$relay_node_build_dir"
+  mkdir -p "$relay_node_build_dir"
+  for arch in "${BUILD_ARCHS[@]}"; do
+    local node_arch_out="$relay_node_build_dir/node-$arch"
+    download_node_binary "$node_version" "$arch" "$node_arch_out"
+  done
+  if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
+    /usr/bin/lipo -create "$relay_node_build_dir"/node-* -output "$relay_node"
+  else
+    cp "$relay_node_build_dir/node-${BUILD_ARCHS[0]}" "$relay_node"
+  fi
+  chmod +x "$relay_node"
+  if [[ "${STRIP_NODE:-1}" == "1" ]]; then
+    /usr/bin/strip -x "$relay_node" 2>/dev/null || true
+  fi
+  rm -rf "$relay_node_build_dir"
+  stage_relay_payload "$relay_dir"
+  write_relay_wrapper "$relay_dir"
 }
 
 validate_bundled_runtime() {
@@ -362,52 +427,11 @@ RELAY_DIR="$APP_ROOT/Contents/Resources/Relay"
 if [[ "${SKIP_GATEWAY_PACKAGE:-0}" != "1" ]]; then
   validate_bundled_runtime
   mkdir -p "$RELAY_DIR"
-  RELAY_CMD="$RELAY_DIR/clawdbot"
 
   if [[ "$BUNDLED_RUNTIME" == "bun" ]]; then
-    if ! command -v bun >/dev/null 2>&1; then
-      echo "ERROR: bun missing. Install bun or set BUNDLED_RUNTIME=node." >&2
-      exit 1
-    fi
-
-    echo "🧰 Building bundled relay (bun --compile)"
-    RELAY_BUILD_DIR="$RELAY_DIR/.relay-build"
-    rm -rf "$RELAY_BUILD_DIR"
-    mkdir -p "$RELAY_BUILD_DIR"
-    for arch in "${BUILD_ARCHS[@]}"; do
-      RELAY_ARCH_OUT="$RELAY_BUILD_DIR/clawdbot-$arch"
-      build_relay_binary "$arch" "$RELAY_ARCH_OUT"
-      chmod +x "$RELAY_ARCH_OUT"
-    done
-    if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-      /usr/bin/lipo -create "$RELAY_BUILD_DIR"/clawdbot-* -output "$RELAY_CMD"
-    else
-      cp "$RELAY_BUILD_DIR/clawdbot-${BUILD_ARCHS[0]}" "$RELAY_CMD"
-    fi
-    rm -rf "$RELAY_BUILD_DIR"
+    package_relay_bun "$RELAY_DIR"
   else
-    NODE_VERSION="$(resolve_node_version)"
-    echo "🧰 Preparing bundled Node runtime (v${NODE_VERSION})"
-    RELAY_NODE="$RELAY_DIR/node"
-    RELAY_NODE_BUILD_DIR="$RELAY_DIR/.node-build"
-    rm -rf "$RELAY_NODE_BUILD_DIR"
-    mkdir -p "$RELAY_NODE_BUILD_DIR"
-    for arch in "${BUILD_ARCHS[@]}"; do
-      NODE_ARCH_OUT="$RELAY_NODE_BUILD_DIR/node-$arch"
-      download_node_binary "$NODE_VERSION" "$arch" "$NODE_ARCH_OUT"
-    done
-    if [[ "${#BUILD_ARCHS[@]}" -gt 1 ]]; then
-      /usr/bin/lipo -create "$RELAY_NODE_BUILD_DIR"/node-* -output "$RELAY_NODE"
-    else
-      cp "$RELAY_NODE_BUILD_DIR/node-${BUILD_ARCHS[0]}" "$RELAY_NODE"
-    fi
-    chmod +x "$RELAY_NODE"
-    if [[ "${STRIP_NODE:-1}" == "1" ]]; then
-      /usr/bin/strip -x "$RELAY_NODE" 2>/dev/null || true
-    fi
-    rm -rf "$RELAY_NODE_BUILD_DIR"
-    stage_relay_payload "$RELAY_DIR"
-    write_relay_wrapper "$RELAY_DIR"
+    package_relay_node "$RELAY_DIR"
   fi
 
   echo "🧪 Verifying bundled relay (version)"
