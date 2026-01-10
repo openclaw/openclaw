@@ -49,7 +49,8 @@
     "dist/utils/**",
     "dist/logging/**",
     "dist/markdown/**",
-    "dist/pairing/**"
+    "dist/pairing/**",
+    "dist/whatsapp/**"
   ],
   "scripts": {
     "dev": "tsx src/entry.ts",
