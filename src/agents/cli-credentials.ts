@@ -16,6 +16,15 @@ const CODEX_CLI_AUTH_RELATIVE_PATH = ".codex/auth.json";
 const CLAUDE_CLI_KEYCHAIN_SERVICE = "Claude Code-credentials";
 const CLAUDE_CLI_KEYCHAIN_ACCOUNT = "Claude Code";
 
+type CachedValue<T> = {
+  value: T | null;
+  readAt: number;
+  cacheKey: string;
+};
+
+let claudeCliCache: CachedValue<ClaudeCliCredential> | null = null;
+let codexCliCache: CachedValue<CodexCliCredential> | null = null;
+
 export type ClaudeCliCredential =
   | {
       type: "oauth";
@@ -144,6 +153,30 @@ export function readClaudeCliCredentials(options?: {
     token: accessToken,
     expires: expiresAt,
   };
+}
+
+export function readClaudeCliCredentialsCached(options?: {
+  allowKeychainPrompt?: boolean;
+  ttlMs?: number;
+}): ClaudeCliCredential | null {
+  const ttlMs = options?.ttlMs ?? 0;
+  const now = Date.now();
+  const cacheKey = resolveClaudeCliCredentialsPath();
+  if (
+    ttlMs > 0 &&
+    claudeCliCache &&
+    claudeCliCache.cacheKey === cacheKey &&
+    now - claudeCliCache.readAt < ttlMs
+  ) {
+    return claudeCliCache.value;
+  }
+  const value = readClaudeCliCredentials({
+    allowKeychainPrompt: options?.allowKeychainPrompt,
+  });
+  if (ttlMs > 0) {
+    claudeCliCache = { value, readAt: now, cacheKey };
+  }
+  return value;
 }
 
 export function writeClaudeCliKeychainCredentials(
@@ -279,4 +312,25 @@ export function readCodexCliCredentials(): CodexCliCredential | null {
     refresh: refreshToken,
     expires,
   };
+}
+
+export function readCodexCliCredentialsCached(options?: {
+  ttlMs?: number;
+}): CodexCliCredential | null {
+  const ttlMs = options?.ttlMs ?? 0;
+  const now = Date.now();
+  const cacheKey = resolveCodexCliAuthPath();
+  if (
+    ttlMs > 0 &&
+    codexCliCache &&
+    codexCliCache.cacheKey === cacheKey &&
+    now - codexCliCache.readAt < ttlMs
+  ) {
+    return codexCliCache.value;
+  }
+  const value = readCodexCliCredentials();
+  if (ttlMs > 0) {
+    codexCliCache = { value, readAt: now, cacheKey };
+  }
+  return value;
 }
