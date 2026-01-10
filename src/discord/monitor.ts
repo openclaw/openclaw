@@ -99,6 +99,25 @@ type DiscordMediaInfo = {
   placeholder: string;
 };
 
+type DiscordSnapshotAuthor = {
+  id?: string | null;
+  username?: string | null;
+  discriminator?: string | null;
+  global_name?: string | null;
+  name?: string | null;
+};
+
+type DiscordSnapshotMessage = {
+  content?: string | null;
+  embeds?: Array<{ description?: string | null; title?: string | null }> | null;
+  attachments?: APIAttachment[] | null;
+  author?: DiscordSnapshotAuthor | null;
+};
+
+type DiscordMessageSnapshot = {
+  message?: DiscordSnapshotMessage | null;
+};
+
 type DiscordHistoryEntry = {
   sender: string;
   body: string;
@@ -706,7 +725,12 @@ export function createDiscordMessageHandler(params: {
         }
       }
       const botId = botUserId;
-      const baseText = resolveDiscordMessageText(message);
+      const baseText = resolveDiscordMessageText(message, {
+        includeForwarded: false,
+      });
+      const messageText = resolveDiscordMessageText(message, {
+        includeForwarded: true,
+      });
       recordProviderActivity({
         provider: "discord",
         accountId,
@@ -732,7 +756,7 @@ export function createDiscordMessageHandler(params: {
           matchesMentionPatterns(baseText, mentionRegexes));
       if (shouldLogVerbose()) {
         logVerbose(
-          `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${baseText ? "yes" : "no"}`,
+          `discord: inbound id=${message.id} guild=${message.guild?.id ?? "dm"} channel=${message.channelId} mention=${wasMentioned ? "yes" : "no"} type=${isDirectMessage ? "dm" : isGroupDm ? "group-dm" : "guild"} content=${messageText ? "yes" : "no"}`,
         );
       }
 
@@ -860,7 +884,9 @@ export function createDiscordMessageHandler(params: {
         return;
       }
 
-      const textForHistory = resolveDiscordMessageText(message);
+      const textForHistory = resolveDiscordMessageText(message, {
+        includeForwarded: true,
+      });
       if (isGuildMessage && historyLimit > 0 && textForHistory) {
         const history = guildHistories.get(message.channelId) ?? [];
         history.push({
@@ -957,7 +983,7 @@ export function createDiscordMessageHandler(params: {
       }
 
       const mediaList = await resolveMediaList(message, mediaMaxBytes);
-      const text = baseText;
+      const text = messageText;
       if (!text) {
         logVerbose(`discord: drop message ${message.id} (empty content)`);
         return;
@@ -1938,15 +1964,84 @@ function buildDiscordAttachmentPlaceholder(
 
 function resolveDiscordMessageText(
   message: Message,
-  fallbackText?: string,
+  options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  return (
+  const baseText =
     message.content?.trim() ||
     buildDiscordAttachmentPlaceholder(message.attachments) ||
     message.embeds?.[0]?.description ||
-    fallbackText?.trim() ||
-    ""
+    options?.fallbackText?.trim() ||
+    "";
+  if (!options?.includeForwarded) return baseText;
+  const forwardedText = resolveDiscordForwardedMessagesText(message);
+  if (!forwardedText) return baseText;
+  if (!baseText) return forwardedText;
+  return `${baseText}\n${forwardedText}`;
+}
+
+function resolveDiscordForwardedMessagesText(message: Message): string {
+  const snapshots = resolveDiscordMessageSnapshots(message);
+  if (snapshots.length === 0) return "";
+  const forwardedBlocks = snapshots
+    .map((snapshot) => {
+      const snapshotMessage = snapshot.message;
+      if (!snapshotMessage) return null;
+      const text = resolveDiscordSnapshotMessageText(snapshotMessage);
+      if (!text) return null;
+      const authorLabel = formatDiscordSnapshotAuthor(snapshotMessage.author);
+      const heading = authorLabel
+        ? `[Forwarded message from ${authorLabel}]`
+        : "[Forwarded message]";
+      return `${heading}\n${text}`;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  if (forwardedBlocks.length === 0) return "";
+  return forwardedBlocks.join("\n\n");
+}
+
+function resolveDiscordMessageSnapshots(
+  message: Message,
+): DiscordMessageSnapshot[] {
+  const rawData = (message as { rawData?: { message_snapshots?: unknown } })
+    .rawData;
+  const snapshots =
+    rawData?.message_snapshots ??
+    (message as { message_snapshots?: unknown }).message_snapshots ??
+    (message as { messageSnapshots?: unknown }).messageSnapshots;
+  if (!Array.isArray(snapshots)) return [];
+  return snapshots.filter(
+    (entry): entry is DiscordMessageSnapshot =>
+      Boolean(entry) && typeof entry === "object",
   );
+}
+
+function resolveDiscordSnapshotMessageText(
+  snapshot: DiscordSnapshotMessage,
+): string {
+  const content = snapshot.content?.trim() ?? "";
+  const attachmentText = buildDiscordAttachmentPlaceholder(
+    snapshot.attachments ?? undefined,
+  );
+  const embed = snapshot.embeds?.[0];
+  const embedText = embed?.description?.trim() || embed?.title?.trim() || "";
+  return content || attachmentText || embedText || "";
+}
+
+function formatDiscordSnapshotAuthor(
+  author: DiscordSnapshotAuthor | null | undefined,
+): string | undefined {
+  if (!author) return undefined;
+  const globalName = author.global_name ?? undefined;
+  const username = author.username ?? undefined;
+  const name = author.name ?? undefined;
+  const discriminator = author.discriminator ?? undefined;
+  const base = globalName || username || name;
+  if (username && discriminator && discriminator !== "0") {
+    return `@${username}#${discriminator}`;
+  }
+  if (base) return `@${base}`;
+  if (author.id) return `@${author.id}`;
+  return undefined;
 }
 
 export function buildDiscordMediaPayload(
@@ -1977,7 +2072,9 @@ export function buildDiscordMediaPayload(
 function resolveReplyContext(message: Message): string | null {
   const referenced = message.referencedMessage;
   if (!referenced?.author) return null;
-  const referencedText = resolveDiscordMessageText(referenced);
+  const referencedText = resolveDiscordMessageText(referenced, {
+    includeForwarded: true,
+  });
   if (!referencedText) return null;
   const fromLabel = referenced.author
     ? buildDirectLabel(referenced.author)

@@ -19,7 +19,7 @@ import {
   listNativeCommandSpecs,
 } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { resolveBlockStreamingChunking } from "../auto-reply/reply/block-streaming.js";
+import { resolveTelegramDraftStreamingChunking } from "../auto-reply/reply/block-streaming.js";
 import {
   buildMentionRegexes,
   matchesMentionPatterns,
@@ -749,7 +749,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       : undefined;
     const draftChunking =
       draftStream && streamMode === "block"
-        ? resolveBlockStreamingChunking(cfg, "telegram", route.accountId)
+        ? resolveTelegramDraftStreamingChunking(cfg, route.accountId)
         : undefined;
     const draftChunker = draftChunking
       ? new EmbeddedBlockChunker(draftChunking)

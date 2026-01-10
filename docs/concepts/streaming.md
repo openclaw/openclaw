@@ -100,6 +100,7 @@ Telegram is the only provider with draft streaming:
   - `partial`: draft updates with the latest stream text.
   - `block`: draft updates in chunked blocks (same chunker rules).
   - `off`: no draft streaming.
+- Draft chunk config (only for `streamMode: "block"`): `telegram.draftChunk` (defaults: `minChars: 200`, `maxChars: 800`).
 - Draft streaming is separate from block streaming; block replies are off by default and only enabled by `*.blockStreaming: true` on non-Telegram providers.
 - Final reply is still a normal message.
 - `/reasoning stream` writes reasoning into the draft bubble (Telegram only).
