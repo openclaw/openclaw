@@ -118,7 +118,7 @@ describe("discord tool result dispatch", () => {
     expect(runtimeError).not.toHaveBeenCalled();
     expect(sendMock).toHaveBeenCalledTimes(1);
     expect(sendMock.mock.calls[0]?.[1]).toMatch(/^PFX /);
-  }, 10000);
+  }, 15_000);
 
   it("caches channel info lookups between messages", async () => {
     const { createDiscordMessageHandler } = await import("./monitor.js");

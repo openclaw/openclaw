@@ -156,8 +156,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       defaultRuntime.log(theme.heading("Restarting daemon..."));
     }
     try {
-      await runDaemonRestart();
-      if (!opts.json) {
+      const restarted = await runDaemonRestart();
+      if (!opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
       }
     } catch (err) {

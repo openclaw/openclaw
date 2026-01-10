@@ -993,7 +993,12 @@ export async function runDaemonStop() {
   }
 }
 
-export async function runDaemonRestart() {
+/**
+ * Restart the gateway daemon service.
+ * @returns `true` if restart succeeded, `false` if the service was not loaded.
+ * Throws/exits on check or restart failures.
+ */
+export async function runDaemonRestart(): Promise<boolean> {
   const service = resolveGatewayService();
   let loaded = false;
   try {
@@ -1001,20 +1006,22 @@ export async function runDaemonRestart() {
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
-    return;
+    return false;
   }
   if (!loaded) {
     defaultRuntime.log(`Gateway service ${service.notLoadedText}.`);
     for (const hint of renderGatewayServiceStartHints()) {
       defaultRuntime.log(`Start with: ${hint}`);
     }
-    return;
+    return false;
   }
   try {
     await service.restart({ stdout: process.stdout });
+    return true;
   } catch (err) {
     defaultRuntime.error(`Gateway restart failed: ${String(err)}`);
     defaultRuntime.exit(1);
+    return false;
   }
 }
 
