@@ -165,9 +165,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         try {
           await doctorCommand(defaultRuntime, { nonInteractive: true });
         } catch (err) {
-          defaultRuntime.log(
-            theme.warn(`Doctor failed: ${String(err)}`),
-          );
+          defaultRuntime.log(theme.warn(`Doctor failed: ${String(err)}`));
         } finally {
           delete process.env.CLAWDBOT_UPDATE_IN_PROGRESS;
         }

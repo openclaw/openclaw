@@ -13,6 +13,7 @@
 - Docker: allow optional home volume + extra bind mounts in `docker-setup.sh`. (#679) — thanks @gabriel-trigo.
 
 ### Fixes
+- Agents: strip `<thought>`/`<antthinking>` tags from hidden reasoning output and cover tag variants in tests. (#688) — thanks @theglove44.
 - Agents: recognize "usage limit" errors as rate limits for failover. (#687) — thanks @evalexpr.
 - CLI: avoid success message when daemon restart is skipped. (#685) — thanks @carlulsoe.
 - Gateway: disable the OpenAI-compatible `/v1/chat/completions` endpoint by default; enable via `gateway.http.endpoints.chatCompletions.enabled=true`.
