@@ -3,11 +3,11 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import {
   applyGoogleTurnOrderingFix,
   buildEmbeddedSandboxInfo,
   createSystemPromptOverride,
-  resolveSessionAgentIds,
   splitSdkTools,
 } from "./pi-embedded-runner.js";
 import type { SandboxContext } from "./sandbox.js";
@@ -77,6 +77,22 @@ describe("resolveSessionAgentIds", () => {
   it("falls back to the configured default when sessionKey is non-agent", () => {
     const { sessionAgentId } = resolveSessionAgentIds({
       sessionKey: "telegram:slash:123",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("falls back to the configured default for global sessions", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "global",
+      config: cfg,
+    });
+    expect(sessionAgentId).toBe("beta");
+  });
+
+  it("keeps the agent id for provider-qualified agent sessions", () => {
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: "agent:beta:slack:channel:C1",
       config: cfg,
     });
     expect(sessionAgentId).toBe("beta");

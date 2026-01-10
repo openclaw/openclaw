@@ -1,3 +1,4 @@
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
@@ -7,10 +8,7 @@ import {
   saveSessionStore,
   type SessionEntry,
 } from "../../config/sessions.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-} from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import {
   normalizeCommandBody,
@@ -80,9 +78,10 @@ export async function tryFastAbortFromMessage(params: {
   if (!auth.isAuthorizedSender) return { handled: false, aborted: false };
 
   const targetKey = resolveAbortTargetKey(ctx);
-  const agentId = resolveAgentIdFromSessionKey(
-    targetKey ?? ctx.SessionKey ?? "",
-  );
+  const agentId = resolveSessionAgentId({
+    sessionKey: targetKey ?? ctx.SessionKey ?? "",
+    config: cfg,
+  });
   const raw = stripStructuralPrefixes(ctx.Body ?? "");
   const isGroup = ctx.ChatType?.trim().toLowerCase() === "group";
   const stripped = isGroup ? stripMentions(raw, ctx, cfg, agentId) : raw;

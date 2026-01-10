@@ -7,12 +7,12 @@
  * across multiple providers.
  */
 
+import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveEffectiveMessagesConfig } from "../../agents/identity.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { sendMessageDiscord } from "../../discord/send.js";
 import { sendMessageIMessage } from "../../imessage/send.js";
 import { sendMessageMSTeams } from "../../msteams/send.js";
-import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import { sendMessageSlack } from "../../slack/send.js";
 import { sendMessageTelegram } from "../../telegram/send.js";
@@ -67,7 +67,10 @@ export async function routeReply(
   const responsePrefix = params.sessionKey
     ? resolveEffectiveMessagesConfig(
         cfg,
-        resolveAgentIdFromSessionKey(params.sessionKey),
+        resolveSessionAgentId({
+          sessionKey: params.sessionKey,
+          config: cfg,
+        }),
       ).responsePrefix
     : cfg.messages?.responsePrefix === "auto"
       ? undefined

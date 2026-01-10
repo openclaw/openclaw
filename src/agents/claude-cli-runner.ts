@@ -9,6 +9,7 @@ import { shouldLogVerbose } from "../globals.js";
 import { createSubsystemLogger } from "../logging.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
+import { resolveSessionAgentIds } from "./agent-scope.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import {
   buildBootstrapContextFiles,
@@ -136,6 +137,7 @@ function buildSystemPrompt(params: {
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  heartbeatPrompt?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   modelDisplay: string;
@@ -150,9 +152,7 @@ function buildSystemPrompt(params: {
     extraSystemPrompt: params.extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
-    heartbeatPrompt: resolveHeartbeatPrompt(
-      params.config?.agents?.defaults?.heartbeat?.prompt,
-    ),
+    heartbeatPrompt: params.heartbeatPrompt,
     runtimeInfo: {
       host: "clawdbot",
       os: `${os.type()} ${os.release()}`,
@@ -374,12 +374,23 @@ export async function runClaudeCliAgent(params: {
     params.sessionKey ?? params.sessionId,
   );
   const contextFiles = buildBootstrapContextFiles(bootstrapFiles);
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+  });
+  const heartbeatPrompt =
+    sessionAgentId === defaultAgentId
+      ? resolveHeartbeatPrompt(
+          params.config?.agents?.defaults?.heartbeat?.prompt,
+        )
+      : undefined;
   const systemPrompt = buildSystemPrompt({
     workspaceDir,
     config: params.config,
     defaultThinkLevel: params.thinkLevel,
     extraSystemPrompt,
     ownerNumbers: params.ownerNumbers,
+    heartbeatPrompt,
     tools: [],
     contextFiles,
     modelDisplay,
