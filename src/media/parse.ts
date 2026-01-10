@@ -1,5 +1,7 @@
 // Shared helpers for parsing MEDIA tokens from command/stdout text.
 
+import { parseFenceSpans } from "../markdown/fences.js";
+
 // Allow optional wrapping backticks and punctuation after the token; capture the core token.
 export const MEDIA_TOKEN_RE = /\bMEDIA:\s*`?([^\n]+)`?/gi;
 
@@ -22,10 +24,23 @@ function isValidMedia(candidate: string) {
   );
 }
 
+// Check if a character offset is inside any fenced code block
+function isInsideFence(
+  fenceSpans: Array<{ start: number; end: number }>,
+  offset: number,
+): boolean {
+  return fenceSpans.some((span) => offset >= span.start && offset < span.end);
+}
+
+// Regex to detect [[audio_as_voice]] tag
+const AUDIO_AS_VOICE_RE = /\[\[audio_as_voice\]\]/gi;
+const AUDIO_AS_VOICE_TEST_RE = /\[\[audio_as_voice\]\]/i;
+
 export function splitMediaFromOutput(raw: string): {
   text: string;
   mediaUrls?: string[];
   mediaUrl?: string; // legacy first item for backward compatibility
+  audioAsVoice?: boolean; // true if [[audio_as_voice]] tag was found
 } {
   // KNOWN: Leading whitespace is semantically meaningful in Markdown (lists, indented fences).
   // We only trim the end; token cleanup below handles removing `MEDIA:` lines.
@@ -35,14 +50,26 @@ export function splitMediaFromOutput(raw: string): {
   const media: string[] = [];
   let foundMediaToken = false;
 
+  // Parse fenced code blocks to avoid extracting MEDIA tokens from inside them
+  const fenceSpans = parseFenceSpans(trimmedRaw);
+
   // Collect tokens line by line so we can strip them cleanly.
   const lines = trimmedRaw.split("\n");
   const keptLines: string[] = [];
 
+  let lineOffset = 0; // Track character offset for fence checking
   for (const line of lines) {
+    // Skip MEDIA extraction if this line is inside a fenced code block
+    if (isInsideFence(fenceSpans, lineOffset)) {
+      keptLines.push(line);
+      lineOffset += line.length + 1; // +1 for newline
+      continue;
+    }
+
     const matches = Array.from(line.matchAll(MEDIA_TOKEN_RE));
     if (matches.length === 0) {
       keptLines.push(line);
+      lineOffset += line.length + 1; // +1 for newline
       continue;
     }
 
@@ -86,18 +113,39 @@ export function splitMediaFromOutput(raw: string): {
     if (cleanedLine) {
       keptLines.push(cleanedLine);
     }
+    lineOffset += line.length + 1; // +1 for newline
   }
 
-  const cleanedText = keptLines
+  let cleanedText = keptLines
     .join("\n")
     .replace(/[ \t]+\n/g, "\n")
     .replace(/[ \t]{2,}/g, " ")
     .replace(/\n{2,}/g, "\n")
     .trim();
 
-  if (media.length === 0) {
-    return { text: foundMediaToken ? cleanedText : trimmedRaw };
+  // Detect and strip [[audio_as_voice]] tag
+  const hasAudioAsVoice = AUDIO_AS_VOICE_TEST_RE.test(cleanedText);
+  if (hasAudioAsVoice) {
+    cleanedText = cleanedText
+      .replace(AUDIO_AS_VOICE_RE, "")
+      .replace(/[ \t]+/g, " ")
+      .replace(/\n{2,}/g, "\n")
+      .trim();
   }
 
-  return { text: cleanedText, mediaUrls: media, mediaUrl: media[0] };
+  if (media.length === 0) {
+    const result: ReturnType<typeof splitMediaFromOutput> = {
+      // Return cleaned text if we found a media token OR audio tag, otherwise original
+      text: foundMediaToken || hasAudioAsVoice ? cleanedText : trimmedRaw,
+    };
+    if (hasAudioAsVoice) result.audioAsVoice = true;
+    return result;
+  }
+
+  return {
+    text: cleanedText,
+    mediaUrls: media,
+    mediaUrl: media[0],
+    ...(hasAudioAsVoice ? { audioAsVoice: true } : {}),
+  };
 }

@@ -64,6 +64,7 @@ import {
   readTelegramAllowFromStore,
   upsertTelegramPairingRequest,
 } from "./pairing-store.js";
+import { resolveTelegramVoiceDecision } from "./voice.js";
 
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;
@@ -1387,7 +1388,16 @@ async function deliverReplies(params: {
           ...mediaParams,
         });
       } else if (kind === "audio") {
-        const useVoice = reply.audioAsVoice === true; // default false (backward compatible)
+        const { useVoice, reason } = resolveTelegramVoiceDecision({
+          wantsVoice: reply.audioAsVoice === true, // default false (backward compatible)
+          contentType: media.contentType,
+          fileName,
+        });
+        if (reason) {
+          logVerbose(
+            `Telegram voice requested but ${reason}; sending as audio file instead.`,
+          );
+        }
         if (useVoice) {
           // Voice message - displays as round playable bubble (opt-in via [[audio_as_voice]])
           await bot.api.sendVoice(chatId, file, {

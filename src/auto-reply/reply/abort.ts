@@ -3,6 +3,7 @@ import type { ClawdbotConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveStorePath,
+  type SessionEntry,
   saveSessionStore,
   type SessionEntry,
 } from "../../config/sessions.js";

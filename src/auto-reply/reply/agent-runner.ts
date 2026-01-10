@@ -260,6 +260,14 @@ export async function runReplyAgent(params: {
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs =
     opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
+
+  // Buffer audio blocks to apply [[audio_as_voice]] tag that may come later
+  const bufferedAudioBlocks: ReplyPayload[] = [];
+  let seenAudioAsVoice = false;
+
+  const AUDIO_EXTENSIONS = /\.(opus|mp3|m4a|wav|ogg|aac|flac)$/i;
+  const hasAudioMedia = (urls?: string[]): boolean =>
+    Boolean(urls?.some((u) => AUDIO_EXTENSIONS.test(u)));
   const replyToChannel =
     sessionCtx.OriginatingChannel ??
     ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
@@ -532,23 +540,37 @@ export async function runReplyAgent(params: {
                       },
                       sessionCtx.MessageSid,
                     );
-                    if (!isRenderablePayload(taggedPayload)) return;
+                    // Let through payloads with audioAsVoice flag even if empty (need to track it)
+                    if (
+                      !isRenderablePayload(taggedPayload) &&
+                      !payload.audioAsVoice
+                    )
+                      return;
                     const audioTagResult = extractAudioTag(taggedPayload.text);
                     const cleaned = audioTagResult.cleaned || undefined;
                     const hasMedia =
                       Boolean(taggedPayload.mediaUrl) ||
                       (taggedPayload.mediaUrls?.length ?? 0) > 0;
-                    if (!cleaned && !hasMedia) return;
+                    // Skip empty payloads unless they have audioAsVoice flag (need to track it)
+                    if (!cleaned && !hasMedia && !payload.audioAsVoice) return;
                     if (
                       isSilentReplyText(cleaned, SILENT_REPLY_TOKEN) &&
                       !hasMedia
                     )
                       return;
+
+                    // Track if we've seen [[audio_as_voice]] from payload or text extraction
+                    if (payload.audioAsVoice || audioTagResult.audioAsVoice) {
+                      seenAudioAsVoice = true;
+                    }
+
                     const blockPayload: ReplyPayload = applyReplyToMode({
                       ...taggedPayload,
                       text: cleaned,
-                      audioAsVoice: audioTagResult.audioAsVoice,
+                      audioAsVoice:
+                        audioTagResult.audioAsVoice || payload.audioAsVoice,
                     });
+
                     void typingSignals
                       .signalTextDelta(taggedPayload.text)
                       .catch((err) => {
@@ -556,6 +578,14 @@ export async function runReplyAgent(params: {
                           `block reply typing signal failed: ${String(err)}`,
                         );
                       });
+
+                    // Buffer audio blocks to apply [[audio_as_voice]] that may come later
+                    const isAudioBlock = hasAudioMedia(taggedPayload.mediaUrls);
+                    if (isAudioBlock) {
+                      bufferedAudioBlocks.push(blockPayload);
+                      return; // Don't send immediately - wait for potential [[audio_as_voice]] tag
+                    }
+
                     blockReplyPipeline?.enqueue(blockPayload);
                   }
                 : undefined,
@@ -670,6 +700,17 @@ export async function runReplyAgent(params: {
     }
 
     const payloadArray = runResult.payloads ?? [];
+
+    if (bufferedAudioBlocks.length > 0 && blockReplyPipeline) {
+      for (const audioPayload of bufferedAudioBlocks) {
+        const finalPayload = seenAudioAsVoice
+          ? { ...audioPayload, audioAsVoice: true }
+          : audioPayload;
+        blockReplyPipeline.enqueue(finalPayload);
+      }
+      bufferedAudioBlocks.length = 0;
+    }
+
     if (blockReplyPipeline) {
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
@@ -677,6 +718,7 @@ export async function runReplyAgent(params: {
     if (pendingToolTasks.size > 0) {
       await Promise.allSettled(pendingToolTasks);
     }
+
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
     // keep the typing indicator stuck.

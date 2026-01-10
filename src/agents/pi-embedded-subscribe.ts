@@ -262,6 +262,7 @@ export function subscribeEmbeddedPiSession(params: {
   onBlockReply?: (payload: {
     text?: string;
     mediaUrls?: string[];
+    audioAsVoice?: boolean;
   }) => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
@@ -436,11 +437,15 @@ export function subscribeEmbeddedPiSession(params: {
     lastBlockReplyText = chunk;
     assistantTexts.push(chunk);
     if (!params.onBlockReply) return;
-    const { text: cleanedText, mediaUrls } = splitMediaFromOutput(chunk);
-    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0)) return;
+    const splitResult = splitMediaFromOutput(chunk);
+    const { text: cleanedText, mediaUrls, audioAsVoice } = splitResult;
+    // Skip empty payloads, but always emit if audioAsVoice is set (to propagate the flag)
+    if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice)
+      return;
     void params.onBlockReply({
       text: cleanedText,
       mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+      audioAsVoice,
     });
   };
 
@@ -859,12 +864,21 @@ export function subscribeEmbeddedPiSession(params: {
                 );
               } else {
                 lastBlockReplyText = text;
-                const { text: cleanedText, mediaUrls } =
-                  splitMediaFromOutput(text);
-                if (cleanedText || (mediaUrls && mediaUrls.length > 0)) {
+                const {
+                  text: cleanedText,
+                  mediaUrls,
+                  audioAsVoice,
+                } = splitMediaFromOutput(text);
+                // Emit if there's content OR audioAsVoice flag (to propagate the flag)
+                if (
+                  cleanedText ||
+                  (mediaUrls && mediaUrls.length > 0) ||
+                  audioAsVoice
+                ) {
                   void onBlockReply({
                     text: cleanedText,
                     mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+                    audioAsVoice,
                   });
                 }
               }
