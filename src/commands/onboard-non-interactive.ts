@@ -337,11 +337,11 @@ export async function runNonInteractiveOnboarding(
     nextConfig = applyMinimaxConfig(nextConfig);
   } else if (authChoice === "opencode-zen") {
     const resolved = await resolveNonInteractiveApiKey({
-      provider: "opencode-zen",
+      provider: "opencode",
       cfg: baseConfig,
       flagValue: opts.opencodeZenApiKey,
       flagName: "--opencode-zen-api-key",
-      envVar: "OPENCODE_ZEN_API_KEY",
+      envVar: "OPENCODE_API_KEY (or OPENCODE_ZEN_API_KEY)",
       runtime,
     });
     if (!resolved) return;
@@ -349,8 +349,8 @@ export async function runNonInteractiveOnboarding(
       await setOpencodeZenApiKey(resolved.key);
     }
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "opencode-zen:default",
-      provider: "opencode-zen",
+      profileId: "opencode:default",
+      provider: "opencode",
       mode: "api_key",
     });
     nextConfig = applyOpencodeZenConfig(nextConfig);

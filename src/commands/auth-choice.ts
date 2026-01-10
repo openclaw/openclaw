@@ -710,8 +710,8 @@ export async function applyAuthChoice(params: {
     });
     await setOpencodeZenApiKey(String(key).trim(), params.agentDir);
     nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "opencode-zen:default",
-      provider: "opencode-zen",
+      profileId: "opencode:default",
+      provider: "opencode",
       mode: "api_key",
     });
     if (params.setDefaultModel) {
@@ -755,7 +755,7 @@ export function resolvePreferredProviderForAuthChoice(
     case "minimax":
       return "lmstudio";
     case "opencode-zen":
-      return "opencode-zen";
+      return "opencode";
     default:
       return undefined;
   }

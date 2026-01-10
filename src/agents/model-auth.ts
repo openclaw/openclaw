@@ -2,6 +2,7 @@ import { type Api, getEnvApiKey, type Model } from "@mariozechner/pi-ai";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
+import { normalizeProviderId } from "./model-selection.js";
 import {
   type AuthProfileStore,
   ensureAuthProfileStore,
@@ -103,6 +104,7 @@ export type EnvApiKeyResult = { apiKey: string; source: string };
 export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "unknown";
 
 export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
+  const normalized = normalizeProviderId(provider);
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = process.env[envVar]?.trim();
@@ -113,24 +115,28 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return { apiKey: value, source };
   };
 
-  if (provider === "github-copilot") {
+  if (normalized === "github-copilot") {
     return (
       pick("COPILOT_GITHUB_TOKEN") ?? pick("GH_TOKEN") ?? pick("GITHUB_TOKEN")
     );
   }
 
-  if (provider === "anthropic") {
+  if (normalized === "anthropic") {
     return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
   }
 
-  if (provider === "zai") {
+  if (normalized === "zai") {
     return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
   }
 
-  if (provider === "google-vertex") {
-    const envKey = getEnvApiKey(provider);
+  if (normalized === "google-vertex") {
+    const envKey = getEnvApiKey(normalized);
     if (!envKey) return null;
     return { apiKey: envKey, source: "gcloud adc" };
+  }
+
+  if (normalized === "opencode") {
+    return pick("OPENCODE_API_KEY") ?? pick("OPENCODE_ZEN_API_KEY");
   }
 
   const envMap: Record<string, string> = {
@@ -142,9 +148,9 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     openrouter: "OPENROUTER_API_KEY",
     minimax: "MINIMAX_API_KEY",
     mistral: "MISTRAL_API_KEY",
-    "opencode-zen": "OPENCODE_ZEN_API_KEY",
+    opencode: "OPENCODE_API_KEY",
   };
-  const envVar = envMap[provider];
+  const envVar = envMap[normalized];
   if (!envVar) return null;
   return pick(envVar);
 }

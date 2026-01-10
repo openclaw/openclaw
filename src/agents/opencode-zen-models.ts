@@ -12,7 +12,7 @@ import type { ModelApi, ModelDefinitionConfig } from "../config/types.js";
 
 export const OPENCODE_ZEN_API_BASE_URL = "https://opencode.ai/zen/v1";
 export const OPENCODE_ZEN_DEFAULT_MODEL = "claude-opus-4-5";
-export const OPENCODE_ZEN_DEFAULT_MODEL_REF = `opencode-zen/${OPENCODE_ZEN_DEFAULT_MODEL}`;
+export const OPENCODE_ZEN_DEFAULT_MODEL_REF = `opencode/${OPENCODE_ZEN_DEFAULT_MODEL}`;
 
 // Cache for fetched models (1 hour TTL)
 let cachedModels: ModelDefinitionConfig[] | null = null;
@@ -87,10 +87,23 @@ export function resolveOpencodeZenAlias(modelIdOrAlias: string): string {
 }
 
 /**
- * OpenCode Zen is an OpenAI-compatible proxy for all models.
- * All requests go through /chat/completions regardless of the underlying model.
+ * OpenCode Zen routes models to different APIs based on model family.
  */
-export function resolveOpencodeZenModelApi(_modelId: string): ModelApi {
+export function resolveOpencodeZenModelApi(modelId: string): ModelApi {
+  const lower = modelId.toLowerCase();
+  if (
+    lower.startsWith("claude-") ||
+    lower.startsWith("minimax") ||
+    lower.startsWith("alpha-gd4")
+  ) {
+    return "anthropic-messages";
+  }
+  if (lower.startsWith("gemini-")) {
+    return "google-generative-ai";
+  }
+  if (lower.startsWith("gpt-")) {
+    return "openai-responses";
+  }
   return "openai-completions";
 }
 

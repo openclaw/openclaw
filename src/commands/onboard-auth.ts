@@ -1,11 +1,7 @@
 import type { OAuthCredentials, OAuthProvider } from "@mariozechner/pi-ai";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import {
-  getOpencodeZenStaticFallbackModels,
-  OPENCODE_ZEN_API_BASE_URL,
-  OPENCODE_ZEN_DEFAULT_MODEL_REF,
-} from "../agents/opencode-zen-models.js";
+import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.js";
 
@@ -450,10 +446,10 @@ export function applyMinimaxApiConfig(
 
 export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
   upsertAuthProfile({
-    profileId: "opencode-zen:default",
+    profileId: "opencode:default",
     credential: {
       type: "api_key",
-      provider: "opencode-zen",
+      provider: "opencode",
       key,
     },
     agentDir: agentDir ?? resolveDefaultAgentDir(),
@@ -463,21 +459,8 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
 export function applyOpencodeZenProviderConfig(
   cfg: ClawdbotConfig,
 ): ClawdbotConfig {
-  const opencodeModels = getOpencodeZenStaticFallbackModels();
-
-  const providers = { ...cfg.models?.providers };
-  providers["opencode-zen"] = {
-    baseUrl: OPENCODE_ZEN_API_BASE_URL,
-    apiKey: "opencode-zen",
-    api: "openai-completions",
-    models: opencodeModels,
-  };
-
+  // Use the built-in opencode provider from pi-ai; only seed the allowlist alias.
   const models = { ...cfg.agents?.defaults?.models };
-  for (const model of opencodeModels) {
-    const key = `opencode-zen/${model.id}`;
-    models[key] = models[key] ?? {};
-  }
   models[OPENCODE_ZEN_DEFAULT_MODEL_REF] = {
     ...models[OPENCODE_ZEN_DEFAULT_MODEL_REF],
     alias: models[OPENCODE_ZEN_DEFAULT_MODEL_REF]?.alias ?? "Opus",
@@ -491,10 +474,6 @@ export function applyOpencodeZenProviderConfig(
         ...cfg.agents?.defaults,
         models,
       },
-    },
-    models: {
-      mode: cfg.models?.mode ?? "merge",
-      providers,
     },
   };
 }

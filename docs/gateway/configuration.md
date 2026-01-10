@@ -1423,6 +1423,7 @@ Clawdbot uses the **pi-coding-agent** model catalog. You can add custom provider
 (LiteLLM, local OpenAI-compatible servers, Anthropic proxies, etc.) by writing
 `~/.clawdbot/agents/<agentId>/agent/models.json` or by defining the same schema inside your
 Clawdbot config under `models.providers`.
+Provider-by-provider overview + examples: [/concepts/model-providers](/concepts/model-providers).
 
 When `models.providers` is present, Clawdbot writes/merges a `models.json` into
 `~/.clawdbot/agents/<agentId>/agent/` on startup:
@@ -1467,10 +1468,12 @@ Select the model via `agents.defaults.model.primary` (provider/model).
 
 ### OpenCode Zen (multi-model proxy)
 
-OpenCode Zen is an OpenAI-compatible proxy at `https://opencode.ai/zen/v1`. Get an API key at https://opencode.ai/auth and set `OPENCODE_ZEN_API_KEY`.
+OpenCode Zen is a multi-model gateway with per-model endpoints. Clawdbot uses
+the built-in `opencode` provider from pi-ai; set `OPENCODE_API_KEY` (or
+`OPENCODE_ZEN_API_KEY`) from https://opencode.ai/auth.
 
 Notes:
-- Model refs use `opencode-zen/<modelId>` (example: `opencode-zen/claude-opus-4-5`).
+- Model refs use `opencode/<modelId>` (example: `opencode/claude-opus-4-5`).
 - If you enable an allowlist via `agents.defaults.models`, add each model you plan to use.
 - Shortcut: `clawdbot onboard --auth-choice opencode-zen`.
 
@@ -1478,29 +1481,8 @@ Notes:
 {
   agents: {
     defaults: {
-      model: { primary: "opencode-zen/claude-opus-4-5" },
-      models: { "opencode-zen/claude-opus-4-5": { alias: "Opus" } }
-    }
-  },
-  models: {
-    mode: "merge",
-    providers: {
-      "opencode-zen": {
-        baseUrl: "https://opencode.ai/zen/v1",
-        apiKey: "${OPENCODE_ZEN_API_KEY}",
-        api: "openai-completions",
-        models: [
-          {
-            id: "claude-opus-4-5",
-            name: "Claude Opus 4.5",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200000,
-            maxTokens: 32000
-          }
-        ]
-      }
+      model: { primary: "opencode/claude-opus-4-5" },
+      models: { "opencode/claude-opus-4-5": { alias: "Opus" } }
     }
   }
 }
