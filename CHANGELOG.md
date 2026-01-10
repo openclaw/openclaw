@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Sandbox: allow sandbox browser to auto-start the CDP endpoint when the browser tool needs it. — thanks @steipete
 - Sandbox browser: proxy CDP out of the container so host port mappings work (fixes `attachOnly` “profile not running”). — thanks @steipete
 - Agents: gate heartbeat prompt to default agent sessions (including non-agent session keys). (#630) — thanks @adam91holt
 - Agent: fast abort on /stop and cancel tool calls between tool boundaries. (#617)

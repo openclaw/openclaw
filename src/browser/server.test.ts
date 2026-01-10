@@ -707,6 +707,50 @@ describe("browser control server", () => {
     expect(started.error ?? "").toMatch(/attachOnly/i);
   });
 
+  it("allows attachOnly servers to ensure reachability via callback", async () => {
+    cfgAttachOnly = true;
+    reachable = false;
+    const { startBrowserBridgeServer } = await import("./bridge-server.js");
+
+    const ensured = vi.fn(async () => {
+      reachable = true;
+    });
+
+    const bridge = await startBrowserBridgeServer({
+      resolved: {
+        enabled: true,
+        controlUrl: "http://127.0.0.1:0",
+        controlHost: "127.0.0.1",
+        controlPort: 0,
+        cdpProtocol: "http",
+        cdpHost: "127.0.0.1",
+        cdpIsLoopback: true,
+        color: "#FF4500",
+        headless: true,
+        noSandbox: false,
+        attachOnly: true,
+        defaultProfile: "clawd",
+        profiles: {
+          clawd: { cdpPort: testPort + 1, color: "#FF4500" },
+        },
+      },
+      onEnsureAttachTarget: ensured,
+    });
+
+    const started = (await realFetch(`${bridge.baseUrl}/start`, {
+      method: "POST",
+    }).then((r) => r.json())) as { ok?: boolean; error?: string };
+    expect(started.error).toBeUndefined();
+    expect(started.ok).toBe(true);
+    const status = (await realFetch(`${bridge.baseUrl}/`).then((r) =>
+      r.json(),
+    )) as { running?: boolean };
+    expect(status.running).toBe(true);
+    expect(ensured).toHaveBeenCalledTimes(1);
+
+    await new Promise<void>((resolve) => bridge.server.close(() => resolve()));
+  });
+
   it("opens tabs via CDP createTarget path", async () => {
     const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();

@@ -7,6 +7,7 @@ import { registerBrowserRoutes } from "./routes/index.js";
 import {
   type BrowserServerState,
   createBrowserRouteContext,
+  type ProfileContext,
 } from "./server-context.js";
 
 export type BrowserBridge = {
@@ -20,6 +21,7 @@ export async function startBrowserBridgeServer(params: {
   resolved: ResolvedBrowserConfig;
   host?: string;
   port?: number;
+  onEnsureAttachTarget?: (profile: ProfileContext["profile"]) => Promise<void>;
 }): Promise<BrowserBridge> {
   const host = params.host ?? "127.0.0.1";
   const port = params.port ?? 0;
@@ -36,6 +38,7 @@ export async function startBrowserBridgeServer(params: {
 
   const ctx = createBrowserRouteContext({
     getState: () => state,
+    onEnsureAttachTarget: params.onEnsureAttachTarget,
   });
   registerBrowserRoutes(app, ctx);
 

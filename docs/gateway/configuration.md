@@ -1354,7 +1354,9 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
           vncPort: 5900,
           noVncPort: 6080,
           headless: false,
-          enableNoVnc: true
+          enableNoVnc: true,
+          autoStart: true,
+          autoStartTimeoutMs: 12000
         },
         prune: {
           idleHours: 24,  // 0 disables idle pruning
