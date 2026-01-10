@@ -363,7 +363,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect((content as Array<{ type?: string }>)[0]?.type).toBe("toolCall");
   });
 
-  it("sanitizes tool ids for assistant blocks and tool results", async () => {
+  it("sanitizes tool ids for assistant blocks and tool results when enabled", async () => {
     const input = [
       {
         role: "assistant",
@@ -384,7 +384,9 @@ describe("sanitizeSessionMessagesImages", () => {
       },
     ] satisfies AgentMessage[];
 
-    const out = await sanitizeSessionMessagesImages(input, "test");
+    const out = await sanitizeSessionMessagesImages(input, "test", {
+      sanitizeToolCallIds: true,
+    });
 
     const assistant = out[0] as { content?: Array<{ id?: string }> };
     expect(assistant.content?.[0]?.id).toBe("call_abc_item_123");
