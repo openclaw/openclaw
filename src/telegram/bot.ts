@@ -577,6 +577,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     // ACK reactions
     const ackReaction = resolveAckReaction(cfg, route.agentId);
+    const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
     const shouldAckReaction = () => {
       if (!ackReaction) return false;
       if (ackReactionScope === "all") return true;
@@ -590,6 +591,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
       return false;
     };
+    let didAddAckReaction = false;
     if (shouldAckReaction() && msg.message_id) {
       const api = bot.api as unknown as {
         setMessageReaction?: (
@@ -608,6 +610,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               `telegram react failed for chat ${chatId}: ${String(err)}`,
             );
           });
+        didAddAckReaction = true;
       }
     }
 
@@ -854,6 +857,22 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     markDispatchIdle();
     draftStream?.stop();
     if (!queuedFinal) return;
+    if (removeAckAfterReply && didAddAckReaction && msg.message_id) {
+      const api = bot.api as unknown as {
+        setMessageReaction?: (
+          chatId: number | string,
+          messageId: number,
+          reactions: Array<{ type: "emoji"; emoji: string }>,
+        ) => Promise<void>;
+      };
+      if (typeof api.setMessageReaction === "function") {
+        api.setMessageReaction(chatId, msg.message_id, []).catch((err) => {
+          logVerbose(
+            `telegram: failed to remove ack reaction from ${chatId}/${msg.message_id}: ${String(err)}`,
+          );
+        });
+      }
+    }
   };
 
   const nativeCommands = nativeEnabled ? listNativeCommandSpecs() : [];

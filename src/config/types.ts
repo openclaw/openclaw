@@ -999,6 +999,8 @@ export type MessagesConfig = {
   ackReaction?: string;
   /** When to send ack reactions. Default: "group-mentions". */
   ackReactionScope?: "group-mentions" | "group-all" | "direct" | "all";
+  /** Remove ack reaction after reply is sent (default: false). */
+  removeAckAfterReply?: boolean;
 };
 
 export type CommandsConfig = {
