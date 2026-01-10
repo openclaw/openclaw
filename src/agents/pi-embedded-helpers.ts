@@ -103,7 +103,17 @@ export async function sanitizeSessionMessagesImages(
         content as ContentBlock[],
         label,
       )) as unknown as typeof toolMsg.content;
-      out.push({ ...toolMsg, content: nextContent });
+      const sanitizedToolCallId = toolMsg.toolCallId
+        ? sanitizeToolCallId(toolMsg.toolCallId)
+        : undefined;
+      const sanitizedMsg = {
+        ...toolMsg,
+        content: nextContent,
+        ...(sanitizedToolCallId && {
+          toolCallId: sanitizedToolCallId,
+        }),
+      };
+      out.push(sanitizedMsg);
       continue;
     }
 
@@ -133,14 +143,32 @@ export async function sanitizeSessionMessagesImages(
           if (rec.type !== "text" || typeof rec.text !== "string") return true;
           return rec.text.trim().length > 0;
         });
-        const sanitizedContent = (await sanitizeContentBlocksImages(
-          filteredContent as unknown as ContentBlock[],
+        // Also sanitize tool call IDs in assistant messages (function call blocks)
+        const sanitizedContent = await Promise.all(
+          filteredContent.map(async (block) => {
+            if (
+              block &&
+              typeof block === "object" &&
+              (block as { type?: unknown }).type === "functionCall" &&
+              (block as { id?: unknown }).id
+            ) {
+              const functionBlock = block as { type: string; id: string };
+              return {
+                ...functionBlock,
+                id: sanitizeToolCallId(functionBlock.id),
+              };
+            }
+            return block;
+          }),
+        );
+        const finalContent = (await sanitizeContentBlocksImages(
+          sanitizedContent as unknown as ContentBlock[],
           label,
         )) as unknown as typeof assistantMsg.content;
-        if (sanitizedContent.length === 0) {
+        if (finalContent.length === 0) {
           continue;
         }
-        out.push({ ...assistantMsg, content: sanitizedContent });
+        out.push({ ...assistantMsg, content: finalContent });
         continue;
       }
     }
@@ -257,7 +285,10 @@ export function isRateLimitErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   return (
     /rate[_ ]limit|too many requests|429/.test(value) ||
-    value.includes("exceeded your current quota")
+    value.includes("exceeded your current quota") ||
+    value.includes("resource has been exhausted") ||
+    value.includes("quota exceeded") ||
+    value.includes("resource_exhausted")
   );
 }
 
@@ -307,8 +338,23 @@ export function isAuthErrorMessage(raw: string): boolean {
     value.includes("unauthorized") ||
     value.includes("forbidden") ||
     value.includes("access denied") ||
+    value.includes("expired") ||
+    value.includes("token has expired") ||
     /\b401\b/.test(value) ||
     /\b403\b/.test(value)
+  );
+}
+
+export function isCloudCodeAssistFormatError(raw: string): boolean {
+  const value = raw.toLowerCase();
+  if (!value) return false;
+  return (
+    value.includes("invalid_request_error") ||
+    value.includes("string should match pattern") ||
+    value.includes("tool_use.id") ||
+    value.includes("tool_use_id") ||
+    value.includes("messages.1.content.1.tool_use.id") ||
+    value.includes("invalid request format")
   );
 }
 
@@ -482,6 +528,31 @@ export function normalizeTextForComparison(text: string): string {
  * Uses substring matching to handle LLM elaboration (e.g., wrapping in quotes,
  * adding context, or slight rephrasing that includes the original).
  */
+// ── Tool Call ID Sanitization (Google Cloud Code Assist) ───────────────────────
+// Google Cloud Code Assist rejects tool call IDs that contain invalid characters.
+// OpenAI Codex generates IDs like "call_abc123|item_456" with pipe characters,
+// but Google requires IDs matching ^[a-zA-Z0-9_-]+$ pattern.
+// This function sanitizes tool call IDs by replacing invalid characters with underscores.
+
+export function sanitizeToolCallId(id: string): string {
+  if (!id || typeof id !== "string") return "default_tool_id";
+
+  const cloudCodeAssistPatternReplacement = id.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const trimmedInvalidStartChars = cloudCodeAssistPatternReplacement.replace(
+    /^[^a-zA-Z0-9_-]+/,
+    "",
+  );
+
+  return trimmedInvalidStartChars.length > 0
+    ? trimmedInvalidStartChars
+    : "sanitized_tool_id";
+}
+
+export function isValidCloudCodeAssistToolId(id: string): boolean {
+  if (!id || typeof id !== "string") return false;
+  return /^[a-zA-Z0-9_-]+$/.test(id);
+}
+
 export function isMessagingToolDuplicate(
   text: string,
   sentTexts: string[],

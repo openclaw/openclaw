@@ -67,6 +67,7 @@ import {
   ensureSessionHeader,
   formatAssistantErrorText,
   isAuthAssistantError,
+  isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
@@ -1527,9 +1528,14 @@ export async function runEmbeddedPiAgent(params: {
           const assistantFailoverReason = classifyFailoverReason(
             lastAssistant?.errorMessage ?? "",
           );
+          const cloudCodeAssistFormatError = lastAssistant?.errorMessage
+            ? isCloudCodeAssistFormatError(lastAssistant.errorMessage)
+            : false;
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          const shouldRotate = (!aborted && failoverFailure) || timedOut;
+          const shouldRotate =
+            (!aborted && (failoverFailure || cloudCodeAssistFormatError)) ||
+            timedOut;
 
           if (shouldRotate) {
             // Mark current profile for cooldown before rotating
@@ -1548,6 +1554,11 @@ export async function runEmbeddedPiAgent(params: {
               if (timedOut) {
                 log.warn(
                   `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
+                );
+              }
+              if (cloudCodeAssistFormatError) {
+                log.warn(
+                  `Profile ${lastProfileId} hit Cloud Code Assist format error. Tool calls will be sanitized on retry.`,
                 );
               }
             }

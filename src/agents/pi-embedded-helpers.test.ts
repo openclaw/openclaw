@@ -6,12 +6,14 @@ import {
   classifyFailoverReason,
   formatAssistantErrorText,
   isBillingErrorMessage,
+  isCloudCodeAssistFormatError,
   isContextOverflowError,
   isFailoverErrorMessage,
   isMessagingToolDuplicate,
   normalizeTextForComparison,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  sanitizeToolCallId,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
@@ -258,9 +260,31 @@ describe("classifyFailoverReason", () => {
   it("returns a stable reason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
+    expect(classifyFailoverReason("resource has been exhausted")).toBe(
+      "rate_limit",
+    );
     expect(classifyFailoverReason("credit balance too low")).toBe("billing");
     expect(classifyFailoverReason("deadline exceeded")).toBe("timeout");
+    expect(classifyFailoverReason("string should match pattern")).toBeNull();
     expect(classifyFailoverReason("bad request")).toBeNull();
+  });
+});
+
+describe("isCloudCodeAssistFormatError", () => {
+  it("matches format errors", () => {
+    const samples = [
+      "INVALID_REQUEST_ERROR: string should match pattern",
+      "messages.1.content.1.tool_use.id",
+      "tool_use.id should match pattern",
+      "invalid request format",
+    ];
+    for (const sample of samples) {
+      expect(isCloudCodeAssistFormatError(sample)).toBe(true);
+    }
+  });
+
+  it("ignores unrelated errors", () => {
+    expect(isCloudCodeAssistFormatError("rate limit exceeded")).toBe(false);
   });
 });
 
@@ -274,6 +298,20 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+});
+
+describe("sanitizeToolCallId", () => {
+  it("keeps valid tool call IDs", () => {
+    expect(sanitizeToolCallId("call_abc-123")).toBe("call_abc-123");
+  });
+
+  it("replaces invalid characters with underscores", () => {
+    expect(sanitizeToolCallId("call_abc|item:456")).toBe("call_abc_item_456");
+  });
+
+  it("returns default for empty IDs", () => {
+    expect(sanitizeToolCallId("")).toBe("default_tool_id");
   });
 });
 
