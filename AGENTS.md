@@ -115,39 +115,3 @@ EOF
 ```
 
 This is a Claude Code quirk, not a clawdbot bug.
-
----
-
-## PR & Code Review Checklist
-
-Before creating PRs or presenting code for review (especially to senior engineers):
-
-### 1. Verify Code Quality
-- [ ] Run `pnpm lint` - no errors
-- [ ] Run `pnpm build` - TypeScript compiles
-- [ ] Run related tests - all pass
-
-### 2. Review Diff Purity
-- [ ] Diff is minimal and focused on the feature
-- [ ] No unrelated changes bundled in
-- [ ] Patch files: **append** changes, don't replace entire files
-
-### 3. Self-Critique Questions
-- Is the auth resolution chain correct?
-- Are type changes safe and backwards compatible?
-- Would this pass review by John Carmack? (clarity > cleverness)
-
-### 4. Fork Workflow (when applicable)
-```bash
-# Push to fork
-git remote add fork https://github.com/USERNAME/clawdbot
-git push fork branch-name
-
-# Create PR from fork
-gh pr create --head USERNAME:branch-name --base main
-```
-
-### 5. Git Diff Interpretation
-- `-` lines = content being **removed**
-- `+` lines = content being **added**
-- Verify you understand what the diff actually shows
