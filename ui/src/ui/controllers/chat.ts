@@ -92,6 +92,22 @@ export async function sendChatMessage(state: ChatState, message: string): Promis
   }
 }
 
+export async function abortChatRun(state: ChatState): Promise<boolean> {
+  if (!state.client || !state.connected) return false;
+  const runId = state.chatRunId;
+  if (!runId) return false;
+  try {
+    await state.client.request("chat.abort", {
+      sessionKey: state.sessionKey,
+      runId,
+    });
+    return true;
+  } catch (err) {
+    state.lastError = String(err);
+    return false;
+  }
+}
+
 export function handleChatEvent(
   state: ChatState,
   payload?: ChatEventPayload,
