@@ -140,7 +140,29 @@ open /Applications/Clawdbot.app
 
 ---
 
-## Step 5: Verify & Push
+## Step 4A: Verify macOS App & Agent
+
+After rebuilding the macOS app, always verify it works correctly:
+
+```bash
+# Check gateway health
+pnpm clawdbot health
+
+# Verify no zombie processes
+ps aux | grep -E "(clawdbot|gateway)" | grep -v grep
+
+# Test agent functionality by sending a verification message
+pnpm clawdbot agent --message "Verification: macOS app rebuild successful - agent is responding." --session-id YOUR_TELEGRAM_SESSION_ID
+
+# Confirm the message was received on Telegram
+# (Check your Telegram chat with the bot)
+```
+
+**Important:** Always wait for the Telegram verification message before proceeding. If the agent doesn't respond, troubleshoot the gateway or model configuration before pushing.
+
+---
+
+## Step 6: Verify & Push
 
 ```bash
 # Verify everything works
@@ -221,5 +243,12 @@ pnpm clawdbot doctor
 echo "==> Rebuilding macOS app..."
 ./scripts/restart-mac.sh
 
-echo "==> Done! Run 'git push --force-with-lease' when ready."
+echo "==> Verifying gateway health..."
+pnpm clawdbot health
+
+echo "==> Testing agent functionality..."
+# Note: Update YOUR_TELEGRAM_SESSION_ID with actual session ID
+pnpm clawdbot agent --message "Verification: Upstream sync and macOS rebuild completed successfully." --session-id YOUR_TELEGRAM_SESSION_ID || echo "Warning: Agent test failed - check Telegram for verification message"
+
+echo "==> Done! Check Telegram for verification message, then run 'git push --force-with-lease' when ready."
 ```
