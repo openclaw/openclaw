@@ -133,6 +133,17 @@ export type SessionEntry = {
   skillsSnapshot?: SessionSkillSnapshot;
 };
 
+export function mergeSessionEntry(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+): SessionEntry {
+  const sessionId =
+    patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
+  const updatedAt = patch.updatedAt ?? existing?.updatedAt ?? Date.now();
+  if (!existing) return { ...patch, sessionId, updatedAt };
+  return { ...existing, ...patch, sessionId, updatedAt };
+}
+
 export type GroupKeyResolution = {
   key: string;
   legacyKey?: string;
@@ -487,17 +498,14 @@ export async function updateLastRoute(params: {
   const store = loadSessionStore(storePath);
   const existing = store[sessionKey];
   const now = Date.now();
-  const sessionId = existing?.sessionId ?? crypto.randomUUID();
-  const next: SessionEntry = {
-    ...(existing ?? { sessionId, updatedAt: 0 }),
-    sessionId,
+  const next = mergeSessionEntry(existing, {
     updatedAt: Math.max(existing?.updatedAt ?? 0, now),
     lastProvider: provider,
     lastTo: to?.trim() ? to.trim() : undefined,
     lastAccountId: accountId?.trim()
       ? accountId.trim()
       : existing?.lastAccountId,
-  };
+  });
   store[sessionKey] = next;
   await saveSessionStore(storePath, store);
   return next;
