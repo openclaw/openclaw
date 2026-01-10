@@ -4,7 +4,7 @@
 
 ### New Features and Changes
 - Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
-- Agents: add human-delay pacing between block replies (per-agent configurable). (#446) — thanks @tony-freedomology.
+- Agents: add human-delay pacing between block replies (modes: off/natural/custom, per-agent configurable). (#446) — thanks @tony-freedomology.
 
 ### Fixes
 - Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”).

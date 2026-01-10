@@ -1439,7 +1439,6 @@ export type ClawdbotConfig = {
   bindings?: AgentBinding[];
   broadcast?: BroadcastConfig;
   audio?: AudioConfig;
-  routing?: RoutingConfig;
   messages?: MessagesConfig;
   commands?: CommandsConfig;
   session?: SessionConfig;
