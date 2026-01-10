@@ -103,6 +103,18 @@ const BlockStreamingCoalesceSchema = z.object({
   idleMs: z.number().int().nonnegative().optional(),
 });
 
+const BlockStreamingChunkSchema = z.object({
+  minChars: z.number().int().positive().optional(),
+  maxChars: z.number().int().positive().optional(),
+  breakPreference: z
+    .union([
+      z.literal("paragraph"),
+      z.literal("newline"),
+      z.literal("sentence"),
+    ])
+    .optional(),
+});
+
 const HumanDelaySchema = z.object({
   mode: z
     .union([z.literal("off"), z.literal("natural"), z.literal("custom")])
@@ -207,6 +219,7 @@ const TelegramAccountSchemaBase = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
+  draftChunk: BlockStreamingChunkSchema.optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
   streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
   mediaMaxMb: z.number().positive().optional(),
@@ -1038,19 +1051,7 @@ const AgentDefaultsSchema = z
     blockStreamingBreak: z
       .union([z.literal("text_end"), z.literal("message_end")])
       .optional(),
-    blockStreamingChunk: z
-      .object({
-        minChars: z.number().int().positive().optional(),
-        maxChars: z.number().int().positive().optional(),
-        breakPreference: z
-          .union([
-            z.literal("paragraph"),
-            z.literal("newline"),
-            z.literal("sentence"),
-          ])
-          .optional(),
-      })
-      .optional(),
+    blockStreamingChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
     humanDelay: HumanDelaySchema.optional(),
     timeoutSeconds: z.number().int().positive().optional(),
