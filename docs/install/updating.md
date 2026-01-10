@@ -42,10 +42,25 @@ Notes:
 - If your Gateway runs as a service, `clawdbot daemon restart` is preferred over killing PIDs.
 - If you’re pinned to a specific version, see “Rollback / pinning” below.
 
+## Update (`clawdbot update`)
+
+For **source installs** (git checkout), prefer:
+
+```bash
+clawdbot update --restart
+```
+
+It runs a safe-ish update flow:
+- Requires a clean worktree.
+- Fetches + rebases against the configured upstream.
+- Installs deps, builds, builds the Control UI, and runs `clawdbot doctor`.
+
+If you installed via **npm/pnpm** (no git metadata), `clawdbot update` will skip. Use “Update (npm install)” instead.
+
 ## Update (Control UI / RPC)
 
 The Control UI has **Update & Restart** (RPC: `update.run`). It:
-1) Runs a git update (clean rebase) or package manager update.
+1) Runs the same source-update flow as `clawdbot update` (git checkout only).
 2) Writes a restart sentinel with a structured report (stdout/stderr tail).
 3) Restarts the gateway and pings the last active session with the report.
 
@@ -54,6 +69,14 @@ If the rebase fails, the gateway aborts and restarts without applying the update
 ## Update (from source)
 
 From the repo checkout:
+
+Preferred:
+
+```bash
+clawdbot update
+```
+
+Manual (equivalent-ish):
 
 ```bash
 git pull
