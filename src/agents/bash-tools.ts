@@ -436,7 +436,9 @@ export function createBashTool(
             );
           };
 
-          child.once("exit", (code, exitSignal) => {
+          // `exit` can fire before stdio fully flushes (notably on Windows).
+          // `close` waits for streams to close, so aggregated output is complete.
+          child.once("close", (code, exitSignal) => {
             handleExit(code, exitSignal);
           });
 

@@ -448,15 +448,32 @@ export function loadSessionStore(
   return store;
 }
 
-export async function saveSessionStore(
+async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
-) {
+): Promise<void> {
   // Invalidate cache on write to ensure consistency
   invalidateSessionStoreCache(storePath);
 
   await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
   const json = JSON.stringify(store, null, 2);
+
+  // Windows: avoid atomic rename swaps (can be flaky under concurrent access).
+  // We serialize writers via the session-store lock instead.
+  if (process.platform === "win32") {
+    try {
+      await fs.promises.writeFile(storePath, json, "utf-8");
+    } catch (err) {
+      const code =
+        err && typeof err === "object" && "code" in err
+          ? String((err as { code?: unknown }).code)
+          : null;
+      if (code === "ENOENT") return;
+      throw err;
+    }
+    return;
+  }
+
   const tmp = `${storePath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
     await fs.promises.writeFile(tmp, json, "utf-8");
@@ -488,6 +505,15 @@ export async function saveSessionStore(
   } finally {
     await fs.promises.rm(tmp, { force: true });
   }
+}
+
+export async function saveSessionStore(
+  storePath: string,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  await withSessionStoreLock(storePath, async () => {
+    await saveSessionStoreUnlocked(storePath, store);
+  });
 }
 
 type SessionStoreLockOptions = {
@@ -571,7 +597,7 @@ export async function updateSessionStoreEntry(params: {
     if (!patch) return existing;
     const next = mergeSessionEntry(existing, patch);
     store[sessionKey] = next;
-    await saveSessionStore(storePath, store);
+    await saveSessionStoreUnlocked(storePath, store);
     return next;
   });
 }
@@ -584,20 +610,22 @@ export async function updateLastRoute(params: {
   accountId?: string;
 }) {
   const { storePath, sessionKey, provider, to, accountId } = params;
-  const store = loadSessionStore(storePath);
-  const existing = store[sessionKey];
-  const now = Date.now();
-  const next = mergeSessionEntry(existing, {
-    updatedAt: Math.max(existing?.updatedAt ?? 0, now),
-    lastProvider: provider,
-    lastTo: to?.trim() ? to.trim() : undefined,
-    lastAccountId: accountId?.trim()
-      ? accountId.trim()
-      : existing?.lastAccountId,
+  return await withSessionStoreLock(storePath, async () => {
+    const store = loadSessionStore(storePath);
+    const existing = store[sessionKey];
+    const now = Date.now();
+    const next = mergeSessionEntry(existing, {
+      updatedAt: Math.max(existing?.updatedAt ?? 0, now),
+      lastProvider: provider,
+      lastTo: to?.trim() ? to.trim() : undefined,
+      lastAccountId: accountId?.trim()
+        ? accountId.trim()
+        : existing?.lastAccountId,
+    });
+    store[sessionKey] = next;
+    await saveSessionStoreUnlocked(storePath, store);
+    return next;
   });
-  store[sessionKey] = next;
-  await saveSessionStore(storePath, store);
-  return next;
 }
 
 // Decide which session bucket to use (per-sender vs global).
