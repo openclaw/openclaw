@@ -162,6 +162,7 @@ export function createSessionsSpawnTool(opts?: {
         requesterProvider: opts?.agentProvider,
         childSessionKey,
         label: label || undefined,
+        task,
       });
 
       const childIdem = crypto.randomUUID();
