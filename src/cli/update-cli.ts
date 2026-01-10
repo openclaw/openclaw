@@ -32,10 +32,7 @@ const STEP_LABELS: Record<string, string> = {
 
 function getStepLabel(step: UpdateStepInfo): string {
   const friendlyLabel = STEP_LABELS[step.name] ?? step.name;
-  const commandHint = step.command.startsWith("git ")
-    ? step.command.split(" ").slice(0, 2).join(" ")
-    : step.command.split(" ")[0];
-  return `${friendlyLabel} (${commandHint})`;
+  return `${friendlyLabel} (${step.name})`;
 }
 
 type ProgressController = {
@@ -96,7 +93,11 @@ function formatStepStatus(exitCode: number | null): string {
   return theme.error("\u2717");
 }
 
-function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
+type PrintResultOptions = UpdateCommandOptions & {
+  hideSteps?: boolean;
+};
+
+function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(result, null, 2));
     return;
@@ -113,12 +114,8 @@ function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
   defaultRuntime.log(
     `${theme.heading("Update Result:")} ${statusColor(result.status.toUpperCase())}`,
   );
-  defaultRuntime.log(`  Mode: ${theme.muted(result.mode)}`);
   if (result.root) {
     defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
-  }
-  if (result.reason) {
-    defaultRuntime.log(`  Reason: ${theme.muted(result.reason)}`);
   }
 
   if (result.before?.version || result.before?.sha) {
@@ -131,7 +128,7 @@ function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
     defaultRuntime.log(`  After: ${theme.muted(after)}`);
   }
 
-  if (result.steps.length > 0) {
+  if (!opts.hideSteps && result.steps.length > 0) {
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Steps:"));
     for (const step of result.steps) {
@@ -139,7 +136,6 @@ function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
       defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
 
-      // Show stderr for failed steps
       if (step.exitCode !== 0 && step.stderrTail) {
         const lines = step.stderrTail.split("\n").slice(0, 5);
         for (const line of lines) {
@@ -193,7 +189,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   stop();
 
-  printResult(result, opts);
+  printResult(result, { ...opts, hideSteps: showProgress });
 
   if (result.status === "error") {
     defaultRuntime.exit(1);
