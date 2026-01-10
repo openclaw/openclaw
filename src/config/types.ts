@@ -297,6 +297,8 @@ export type HooksGmailConfig = {
   tailscale?: {
     mode?: HooksGmailTailscaleMode;
     path?: string;
+    /** Optional tailscale serve/funnel target (port, host:port, or full URL). */
+    target?: string;
   };
   /** Optional model override for Gmail hook processing (provider/model or alias). */
   model?: string;
