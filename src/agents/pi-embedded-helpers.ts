@@ -12,6 +12,11 @@ import {
 } from "../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "./sandbox.js";
+import {
+  isValidCloudCodeAssistToolId,
+  sanitizeToolCallId,
+  sanitizeToolCallIdsForCloudCodeAssist,
+} from "./tool-call-id.js";
 import { sanitizeContentBlocksImages } from "./tool-images.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
@@ -90,8 +95,11 @@ export async function sanitizeSessionMessagesImages(
 ): Promise<AgentMessage[]> {
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (see MAX_IMAGE_DIMENSION_PX).
+  const sanitizedIds = options?.sanitizeToolCallIds
+    ? sanitizeToolCallIdsForCloudCodeAssist(messages)
+    : messages;
   const out: AgentMessage[] = [];
-  for (const msg of messages) {
+  for (const msg of sanitizedIds) {
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;
@@ -105,28 +113,7 @@ export async function sanitizeSessionMessagesImages(
         content as ContentBlock[],
         label,
       )) as unknown as typeof toolMsg.content;
-      const sanitizedToolCallId =
-        options?.sanitizeToolCallIds && toolMsg.toolCallId
-          ? sanitizeToolCallId(toolMsg.toolCallId)
-          : undefined;
-      const toolUseId = (toolMsg as { toolUseId?: unknown }).toolUseId;
-      const sanitizedToolUseId =
-        options?.sanitizeToolCallIds &&
-        typeof toolUseId === "string" &&
-        toolUseId
-          ? sanitizeToolCallId(toolUseId)
-          : undefined;
-      const sanitizedMsg = {
-        ...toolMsg,
-        content: nextContent,
-        ...(sanitizedToolCallId && {
-          toolCallId: sanitizedToolCallId,
-        }),
-        ...(sanitizedToolUseId && {
-          toolUseId: sanitizedToolUseId,
-        }),
-      };
-      out.push(sanitizedMsg);
+      out.push({ ...toolMsg, content: nextContent });
       continue;
     }
 
@@ -176,33 +163,8 @@ export async function sanitizeSessionMessagesImages(
               return filteredContent.slice(0, lastToolIndex + 1);
             })()
           : filteredContent;
-        const sanitizedContent = options?.sanitizeToolCallIds
-          ? await Promise.all(
-              normalizedContent.map(async (block) => {
-                if (!block || typeof block !== "object") return block;
-
-                const type = (block as { type?: unknown }).type;
-                const id = (block as { id?: unknown }).id;
-                if (typeof id !== "string" || !id) return block;
-
-                // Cloud Code Assist tool blocks require ids matching ^[a-zA-Z0-9_-]+$.
-                if (
-                  type === "functionCall" ||
-                  type === "toolUse" ||
-                  type === "toolCall"
-                ) {
-                  return {
-                    ...(block as unknown as Record<string, unknown>),
-                    id: sanitizeToolCallId(id),
-                  };
-                }
-
-                return block;
-              }),
-            )
-          : normalizedContent;
         const finalContent = (await sanitizeContentBlocksImages(
-          sanitizedContent as unknown as ContentBlock[],
+          normalizedContent as unknown as ContentBlock[],
           label,
         )) as unknown as typeof assistantMsg.content;
         if (finalContent.length === 0) {
@@ -621,25 +583,7 @@ export function isMessagingToolDuplicateNormalized(
 // OpenAI Codex generates IDs like "call_abc123|item_456" with pipe characters,
 // but Google requires IDs matching ^[a-zA-Z0-9_-]+$ pattern.
 // This function sanitizes tool call IDs by replacing invalid characters with underscores.
-
-export function sanitizeToolCallId(id: string): string {
-  if (!id || typeof id !== "string") return "default_tool_id";
-
-  const cloudCodeAssistPatternReplacement = id.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const trimmedInvalidStartChars = cloudCodeAssistPatternReplacement.replace(
-    /^[^a-zA-Z0-9_-]+/,
-    "",
-  );
-
-  return trimmedInvalidStartChars.length > 0
-    ? trimmedInvalidStartChars
-    : "sanitized_tool_id";
-}
-
-export function isValidCloudCodeAssistToolId(id: string): boolean {
-  if (!id || typeof id !== "string") return false;
-  return /^[a-zA-Z0-9_-]+$/.test(id);
-}
+export { sanitizeToolCallId, isValidCloudCodeAssistToolId };
 
 export function isMessagingToolDuplicate(
   text: string,
