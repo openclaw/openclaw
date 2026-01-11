@@ -21,6 +21,7 @@ struct GatewayUsageSummary: Codable {
 
 struct UsageRow: Identifiable {
     let id: String
+    let providerId: String
     let displayName: String
     let plan: String?
     let windowLabel: String?
@@ -73,6 +74,7 @@ extension GatewayUsageSummary {
             if let error = provider.error, provider.windows.isEmpty {
                 return UsageRow(
                     id: provider.provider,
+                    providerId: provider.provider,
                     displayName: provider.displayName,
                     plan: provider.plan,
                     windowLabel: nil,
@@ -87,6 +89,7 @@ extension GatewayUsageSummary {
 
             return UsageRow(
                 id: "\(provider.provider)-\(window.label)",
+                providerId: provider.provider,
                 displayName: provider.displayName,
                 plan: provider.plan,
                 windowLabel: window.label,
