@@ -35,18 +35,18 @@ Common commands
 Calendar Colors
 - Use `gog calendar colors` to see all available event colors (IDs 1-11)
 - Add colors to events with `--event-color <id>` flag
-- Event color IDs:
-  - 1: Lavender (#a4bdfc)
-  - 2: Sage (#7ae7bf)
-  - 3: Grape (#dbadff)
-  - 4: Flamingo (#ff887c)
-  - 5: Banana (#fbd75b)
-  - 6: Tangerine (#ffb878)
-  - 7: Peacock (#46d6db)
-  - 8: Graphite (#e1e1e1)
-  - 9: Blueberry (#5484ed)
-  - 10: Basil (#51b749)
-  - 11: Tomato (#dc2127)
+- Event color IDs (from `gog calendar colors` output):
+  - 1: #a4bdfc
+  - 2: #7ae7bf
+  - 3: #dbadff
+  - 4: #ff887c
+  - 5: #fbd75b
+  - 6: #ffb878
+  - 7: #46d6db
+  - 8: #e1e1e1
+  - 9: #5484ed
+  - 10: #51b749
+  - 11: #dc2127
 
 Notes
 - Set `GOG_ACCOUNT=you@gmail.com` to avoid repeating `--account`.
