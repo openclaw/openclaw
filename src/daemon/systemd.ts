@@ -6,8 +6,8 @@ import { promisify } from "node:util";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
-  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   formatGatewayServiceDescription,
+  LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES,
   resolveGatewaySystemdServiceName,
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";

@@ -613,7 +613,10 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
-    return { shouldContinue: false, reply: { text: buildCommandsMessage(cfg) } };
+    return {
+      shouldContinue: false,
+      reply: { text: buildCommandsMessage(cfg) },
+    };
   }
 
   const statusRequested =

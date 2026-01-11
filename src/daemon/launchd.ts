@@ -5,9 +5,9 @@ import { promisify } from "node:util";
 
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
+  formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
   LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
-  formatGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
@@ -190,12 +190,11 @@ export function buildLaunchAgentPlist({
     <key>WorkingDirectory</key>
     <string>${plistEscape(workingDirectory)}</string>`
     : "";
-  const commentXml =
-    comment && comment.trim()
-      ? `
+  const commentXml = comment?.trim()
+    ? `
     <key>Comment</key>
     <string>${plistEscape(comment.trim())}</string>`
-      : "";
+    : "";
   const envXml = renderEnvDict(environment);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

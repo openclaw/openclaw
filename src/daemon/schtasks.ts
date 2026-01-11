@@ -5,8 +5,8 @@ import { promisify } from "node:util";
 
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
-  LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   formatGatewayServiceDescription,
+  LEGACY_GATEWAY_WINDOWS_TASK_NAMES,
   resolveGatewayWindowsTaskName,
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";

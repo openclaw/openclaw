@@ -103,7 +103,10 @@ export function resolveGatewayService(): GatewayService {
         await uninstallSystemdService(args);
       },
       stop: async (args) => {
-        await stopSystemdService({ stdout: args.stdout, profile: args.profile });
+        await stopSystemdService({
+          stdout: args.stdout,
+          profile: args.profile,
+        });
       },
       restart: async (args) => {
         await restartSystemdService({
