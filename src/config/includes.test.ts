@@ -3,13 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
-  resolveIncludes,
-} from "./io.js";
+  resolveConfigIncludes,
+} from "./includes.js";
 
-function createMockContext(
-  files: Record<string, unknown>,
-  basePath = "/config/clawdbot.json",
-) {
+function createMockResolver(files: Record<string, unknown>) {
   const fsModule = {
     readFileSync: (filePath: string) => {
       if (filePath in files) {
@@ -25,63 +22,57 @@ function createMockContext(
     parse: JSON.parse,
   } as typeof import("json5");
 
-  return {
-    basePath,
-    visited: new Set([basePath]),
-    depth: 0,
-    fsModule,
-    json5Module,
-    logger: { error: () => {}, warn: () => {} },
-  };
+  return { fsModule, json5Module };
 }
 
-describe("resolveIncludes", () => {
+function resolve(
+  obj: unknown,
+  files: Record<string, unknown> = {},
+  basePath = "/config/clawdbot.json",
+) {
+  return resolveConfigIncludes(obj, basePath, createMockResolver(files));
+}
+
+describe("resolveConfigIncludes", () => {
   it("passes through primitives unchanged", () => {
-    const ctx = createMockContext({});
-    expect(resolveIncludes("hello", ctx)).toBe("hello");
-    expect(resolveIncludes(42, ctx)).toBe(42);
-    expect(resolveIncludes(true, ctx)).toBe(true);
-    expect(resolveIncludes(null, ctx)).toBe(null);
+    expect(resolve("hello")).toBe("hello");
+    expect(resolve(42)).toBe(42);
+    expect(resolve(true)).toBe(true);
+    expect(resolve(null)).toBe(null);
   });
 
   it("passes through arrays with recursion", () => {
-    const ctx = createMockContext({});
-    expect(resolveIncludes([1, 2, { a: 1 }], ctx)).toEqual([1, 2, { a: 1 }]);
+    expect(resolve([1, 2, { a: 1 }])).toEqual([1, 2, { a: 1 }]);
   });
 
   it("passes through objects without $include", () => {
-    const ctx = createMockContext({});
     const obj = { foo: "bar", nested: { x: 1 } };
-    expect(resolveIncludes(obj, ctx)).toEqual(obj);
+    expect(resolve(obj)).toEqual(obj);
   });
 
   it("resolves single file $include", () => {
-    const ctx = createMockContext({
-      "/config/agents.json": { list: [{ id: "main" }] },
-    });
+    const files = { "/config/agents.json": { list: [{ id: "main" }] } };
     const obj = { agents: { $include: "./agents.json" } };
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       agents: { list: [{ id: "main" }] },
     });
   });
 
   it("resolves absolute path $include", () => {
-    const ctx = createMockContext({
-      "/etc/clawdbot/agents.json": { list: [{ id: "main" }] },
-    });
+    const files = { "/etc/clawdbot/agents.json": { list: [{ id: "main" }] } };
     const obj = { agents: { $include: "/etc/clawdbot/agents.json" } };
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       agents: { list: [{ id: "main" }] },
     });
   });
 
   it("resolves array $include with deep merge", () => {
-    const ctx = createMockContext({
+    const files = {
       "/config/a.json": { "group-a": ["agent1"] },
       "/config/b.json": { "group-b": ["agent2"] },
-    });
+    };
     const obj = { broadcast: { $include: ["./a.json", "./b.json"] } };
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       broadcast: {
         "group-a": ["agent1"],
         "group-b": ["agent2"],
@@ -90,12 +81,12 @@ describe("resolveIncludes", () => {
   });
 
   it("deep merges overlapping keys in array $include", () => {
-    const ctx = createMockContext({
+    const files = {
       "/config/a.json": { agents: { defaults: { workspace: "~/a" } } },
       "/config/b.json": { agents: { list: [{ id: "main" }] } },
-    });
+    };
     const obj = { $include: ["./a.json", "./b.json"] };
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       agents: {
         defaults: { workspace: "~/a" },
         list: [{ id: "main" }],
@@ -104,144 +95,111 @@ describe("resolveIncludes", () => {
   });
 
   it("merges $include with sibling keys", () => {
-    const ctx = createMockContext({
-      "/config/base.json": { a: 1, b: 2 },
-    });
+    const files = { "/config/base.json": { a: 1, b: 2 } };
     const obj = { $include: "./base.json", c: 3 };
-    expect(resolveIncludes(obj, ctx)).toEqual({ a: 1, b: 2, c: 3 });
+    expect(resolve(obj, files)).toEqual({ a: 1, b: 2, c: 3 });
   });
 
   it("sibling keys override included values", () => {
-    const ctx = createMockContext({
-      "/config/base.json": { a: 1, b: 2 },
-    });
+    const files = { "/config/base.json": { a: 1, b: 2 } };
     const obj = { $include: "./base.json", b: 99 };
-    expect(resolveIncludes(obj, ctx)).toEqual({ a: 1, b: 99 });
+    expect(resolve(obj, files)).toEqual({ a: 1, b: 99 });
   });
 
   it("resolves nested includes", () => {
-    const ctx = createMockContext({
+    const files = {
       "/config/level1.json": { nested: { $include: "./level2.json" } },
       "/config/level2.json": { deep: "value" },
-    });
+    };
     const obj = { $include: "./level1.json" };
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       nested: { deep: "value" },
     });
   });
 
   it("throws ConfigIncludeError for missing file", () => {
-    const ctx = createMockContext({});
     const obj = { $include: "./missing.json" };
-    expect(() => resolveIncludes(obj, ctx)).toThrow(ConfigIncludeError);
-    expect(() => resolveIncludes(obj, ctx)).toThrow(/Failed to read include file/);
+    expect(() => resolve(obj)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj)).toThrow(/Failed to read include file/);
   });
 
   it("throws ConfigIncludeError for invalid JSON", () => {
-    const fsModule = {
-      readFileSync: () => "{ invalid json }",
-    } as typeof import("node:fs");
-    const json5Module = {
-      parse: JSON.parse,
-    } as typeof import("json5");
-    const ctx = {
-      basePath: "/config/clawdbot.json",
-      visited: new Set(["/config/clawdbot.json"]),
-      depth: 0,
-      fsModule,
-      json5Module,
-      logger: { error: () => {}, warn: () => {} },
+    const resolver = {
+      fsModule: { readFileSync: () => "{ invalid json }" } as typeof import("node:fs"),
+      json5Module: { parse: JSON.parse } as typeof import("json5"),
     };
     const obj = { $include: "./bad.json" };
-    expect(() => resolveIncludes(obj, ctx)).toThrow(ConfigIncludeError);
-    expect(() => resolveIncludes(obj, ctx)).toThrow(/Failed to parse include file/);
+    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
+      .toThrow(ConfigIncludeError);
+    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
+      .toThrow(/Failed to parse include file/);
   });
 
   it("throws CircularIncludeError for circular includes", () => {
-    // Create a mock that simulates circular includes
-    const fsModule = {
-      readFileSync: (filePath: string) => {
-        if (filePath === "/config/a.json") {
-          return JSON.stringify({ $include: "./b.json" });
-        }
-        if (filePath === "/config/b.json") {
-          return JSON.stringify({ $include: "./a.json" });
-        }
-        throw new Error(`Unknown file: ${filePath}`);
-      },
-    } as typeof import("node:fs");
-    const json5Module = { parse: JSON.parse } as typeof import("json5");
-    const ctx = {
-      basePath: "/config/clawdbot.json",
-      visited: new Set(["/config/clawdbot.json"]),
-      depth: 0,
-      fsModule,
-      json5Module,
-      logger: { error: () => {}, warn: () => {} },
+    const resolver = {
+      fsModule: {
+        readFileSync: (filePath: string) => {
+          if (filePath === "/config/a.json") {
+            return JSON.stringify({ $include: "./b.json" });
+          }
+          if (filePath === "/config/b.json") {
+            return JSON.stringify({ $include: "./a.json" });
+          }
+          throw new Error(`Unknown file: ${filePath}`);
+        },
+      } as typeof import("node:fs"),
+      json5Module: { parse: JSON.parse } as typeof import("json5"),
     };
     const obj = { $include: "./a.json" };
-    expect(() => resolveIncludes(obj, ctx)).toThrow(CircularIncludeError);
-    expect(() => resolveIncludes(obj, ctx)).toThrow(/Circular include detected/);
+    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
+      .toThrow(CircularIncludeError);
+    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
+      .toThrow(/Circular include detected/);
   });
 
   it("throws ConfigIncludeError for invalid $include value type", () => {
-    const ctx = createMockContext({});
     const obj = { $include: 123 };
-    expect(() => resolveIncludes(obj, ctx)).toThrow(ConfigIncludeError);
-    expect(() => resolveIncludes(obj, ctx)).toThrow(/expected string or array/);
+    expect(() => resolve(obj)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj)).toThrow(/expected string or array/);
   });
 
   it("throws ConfigIncludeError for invalid array item type", () => {
-    const ctx = createMockContext({
-      "/config/valid.json": { valid: true },
-    });
+    const files = { "/config/valid.json": { valid: true } };
     const obj = { $include: ["./valid.json", 123] };
-    expect(() => resolveIncludes(obj, ctx)).toThrow(ConfigIncludeError);
-    expect(() => resolveIncludes(obj, ctx)).toThrow(/expected string, got number/);
+    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj, files)).toThrow(/expected string, got number/);
   });
 
   it("respects max depth limit", () => {
-    // Create deeply nested includes
     const files: Record<string, unknown> = {};
     for (let i = 0; i < 15; i++) {
       files[`/config/level${i}.json`] = { $include: `./level${i + 1}.json` };
     }
     files["/config/level15.json"] = { done: true };
 
-    const ctx = createMockContext(files);
     const obj = { $include: "./level0.json" };
-    expect(() => resolveIncludes(obj, ctx)).toThrow(ConfigIncludeError);
-    expect(() => resolveIncludes(obj, ctx)).toThrow(/Maximum include depth/);
+    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj, files)).toThrow(/Maximum include depth/);
   });
 
   it("handles relative paths correctly", () => {
-    const ctx = createMockContext(
-      {
-        "/config/clients/mueller/agents.json": { id: "mueller" },
-      },
-      "/config/clawdbot.json",
-    );
+    const files = { "/config/clients/mueller/agents.json": { id: "mueller" } };
     const obj = { agent: { $include: "./clients/mueller/agents.json" } };
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       agent: { id: "mueller" },
     });
   });
 
   it("resolves parent directory references", () => {
-    const ctx = createMockContext(
-      {
-        "/shared/common.json": { shared: true },
-      },
-      "/config/sub/clawdbot.json",
-    );
+    const files = { "/shared/common.json": { shared: true } };
     const obj = { $include: "../../shared/common.json" };
-    expect(resolveIncludes(obj, ctx)).toEqual({ shared: true });
+    expect(resolve(obj, files, "/config/sub/clawdbot.json")).toEqual({ shared: true });
   });
 });
 
 describe("real-world config patterns", () => {
   it("supports per-client agent includes", () => {
-    const ctx = createMockContext({
+    const files = {
       "/config/clients/mueller.json": {
         agents: [
           { id: "mueller-screenshot", workspace: "~/clients/mueller/screenshot" },
@@ -255,14 +213,14 @@ describe("real-world config patterns", () => {
         ],
         broadcast: { "group-schmidt": ["schmidt-screenshot"] },
       },
-    });
+    };
 
     const obj = {
       gateway: { port: 18789 },
       $include: ["./clients/mueller.json", "./clients/schmidt.json"],
     };
 
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       gateway: { port: 18789 },
       agents: [
         { id: "mueller-screenshot", workspace: "~/clients/mueller/screenshot" },
@@ -277,7 +235,7 @@ describe("real-world config patterns", () => {
   });
 
   it("supports modular config structure", () => {
-    const ctx = createMockContext({
+    const files = {
       "/config/gateway.json": { gateway: { port: 18789, bind: "loopback" } },
       "/config/providers/whatsapp.json": {
         whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] },
@@ -285,7 +243,7 @@ describe("real-world config patterns", () => {
       "/config/agents/defaults.json": {
         agents: { defaults: { sandbox: { mode: "all" } } },
       },
-    });
+    };
 
     const obj = {
       $include: [
@@ -295,7 +253,7 @@ describe("real-world config patterns", () => {
       ],
     };
 
-    expect(resolveIncludes(obj, ctx)).toEqual({
+    expect(resolve(obj, files)).toEqual({
       gateway: { port: 18789, bind: "loopback" },
       whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] },
       agents: { defaults: { sandbox: { mode: "all" } } },
