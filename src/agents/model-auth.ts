@@ -125,6 +125,10 @@ export function resolveEnvApiKey(provider: string): EnvApiKeyResult | null {
     return pick("ANTHROPIC_OAUTH_TOKEN") ?? pick("ANTHROPIC_API_KEY");
   }
 
+  if (normalized === "chutes") {
+    return pick("CHUTES_OAUTH_TOKEN") ?? pick("CHUTES_API_KEY");
+  }
+
   if (normalized === "zai") {
     return pick("ZAI_API_KEY") ?? pick("Z_AI_API_KEY");
   }

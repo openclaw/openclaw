@@ -20,6 +20,7 @@ import {
   readCodexCliCredentialsCached,
   writeClaudeCliCredentials,
 } from "./cli-credentials.js";
+import { refreshChutesTokens, type ChutesStoredOAuth } from "./chutes-oauth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const AUTH_STORE_VERSION = 1;
@@ -212,7 +213,16 @@ async function refreshOAuthTokenWithLock(params: {
     const oauthCreds: Record<string, OAuthCredentials> = {
       [cred.provider]: cred,
     };
-    const result = await getOAuthApiKey(cred.provider, oauthCreds);
+
+    const result =
+      String(cred.provider) === "chutes"
+        ? await (async () => {
+            const newCredentials = await refreshChutesTokens({
+              credential: cred as unknown as ChutesStoredOAuth,
+            });
+            return { apiKey: newCredentials.access, newCredentials };
+          })()
+        : await getOAuthApiKey(cred.provider, oauthCreds);
     if (!result) return null;
     store.profiles[params.profileId] = {
       ...cred,

@@ -68,6 +68,7 @@ import {
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { AuthChoice } from "./onboard-types.js";
+import { loginChutes } from "./chutes-oauth.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,
@@ -535,6 +536,110 @@ export async function applyAuthChoice(params: {
       nextConfig = applyMoonshotProviderConfig(nextConfig);
       agentModelOverride = MOONSHOT_DEFAULT_MODEL_REF;
       await noteAgentModel(MOONSHOT_DEFAULT_MODEL_REF);
+    }
+  } else if (params.authChoice === "chutes") {
+    const isRemote = isRemoteEnvironment();
+    const redirectUri =
+      process.env.CHUTES_OAUTH_REDIRECT_URI?.trim() ||
+      "http://127.0.0.1:1456/oauth-callback";
+    const scopes =
+      process.env.CHUTES_OAUTH_SCOPES?.trim() || "openid profile chutes:invoke";
+    const clientId =
+      process.env.CHUTES_CLIENT_ID?.trim() ||
+      String(
+        await params.prompter.text({
+          message: "Enter Chutes OAuth client id",
+          placeholder: "cid_xxx",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
+    const clientSecret = process.env.CHUTES_CLIENT_SECRET?.trim() || undefined;
+
+    await params.prompter.note(
+      isRemote
+        ? [
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, paste the redirect URL back here.",
+            "",
+            `Redirect URI: ${redirectUri}`,
+          ].join("\n")
+        : [
+            "Browser will open for Chutes authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "",
+            `Redirect URI: ${redirectUri}`,
+          ].join("\n"),
+      "Chutes OAuth",
+    );
+
+    const spin = params.prompter.progress("Starting OAuth flow…");
+    let manualCodePromise: Promise<string> | undefined;
+    try {
+      const creds = await loginChutes({
+        app: {
+          clientId,
+          clientSecret,
+          redirectUri,
+          scopes: scopes.split(/\\s+/).filter(Boolean),
+        },
+        manual: isRemote,
+        onAuth: async ({ url }) => {
+          if (isRemote) {
+            spin.stop("OAuth URL ready");
+            params.runtime.log(
+              `\\nOpen this URL in your LOCAL browser:\\n\\n${url}\\n`,
+            );
+            manualCodePromise = params.prompter
+              .text({
+                message: "Paste the redirect URL (or authorization code)",
+                validate: (value) => (value?.trim() ? undefined : "Required"),
+              })
+              .then((value) => String(value));
+          } else {
+            spin.update("Complete sign-in in browser…");
+            await openUrl(url);
+            params.runtime.log(`Open: ${url}`);
+          }
+        },
+        onPrompt: async (prompt) => {
+          if (manualCodePromise) return manualCodePromise;
+          const code = await params.prompter.text({
+            message: prompt.message,
+            placeholder: prompt.placeholder,
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          });
+          return String(code);
+        },
+        onProgress: (msg) => spin.update(msg),
+      });
+
+      spin.stop("Chutes OAuth complete");
+      const email = creds.email?.trim() || "default";
+      const profileId = `chutes:${email}`;
+
+      await writeOAuthCredentials(
+        "chutes" as unknown as OAuthProvider,
+        creds,
+        params.agentDir,
+      );
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "chutes",
+        mode: "oauth",
+      });
+    } catch (err) {
+      spin.stop("Chutes OAuth failed");
+      params.runtime.error(String(err));
+      await params.prompter.note(
+        [
+          "Trouble with OAuth?",
+          "Verify CHUTES_CLIENT_ID (and CHUTES_CLIENT_SECRET if required).",
+          `Verify the OAuth app redirect URI includes: ${redirectUri}`,
+          "Chutes docs: https://chutes.ai/docs/sign-in-with-chutes/overview",
+        ].join("\\n"),
+        "OAuth help",
+      );
     }
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
@@ -1060,6 +1165,8 @@ export function resolvePreferredProviderForAuthChoice(
     case "openai-codex":
     case "codex-cli":
       return "openai-codex";
+    case "chutes":
+      return "chutes";
     case "openai-api-key":
       return "openai";
     case "openrouter-api-key":
