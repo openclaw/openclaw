@@ -724,6 +724,7 @@ const SandboxBrowserSchema = z
     noVncPort: z.number().int().positive().optional(),
     headless: z.boolean().optional(),
     enableNoVnc: z.boolean().optional(),
+    allowHostControl: z.boolean().optional(),
     autoStart: z.boolean().optional(),
     autoStartTimeoutMs: z.number().int().positive().optional(),
   })

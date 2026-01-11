@@ -78,6 +78,7 @@ export type SandboxBrowserConfig = {
   noVncPort: number;
   headless: boolean;
   enableNoVnc: boolean;
+  allowHostControl: boolean;
   autoStart: boolean;
   autoStartTimeoutMs: number;
 };
@@ -138,6 +139,7 @@ export type SandboxContext = {
   containerWorkdir: string;
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
+  browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;
 };
 
@@ -333,6 +335,10 @@ export function resolveSandboxBrowserConfig(params: {
     headless: agentBrowser?.headless ?? globalBrowser?.headless ?? false,
     enableNoVnc:
       agentBrowser?.enableNoVnc ?? globalBrowser?.enableNoVnc ?? true,
+    allowHostControl:
+      agentBrowser?.allowHostControl ??
+      globalBrowser?.allowHostControl ??
+      false,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
     autoStartTimeoutMs:
       agentBrowser?.autoStartTimeoutMs ??
@@ -1324,6 +1330,7 @@ export async function resolveSandboxContext(params: {
     containerWorkdir: cfg.docker.workdir,
     docker: cfg.docker,
     tools: cfg.tools,
+    browserAllowHostControl: cfg.browser.allowHostControl,
     browser: browser ?? undefined,
   };
 }

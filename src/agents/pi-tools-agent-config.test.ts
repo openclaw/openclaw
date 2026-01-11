@@ -240,6 +240,7 @@ describe("Agent-specific tool filtering", () => {
           allow: ["read", "write", "bash"],
           deny: [],
         },
+        browserAllowHostControl: false,
       },
     });
 

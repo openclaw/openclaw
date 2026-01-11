@@ -12,6 +12,11 @@ Clawdbot can run a **dedicated Chrome/Chromium profile** that the agent controls
 It is isolated from your personal browser and is managed through a small local
 control server.
 
+Beginner view:
+- Think of it as a **separate, agent-only browser**.
+- It does **not** touch your personal Chrome profile.
+- The agent can **open tabs, read pages, click, and type** in a safe lane.
+
 ## What you get
 
 - A separate browser profile named **clawd** (orange accent by default).
@@ -65,6 +70,7 @@ Notes:
   the default browser ports shift to stay in the same “family” (control = gateway + 2).
 - `cdpUrl` defaults to `controlUrl + 1` when unset.
 - `attachOnly: true` means “never launch Chrome; only attach if it is already running.”
+- `color` + per-profile `color` tint the browser UI so you can see which profile is active.
 
 ## Local vs remote control
 
@@ -74,6 +80,31 @@ Notes:
   a local server; it assumes you are pointing at an existing server elsewhere.
 - **Remote CDP:** set `browser.profiles.<name>.cdpUrl` (or `browser.cdpUrl`) to
   attach to a remote Chrome. In this case, Clawdbot will not launch a local browser.
+
+## Remote browser (control server)
+
+You can run the **browser control server** on another machine and point your
+Gateway at it with a remote `controlUrl`. This lets the agent drive a browser
+outside the host (lab box, VM, remote desktop, etc.).
+
+Key points:
+- The **control server** speaks to Chrome/Chromium via **CDP**.
+- The **Gateway** only needs the HTTP control URL.
+- Profiles are resolved on the **control server** side.
+
+Example:
+```json5
+{
+  browser: {
+    enabled: true,
+    controlUrl: "http://10.0.0.42:18791",
+    defaultProfile: "work"
+  }
+}
+```
+
+Use `profiles.<name>.cdpUrl` for **remote CDP** if you want the Gateway to talk
+directly to a Chrome instance without a remote control server.
 
 ## Profiles (multi-browser)
 
@@ -128,6 +159,18 @@ All endpoints accept `?profile=<name>`.
 Some features (navigate/act/ai snapshot, element screenshots, PDF) require
 Playwright. In embedded gateway builds, Playwright may be unavailable; those
 endpoints return a clear 501 error. ARIA snapshots and basic screenshots still work.
+
+## How it works (internal)
+
+High-level flow:
+- A small **control server** accepts HTTP requests.
+- It connects to Chrome/Chromium via **CDP**.
+- For advanced actions (click/type/snapshot/PDF), it uses **Playwright** on top
+  of CDP.
+- When Playwright is missing, only non-Playwright operations are available.
+
+This design keeps the agent on a stable, deterministic interface while letting
+you swap local/remote browsers and profiles.
 
 ## CLI quick reference
 
@@ -185,3 +228,21 @@ Notes:
 
 For Linux-specific issues (especially snap Chromium), see
 [Browser troubleshooting](/tools/browser-linux-troubleshooting).
+
+## Agent tools + how control works
+
+The agent gets **one tool** for browser automation:
+- `browser` — status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
+
+How it maps:
+- `browser snapshot` returns a stable UI tree (AI or ARIA).
+- `browser act` uses the snapshot `ref` IDs to click/type/drag/select.
+- `browser screenshot` captures pixels (full page or element).
+- `browser` accepts:
+  - `profile` to choose a named browser profile (host or remote control server).
+  - `target` (`sandbox` | `host` | `custom`) to select where the browser lives.
+  - `controlUrl` sets `target: "custom"` implicitly (remote control server).
+  - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
+  - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
+
+This keeps the agent deterministic and avoids brittle selectors.

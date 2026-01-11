@@ -17,6 +17,7 @@ import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 
 export function createClawdbotTools(options?: {
   browserControlUrl?: string;
+  allowHostBrowserControl?: boolean;
   agentSessionKey?: string;
   agentProvider?: GatewayMessageProvider;
   agentAccountId?: string;
@@ -37,7 +38,10 @@ export function createClawdbotTools(options?: {
     agentDir: options?.agentDir,
   });
   return [
-    createBrowserTool({ defaultControlUrl: options?.browserControlUrl }),
+    createBrowserTool({
+      defaultControlUrl: options?.browserControlUrl,
+      allowHostControl: options?.allowHostBrowserControl,
+    }),
     createCanvasTool(),
     createNodesTool(),
     createCronTool(),

@@ -1376,6 +1376,7 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
           noVncPort: 6080,
           headless: false,
           enableNoVnc: true,
+          allowHostControl: false,
           autoStart: true,
           autoStartTimeoutMs: 12000
         },
@@ -1417,6 +1418,11 @@ Chromium instance (CDP). If noVNC is enabled (default when headless=false),
 the noVNC URL is injected into the system prompt so the agent can reference it.
 This does not require `browser.enabled` in the main config; the sandbox control
 URL is injected per session.
+
+`agents.defaults.sandbox.browser.allowHostControl` (default: false) allows
+sandboxed sessions to explicitly target the **host** browser control server
+via the browser tool (`target: "host"`). Leave this off if you want strict
+sandbox isolation.
 
 ### `models` (custom providers + base URLs)
 
