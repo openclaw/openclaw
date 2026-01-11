@@ -151,6 +151,8 @@ imageMode: "repeat"
 Clawdbot will write base64 images to temp files and pass their paths.
 If `imageArg` is missing and images are present, the CLI backend will fail fast
 (so fallback continues to the next provider).
+If your CLI does not expose an image flag (the current Claude CLI does not),
+leave `imageArg` unset and stick to text-only runs.
 
 ## Inputs / outputs
 

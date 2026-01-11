@@ -8,10 +8,12 @@ import { describe, expect, it } from "vitest";
 import { parseModelRef } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { GatewayClient } from "./client.js";
+import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 const CLI_LIVE = process.env.CLAWDBOT_LIVE_CLI_BACKEND === "1";
+const CLI_IMAGE = process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE === "1";
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-5";
@@ -22,6 +24,43 @@ const DEFAULT_ARGS = [
   "--dangerously-skip-permissions",
 ];
 const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
+
+function randomImageProbeCode(len = 10): string {
+  const alphabet = "2345689ABCEF";
+  const bytes = randomBytes(len);
+  let out = "";
+  for (let i = 0; i < len; i += 1) {
+    out += alphabet[bytes[i] % alphabet.length];
+  }
+  return out;
+}
+
+function editDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  const aLen = a.length;
+  const bLen = b.length;
+  if (aLen === 0) return bLen;
+  if (bLen === 0) return aLen;
+
+  let prev = Array.from({ length: bLen + 1 }, (_v, idx) => idx);
+  let curr = Array.from({ length: bLen + 1 }, () => 0);
+
+  for (let i = 1; i <= aLen; i += 1) {
+    curr[0] = i;
+    const aCh = a.charCodeAt(i - 1);
+    for (let j = 1; j <= bLen; j += 1) {
+      const cost = aCh === b.charCodeAt(j - 1) ? 0 : 1;
+      curr[j] = Math.min(
+        prev[j] + 1, // delete
+        curr[j - 1] + 1, // insert
+        prev[j - 1] + cost, // substitute
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+
+  return prev[bLen] ?? Number.POSITIVE_INFINITY;
+}
 
 function extractPayloadText(result: unknown): string {
   const record = result as Record<string, unknown>;
@@ -50,6 +89,15 @@ function parseJsonStringArray(
     throw new Error(`${name} must be a JSON array of strings.`);
   }
   return parsed;
+}
+
+function parseImageMode(raw?: string): "list" | "repeat" | undefined {
+  const trimmed = raw?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === "list" || trimmed === "repeat") return trimmed;
+  throw new Error(
+    "CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.",
+  );
 }
 
 function withMcpConfigOverrides(
@@ -184,6 +232,22 @@ describeLive("gateway live (cli backend)", () => {
         "CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV,
       ) ?? DEFAULT_CLEAR_ENV;
+    const cliImageArg =
+      process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
+    const cliImageMode = parseImageMode(
+      process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE,
+    );
+
+    if (CLI_IMAGE && !cliImageArg) {
+      throw new Error(
+        "CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE=1 requires CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG.",
+      );
+    }
+    if (cliImageMode && !cliImageArg) {
+      throw new Error(
+        "CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE requires CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG.",
+      );
+    }
 
     const tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-live-cli-"),
@@ -218,6 +282,9 @@ describeLive("gateway live (cli backend)", () => {
               args: cliArgs,
               clearEnv: cliClearEnv,
               systemPromptWhen: "never",
+              ...(cliImageArg
+                ? { imageArg: cliImageArg, imageMode: cliImageMode }
+                : {}),
             },
           },
           sandbox: { mode: "off" },
@@ -259,6 +326,53 @@ describeLive("gateway live (cli backend)", () => {
       }
       const text = extractPayloadText(payload?.result);
       expect(text).toContain(`CLI backend OK ${nonce}.`);
+
+      if (CLI_IMAGE) {
+        const imageCode = randomImageProbeCode(10);
+        const imageBase64 = renderCatNoncePngBase64(imageCode);
+        const runIdImage = randomUUID();
+
+        const imageProbe = await client.request<Record<string, unknown>>(
+          "agent",
+          {
+            sessionKey,
+            idempotencyKey: `idem-${runIdImage}-image`,
+            message:
+              "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
+              "(1) the animal shown or written in the image, lowercase; " +
+              "(2) the code printed in the image, uppercase. No extra text.",
+            attachments: [
+              {
+                mimeType: "image/png",
+                fileName: `probe-${runIdImage}.png`,
+                content: imageBase64,
+              },
+            ],
+            deliver: false,
+          },
+          { expectFinal: true },
+        );
+        if (imageProbe?.status !== "ok") {
+          throw new Error(
+            `image probe failed: status=${String(imageProbe?.status)}`,
+          );
+        }
+        const imageText = extractPayloadText(imageProbe?.result);
+        if (!/\bcat\b/i.test(imageText)) {
+          throw new Error(`image probe missing 'cat': ${imageText}`);
+        }
+        const candidates =
+          imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
+        const bestDistance = candidates.reduce((best, cand) => {
+          if (Math.abs(cand.length - imageCode.length) > 2) return best;
+          return Math.min(best, editDistance(cand, imageCode));
+        }, Number.POSITIVE_INFINITY);
+        if (!(bestDistance <= 2)) {
+          throw new Error(
+            `image probe missing code (${imageCode}): ${imageText}`,
+          );
+        }
+      }
     } finally {
       client.stop();
       await server.close();
