@@ -522,6 +522,7 @@ describe("config compaction settings", () => {
             agents: {
               defaults: {
                 compaction: {
+                  mode: "safeguard",
                   reserveTokensFloor: 12_345,
                   memoryFlush: {
                     enabled: false,
@@ -544,6 +545,7 @@ describe("config compaction settings", () => {
       const cfg = loadConfig();
 
       expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
+      expect(cfg.agents?.defaults?.compaction?.mode).toBe("safeguard");
       expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(
         false,
       );

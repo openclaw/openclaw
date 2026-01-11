@@ -1716,7 +1716,11 @@ export type AgentDefaultsConfig = {
   };
 };
 
+export type AgentCompactionMode = "default" | "safeguard";
+
 export type AgentCompactionConfig = {
+  /** Compaction summarization mode. */
+  mode?: AgentCompactionMode;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
   /** Pre-compaction memory flush (agentic turn). Default: enabled. */

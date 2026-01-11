@@ -321,6 +321,12 @@ function buildContextPruningExtension(params: {
   };
 }
 
+function resolveCompactionMode(cfg?: ClawdbotConfig): "default" | "safeguard" {
+  return cfg?.agents?.defaults?.compaction?.mode === "safeguard"
+    ? "safeguard"
+    : "default";
+}
+
 function buildEmbeddedExtensionPaths(params: {
   cfg: ClawdbotConfig | undefined;
   sessionManager: SessionManager;
@@ -329,6 +335,9 @@ function buildEmbeddedExtensionPaths(params: {
   model: Model<Api> | undefined;
 }): string[] {
   const paths = [resolvePiExtensionPath("transcript-sanitize")];
+  if (resolveCompactionMode(params.cfg) === "safeguard") {
+    paths.push(resolvePiExtensionPath("compaction-safeguard"));
+  }
   const pruning = buildContextPruningExtension(params);
   if (pruning.additionalExtensionPaths) {
     paths.push(...pruning.additionalExtensionPaths);
