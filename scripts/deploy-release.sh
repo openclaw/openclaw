@@ -58,6 +58,8 @@ echo "🗑️  Removing old installation..."
 sudo rm -rf "$APP_TARGET"
 
 echo "📋 Copying new version..."
+# Clear quarantine attributes on source first (prevents "operation not permitted")
+xattr -cr "$APP_SOURCE" 2>/dev/null || true
 sudo cp -R "$APP_SOURCE" "$APP_TARGET"
 
 echo "🔒 Setting ownership and permissions..."
@@ -71,6 +73,7 @@ echo "🔗 Installing CLI wrappers..."
 # Create wrapper scripts instead of symlinks (symlinks break dirname resolution)
 RELAY_DIR="$APP_TARGET/Contents/Resources/Relay"
 for bin_path in /usr/local/bin/clawdbot /opt/homebrew/bin/clawdbot; do
+  sudo rm -f "$bin_path"
   sudo tee "$bin_path" > /dev/null <<WRAPPER
 #!/bin/sh
 exec "$RELAY_DIR/clawdbot" "\$@"
@@ -86,7 +89,8 @@ echo "Installed version:"
   "$APP_TARGET/Contents/Info.plist" 2>/dev/null || echo "(version info not available)"
 echo ""
 echo "CLI version:"
-/usr/local/bin/clawdbot --version 2>/dev/null || echo "(CLI not accessible)"
+# Skip version check - can hang during first run
+echo "(run 'clawdbot --version' manually to verify)"
 echo ""
 echo "Next steps:"
 echo "1. Switch back to petter account"
