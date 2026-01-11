@@ -272,6 +272,14 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
 
         var cursor = cursor
+
+        if cursor > 0, !menu.items[cursor - 1].isSeparatorItem {
+            let separator = NSMenuItem.separator()
+            separator.tag = self.tag
+            menu.insertItem(separator, at: cursor)
+            cursor += 1
+        }
+
         let headerItem = NSMenuItem()
         headerItem.tag = self.tag
         headerItem.isEnabled = false
@@ -292,6 +300,28 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             return cursor
         }
 
+        if let selectedProvider = self.selectedUsageProviderId,
+           let primary = rows.first(where: { $0.providerId.lowercased() == selectedProvider }),
+           rows.count > 1
+        {
+            let others = rows.filter { $0.providerId.lowercased() != selectedProvider }
+
+            let item = NSMenuItem()
+            item.tag = self.tag
+            item.isEnabled = true
+            if !others.isEmpty {
+                item.submenu = self.buildUsageOverflowMenu(rows: others, width: width)
+            }
+            item.view = self.makeHostedView(
+                rootView: AnyView(UsageMenuLabelView(row: primary, width: width, showsChevron: !others.isEmpty)),
+                width: width,
+                highlighted: true)
+            menu.insertItem(item, at: cursor)
+            cursor += 1
+
+            return cursor
+        }
+
         for row in rows {
             let item = NSMenuItem()
             item.tag = self.tag
@@ -307,9 +337,32 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         return cursor
     }
 
+    private var selectedUsageProviderId: String? {
+        guard let model = self.cachedSnapshot?.defaults.model.nonEmpty else { return nil }
+        let trimmed = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let slash = trimmed.firstIndex(of: "/") else { return nil }
+        let provider = trimmed[..<slash].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return provider.nonEmpty
+    }
+
     private var usageRows: [UsageRow] {
         guard let summary = self.cachedUsageSummary else { return [] }
         return summary.primaryRows()
+    }
+
+    private func buildUsageOverflowMenu(rows: [UsageRow], width: CGFloat) -> NSMenu {
+        let menu = NSMenu()
+        for row in rows {
+            let item = NSMenuItem()
+            item.tag = self.tag
+            item.isEnabled = false
+            item.view = self.makeHostedView(
+                rootView: AnyView(UsageMenuLabelView(row: row, width: width)),
+                width: width,
+                highlighted: false)
+            menu.addItem(item)
+        }
+        return menu
     }
 
     private var isControlChannelConnected: Bool {
@@ -936,6 +989,12 @@ extension MenuSessionsInjector {
         self.cachedSnapshot = snapshot
         self.cachedErrorText = errorText
         self.cacheUpdatedAt = Date()
+    }
+
+    func setTestingUsageSummary(_ summary: GatewayUsageSummary?, errorText: String? = nil) {
+        self.cachedUsageSummary = summary
+        self.cachedUsageErrorText = errorText
+        self.usageCacheUpdatedAt = Date()
     }
 
     func injectForTesting(into menu: NSMenu) {

@@ -23,7 +23,7 @@ struct MenuSessionsInjectorTests {
         let injector = MenuSessionsInjector()
         injector.setTestingControlChannelConnected(true)
 
-        let defaults = SessionDefaults(model: "claude-opus-4-5", contextTokens: 200_000)
+        let defaults = SessionDefaults(model: "anthropic/claude-opus-4-5", contextTokens: 200_000)
         let rows = [
             SessionRow(
                 id: "main",
@@ -66,6 +66,24 @@ struct MenuSessionsInjectorTests {
             rows: rows)
         injector.setTestingSnapshot(snapshot, errorText: nil)
 
+        let usage = GatewayUsageSummary(
+            updatedAt: Date().timeIntervalSince1970 * 1000,
+            providers: [
+                GatewayUsageProvider(
+                    provider: "anthropic",
+                    displayName: "Claude",
+                    windows: [GatewayUsageWindow(label: "5h", usedPercent: 12, resetAt: nil)],
+                    plan: "Pro",
+                    error: nil),
+                GatewayUsageProvider(
+                    provider: "openai-codex",
+                    displayName: "Codex",
+                    windows: [GatewayUsageWindow(label: "day", usedPercent: 3, resetAt: nil)],
+                    plan: nil,
+                    error: nil),
+            ])
+        injector.setTestingUsageSummary(usage, errorText: nil)
+
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "Header", action: nil, keyEquivalent: ""))
         menu.addItem(.separator())
@@ -73,5 +91,6 @@ struct MenuSessionsInjectorTests {
 
         injector.injectForTesting(into: menu)
         #expect(menu.items.contains { $0.tag == 9_415_557 })
+        #expect(menu.items.contains { $0.tag == 9_415_557 && $0.isSeparatorItem })
     }
 }
