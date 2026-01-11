@@ -61,11 +61,14 @@ function createUpdateProgress(enabled: boolean): ProgressController {
       const label = getStepLabel(step);
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
 
-      if (step.exitCode === 0) {
-        currentSpinner.stop(`${theme.success("\u2713")} ${label} ${duration}`);
-      } else {
-        currentSpinner.stop(`${theme.error("\u2717")} ${label} ${duration}`);
-      }
+      const icon =
+        step.status === "success"
+          ? theme.success("\u2713")
+          : step.status === "skipped"
+            ? theme.warn("\u25CB")
+            : theme.error("\u2717");
+
+      currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
     },
   };
