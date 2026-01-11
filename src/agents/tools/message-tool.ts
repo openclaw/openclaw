@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { listEnabledDiscordAccounts } from "../../discord/accounts.js";
@@ -27,45 +28,43 @@ import { handleSlackAction } from "./slack-actions.js";
 import { handleTelegramAction } from "./telegram-actions.js";
 import { handleWhatsAppAction } from "./whatsapp-actions.js";
 
-const MessageActionSchema = Type.Union([
-  Type.Literal("send"),
-  Type.Literal("poll"),
-  Type.Literal("react"),
-  Type.Literal("reactions"),
-  Type.Literal("read"),
-  Type.Literal("edit"),
-  Type.Literal("delete"),
-  Type.Literal("pin"),
-  Type.Literal("unpin"),
-  Type.Literal("list-pins"),
-  Type.Literal("permissions"),
-  Type.Literal("thread-create"),
-  Type.Literal("thread-list"),
-  Type.Literal("thread-reply"),
-  Type.Literal("search"),
-  Type.Literal("sticker"),
-  Type.Literal("member-info"),
-  Type.Literal("role-info"),
-  Type.Literal("emoji-list"),
-  Type.Literal("emoji-upload"),
-  Type.Literal("sticker-upload"),
-  Type.Literal("role-add"),
-  Type.Literal("role-remove"),
-  Type.Literal("channel-info"),
-  Type.Literal("channel-list"),
-  Type.Literal("voice-status"),
-  Type.Literal("event-list"),
-  Type.Literal("event-create"),
-  Type.Literal("timeout"),
-  Type.Literal("kick"),
-  Type.Literal("ban"),
-]);
+const AllMessageActions = [
+  "send",
+  "poll",
+  "react",
+  "reactions",
+  "read",
+  "edit",
+  "delete",
+  "pin",
+  "unpin",
+  "list-pins",
+  "permissions",
+  "thread-create",
+  "thread-list",
+  "thread-reply",
+  "search",
+  "sticker",
+  "member-info",
+  "role-info",
+  "emoji-list",
+  "emoji-upload",
+  "sticker-upload",
+  "role-add",
+  "role-remove",
+  "channel-info",
+  "channel-list",
+  "voice-status",
+  "event-list",
+  "event-create",
+  "timeout",
+  "kick",
+  "ban",
+];
 
-const MessageToolSchema = Type.Object({
-  action: MessageActionSchema,
+
+const MessageToolCommonSchema = {
   provider: Type.Optional(Type.String()),
-  to: Type.Optional(Type.String()),
-  message: Type.Optional(Type.String()),
   media: Type.Optional(Type.String()),
   buttons: Type.Optional(
     Type.Array(
@@ -129,6 +128,46 @@ const MessageToolSchema = Type.Object({
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
+};
+
+function buildMessageToolSchemaFromActions(
+  actions: string[],
+  options: { includeButtons: boolean },
+) {
+  const props: Record<string, unknown> = { ...MessageToolCommonSchema };
+  if (!options.includeButtons) delete props.buttons;
+
+  const schemas: Array<ReturnType<typeof Type.Object>> = [];
+  if (actions.includes("send")) {
+    schemas.push(
+      Type.Object({
+        action: Type.Literal("send"),
+        to: Type.String(),
+        message: Type.String(),
+        ...props,
+      }),
+    );
+  }
+
+  const nonSendActions = actions.filter((action) => action !== "send");
+  if (nonSendActions.length > 0) {
+    schemas.push(
+      Type.Object({
+        action: Type.Union(
+          nonSendActions.map((action) => Type.Literal(action)),
+        ),
+        to: Type.Optional(Type.String()),
+        message: Type.Optional(Type.String()),
+        ...props,
+      }),
+    );
+  }
+
+  return schemas.length === 1 ? schemas[0] : Type.Union(schemas);
+}
+
+const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
+  includeButtons: true,
 });
 
 type MessageToolOptions = {
@@ -164,7 +203,7 @@ function hasTelegramInlineButtons(cfg: ClawdbotConfig): boolean {
   return caps.has("inlinebuttons");
 }
 
-function buildMessageActionSchema(cfg: ClawdbotConfig) {
+function buildMessageActionList(cfg: ClawdbotConfig) {
   const actions = new Set<string>(["send"]);
 
   const discordAccounts = listEnabledDiscordAccounts(cfg).filter(
@@ -281,25 +320,16 @@ function buildMessageActionSchema(cfg: ClawdbotConfig) {
     actions.add("ban");
   }
 
-  return Type.Union(Array.from(actions).map((action) => Type.Literal(action)));
+  return Array.from(actions);
 }
 
 function buildMessageToolSchema(cfg: ClawdbotConfig) {
-  const base = MessageToolSchema as unknown as Record<string, unknown>;
-  const baseProps = (base.properties ?? {}) as Record<string, unknown>;
-  const props: Record<string, unknown> = {
-    ...baseProps,
-    action: buildMessageActionSchema(cfg),
-  };
-
+  const actions = buildMessageActionList(cfg);
   const telegramEnabled = listEnabledTelegramAccounts(cfg).some(
     (account) => account.tokenSource !== "none",
   );
-  if (!telegramEnabled || !hasTelegramInlineButtons(cfg)) {
-    delete props.buttons;
-  }
-
-  return { ...base, properties: props };
+  const includeButtons = telegramEnabled && hasTelegramInlineButtons(cfg);
+  return buildMessageToolSchemaFromActions(actions, { includeButtons });
 }
 
 function resolveAgentAccountId(value?: string): string | undefined {
@@ -340,12 +370,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       if (action === "send") {
         const to = readStringParam(params, "to", { required: true });
-        const message = readStringParam(params, "message", {
+        let message = readStringParam(params, "message", {
           required: true,
           allowEmpty: true,
         });
-        const mediaUrl = readStringParam(params, "media", { trim: false });
-        const replyTo = readStringParam(params, "replyTo");
+        const parsed = parseReplyDirectives(message);
+        message = parsed.text;
+        const mediaUrl =
+          readStringParam(params, "media", { trim: false }) ??
+          (parsed.mediaUrls?.[0] || parsed.mediaUrl);
+        const replyTo =
+          readStringParam(params, "replyTo") ?? parsed.replyToId;
         const threadId = readStringParam(params, "threadId");
         const buttons = params.buttons;
         const gifPlayback =
@@ -803,9 +838,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             `Thread reply is only supported for Discord (provider=${provider}).`,
           );
         }
-        const content = readStringParam(params, "message", { required: true });
-        const mediaUrl = readStringParam(params, "media", { trim: false });
-        const replyTo = readStringParam(params, "replyTo");
+        let content = readStringParam(params, "message", { required: true });
+        const parsed = parseReplyDirectives(content);
+        content = parsed.text;
+        const mediaUrl =
+          readStringParam(params, "media", { trim: false }) ??
+          (parsed.mediaUrls?.[0] || parsed.mediaUrl);
+        const replyTo =
+          readStringParam(params, "replyTo") ?? parsed.replyToId;
         return await handleDiscordAction(
           {
             action: "threadReply",

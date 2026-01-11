@@ -9,6 +9,7 @@
 
 ### Fixes
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
+- Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
 
 ## 2026.1.10
 
