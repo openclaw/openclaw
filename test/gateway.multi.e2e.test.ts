@@ -16,7 +16,9 @@ type GatewayInstance = {
   port: number;
   bridgePort: number;
   hookToken: string;
+  gatewayToken: string;
   homeDir: string;
+  stateDir: string;
   configPath: string;
   child: ChildProcessWithoutNullStreams;
   stdout: string[];
@@ -99,14 +101,16 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
   const port = await getFreePort();
   const bridgePort = await getFreePort();
   const hookToken = `token-${name}-${randomUUID()}`;
+  const gatewayToken = `gateway-${name}-${randomUUID()}`;
   const homeDir = await fs.mkdtemp(
     path.join(os.tmpdir(), `clawdbot-e2e-${name}-`),
   );
   const configDir = path.join(homeDir, ".clawdbot");
   await fs.mkdir(configDir, { recursive: true });
   const configPath = path.join(configDir, "clawdbot.json");
+  const stateDir = path.join(configDir, "state");
   const config = {
-    gateway: { port },
+    gateway: { port, auth: { mode: "token", token: gatewayToken } },
     hooks: { enabled: true, token: hookToken, path: "/hooks" },
     bridge: { bind: "loopback", port: bridgePort },
   };
@@ -134,7 +138,7 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
           ...process.env,
           HOME: homeDir,
           CLAWDBOT_CONFIG_PATH: configPath,
-          CLAWDBOT_STATE_DIR: path.join(homeDir, ".clawdbot", "state"),
+          CLAWDBOT_STATE_DIR: stateDir,
           CLAWDBOT_GATEWAY_TOKEN: "",
           CLAWDBOT_GATEWAY_PASSWORD: "",
           CLAWDBOT_SKIP_PROVIDERS: "1",
@@ -166,7 +170,9 @@ const spawnGatewayInstance = async (name: string): Promise<GatewayInstance> => {
       port,
       bridgePort,
       hookToken,
+      gatewayToken,
       homeDir,
+      stateDir,
       configPath,
       child,
       stdout,
@@ -369,7 +375,7 @@ const pairNode = async (inst: GatewayInstance, nodeId: string) => {
     version: "1.0.0",
   });
 
-  const baseDir = path.join(inst.homeDir, ".clawdbot");
+  const baseDir = inst.stateDir;
   const requestId = await waitForPairRequest(baseDir, nodeId);
   const approved = await approveNodePairing(requestId, baseDir);
   expect(approved).toBeTruthy();
@@ -409,12 +415,12 @@ describe("gateway multi-instance e2e", () => {
       const [healthA, healthB] = (await Promise.all([
         runCliJson(["health", "--json", "--timeout", "10000"], {
           CLAWDBOT_GATEWAY_PORT: String(gwA.port),
-          CLAWDBOT_GATEWAY_TOKEN: "",
+          CLAWDBOT_GATEWAY_TOKEN: gwA.gatewayToken,
           CLAWDBOT_GATEWAY_PASSWORD: "",
         }),
         runCliJson(["health", "--json", "--timeout", "10000"], {
           CLAWDBOT_GATEWAY_PORT: String(gwB.port),
-          CLAWDBOT_GATEWAY_TOKEN: "",
+          CLAWDBOT_GATEWAY_TOKEN: gwB.gatewayToken,
           CLAWDBOT_GATEWAY_PASSWORD: "",
         }),
       ])) as [HealthPayload, HealthPayload];
@@ -443,14 +449,14 @@ describe("gateway multi-instance e2e", () => {
         runCliJson(
           ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwA.port}`],
           {
-            CLAWDBOT_GATEWAY_TOKEN: "",
+            CLAWDBOT_GATEWAY_TOKEN: gwA.gatewayToken,
             CLAWDBOT_GATEWAY_PASSWORD: "",
           },
         ),
         runCliJson(
           ["nodes", "status", "--json", "--url", `ws://127.0.0.1:${gwB.port}`],
           {
-            CLAWDBOT_GATEWAY_TOKEN: "",
+            CLAWDBOT_GATEWAY_TOKEN: gwB.gatewayToken,
             CLAWDBOT_GATEWAY_PASSWORD: "",
           },
         ),

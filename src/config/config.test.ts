@@ -975,7 +975,10 @@ describe("legacy config detection", () => {
       routing: {
         agentToAgent: { enabled: true, allow: ["main"] },
         queue: { mode: "queue", cap: 3 },
-        transcribeAudio: { command: ["echo", "hi"], timeoutSeconds: 2 },
+        transcribeAudio: {
+          command: ["whisper", "--model", "base"],
+          timeoutSeconds: 2,
+        },
       },
     });
     expect(res.changes).toContain(
@@ -983,7 +986,7 @@ describe("legacy config detection", () => {
     );
     expect(res.changes).toContain("Moved routing.queue → messages.queue.");
     expect(res.changes).toContain(
-      "Moved routing.transcribeAudio → audio.transcription.",
+      "Moved routing.transcribeAudio → tools.audio.transcription.",
     );
     expect(res.config?.tools?.agentToAgent).toEqual({
       enabled: true,
@@ -993,8 +996,8 @@ describe("legacy config detection", () => {
       mode: "queue",
       cap: 3,
     });
-    expect(res.config?.audio?.transcription).toEqual({
-      command: ["echo", "hi"],
+    expect(res.config?.tools?.audio?.transcription).toEqual({
+      args: ["--model", "base"],
       timeoutSeconds: 2,
     });
     expect(res.config?.routing).toBeUndefined();
@@ -1285,6 +1288,44 @@ describe("legacy config detection", () => {
     if (res.ok) {
       expect(res.config.imessage?.dmPolicy).toBe("pairing");
     }
+  });
+
+  it("rejects unsafe executable config values", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      imessage: { cliPath: "imsg; rm -rf /" },
+      tools: { audio: { transcription: { args: ["--model", "base"] } } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.issues.some((i) => i.path === "imessage.cliPath")).toBe(true);
+    }
+  });
+
+  it("accepts tools audio transcription without cli", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      tools: { audio: { transcription: { args: ["--model", "base"] } } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts path-like executable values with spaces", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({
+      imessage: { cliPath: "/Applications/Imsg Tools/imsg" },
+      tools: {
+        audio: {
+          transcription: {
+            args: ["--model"],
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
   });
 
   it('rejects discord.dm.policy="open" without allowFrom "*"', async () => {

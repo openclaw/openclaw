@@ -89,6 +89,9 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.remote.password": "Remote Gateway Password",
   "gateway.auth.token": "Gateway Token",
   "gateway.auth.password": "Gateway Password",
+  "tools.audio.transcription.args": "Audio Transcription Args",
+  "tools.audio.transcription.timeoutSeconds":
+    "Audio Transcription Timeout (sec)",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.http.endpoints.chatCompletions.enabled":
     "OpenAI Chat Completions Endpoint",
@@ -156,7 +159,7 @@ const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshIdentity":
     "Optional SSH identity file path (passed to ssh -i).",
   "gateway.auth.token":
-    "Required for multi-machine access or non-loopback binds.",
+    "Recommended for all gateways; required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "gateway.controlUi.basePath":
     "Optional URL prefix where the Control UI is served (e.g. /clawdbot).",

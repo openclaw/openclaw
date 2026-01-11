@@ -288,6 +288,7 @@ vi.mock("./onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp",
   guardCancel: (value: unknown) => value,
   printWizardHeader: vi.fn(),
+  randomToken: vi.fn(() => "test-gateway-token"),
 }));
 
 vi.mock("./doctor-state-migrations.js", () => ({
@@ -749,7 +750,10 @@ describe("doctor", () => {
       return Promise.resolve({ stdout: "", stderr: "" });
     });
 
-    confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    confirm
+      .mockResolvedValueOnce(false) // skip gateway token prompt
+      .mockResolvedValueOnce(false) // skip build
+      .mockResolvedValueOnce(true); // accept legacy fallback
 
     const { doctorCommand } = await import("./doctor.js");
     const runtime = {

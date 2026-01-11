@@ -14,6 +14,7 @@ import { CONFIG_PATH_CLAWDBOT } from "../config/config.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -288,8 +289,14 @@ export async function handleReset(
 
 export async function detectBinary(name: string): Promise<boolean> {
   if (!name?.trim()) return false;
+  if (!isSafeExecutableValue(name)) return false;
   const resolved = name.startsWith("~") ? resolveUserPath(name) : name;
-  if (path.isAbsolute(resolved) || resolved.startsWith(".")) {
+  if (
+    path.isAbsolute(resolved) ||
+    resolved.startsWith(".") ||
+    resolved.includes("/") ||
+    resolved.includes("\\")
+  ) {
     try {
       await fs.access(resolved);
       return true;
@@ -301,7 +308,7 @@ export async function detectBinary(name: string): Promise<boolean> {
   const command =
     process.platform === "win32"
       ? ["where", name]
-      : ["/usr/bin/env", "sh", "-lc", `command -v ${name}`];
+      : ["/usr/bin/env", "which", name];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
     return result.code === 0 && result.stdout.trim().length > 0;

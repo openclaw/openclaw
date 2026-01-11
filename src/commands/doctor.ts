@@ -84,7 +84,11 @@ import {
 } from "./doctor-workspace.js";
 import { healthCommand } from "./health.js";
 import { formatHealthCheckFailure } from "./health-format.js";
-import { applyWizardMetadata, printWizardHeader } from "./onboard-helpers.js";
+import {
+  applyWizardMetadata,
+  printWizardHeader,
+  randomToken,
+} from "./onboard-helpers.js";
 import { ensureSystemdUserLingerInteractive } from "./systemd-linger.js";
 
 const intro = (message: string) =>
@@ -278,6 +282,45 @@ export async function doctorCommand(
   const gatewayDetails = buildGatewayConnectionDetails({ config: cfg });
   if (gatewayDetails.remoteFallbackNote) {
     note(gatewayDetails.remoteFallbackNote, "Gateway");
+  }
+  if (resolveMode(cfg) === "local") {
+    const authMode = cfg.gateway?.auth?.mode;
+    const token =
+      typeof cfg.gateway?.auth?.token === "string"
+        ? cfg.gateway?.auth?.token.trim()
+        : "";
+    const needsToken =
+      authMode !== "password" && (authMode !== "token" || !token);
+    if (needsToken) {
+      note(
+        "Gateway auth is off or missing a token. Token auth is now the recommended default (including loopback).",
+        "Gateway auth",
+      );
+      const shouldSetToken =
+        options.generateGatewayToken === true
+          ? true
+          : options.nonInteractive === true
+            ? false
+            : await prompter.confirmRepair({
+                message: "Generate and configure a gateway token now?",
+                initialValue: true,
+              });
+      if (shouldSetToken) {
+        const nextToken = randomToken();
+        cfg = {
+          ...cfg,
+          gateway: {
+            ...cfg.gateway,
+            auth: {
+              ...cfg.gateway?.auth,
+              mode: "token",
+              token: nextToken,
+            },
+          },
+        };
+        note("Gateway token configured.", "Gateway auth");
+      }
+    }
   }
 
   const legacyState = await detectLegacyStateMigrations({ cfg });
