@@ -315,6 +315,7 @@ export async function runHeartbeatOnce(opts: {
     const mediaUrls =
       replyPayload.mediaUrls ??
       (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
+    // Reasoning payloads are text-only; any attachments stay on the main reply.
     const previewText = shouldSkipMain
       ? reasoningPayloads
           .map((payload) => payload.text)
