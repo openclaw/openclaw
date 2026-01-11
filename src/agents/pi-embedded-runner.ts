@@ -66,6 +66,7 @@ import {
   resolveAuthProfileOrder,
   resolveModelAuthMode,
 } from "./model-auth.js";
+import { normalizeModelCompat } from "./model-compat.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
 import { acquireSessionWriteLock } from "./session-write-lock.js";
@@ -762,7 +763,7 @@ function resolveModel(
       modelRegistry,
     };
   }
-  return { model, authStorage, modelRegistry };
+  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
 }
 
 export async function compactEmbeddedPiSession(params: {

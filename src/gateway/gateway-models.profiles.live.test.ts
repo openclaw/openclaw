@@ -27,6 +27,7 @@ const ALL_MODELS =
 const EXTRA_TOOL_PROBES = process.env.CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE === "1";
 const EXTRA_IMAGE_PROBES =
   process.env.CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE === "1";
+const ZAI_FALLBACK = process.env.CLAWDBOT_LIVE_GATEWAY_ZAI_FALLBACK === "1";
 const PROVIDERS = parseFilter(process.env.CLAWDBOT_LIVE_GATEWAY_PROVIDERS);
 
 const describeLive = LIVE && GATEWAY_LIVE ? describe : describe.skip;
@@ -559,4 +560,142 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     },
     20 * 60 * 1000,
   );
+
+  it("z.ai fallback handles anthropic tool history", async () => {
+    if (!ZAI_FALLBACK) return;
+    const previous = {
+      configPath: process.env.CLAWDBOT_CONFIG_PATH,
+      token: process.env.CLAWDBOT_GATEWAY_TOKEN,
+      skipProviders: process.env.CLAWDBOT_SKIP_PROVIDERS,
+      skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.CLAWDBOT_SKIP_CRON,
+      skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+    };
+
+    process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
+    process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
+    process.env.CLAWDBOT_SKIP_CRON = "1";
+    process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+
+    const token = `test-${randomUUID()}`;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = token;
+
+    const cfg = loadConfig();
+    await ensureClawdbotModelsJson(cfg);
+
+    const agentDir = resolveClawdbotAgentDir();
+    const authStorage = discoverAuthStorage(agentDir);
+    const modelRegistry = discoverModels(authStorage, agentDir);
+    const anthropic = modelRegistry.find(
+      "anthropic",
+      "claude-opus-4-5",
+    ) as Model<Api> | null;
+    const zai = modelRegistry.find("zai", "glm-4.7") as Model<Api> | null;
+
+    if (!anthropic || !zai) return;
+    try {
+      await getApiKeyForModel({ model: anthropic, cfg });
+      await getApiKeyForModel({ model: zai, cfg });
+    } catch {
+      return;
+    }
+
+    const workspaceDir = resolveUserPath(
+      cfg.agents?.defaults?.workspace ?? path.join(os.homedir(), "clawd"),
+    );
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const nonceA = randomUUID();
+    const nonceB = randomUUID();
+    const toolProbePath = path.join(
+      workspaceDir,
+      `.clawdbot-live-zai-fallback.${nonceA}.txt`,
+    );
+    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
+
+    const port = await getFreeGatewayPort();
+    const server = await startGatewayServer({
+      configPath: cfg.__meta?.path,
+      port,
+      token,
+    });
+
+    const client = await connectClient({
+      url: `ws://127.0.0.1:${port}`,
+      token,
+    });
+
+    try {
+      const sessionKey = "agent:dev:live-zai-fallback";
+
+      await client.request<Record<string, unknown>>("sessions.patch", {
+        key: sessionKey,
+        model: "anthropic/claude-opus-4-5",
+      });
+      await client.request<Record<string, unknown>>("sessions.reset", {
+        key: sessionKey,
+      });
+
+      const runId = randomUUID();
+      const toolProbe = await client.request<AgentFinalPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `idem-${runId}-tool`,
+          message:
+            `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
+            `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
+          deliver: false,
+        },
+        { expectFinal: true },
+      );
+      if (toolProbe?.status !== "ok") {
+        throw new Error(
+          `anthropic tool probe failed: status=${String(toolProbe?.status)}`,
+        );
+      }
+      const toolText = extractPayloadText(toolProbe?.result);
+      if (!toolText.includes(nonceA) || !toolText.includes(nonceB)) {
+        throw new Error(`anthropic tool probe missing nonce: ${toolText}`);
+      }
+
+      await client.request<Record<string, unknown>>("sessions.patch", {
+        key: sessionKey,
+        model: "zai/glm-4.7",
+      });
+
+      const followupId = randomUUID();
+      const followup = await client.request<AgentFinalPayload>(
+        "agent",
+        {
+          sessionKey,
+          idempotencyKey: `idem-${followupId}-followup`,
+          message:
+            `What are the values of nonceA and nonceB in "${toolProbePath}"? ` +
+            `Reply with exactly: ${nonceA} ${nonceB}.`,
+          deliver: false,
+        },
+        { expectFinal: true },
+      );
+      if (followup?.status !== "ok") {
+        throw new Error(
+          `zai followup failed: status=${String(followup?.status)}`,
+        );
+      }
+      const followupText = extractPayloadText(followup?.result);
+      if (!followupText.includes(nonceA) || !followupText.includes(nonceB)) {
+        throw new Error(`zai followup missing nonce: ${followupText}`);
+      }
+    } finally {
+      client.stop();
+      await server.close({ reason: "live test complete" });
+      await fs.rm(toolProbePath, { force: true });
+
+      process.env.CLAWDBOT_CONFIG_PATH = previous.configPath;
+      process.env.CLAWDBOT_GATEWAY_TOKEN = previous.token;
+      process.env.CLAWDBOT_SKIP_PROVIDERS = previous.skipProviders;
+      process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = previous.skipGmail;
+      process.env.CLAWDBOT_SKIP_CRON = previous.skipCron;
+      process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;
+    }
+  }, 180_000);
 });
