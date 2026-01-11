@@ -32,6 +32,7 @@ import {
   buildTokenProfileId,
   validateAnthropicSetupToken,
 } from "./auth-token.js";
+import { loginChutes } from "./chutes-oauth.js";
 import {
   applyGoogleGeminiModelDefault,
   GOOGLE_GEMINI_DEFAULT_MODEL,
@@ -68,7 +69,6 @@ import {
 } from "./onboard-auth.js";
 import { openUrl } from "./onboard-helpers.js";
 import type { AuthChoice } from "./onboard-types.js";
-import { loginChutes } from "./chutes-oauth.js";
 import {
   applyOpenAICodexModelDefault,
   OPENAI_CODEX_DEFAULT_MODEL,

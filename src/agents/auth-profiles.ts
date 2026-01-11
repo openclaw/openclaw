@@ -15,12 +15,12 @@ import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { type ChutesStoredOAuth, refreshChutesTokens } from "./chutes-oauth.js";
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
   writeClaudeCliCredentials,
 } from "./cli-credentials.js";
-import { refreshChutesTokens, type ChutesStoredOAuth } from "./chutes-oauth.js";
 import { normalizeProviderId } from "./model-selection.js";
 
 const AUTH_STORE_VERSION = 1;

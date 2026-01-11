@@ -61,7 +61,9 @@ export function parseOAuthCallbackInput(
 
 function coerceExpiresAt(expiresInSeconds: number, now: number): number {
   const value =
-    now + Math.max(0, Math.floor(expiresInSeconds)) * 1000 - DEFAULT_EXPIRES_BUFFER_MS;
+    now +
+    Math.max(0, Math.floor(expiresInSeconds)) * 1000 -
+    DEFAULT_EXPIRES_BUFFER_MS;
   return Math.max(value, now + 30_000);
 }
 
@@ -121,7 +123,8 @@ export async function exchangeChutesCodeForTokens(params: {
   const refresh = data.refresh_token?.trim();
   const expiresIn = data.expires_in ?? 0;
 
-  if (!access) throw new Error("Chutes token exchange returned no access_token");
+  if (!access)
+    throw new Error("Chutes token exchange returned no access_token");
   if (!refresh) {
     throw new Error("Chutes token exchange returned no refresh_token");
   }
@@ -201,4 +204,3 @@ export async function refreshChutesTokens(params: {
     clientSecret,
   } as unknown as ChutesStoredOAuth;
 }
-
