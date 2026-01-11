@@ -57,6 +57,15 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
       actions.add("channel-info");
       actions.add("channel-list");
     }
+    if (gate("channels", false)) {
+      actions.add("channel-create");
+      actions.add("channel-edit");
+      actions.add("channel-delete");
+      actions.add("channel-move");
+      actions.add("category-create");
+      actions.add("category-edit");
+      actions.add("category-delete");
+    }
     if (gate("voiceStatus")) actions.add("voice-status");
     if (gate("events")) {
       actions.add("event-list");
@@ -447,6 +456,136 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
         required: true,
       });
       return await handleDiscordAction({ action: "channelList", guildId }, cfg);
+    }
+
+    if (action === "channel-create") {
+      const guildId = readStringParam(params, "guildId", { required: true });
+      const name = readStringParam(params, "name", { required: true });
+      const type = readNumberParam(params, "type", { integer: true });
+      const parentId =
+        params.parentId === null
+          ? null
+          : readStringParam(params, "parentId");
+      const topic = readStringParam(params, "topic");
+      const position = readNumberParam(params, "position", { integer: true });
+      const nsfw = typeof params.nsfw === "boolean" ? params.nsfw : undefined;
+      return await handleDiscordAction(
+        {
+          action: "channelCreate",
+          guildId,
+          name,
+          type: type ?? undefined,
+          parentId: parentId ?? undefined,
+          topic: topic ?? undefined,
+          position: position ?? undefined,
+          nsfw,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "channel-edit") {
+      const channelId = readStringParam(params, "channelId", {
+        required: true,
+      });
+      const name = readStringParam(params, "name");
+      const topic = readStringParam(params, "topic");
+      const position = readNumberParam(params, "position", { integer: true });
+      const parentId =
+        params.parentId === null
+          ? null
+          : readStringParam(params, "parentId");
+      const nsfw = typeof params.nsfw === "boolean" ? params.nsfw : undefined;
+      const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
+        integer: true,
+      });
+      return await handleDiscordAction(
+        {
+          action: "channelEdit",
+          channelId,
+          name: name ?? undefined,
+          topic: topic ?? undefined,
+          position: position ?? undefined,
+          parentId: parentId === undefined ? undefined : parentId,
+          nsfw,
+          rateLimitPerUser: rateLimitPerUser ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "channel-delete") {
+      const channelId = readStringParam(params, "channelId", {
+        required: true,
+      });
+      return await handleDiscordAction(
+        { action: "channelDelete", channelId },
+        cfg,
+      );
+    }
+
+    if (action === "channel-move") {
+      const guildId = readStringParam(params, "guildId", { required: true });
+      const channelId = readStringParam(params, "channelId", {
+        required: true,
+      });
+      const parentId =
+        params.parentId === null
+          ? null
+          : readStringParam(params, "parentId");
+      const position = readNumberParam(params, "position", { integer: true });
+      return await handleDiscordAction(
+        {
+          action: "channelMove",
+          guildId,
+          channelId,
+          parentId: parentId === undefined ? undefined : parentId,
+          position: position ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "category-create") {
+      const guildId = readStringParam(params, "guildId", { required: true });
+      const name = readStringParam(params, "name", { required: true });
+      const position = readNumberParam(params, "position", { integer: true });
+      return await handleDiscordAction(
+        {
+          action: "categoryCreate",
+          guildId,
+          name,
+          position: position ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "category-edit") {
+      const categoryId = readStringParam(params, "categoryId", {
+        required: true,
+      });
+      const name = readStringParam(params, "name");
+      const position = readNumberParam(params, "position", { integer: true });
+      return await handleDiscordAction(
+        {
+          action: "categoryEdit",
+          categoryId,
+          name: name ?? undefined,
+          position: position ?? undefined,
+        },
+        cfg,
+      );
+    }
+
+    if (action === "category-delete") {
+      const categoryId = readStringParam(params, "categoryId", {
+        required: true,
+      });
+      return await handleDiscordAction(
+        { action: "categoryDelete", categoryId },
+        cfg,
+      );
     }
 
     if (action === "voice-status") {

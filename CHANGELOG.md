@@ -11,6 +11,7 @@
 - Docs: add gog calendar event color IDs from `gog calendar colors`. (#715) — thanks @mjrussell.
 - Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.
 - Skills: bundle `skill-creator` to guide creating and packaging skills.
+- Discord: expose channel/category management actions in the message tool. (#730) — thanks @NicholasSpisak
 
 ### Fixes
 - Doctor: surface plugin diagnostics in the report.
