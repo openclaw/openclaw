@@ -825,6 +825,8 @@ export function resolvePreferredProviderForAuthChoice(
       return "openrouter";
     case "gemini-api-key":
       return "google";
+    case "zai-api-key":
+      return "zai";
     case "antigravity":
       return "google-antigravity";
     case "minimax-cloud":

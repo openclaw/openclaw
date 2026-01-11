@@ -56,4 +56,16 @@ describe("buildAuthChoiceOptions", () => {
     const claudeCli = options.find((opt) => opt.value === "claude-cli");
     expect(claudeCli?.hint).toContain("token ok");
   });
+
+  it("includes Z.AI (GLM) auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: true,
+      platform: "darwin",
+    });
+
+    expect(options.some((opt) => opt.value === "zai-api-key")).toBe(true);
+  });
 });
