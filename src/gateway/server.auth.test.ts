@@ -125,4 +125,47 @@ describe("gateway server auth/connect", () => {
     await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     await server.close();
   });
+
+  test("invalid connect params surface in response and close reason", async () => {
+    const { server, ws } = await startServerWithClient();
+    await new Promise<void>((resolve) => ws.once("open", resolve));
+
+    ws.send(
+      JSON.stringify({
+        type: "req",
+        id: "h-bad",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "bad-client",
+            version: "dev",
+            platform: "web",
+            mode: "webchat",
+          },
+        },
+      }),
+    );
+
+    const res = await onceMessage<{
+      ok: boolean;
+      error?: { message?: string };
+    }>(
+      ws,
+      (o) => (o as { type?: string }).type === "res" && (o as { id?: string }).id === "h-bad",
+    );
+    expect(res.ok).toBe(false);
+    expect(String(res.error?.message ?? "")).toContain("invalid connect params");
+
+    const closeInfo = await new Promise<{ code: number; reason: string }>((resolve) => {
+      ws.once("close", (code, reason) =>
+        resolve({ code, reason: reason.toString() }),
+      );
+    });
+    expect(closeInfo.code).toBe(1008);
+    expect(closeInfo.reason).toContain("invalid connect params");
+
+    await server.close();
+  });
 });
