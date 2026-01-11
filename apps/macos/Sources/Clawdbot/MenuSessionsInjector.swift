@@ -111,6 +111,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         guard let insertIndex = self.findInsertIndex(in: menu) else { return }
         let width = self.initialWidth(for: menu)
         let isConnected = self.isControlChannelConnected
+        let channelState = ControlChannel.shared.state
 
         var cursor = insertIndex
         var headerView: NSView?
@@ -133,7 +134,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: rows.count,
-                    statusText: isConnected ? nil : "Gateway disconnected")),
+                    statusText: isConnected ? nil : self.controlChannelStatusText(for: channelState))),
                 width: width,
                 highlighted: false)
             headerItem.view = hosted
@@ -166,7 +167,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             headerItem.isEnabled = false
             let statusText = isConnected
                 ? (self.cachedErrorText ?? "Loading sessions…")
-                : "Gateway disconnected"
+                : self.controlChannelStatusText(for: channelState)
             let hosted = self.makeHostedView(
                 rootView: AnyView(MenuSessionsHeaderView(
                     count: 0,
@@ -216,6 +217,14 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             let gatewayItem = self.makeNodeItem(entry: gatewayEntry, width: width)
             menu.insertItem(gatewayItem, at: cursor)
             cursor += 1
+        }
+
+        if case .connecting = ControlChannel.shared.state {
+            menu.insertItem(
+                self.makeMessageItem(text: "Connecting…", symbolName: "circle.dashed", width: width),
+                at: cursor)
+            cursor += 1
+            return
         }
 
         guard self.isControlChannelConnected else { return }
@@ -383,6 +392,19 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         return false
     }
 
+    private func controlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
+        switch state {
+        case .connected:
+            return "Loading sessions…"
+        case .connecting:
+            return "Connecting…"
+        case let .degraded(message):
+            return message.nonEmpty ?? "Gateway disconnected"
+        case .disconnected:
+            return "Gateway disconnected"
+        }
+    }
+
     private func gatewayEntry() -> NodeInfo? {
         let mode = AppStateStore.shared.connectionMode
         let isConnected = self.isControlChannelConnected
@@ -471,6 +493,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                     .truncationMode(.tail)
                     .fixedSize(horizontal: false, vertical: true)
                     .layoutPriority(1)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
                 Spacer(minLength: 0)
             }

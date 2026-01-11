@@ -3,6 +3,7 @@ import OSLog
 
 enum GatewayEndpointState: Sendable, Equatable {
     case ready(mode: AppState.ConnectionMode, url: URL, token: String?, password: String?)
+    case connecting(mode: AppState.ConnectionMode, detail: String)
     case unavailable(mode: AppState.ConnectionMode, reason: String)
 }
 
@@ -14,6 +15,7 @@ enum GatewayEndpointState: Sendable, Equatable {
 actor GatewayEndpointStore {
     static let shared = GatewayEndpointStore()
     private static let supportedBindModes: Set<String> = ["loopback", "tailnet", "lan", "auto"]
+    private static let remoteConnectingDetail = "Connecting to remote gateway…"
 
     struct Deps: Sendable {
         let mode: @Sendable () async -> AppState.ConnectionMode
@@ -128,6 +130,7 @@ actor GatewayEndpointStore {
 
     private var state: GatewayEndpointState
     private var subscribers: [UUID: AsyncStream<GatewayEndpointState>.Continuation] = [:]
+    private var remoteEnsure: (token: UUID, task: Task<UInt16, Error>)?
 
     init(deps: Deps = .live) {
         self.deps = deps
@@ -155,7 +158,8 @@ actor GatewayEndpointStore {
                 token: token,
                 password: password)
         case .remote:
-            self.state = .unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel")
+            self.state = .connecting(mode: .remote, detail: Self.remoteConnectingDetail)
+            Task { await self.setMode(.remote) }
         case .unconfigured:
             self.state = .unavailable(mode: .unconfigured, reason: "Gateway not configured")
         }
@@ -184,6 +188,7 @@ actor GatewayEndpointStore {
         let password = self.deps.password()
         switch mode {
         case .local:
+            self.cancelRemoteEnsure()
             let port = self.deps.localPort()
             let host = await self.deps.localHost()
             self.setState(.ready(
@@ -194,15 +199,18 @@ actor GatewayEndpointStore {
         case .remote:
             let port = await self.deps.remotePortIfRunning()
             guard let port else {
-                self.setState(.unavailable(mode: .remote, reason: "Remote mode enabled but no active control tunnel"))
+                self.setState(.connecting(mode: .remote, detail: Self.remoteConnectingDetail))
+                self.kickRemoteEnsureIfNeeded(detail: Self.remoteConnectingDetail)
                 return
             }
+            self.cancelRemoteEnsure()
             self.setState(.ready(
                 mode: .remote,
                 url: URL(string: "ws://127.0.0.1:\(Int(port))")!,
                 token: token,
                 password: password))
         case .unconfigured:
+            self.cancelRemoteEnsure()
             self.setState(.unavailable(mode: .unconfigured, reason: "Gateway not configured"))
         }
     }
@@ -216,8 +224,10 @@ actor GatewayEndpointStore {
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
         }
-        let port = try await self.deps.ensureRemoteTunnel()
-        await self.setMode(.remote)
+        let config = try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
+        guard let portInt = config.0.port, let port = UInt16(exactly: portInt) else {
+            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing tunnel port"])
+        }
         return port
     }
 
@@ -226,6 +236,11 @@ actor GatewayEndpointStore {
         switch self.state {
         case let .ready(_, url, token, password):
             return (url, token, password)
+        case let .connecting(mode, _):
+            guard mode == .remote else {
+                throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
+            }
+            return try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
         case let .unavailable(mode, reason):
             guard mode == .remote else {
                 throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: reason])
@@ -233,21 +248,73 @@ actor GatewayEndpointStore {
 
             // Auto-recover for remote mode: if the SSH control tunnel died (or hasn't been created yet),
             // recreate it on demand so callers can recover without a manual reconnect.
-            do {
-                self.logger.info(
-                    "endpoint unavailable; ensuring remote control tunnel reason=\(reason, privacy: .public)")
-                let forwarded = try await self.deps.ensureRemoteTunnel()
-                let token = self.deps.token()
-                let password = self.deps.password()
-                let url = URL(string: "ws://127.0.0.1:\(Int(forwarded))")!
-                self.setState(.ready(mode: .remote, url: url, token: token, password: password))
-                return (url, token, password)
-            } catch {
-                let msg = "\(reason) (\(error.localizedDescription))"
-                self.setState(.unavailable(mode: .remote, reason: msg))
-                self.logger.error("remote control tunnel ensure failed \(msg, privacy: .public)")
-                throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
+            self.logger.info(
+                "endpoint unavailable; ensuring remote control tunnel reason=\(reason, privacy: .public)")
+            return try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
+        }
+    }
+
+    private func cancelRemoteEnsure() {
+        self.remoteEnsure?.task.cancel()
+        self.remoteEnsure = nil
+    }
+
+    private func kickRemoteEnsureIfNeeded(detail: String) {
+        if self.remoteEnsure != nil {
+            self.setState(.connecting(mode: .remote, detail: detail))
+            return
+        }
+
+        let deps = self.deps
+        let token = UUID()
+        let task = Task.detached(priority: .utility) { try await deps.ensureRemoteTunnel() }
+        self.remoteEnsure = (token: token, task: task)
+        self.setState(.connecting(mode: .remote, detail: detail))
+    }
+
+    private func ensureRemoteConfig(detail: String) async throws -> GatewayConnection.Config {
+        let mode = await self.deps.mode()
+        guard mode == .remote else {
+            throw NSError(
+                domain: "RemoteTunnel",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+        }
+
+        self.kickRemoteEnsureIfNeeded(detail: detail)
+        guard let ensure = self.remoteEnsure else {
+            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Connecting…"])
+        }
+
+        do {
+            let forwarded = try await ensure.task.value
+            let stillRemote = await self.deps.mode() == .remote
+            guard stillRemote else {
+                throw NSError(domain: "RemoteTunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
             }
+
+            if self.remoteEnsure?.token == ensure.token {
+                self.remoteEnsure = nil
+            }
+
+            let token = self.deps.token()
+            let password = self.deps.password()
+            let url = URL(string: "ws://127.0.0.1:\(Int(forwarded))")!
+            self.setState(.ready(mode: .remote, url: url, token: token, password: password))
+            return (url, token, password)
+        } catch let err as CancellationError {
+            if self.remoteEnsure?.token == ensure.token {
+                self.remoteEnsure = nil
+            }
+            throw err
+        } catch {
+            if self.remoteEnsure?.token == ensure.token {
+                self.remoteEnsure = nil
+            }
+            let msg = "Remote control tunnel failed (\(error.localizedDescription))"
+            self.setState(.unavailable(mode: .remote, reason: msg))
+            self.logger.error("remote control tunnel ensure failed \(msg, privacy: .public)")
+            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: msg])
         }
     }
 
@@ -268,6 +335,11 @@ actor GatewayEndpointStore {
             self.logger
                 .debug(
                     "resolved endpoint mode=\(modeDesc, privacy: .public) url=\(urlDesc, privacy: .public)")
+        case let .connecting(mode, detail):
+            let modeDesc = String(describing: mode)
+            self.logger
+                .debug(
+                    "endpoint connecting mode=\(modeDesc, privacy: .public) detail=\(detail, privacy: .public)")
         case let .unavailable(mode, reason):
             let modeDesc = String(describing: mode)
             self.logger
