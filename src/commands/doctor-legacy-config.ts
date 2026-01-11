@@ -251,6 +251,39 @@ export function normalizeLegacyConfigValues(cfg: ClawdbotConfig): {
     }
   }
 
+  const legacyAckReaction = cfg.messages?.ackReaction?.trim();
+  if (legacyAckReaction) {
+    const hasWhatsAppAck = cfg.whatsapp?.ackReaction !== undefined;
+    if (!hasWhatsAppAck) {
+      const legacyScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+      let direct = true;
+      let group: "always" | "mentions" | "never" = "mentions";
+      if (legacyScope === "all") {
+        direct = true;
+        group = "always";
+      } else if (legacyScope === "direct") {
+        direct = true;
+        group = "never";
+      } else if (legacyScope === "group-all") {
+        direct = false;
+        group = "always";
+      } else if (legacyScope === "group-mentions") {
+        direct = false;
+        group = "mentions";
+      }
+      next = {
+        ...next,
+        whatsapp: {
+          ...next.whatsapp,
+          ackReaction: { emoji: legacyAckReaction, direct, group },
+        },
+      };
+      changes.push(
+        `Copied messages.ackReaction → whatsapp.ackReaction (scope: ${legacyScope}).`,
+      );
+    }
+  }
+
   return { config: next, changes };
 }
 

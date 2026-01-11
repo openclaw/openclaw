@@ -6,6 +6,7 @@
 - Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists.
 - Telegram/Onboarding: allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
 - Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
+- WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
 
 ## 2026.1.11-6
 
