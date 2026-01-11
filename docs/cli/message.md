@@ -24,7 +24,8 @@ Provider selection:
 Target formats (`--to`):
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
-- Discord/Slack: `channel:<id>` or `user:<id>` (raw `channelId` is also accepted)
+- Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are rejected)
+- Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
 - iMessage: handle or `chat_id:<id>`
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
@@ -53,7 +54,7 @@ Target formats (`--to`):
   - Providers: WhatsApp/Discord/MS Teams
   - Required: `--to`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`, `--poll-duration-hours`, `--message`
-  - Discord only: `--poll-duration-hours`
+  - Discord only: `--poll-duration-hours`, `--message`
 
 - `react`
   - Providers: Discord/Slack/WhatsApp
