@@ -112,6 +112,19 @@ public final class GatewayDiscoveryModel {
         self.scheduleWideAreaFallback()
     }
 
+    public func refreshWideAreaFallbackNow(timeoutSeconds: TimeInterval = 5.0) {
+        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        Task.detached(priority: .utility) { [weak self] in
+            guard let self else { return }
+            let beacons = WideAreaGatewayDiscovery.discover(timeoutSeconds: timeoutSeconds)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
+                self.recomputeGateways()
+            }
+        }
+    }
+
     public func stop() {
         for browser in self.browsers.values {
             browser.cancel()
@@ -128,6 +141,28 @@ public final class GatewayDiscoveryModel {
         self.wideAreaFallbackGateways = []
         self.gateways = []
         self.statusText = "Stopped"
+    }
+
+    private func mapWideAreaBeacons(_ beacons: [WideAreaGatewayBeacon], domain: String) -> [DiscoveredGateway] {
+        beacons.map { beacon in
+            let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
+            let isLocal = Self.isLocalGateway(
+                lanHost: beacon.lanHost,
+                tailnetDns: beacon.tailnetDns,
+                displayName: beacon.displayName,
+                serviceName: beacon.instanceName,
+                local: self.localIdentity)
+            return DiscoveredGateway(
+                displayName: beacon.displayName,
+                lanHost: beacon.lanHost,
+                tailnetDns: beacon.tailnetDns,
+                sshPort: beacon.sshPort ?? 22,
+                gatewayPort: beacon.gatewayPort,
+                cliPath: beacon.cliPath,
+                stableID: stableID,
+                debugID: "\(beacon.instanceName)@\(beacon.host):\(beacon.port)",
+                isLocal: isLocal)
+        }
     }
 
     private func recomputeGateways() {
@@ -231,25 +266,7 @@ public final class GatewayDiscoveryModel {
                 if !beacons.isEmpty {
                     await MainActor.run { [weak self] in
                         guard let self else { return }
-                        self.wideAreaFallbackGateways = beacons.map { beacon in
-                            let stableID = "wide-area|\(domain)|\(beacon.instanceName)"
-                            let isLocal = Self.isLocalGateway(
-                                lanHost: beacon.lanHost,
-                                tailnetDns: beacon.tailnetDns,
-                                displayName: beacon.displayName,
-                                serviceName: beacon.instanceName,
-                                local: self.localIdentity)
-                            return DiscoveredGateway(
-                                displayName: beacon.displayName,
-                                lanHost: beacon.lanHost,
-                                tailnetDns: beacon.tailnetDns,
-                                sshPort: beacon.sshPort ?? 22,
-                                gatewayPort: beacon.gatewayPort,
-                                cliPath: beacon.cliPath,
-                                stableID: stableID,
-                                debugID: "\(beacon.instanceName)@\(beacon.host):\(beacon.port)",
-                                isLocal: isLocal)
-                        }
+                        self.wideAreaFallbackGateways = self.mapWideAreaBeacons(beacons, domain: domain)
                         self.recomputeGateways()
                     }
                     return

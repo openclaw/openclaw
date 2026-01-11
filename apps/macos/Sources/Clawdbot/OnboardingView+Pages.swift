@@ -116,6 +116,11 @@ extension OnboardingView {
                             .foregroundStyle(.secondary)
                         if self.gatewayDiscovery.gateways.isEmpty {
                             ProgressView().controlSize(.small)
+                            Button("Refresh") {
+                                self.gatewayDiscovery.refreshWideAreaFallbackNow(timeoutSeconds: 5.0)
+                            }
+                            .buttonStyle(.link)
+                            .help("Retry Tailscale discovery (DNS-SD).")
                         }
                         Spacer(minLength: 0)
                     }
