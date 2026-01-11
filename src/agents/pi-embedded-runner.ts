@@ -236,6 +236,21 @@ function buildContextPruningExtension(params: {
   };
 }
 
+function buildEmbeddedExtensionPaths(params: {
+  cfg: ClawdbotConfig | undefined;
+  sessionManager: SessionManager;
+  provider: string;
+  modelId: string;
+  model: Model<Api> | undefined;
+}): string[] {
+  const paths = [resolvePiExtensionPath("transcript-sanitize")];
+  const pruning = buildContextPruningExtension(params);
+  if (pruning.additionalExtensionPaths) {
+    paths.push(...pruning.additionalExtensionPaths);
+  }
+  return paths;
+}
+
 export type EmbeddedPiAgentMeta = {
   sessionId: string;
   provider: string;
@@ -966,14 +981,13 @@ export async function compactEmbeddedPiSession(params: {
             effectiveWorkspace,
             agentDir,
           );
-          const pruning = buildContextPruningExtension({
+          const additionalExtensionPaths = buildEmbeddedExtensionPaths({
             cfg: params.config,
             sessionManager,
             provider,
             modelId,
             model,
           });
-          const additionalExtensionPaths = pruning.additionalExtensionPaths;
 
           const { builtInTools, customTools } = splitSdkTools({
             tools,
@@ -1355,14 +1369,13 @@ export async function runEmbeddedPiAgent(params: {
             effectiveWorkspace,
             agentDir,
           );
-          const pruning = buildContextPruningExtension({
+          const additionalExtensionPaths = buildEmbeddedExtensionPaths({
             cfg: params.config,
             sessionManager,
             provider,
             modelId,
             model,
           });
-          const additionalExtensionPaths = pruning.additionalExtensionPaths;
 
           const { builtInTools, customTools } = splitSdkTools({
             tools,
