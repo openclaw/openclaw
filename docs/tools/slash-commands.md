@@ -40,6 +40,7 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 Text + native (when enabled):
 - `/help`
 - `/commands`
+- `/whoami` (alias: `/id`)
 - `/status`
 - `/status` (show current status; includes a short usage line when available)
 - `/usage` (alias: `/status`)
