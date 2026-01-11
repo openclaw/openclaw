@@ -173,7 +173,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
-  const showProgress = !opts.json && process.stderr.isTTY;
+  const showProgress = !opts.json && process.stdout.isTTY;
 
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating Clawdbot..."));
