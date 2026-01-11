@@ -796,17 +796,20 @@ export async function statusCommand(
       columns: [
         { key: "Provider", header: "Provider", minWidth: 10 },
         { key: "Enabled", header: "Enabled", minWidth: 7 },
-        { key: "Configured", header: "Configured", minWidth: 10 },
+        { key: "State", header: "State", minWidth: 8 },
         { key: "Detail", header: "Detail", flex: true, minWidth: 24 },
       ],
       rows: providers.rows.map((row) => ({
         Provider: row.provider,
         Enabled: row.enabled ? ok("ON") : muted("OFF"),
-        Configured: row.configured
-          ? ok("OK")
-          : row.enabled
-            ? warn("WARN")
-            : muted("OFF"),
+        State:
+          row.state === "ok"
+            ? ok("OK")
+            : row.state === "warn"
+              ? warn("WARN")
+              : row.state === "off"
+                ? muted("OFF")
+                : theme.accentDim("SETUP"),
         Detail: row.detail,
       })),
     }).trimEnd(),

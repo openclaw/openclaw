@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.10-2
+
+### Fixes
+- CLI/Status: provider table uses `SETUP` for missing credentials (not `WARN`); richer per-provider detail (token sources, missing keys).
+
 ## 2026.1.10-1
 
 ### Fixes
