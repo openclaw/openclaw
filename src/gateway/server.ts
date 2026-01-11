@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { randomUUID } from "node:crypto";
 import type { Server as HttpServer } from "node:http";
 import os from "node:os";
@@ -379,6 +380,18 @@ let healthVersion = 1;
 let healthCache: HealthSummary | null = null;
 let healthRefresh: Promise<HealthSummary> | null = null;
 let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
+
+const CLOSE_REASON_MAX_BYTES = 120;
+
+function truncateCloseReason(
+  reason: string,
+  maxBytes = CLOSE_REASON_MAX_BYTES,
+): string {
+  if (!reason) return "invalid handshake";
+  const buf = Buffer.from(reason);
+  if (buf.length <= maxBytes) return reason;
+  return buf.subarray(0, maxBytes).toString();
+}
 
 function buildSnapshot(): Snapshot {
   const presence = listSystemPresence();
@@ -1461,6 +1474,11 @@ export async function startGatewayServer(
             (parsed as RequestFrame).method !== "connect" ||
             !validateConnectParams((parsed as RequestFrame).params)
           ) {
+            const handshakeError = validateRequestFrame(parsed)
+              ? (parsed as RequestFrame).method === "connect"
+                ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
+                : "invalid handshake: first request must be connect"
+              : "invalid request frame";
             if (validateRequestFrame(parsed)) {
               const req = parsed as RequestFrame;
               send({
@@ -1469,9 +1487,7 @@ export async function startGatewayServer(
                 ok: false,
                 error: errorShape(
                   ErrorCodes.INVALID_REQUEST,
-                  req.method === "connect"
-                    ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
-                    : "invalid handshake: first request must be connect",
+                  handshakeError,
                 ),
               });
             } else {
@@ -1480,18 +1496,16 @@ export async function startGatewayServer(
               );
             }
             handshakeState = "failed";
-            const handshakeError = validateRequestFrame(parsed)
-              ? (parsed as RequestFrame).method === "connect"
-                ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
-                : "invalid handshake: first request must be connect"
-              : "invalid request frame";
             setCloseCause("invalid-handshake", {
               frameType,
               frameMethod,
               frameId,
               handshakeError,
             });
-            socket.close(1008, "invalid handshake");
+            const closeReason = truncateCloseReason(
+              handshakeError || "invalid handshake",
+            );
+            socket.close(1008, closeReason);
             close();
             return;
           }
