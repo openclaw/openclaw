@@ -9,6 +9,7 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
+  resolveAuthProfileOrder,
   upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -371,16 +372,65 @@ export async function applyAuthChoice(params: {
       "OpenAI API key",
     );
   } else if (params.authChoice === "openrouter-api-key") {
-    const key = await params.prompter.text({
-      message: "Enter OpenRouter API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
+    const store = ensureAuthProfileStore(params.agentDir, {
+      allowKeychainPrompt: false,
     });
-    await setOpenrouterApiKey(String(key).trim(), params.agentDir);
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "openrouter:default",
+    const profileOrder = resolveAuthProfileOrder({
+      cfg: nextConfig,
+      store,
       provider: "openrouter",
-      mode: "api_key",
     });
+    const existingProfileId = profileOrder.find((profileId) =>
+      Boolean(store.profiles[profileId]),
+    );
+    const existingCred = existingProfileId
+      ? store.profiles[existingProfileId]
+      : undefined;
+    let profileId = "openrouter:default";
+    let mode: "api_key" | "oauth" | "token" = "api_key";
+    let hasCredential = false;
+
+    if (existingProfileId && existingCred?.type) {
+      profileId = existingProfileId;
+      mode =
+        existingCred.type === "oauth"
+          ? "oauth"
+          : existingCred.type === "token"
+            ? "token"
+            : "api_key";
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      const envKey = resolveEnvApiKey("openrouter");
+      if (envKey) {
+        const useExisting = await params.prompter.confirm({
+          message: `Use existing OPENROUTER_API_KEY (${envKey.source})?`,
+          initialValue: true,
+        });
+        if (useExisting) {
+          await setOpenrouterApiKey(envKey.apiKey, params.agentDir);
+          hasCredential = true;
+        }
+      }
+    }
+
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter OpenRouter API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setOpenrouterApiKey(String(key).trim(), params.agentDir);
+      hasCredential = true;
+    }
+
+    if (hasCredential) {
+      nextConfig = applyAuthProfileConfig(nextConfig, {
+        profileId,
+        provider: "openrouter",
+        mode,
+      });
+    }
     if (params.setDefaultModel) {
       nextConfig = applyOpenrouterConfig(nextConfig);
       await params.prompter.note(

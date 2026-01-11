@@ -9,8 +9,11 @@ import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  OPENROUTER_DEFAULT_MODEL_REF,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
 
@@ -290,6 +293,51 @@ describe("applyOpencodeZenConfig", () => {
 
   it("preserves existing model fallbacks", () => {
     const cfg = applyOpencodeZenConfig({
+      agents: {
+        defaults: {
+          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
+        },
+      },
+    });
+    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual([
+      "anthropic/claude-opus-4-5",
+    ]);
+  });
+});
+
+describe("applyOpenrouterProviderConfig", () => {
+  it("adds allowlist entry for the default model", () => {
+    const cfg = applyOpenrouterProviderConfig({});
+    const models = cfg.agents?.defaults?.models ?? {};
+    expect(Object.keys(models)).toContain(OPENROUTER_DEFAULT_MODEL_REF);
+  });
+
+  it("preserves existing alias for the default model", () => {
+    const cfg = applyOpenrouterProviderConfig({
+      agents: {
+        defaults: {
+          models: {
+            [OPENROUTER_DEFAULT_MODEL_REF]: { alias: "Router" },
+          },
+        },
+      },
+    });
+    expect(
+      cfg.agents?.defaults?.models?.[OPENROUTER_DEFAULT_MODEL_REF]?.alias,
+    ).toBe("Router");
+  });
+});
+
+describe("applyOpenrouterConfig", () => {
+  it("sets correct primary model", () => {
+    const cfg = applyOpenrouterConfig({});
+    expect(cfg.agents?.defaults?.model?.primary).toBe(
+      OPENROUTER_DEFAULT_MODEL_REF,
+    );
+  });
+
+  it("preserves existing model fallbacks", () => {
+    const cfg = applyOpenrouterConfig({
       agents: {
         defaults: {
           model: { fallbacks: ["anthropic/claude-opus-4-5"] },
