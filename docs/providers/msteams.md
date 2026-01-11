@@ -333,7 +333,7 @@ Key settings (see `/gateway/configuration` for shared provider patterns):
 
 ## Routing & Sessions
 - Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
-  - Direct messages: `agent:<agentId>:msteams:dm:<userId>` (shared main session).
+  - Direct messages share the main session (`agent:<agentId>:<mainKey>`).
   - Channel/group messages use conversation id:
     - `agent:<agentId>:msteams:channel:<conversationId>`
     - `agent:<agentId>:msteams:group:<conversationId>`

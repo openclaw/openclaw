@@ -32,7 +32,7 @@ Minimal config:
 ## What it is
 - Signal provider via `signal-cli` (not embedded libsignal).
 - Deterministic routing: replies always go back to Signal.
-- DMs share the agent's main session; groups are isolated (`signal:group:<groupId>`).
+- DMs share the agent's main session; groups are isolated (`agent:<agentId>:signal:group:<groupId>`).
 
 ## The number model (important)
 - The gateway connects to a **Signal device** (the `signal-cli` account).

@@ -15,8 +15,8 @@ Goal: small, hard-to-misuse tool set so agents can list sessions, fetch history,
 - `sessions_spawn`
 
 ## Key Model
-- Main direct chat bucket is always the literal key `"main"`.
-- Group chats use `<provider>:group:<id>` or `<provider>:channel:<id>`.
+- Main direct chat bucket is always the literal key `"main"` (resolved to the current agent’s main key).
+- Group chats use `agent:<agentId>:<provider>:group:<id>` or `agent:<agentId>:<provider>:channel:<id>` (pass the full key).
 - Cron jobs use `cron:<job.id>`.
 - Hooks use `hook:<uuid>` unless explicitly set.
 - Node bridge uses `node-<nodeId>` unless explicitly set.

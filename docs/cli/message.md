@@ -48,6 +48,7 @@ Target formats (`--to`):
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons-json` (requires `"inlineButtons"` in `telegram.capabilities` or `telegram.accounts.<id>.capabilities`)
   - Telegram only: `--thread-id` (forum topic id)
+  - Slack only: `--thread-id` (thread timestamp; `--reply-to` uses the same field)
   - WhatsApp only: `--gif-playback`
 
 - `poll`

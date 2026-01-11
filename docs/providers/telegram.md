@@ -30,7 +30,7 @@ Minimal config:
 ## What it is
 - A Telegram Bot API provider owned by the Gateway.
 - Deterministic routing: replies go back to Telegram; the model never chooses providers.
-- DMs share the agent's main session; groups stay isolated (`telegram:group:<chatId>`).
+- DMs share the agent's main session; groups stay isolated (`agent:<agentId>:telegram:group:<chatId>`).
 
 ## Setup (fast path)
 ### 1) Create a bot token (BotFather)

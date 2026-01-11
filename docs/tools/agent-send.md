@@ -13,14 +13,14 @@ runtime on the current machine.
 
 - Required: `--message <text>`
 - Session selection:
-  - `--to <E.164>` derives the session key (normal direct-chat routing), **or**
+  - `--to <dest>` derives the session key (use delivery-style targets; group/channel targets preserve isolation), **or**
   - `--session-id <id>` reuses an existing session by id
 - Runs the same embedded agent runtime as normal inbound replies.
 - Thinking/verbose flags persist into the session store.
 - Output:
   - default: prints reply text (plus `MEDIA:<url>` lines)
   - `--json`: prints structured payload + metadata
-- Optional delivery back to a provider with `--deliver` + `--provider`.
+- Optional delivery back to a provider with `--deliver` + `--provider` (target formats match `clawdbot message --to`).
 
 If the Gateway is unreachable, the CLI **falls back** to the embedded local run.
 
