@@ -3,6 +3,7 @@
 ## 2026.1.11 (Unreleased)
 
 ### Changes
+- Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
 - macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 - Docs: add gog calendar event color IDs from `gog calendar colors`. (#715) — thanks @mjrussell.
 - Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.
