@@ -5,6 +5,9 @@
 ### Changes
 - macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 
+### Fixes
+- CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
+
 ## 2026.1.10
 
 ### Highlights
