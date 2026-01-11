@@ -255,8 +255,8 @@ For fine-grained control, use these tags in agent responses:
 
 ## Sessions + routing
 - DMs share the `main` session (like WhatsApp/Telegram).
-- Channels map to `slack:channel:<channelId>` sessions.
-- Slash commands use `slack:slash:<userId>` sessions.
+- Channels map to `agent:<agentId>:slack:channel:<channelId>` sessions.
+- Slash commands use `agent:<agentId>:slack:slash:<userId>` sessions (prefix configurable via `slack.slashCommand.sessionPrefix`).
 - Native command registration is controlled by `commands.native`; text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
 - Full command list + config: [Slash commands](/tools/slash-commands)
 

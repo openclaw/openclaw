@@ -27,7 +27,7 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 ```
 
 - `commands.text` (default `true`) enables parsing `/...` in chat messages.
-  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage), text commands still work even if you set this to `false`.
+  - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/MS Teams), text commands still work even if you set this to `false`.
 - `commands.native` (default `false`) registers native commands on Discord/Slack/Telegram.
   - `false` clears previously registered commands on Discord/Telegram at startup.
   - Slack commands are managed in the Slack app and are not removed automatically.
@@ -109,6 +109,9 @@ Notes:
 ## Surface notes
 
 - **Text commands** run in the normal chat session (DMs share `main`, groups have their own session).
-- **Native commands** use isolated sessions: `discord:slash:<userId>`, `slack:slash:<userId>`, `telegram:slash:<userId>`.
+- **Native commands** use isolated sessions:
+  - Discord: `agent:<agentId>:discord:slash:<userId>`
+  - Slack: `agent:<agentId>:slack:slash:<userId>` (prefix configurable via `slack.slashCommand.sessionPrefix`)
+  - Telegram: `telegram:slash:<userId>` (targets the chat session via `CommandTargetSessionKey`)
 - **`/stop`** targets the active chat session so it can abort the current run.
 - **Slack:** `slack.slashCommand` is still supported for a single `/clawd`-style command. If you enable `commands.native`, you must create one Slack slash command per built-in command (same names as `/help`).
