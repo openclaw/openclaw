@@ -145,11 +145,11 @@ Notes:
 - Uses the image model directly (independent of the main chat model).
 
 ### `message`
-Send messages and provider actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage.
+Send messages and provider actions across Discord/Slack/Telegram/WhatsApp/Signal/iMessage/MS Teams.
 
 Core actions:
 - `send` (text + optional media)
-- `poll` (WhatsApp/Discord polls)
+- `poll` (WhatsApp/Discord/MS Teams polls)
 - `react` / `reactions` / `read` / `edit` / `delete`
 - `pin` / `unpin` / `list-pins`
 - `permissions`
@@ -166,7 +166,7 @@ Core actions:
 
 Notes:
 - `send` routes WhatsApp via the Gateway; other providers go direct.
-- `poll` uses the Gateway for WhatsApp and direct Discord API for Discord.
+- `poll` uses the Gateway for WhatsApp and MS Teams; Discord polls go direct.
 
 ### `cron`
 Manage Gateway cron jobs and wakeups.

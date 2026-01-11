@@ -1,3 +1,11 @@
+---
+summary: "Broadcast a WhatsApp message to multiple agents"
+read_when:
+  - Configuring broadcast groups
+  - Debugging multi-agent replies in WhatsApp
+status: experimental
+---
+
 # Broadcast Groups
 
 **Status:** Experimental  
@@ -5,7 +13,9 @@
 
 ## Overview
 
-Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group, DM, or channel - all using one phone number.
+Broadcast Groups enable multiple agents to process and respond to the same message simultaneously. This allows you to create specialized agent teams that work together in a single WhatsApp group or DM — all using one phone number.
+
+Current scope: **WhatsApp only** (web provider).
 
 Broadcast groups are evaluated after provider allowlists and group activation rules. In WhatsApp groups, this means broadcasts happen when Clawdbot would normally reply (for example: on mention, depending on your group settings).
 
@@ -54,7 +64,9 @@ Agents:
 
 ### Basic Setup
 
-Add a top-level `broadcast` section (next to `bindings`):
+Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer ids:
+- group chats: group JID (e.g. `120363403215116621@g.us`)
+- DMs: E.164 phone number (e.g. `+15551234567`)
 
 ```json
 {

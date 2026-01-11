@@ -107,22 +107,24 @@ clawdbot sandbox recreate --agent alfred
 
 ## Configuration
 
-Sandbox settings are in `clawdbot.config.json`:
+Sandbox settings live in `~/.clawdbot/clawdbot.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
 
 ```jsonc
 {
-  "agent": {
-    "sandbox": {
-      "mode": "all",                    // off, non-main, all
-      "scope": "agent",                 // session, agent, shared
-      "docker": {
-        "image": "clawdbot-sandbox:bookworm-slim",
-        "containerPrefix": "clawdbot-sbx-"
-        // ... more Docker options
-      },
-      "prune": {
-        "idleHours": 24,               // Auto-prune after 24h idle
-        "maxAgeDays": 7                // Auto-prune after 7 days
+  "agents": {
+    "defaults": {
+      "sandbox": {
+        "mode": "all",                    // off, non-main, all
+        "scope": "agent",                 // session, agent, shared
+        "docker": {
+          "image": "clawdbot-sandbox:bookworm-slim",
+          "containerPrefix": "clawdbot-sbx-"
+          // ... more Docker options
+        },
+        "prune": {
+          "idleHours": 24,               // Auto-prune after 24h idle
+          "maxAgeDays": 7                // Auto-prune after 7 days
+        }
       }
     }
   }

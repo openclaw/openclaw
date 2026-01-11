@@ -37,7 +37,7 @@ clawdbot agent --to +15555550123 --message "Summon reply" --deliver
 
 - `--local`: run locally (requires provider keys in your shell)
 - `--deliver`: send the reply to the chosen provider (requires `--to`)
-- `--provider`: `whatsapp|telegram|discord|slack|signal|imessage` (default: `whatsapp`)
+- `--provider`: `whatsapp|telegram|discord|slack|signal|imessage|msteams` (default: `whatsapp`)
 - `--thinking <off|minimal|low|medium|high>`: persist thinking level
 - `--verbose <on|off>`: persist verbose level
 - `--timeout <seconds>`: override agent timeout

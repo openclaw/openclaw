@@ -133,7 +133,7 @@ Live tests are split into two layers so we can isolate failures:
 - Optional tool-calling stress:
   - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “bash writes file → read reads it back → echo nonce” check.
   - This is specifically meant to catch tool-calling compatibility issues across providers (formatting, history replay, tool_result pairing, etc.).
-  - Optional image send smoke:
+- Optional image send smoke:
   - `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` sends a real image attachment through the gateway agent pipeline (multimodal message) and asserts the model can read back a per-run code from the image.
   - Flow (high level):
     - Test generates a tiny PNG with “CAT” + random code (`src/gateway/live-image-probe.ts`)
@@ -141,6 +141,13 @@ Live tests are split into two layers so we can isolate failures:
     - Gateway parses attachments into `images[]` (`src/gateway/server-methods/agent.ts` + `src/gateway/chat-attachments.ts`)
     - Embedded agent forwards a multimodal user message to the model
     - Assertion: reply contains `cat` + the code (OCR tolerance: minor mistakes allowed)
+
+Tip: to see what you can test on your machine (and the exact `provider/model` ids), run:
+
+```bash
+pnpm clawdbot models list
+pnpm clawdbot models list --json
+```
 
 ## Live: Anthropic setup-token smoke
 
@@ -225,7 +232,7 @@ This is the “common models” run we expect to keep working:
 - OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
 - OpenAI Codex: `openai-codex/gpt-5.2` (optional: `openai-codex/gpt-5.2-codex`)
 - Anthropic: `anthropic/claude-opus-4-5` (or `anthropic/claude-sonnet-4-5`)
-- Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview`
+- Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-5-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.1`

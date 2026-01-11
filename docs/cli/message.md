@@ -24,8 +24,8 @@ Provider selection:
 Target formats (`--to`):
 - WhatsApp: E.164 or group JID
 - Telegram: chat id or `@username`
-- Discord/Slack: `channel:<id>` or `user:<id>` (raw id is ambiguous for Discord)
-- Signal: E.164, `group:<id>`, or `signal:+E.164`
+- Discord/Slack: `channel:<id>` or `user:<id>` (raw `channelId` is also accepted)
+- Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
 - iMessage: handle or `chat_id:<id>`
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
@@ -42,61 +42,79 @@ Target formats (`--to`):
 ### Core
 
 - `send`
+  - Providers: WhatsApp/Telegram/Discord/Slack/Signal/iMessage/MS Teams
   - Required: `--to`, `--message`
   - Optional: `--media`, `--reply-to`, `--thread-id`, `--gif-playback`
   - Telegram only: `--buttons-json` (requires `"inlineButtons"` in `telegram.capabilities` or `telegram.accounts.<id>.capabilities`)
+  - Telegram only: `--thread-id` (forum topic id)
+  - WhatsApp only: `--gif-playback`
 
 - `poll`
+  - Providers: WhatsApp/Discord/MS Teams
   - Required: `--to`, `--poll-question`, `--poll-option` (repeat)
   - Optional: `--poll-multi`, `--poll-duration-hours`, `--message`
+  - Discord only: `--poll-duration-hours`
 
 - `react`
+  - Providers: Discord/Slack/WhatsApp
   - Required: `--to`, `--message-id`
   - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--channel-id`
+  - WhatsApp only: `--participant`, `--from-me`
 
 - `reactions`
+  - Providers: Discord/Slack
   - Required: `--to`, `--message-id`
   - Optional: `--limit`, `--channel-id`
 
 - `read`
+  - Providers: Discord/Slack
   - Required: `--to`
   - Optional: `--limit`, `--before`, `--after`, `--around`, `--channel-id`
 
 - `edit`
+  - Providers: Discord/Slack
   - Required: `--to`, `--message-id`, `--message`
   - Optional: `--channel-id`
 
 - `delete`
+  - Providers: Discord/Slack
   - Required: `--to`, `--message-id`
   - Optional: `--channel-id`
 
 - `pin` / `unpin`
+  - Providers: Discord/Slack
   - Required: `--to`, `--message-id`
   - Optional: `--channel-id`
 
 - `pins` (list)
+  - Providers: Discord/Slack
   - Required: `--to`
   - Optional: `--channel-id`
 
 - `permissions`
+  - Providers: Discord
   - Required: `--to`
   - Optional: `--channel-id`
 
 - `search`
+  - Providers: Discord
   - Required: `--guild-id`, `--query`
   - Optional: `--channel-id`, `--channel-ids` (repeat), `--author-id`, `--author-ids` (repeat), `--limit`
 
 ### Threads
 
 - `thread create`
+  - Providers: Discord
   - Required: `--thread-name`, `--to` (channel id) or `--channel-id`
   - Optional: `--message-id`, `--auto-archive-min`
 
 - `thread list`
+  - Providers: Discord
   - Required: `--guild-id`
   - Optional: `--channel-id`, `--include-archived`, `--before`, `--limit`
 
 - `thread reply`
+  - Providers: Discord
   - Required: `--to` (thread id), `--message`
   - Optional: `--media`, `--reply-to`
 
@@ -104,18 +122,22 @@ Target formats (`--to`):
 
 - `emoji list`
   - Discord: `--guild-id`
+  - Slack: no extra flags
 
 - `emoji upload`
+  - Providers: Discord
   - Required: `--guild-id`, `--emoji-name`, `--media`
   - Optional: `--role-ids` (repeat)
 
 ### Stickers
 
 - `sticker send`
+  - Providers: Discord
   - Required: `--to`, `--sticker-id` (repeat)
   - Optional: `--message`
 
 - `sticker upload`
+  - Providers: Discord
   - Required: `--guild-id`, `--sticker-name`, `--sticker-desc`, `--sticker-tags`, `--media`
 
 ### Roles / Channels / Members / Voice

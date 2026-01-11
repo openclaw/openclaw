@@ -39,6 +39,7 @@ Notes:
 - `--password <password>`: password override (also sets `CLAWDBOT_GATEWAY_PASSWORD` for the process).
 - `--tailscale <off|serve|funnel>`: expose the Gateway via Tailscale.
 - `--tailscale-reset-on-exit`: reset Tailscale serve/funnel config on shutdown.
+- `--allow-unconfigured`: allow gateway start without `gateway.mode=local` in config.
 - `--dev`: create a dev config + workspace if missing (skips BOOTSTRAP.md).
 - `--reset`: reset dev config + credentials + sessions + workspace (requires `--dev`).
 - `--force`: kill any existing listener on the selected port before starting.

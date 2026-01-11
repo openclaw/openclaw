@@ -48,6 +48,16 @@ function isGoogleModelNotFoundError(err: unknown): boolean {
   return false;
 }
 
+function isModelNotFoundErrorMessage(raw: string): boolean {
+  const msg = raw.trim();
+  if (!msg) return false;
+  if (/\b404\b/.test(msg) && /not[_-]?found/i.test(msg)) return true;
+  if (/not_found_error/i.test(msg)) return true;
+  if (/model:\s*[a-z0-9._-]+/i.test(msg) && /not[_-]?found/i.test(msg))
+    return true;
+  return false;
+}
+
 describeLive("live models (profile keys)", () => {
   it(
     "completes across configured models",
@@ -186,6 +196,15 @@ describeLive("live models (profile keys)", () => {
               maxTokens: 64,
             },
           );
+
+          if (res.stopReason === "error") {
+            const msg = res.errorMessage ?? "";
+            if (ALL_MODELS && isModelNotFoundErrorMessage(msg)) {
+              skipped.push({ model: id, reason: msg });
+              continue;
+            }
+            throw new Error(msg || "model returned error with no message");
+          }
 
           const text = res.content
             .filter((block) => block.type === "text")

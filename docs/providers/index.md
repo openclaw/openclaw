@@ -25,4 +25,6 @@ Text is supported everywhere; media and reactions vary by provider.
 - Providers can run simultaneously; configure multiple and Clawdbot will route per chat.
 - Group behavior varies by provider; see [Groups](/concepts/groups).
 - DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
+- Telegram internals: [grammY notes](/providers/grammy).
+- Troubleshooting: [Provider troubleshooting](/providers/troubleshooting).
 - Model providers are documented separately; see [Model Providers](/providers/models).
