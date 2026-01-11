@@ -68,7 +68,9 @@ function ensureListener() {
   onAgentEvent((evt) => {
     if (!evt || evt.stream !== "lifecycle") return;
     const entry = subagentRuns.get(evt.runId);
-    if (!entry) return;
+    if (!entry) {
+      return;
+    }
     const phase = evt.data?.phase;
     if (phase === "start") {
       const startedAt =
@@ -148,18 +150,23 @@ export function registerSubagentRun(params: {
   });
   ensureListener();
   if (archiveAfterMs) startSweeper();
-  void probeImmediateCompletion(params.runId);
+  // Wait for subagent completion via gateway RPC (cross-process).
+  // The in-process lifecycle listener is a fallback for embedded runs.
+  void waitForSubagentCompletion(params.runId);
 }
 
-async function probeImmediateCompletion(runId: string) {
+// Default wait timeout: 10 minutes. This covers most subagent runs.
+const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
+
+async function waitForSubagentCompletion(runId: string) {
   try {
     const wait = (await callGateway({
       method: "agent.wait",
       params: {
         runId,
-        timeoutMs: 0,
+        timeoutMs: DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS,
       },
-      timeoutMs: 2000,
+      timeoutMs: DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS + 10_000,
     })) as { status?: string; startedAt?: number; endedAt?: number };
     if (wait?.status !== "ok" && wait?.status !== "error") return;
     const entry = subagentRuns.get(runId);
