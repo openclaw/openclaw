@@ -455,6 +455,7 @@ export async function runCliAgent(params: {
     backend,
     prompt: params.prompt,
   });
+  const stdinPayload = stdin ?? "";
   const args = buildCliArgs({
     backend,
     modelId: normalizedModel,
@@ -526,7 +527,7 @@ export async function runCliAgent(params: {
         timeoutMs: params.timeoutMs,
         cwd: workspaceDir,
         env,
-        ...(stdin ? { input: stdin } : {}),
+        input: stdinPayload,
       });
 
       const stdout = result.stdout.trim();

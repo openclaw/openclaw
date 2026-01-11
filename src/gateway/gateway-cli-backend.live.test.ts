@@ -21,7 +21,7 @@ const DEFAULT_ARGS = [
   "json",
   "--dangerously-skip-permissions",
 ];
-const DEFAULT_CLEAR_ENV: string[] = [];
+const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
 
 function extractPayloadText(result: unknown): string {
   const record = result as Record<string, unknown>;
@@ -50,6 +50,20 @@ function parseJsonStringArray(
     throw new Error(`${name} must be a JSON array of strings.`);
   }
   return parsed;
+}
+
+function withMcpConfigOverrides(
+  args: string[],
+  mcpConfigPath: string,
+): string[] {
+  const next = [...args];
+  if (!next.includes("--strict-mcp-config")) {
+    next.push("--strict-mcp-config");
+  }
+  if (!next.includes("--mcp-config")) {
+    next.push("--mcp-config", mcpConfigPath);
+  }
+  return next;
 }
 
 async function getFreePort(): Promise<number> {
@@ -134,12 +148,16 @@ describeLive("gateway live (cli backend)", () => {
       skipGmail: process.env.CLAWDBOT_SKIP_GMAIL_WATCHER,
       skipCron: process.env.CLAWDBOT_SKIP_CRON,
       skipCanvas: process.env.CLAWDBOT_SKIP_CANVAS_HOST,
+      anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+      anthropicApiKeyOld: process.env.ANTHROPIC_API_KEY_OLD,
     };
 
     process.env.CLAWDBOT_SKIP_PROVIDERS = "1";
     process.env.CLAWDBOT_SKIP_GMAIL_WATCHER = "1";
     process.env.CLAWDBOT_SKIP_CRON = "1";
     process.env.CLAWDBOT_SKIP_CANVAS_HOST = "1";
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY_OLD;
 
     const token = `test-${randomUUID()}`;
     process.env.CLAWDBOT_GATEWAY_TOKEN = token;
@@ -156,7 +174,7 @@ describeLive("gateway live (cli backend)", () => {
 
     const cliCommand =
       process.env.CLAWDBOT_LIVE_CLI_BACKEND_COMMAND ?? "claude";
-    const cliArgs =
+    const baseCliArgs =
       parseJsonStringArray(
         "CLAWDBOT_LIVE_CLI_BACKEND_ARGS",
         process.env.CLAWDBOT_LIVE_CLI_BACKEND_ARGS,
@@ -166,6 +184,20 @@ describeLive("gateway live (cli backend)", () => {
         "CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV,
       ) ?? DEFAULT_CLEAR_ENV;
+
+    const tempDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-live-cli-"),
+    );
+    const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
+    await fs.writeFile(
+      mcpConfigPath,
+      `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`,
+    );
+    const disableMcpConfig =
+      process.env.CLAWDBOT_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
+    const cliArgs = disableMcpConfig
+      ? withMcpConfigOverrides(baseCliArgs, mcpConfigPath)
+      : baseCliArgs;
 
     const cfg = loadConfig();
     const existingBackends = cfg.agents?.defaults?.cliBackends ?? {};
@@ -185,16 +217,13 @@ describeLive("gateway live (cli backend)", () => {
               command: cliCommand,
               args: cliArgs,
               clearEnv: cliClearEnv,
+              systemPromptWhen: "never",
             },
           },
           sandbox: { mode: "off" },
         },
       },
     };
-
-    const tempDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-live-cli-"),
-    );
     const tempConfigPath = path.join(tempDir, "clawdbot.json");
     await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
     process.env.CLAWDBOT_CONFIG_PATH = tempConfigPath;
@@ -252,6 +281,12 @@ describeLive("gateway live (cli backend)", () => {
       if (previous.skipCanvas === undefined)
         delete process.env.CLAWDBOT_SKIP_CANVAS_HOST;
       else process.env.CLAWDBOT_SKIP_CANVAS_HOST = previous.skipCanvas;
+      if (previous.anthropicApiKey === undefined)
+        delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = previous.anthropicApiKey;
+      if (previous.anthropicApiKeyOld === undefined)
+        delete process.env.ANTHROPIC_API_KEY_OLD;
+      else process.env.ANTHROPIC_API_KEY_OLD = previous.anthropicApiKeyOld;
     }
   }, 60_000);
 });

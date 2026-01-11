@@ -177,7 +177,8 @@ CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFI
   - `CLAWDBOT_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-opus-4-5"`
   - `CLAWDBOT_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
   - `CLAWDBOT_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
-  - `CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY"]'`
+  - `CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
+  - `CLAWDBOT_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude CLI MCP config enabled (default disables MCP config with a temporary empty file).
 
 Example:
 
