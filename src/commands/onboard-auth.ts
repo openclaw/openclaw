@@ -131,6 +131,7 @@ export async function setMinimaxApiKey(key: string, agentDir?: string) {
 }
 
 export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
+export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
   // Write to the multi-agent path so gateway finds credentials on startup
@@ -139,6 +140,18 @@ export async function setZaiApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "zai",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
+export async function setOpenrouterApiKey(key: string, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "openrouter:default",
+    credential: {
+      type: "api_key",
+      provider: "openrouter",
       key,
     },
     agentDir: agentDir ?? resolveDefaultAgentDir(),
@@ -169,6 +182,50 @@ export function applyZaiConfig(cfg: ClawdbotConfig): ClawdbotConfig {
               }
             : undefined),
           primary: ZAI_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyOpenrouterProviderConfig(
+  cfg: ClawdbotConfig,
+): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[OPENROUTER_DEFAULT_MODEL_REF] = {
+    ...models[OPENROUTER_DEFAULT_MODEL_REF],
+    alias: models[OPENROUTER_DEFAULT_MODEL_REF]?.alias ?? "OpenRouter",
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+  };
+}
+
+export function applyOpenrouterConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyOpenrouterProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel &&
+          "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+              }
+            : undefined),
+          primary: OPENROUTER_DEFAULT_MODEL_REF,
         },
       },
     },

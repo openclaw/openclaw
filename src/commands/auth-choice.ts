@@ -42,13 +42,17 @@ import {
   applyMinimaxHostedConfig,
   applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyZaiConfig,
   MINIMAX_HOSTED_MODEL_REF,
+  OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
+  setOpenrouterApiKey,
   setOpencodeZenApiKey,
   setZaiApiKey,
   writeOAuthCredentials,
@@ -366,6 +370,28 @@ export async function applyAuthChoice(params: {
       `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
       "OpenAI API key",
     );
+  } else if (params.authChoice === "openrouter-api-key") {
+    const key = await params.prompter.text({
+      message: "Enter OpenRouter API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setOpenrouterApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openrouter:default",
+      provider: "openrouter",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyOpenrouterConfig(nextConfig);
+      await params.prompter.note(
+        `Default model set to ${OPENROUTER_DEFAULT_MODEL_REF}`,
+        "Model configured",
+      );
+    } else {
+      nextConfig = applyOpenrouterProviderConfig(nextConfig);
+      agentModelOverride = OPENROUTER_DEFAULT_MODEL_REF;
+      await noteAgentModel(OPENROUTER_DEFAULT_MODEL_REF);
+    }
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(
@@ -745,6 +771,8 @@ export function resolvePreferredProviderForAuthChoice(
       return "openai-codex";
     case "openai-api-key":
       return "openai";
+    case "openrouter-api-key":
+      return "openrouter";
     case "gemini-api-key":
       return "google";
     case "antigravity":

@@ -10,6 +10,7 @@ export type AuthChoice =
   | "token"
   | "openai-codex"
   | "openai-api-key"
+  | "openrouter-api-key"
   | "codex-cli"
   | "antigravity"
   | "apiKey"
@@ -43,6 +44,7 @@ export type OnboardOptions = {
   tokenExpiresIn?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  openrouterApiKey?: string;
   geminiApiKey?: string;
   zaiApiKey?: string;
   minimaxApiKey?: string;
