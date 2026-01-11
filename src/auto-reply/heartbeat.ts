@@ -59,7 +59,7 @@ export function stripHeartbeatToken(
       : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
-    Number.isFinite(parsedAckChars)
+    typeof parsedAckChars === "number" && Number.isFinite(parsedAckChars)
       ? parsedAckChars
       : DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
