@@ -123,10 +123,6 @@ struct LowCoverageHelperTests {
                 #expect(
                     GatewayLaunchAgentManager._testEscapePlistValue("a&b<c>\"'") ==
                         "a&amp;b&lt;c&gt;&quot;&apos;")
-
-                #expect(GatewayLaunchAgentManager
-                    ._testGatewayExecutablePath(bundlePath: "/App") == "/App/Contents/Resources/Relay/clawdbot")
-                #expect(GatewayLaunchAgentManager._testRelayDir(bundlePath: "/App") == "/App/Contents/Resources/Relay")
             }
     }
 

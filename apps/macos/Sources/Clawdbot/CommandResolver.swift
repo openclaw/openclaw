@@ -84,10 +84,28 @@ enum CommandResolver {
             "/bin",
         ]
         extras.insert(projectRoot.appendingPathComponent("node_modules/.bin").path, at: 0)
-        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1)
+        let clawdbotPaths = self.clawdbotManagedPaths(home: home)
+        if !clawdbotPaths.isEmpty {
+            extras.insert(contentsOf: clawdbotPaths, at: 1)
+        }
+        extras.insert(contentsOf: self.nodeManagerBinPaths(home: home), at: 1 + clawdbotPaths.count)
         var seen = Set<String>()
         // Preserve order while stripping duplicates so PATH lookups remain deterministic.
         return (extras + current).filter { seen.insert($0).inserted }
+    }
+
+    private static func clawdbotManagedPaths(home: URL) -> [String] {
+        let base = home.appendingPathComponent(".clawdbot")
+        let bin = base.appendingPathComponent("bin")
+        let nodeBin = base.appendingPathComponent("tools/node/bin")
+        var paths: [String] = []
+        if FileManager.default.fileExists(atPath: bin.path) {
+            paths.append(bin.path)
+        }
+        if FileManager.default.fileExists(atPath: nodeBin.path) {
+            paths.append(nodeBin.path)
+        }
+        return paths
     }
 
     private static func nodeManagerBinPaths(home: URL) -> [String] {

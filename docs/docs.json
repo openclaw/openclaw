@@ -548,6 +548,10 @@
     {
       "source": "/oauth",
       "destination": "/concepts/oauth"
+    },
+    {
+      "source": "/plugins",
+      "destination": "/plugin"
     }
   ],
   "navigation": {
@@ -689,6 +693,7 @@
         "group": "Tools & Skills",
         "pages": [
           "tools",
+          "plugin",
           "tools/bash",
           "tools/elevated",
           "tools/browser",
@@ -757,6 +762,7 @@
         "pages": [
           "testing",
           "scripts",
+          "reference/session-management-compaction",
           "reference/rpc",
           "reference/device-models",
           "reference/test",

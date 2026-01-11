@@ -3,6 +3,10 @@ import type { Server as HttpServer } from "node:http";
 import os from "node:os";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   loadModelCatalog,
@@ -103,8 +107,22 @@ import {
   getResolvedLoggerSettings,
   runtimeForLogger,
 } from "../logging.js";
+import { loadClawdbotPlugins } from "../plugins/loader.js";
+import {
+  type PluginServicesHandle,
+  startPluginServices,
+} from "../plugins/services.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
-import { defaultRuntime } from "../runtime.js";
+import {
+  listProviderPlugins,
+  normalizeProviderId,
+  type ProviderId,
+} from "../providers/plugins/index.js";
+import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import {
+  isGatewayCliClient,
+  isWebchatClient,
+} from "../utils/message-provider.js";
 import { runOnboardingWizard } from "../wizard/onboarding.js";
 import type { WizardSession } from "../wizard/session.js";
 import {
@@ -168,7 +186,7 @@ import {
   createGatewayHttpServer,
   createHooksRequestHandler,
 } from "./server-http.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { coreGatewayHandlers, handleGatewayRequest } from "./server-methods.js";
 import { createProviderManager } from "./server-providers.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
@@ -189,21 +207,19 @@ const logCron = log.child("cron");
 const logReload = log.child("reload");
 const logHooks = log.child("hooks");
 const logWsControl = log.child("ws");
-const logWhatsApp = logProviders.child("whatsapp");
-const logTelegram = logProviders.child("telegram");
-const logDiscord = logProviders.child("discord");
-const logSlack = logProviders.child("slack");
-const logSignal = logProviders.child("signal");
-const logIMessage = logProviders.child("imessage");
-const logMSTeams = logProviders.child("msteams");
 const canvasRuntime = runtimeForLogger(logCanvas);
-const whatsappRuntimeEnv = runtimeForLogger(logWhatsApp);
-const telegramRuntimeEnv = runtimeForLogger(logTelegram);
-const discordRuntimeEnv = runtimeForLogger(logDiscord);
-const slackRuntimeEnv = runtimeForLogger(logSlack);
-const signalRuntimeEnv = runtimeForLogger(logSignal);
-const imessageRuntimeEnv = runtimeForLogger(logIMessage);
-const msteamsRuntimeEnv = runtimeForLogger(logMSTeams);
+const providerLogs = Object.fromEntries(
+  listProviderPlugins().map((plugin) => [
+    plugin.id,
+    logProviders.child(plugin.id),
+  ]),
+) as Record<ProviderId, ReturnType<typeof createSubsystemLogger>>;
+const providerRuntimeEnvs = Object.fromEntries(
+  Object.entries(providerLogs).map(([id, logger]) => [
+    id,
+    runtimeForLogger(logger),
+  ]),
+) as Record<ProviderId, RuntimeEnv>;
 
 type GatewayModelChoice = ModelCatalogEntry;
 
@@ -225,10 +241,11 @@ type Client = {
   presenceKey?: string;
 };
 
-const METHODS = [
+const BASE_METHODS = [
   "health",
   "logs.tail",
   "providers.status",
+  "providers.logout",
   "status",
   "usage.status",
   "config.get",
@@ -277,15 +294,17 @@ const METHODS = [
   "send",
   "agent",
   "agent.wait",
-  "web.login.start",
-  "web.login.wait",
-  "web.logout",
-  "telegram.logout",
   // WebChat WebSocket-native chat methods
   "chat.history",
   "chat.abort",
   "chat.send",
 ];
+
+const PROVIDER_METHODS = listProviderPlugins().flatMap(
+  (plugin) => plugin.gatewayMethods ?? [],
+);
+
+const METHODS = Array.from(new Set([...BASE_METHODS, ...PROVIDER_METHODS]));
 
 const EVENTS = [
   "agent",
@@ -377,10 +396,10 @@ function buildSnapshot(): Snapshot {
   };
 }
 
-async function refreshHealthSnapshot(_opts?: { probe?: boolean }) {
+async function refreshHealthSnapshot(opts?: { probe?: boolean }) {
   if (!healthRefresh) {
     healthRefresh = (async () => {
-      const snap = await getHealthSnapshot(undefined);
+      const snap = await getHealthSnapshot({ probe: opts?.probe });
       healthCache = snap;
       healthVersion += 1;
       if (broadcastHealthUpdate) {
@@ -428,6 +447,34 @@ export async function startGatewayServer(
 
   const cfgAtStart = loadConfig();
   await autoMigrateLegacyState({ cfg: cfgAtStart, log });
+  const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(
+    cfgAtStart,
+    defaultAgentId,
+  );
+  const pluginRegistry = loadClawdbotPlugins({
+    config: cfgAtStart,
+    workspaceDir: defaultWorkspaceDir,
+    logger: {
+      info: (msg) => log.info(msg),
+      warn: (msg) => log.warn(msg),
+      error: (msg) => log.error(msg),
+      debug: (msg) => log.debug(msg),
+    },
+    coreGatewayHandlers,
+  });
+  const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
+  const gatewayMethods = Array.from(new Set([...METHODS, ...pluginMethods]));
+  if (pluginRegistry.diagnostics.length > 0) {
+    for (const diag of pluginRegistry.diagnostics) {
+      if (diag.level === "error") {
+        log.warn(`[plugins] ${diag.message}`);
+      } else {
+        log.info(`[plugins] ${diag.message}`);
+      }
+    }
+  }
+  let pluginServices: PluginServicesHandle | null = null;
   const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
   const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
   if (!bindHost) {
@@ -782,39 +829,15 @@ export async function startGatewayServer(
 
   const providerManager = createProviderManager({
     loadConfig,
-    logWhatsApp,
-    logTelegram,
-    logDiscord,
-    logSlack,
-    logSignal,
-    logIMessage,
-    logMSTeams,
-    whatsappRuntimeEnv,
-    telegramRuntimeEnv,
-    discordRuntimeEnv,
-    slackRuntimeEnv,
-    signalRuntimeEnv,
-    imessageRuntimeEnv,
-    msteamsRuntimeEnv,
+    providerLogs,
+    providerRuntimeEnvs,
   });
   const {
     getRuntimeSnapshot,
     startProviders,
-    startWhatsAppProvider,
-    startTelegramProvider,
-    startDiscordProvider,
-    startSlackProvider,
-    startSignalProvider,
-    startIMessageProvider,
-    startMSTeamsProvider,
-    stopWhatsAppProvider,
-    stopTelegramProvider,
-    stopDiscordProvider,
-    stopSlackProvider,
-    stopSignalProvider,
-    stopIMessageProvider,
-    stopMSTeamsProvider,
-    markWhatsAppLoggedOut,
+    startProvider,
+    stopProvider,
+    markProviderLoggedOut,
   } = providerManager;
 
   const broadcast = (
@@ -1293,8 +1316,7 @@ export async function startGatewayServer(
     });
     logWs("in", "open", { connId, remoteAddr });
     const isWebchatConnect = (params: ConnectParams | null | undefined) =>
-      params?.client?.mode === "webchat" ||
-      params?.client?.name === "webchat-ui";
+      isWebchatClient(params?.client);
     let handshakeState: "pending" | "connected" | "failed" = "pending";
     let closeCause: string | undefined;
     let closeMeta: Record<string, unknown> = {};
@@ -1476,6 +1498,8 @@ export async function startGatewayServer(
 
           const frame = parsed as RequestFrame;
           const connectParams = frame.params as ConnectParams;
+          const clientLabel =
+            connectParams.client.displayName ?? connectParams.client.id;
 
           // protocol negotiation
           const { minProtocol, maxProtocol } = connectParams;
@@ -1485,13 +1509,14 @@ export async function startGatewayServer(
           ) {
             handshakeState = "failed";
             logWsControl.warn(
-              `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
+              `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
             setCloseCause("protocol-mismatch", {
               minProtocol,
               maxProtocol,
               expectedProtocol: PROTOCOL_VERSION,
-              client: connectParams.client.name,
+              client: connectParams.client.id,
+              clientDisplayName: connectParams.client.displayName,
               mode: connectParams.client.mode,
               version: connectParams.client.version,
             });
@@ -1520,7 +1545,7 @@ export async function startGatewayServer(
           if (!authResult.ok) {
             handshakeState = "failed";
             logWsControl.warn(
-              `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
+              `unauthorized conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
             const authProvided = connectParams.auth?.token
               ? "token"
@@ -1532,7 +1557,8 @@ export async function startGatewayServer(
               authProvided,
               authReason: authResult.reason,
               allowTailscale: resolvedAuth.allowTailscale,
-              client: connectParams.client.name,
+              client: connectParams.client.id,
+              clientDisplayName: connectParams.client.displayName,
               mode: connectParams.client.mode,
               version: connectParams.client.version,
             });
@@ -1548,14 +1574,15 @@ export async function startGatewayServer(
           }
           const authMethod = authResult.method ?? "none";
 
-          const shouldTrackPresence = connectParams.client.mode !== "cli";
+          const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
           const presenceKey = shouldTrackPresence
             ? connectParams.client.instanceId || connId
             : undefined;
 
           logWs("in", "connect", {
             connId,
-            client: connectParams.client.name,
+            client: connectParams.client.id,
+            clientDisplayName: connectParams.client.displayName,
             version: connectParams.client.version,
             mode: connectParams.client.mode,
             instanceId: connectParams.client.instanceId,
@@ -1565,13 +1592,16 @@ export async function startGatewayServer(
 
           if (isWebchatConnect(connectParams)) {
             logWsControl.info(
-              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${connectParams.client.name} ${connectParams.client.mode} v${connectParams.client.version}`,
+              `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
             );
           }
 
           if (presenceKey) {
             upsertPresence(presenceKey, {
-              host: connectParams.client.name || os.hostname(),
+              host:
+                connectParams.client.displayName ??
+                connectParams.client.id ??
+                os.hostname(),
               ip: isLoopbackAddress(remoteAddr) ? undefined : remoteAddr,
               version: connectParams.client.version,
               platform: connectParams.client.platform,
@@ -1601,7 +1631,7 @@ export async function startGatewayServer(
               host: os.hostname(),
               connId,
             },
-            features: { methods: METHODS, events: EVENTS },
+            features: { methods: gatewayMethods, events: EVENTS },
             snapshot,
             canvasHostUrl,
             policy: {
@@ -1617,7 +1647,7 @@ export async function startGatewayServer(
 
           logWs("out", "hello-ok", {
             connId,
-            methods: METHODS.length,
+            methods: gatewayMethods.length,
             events: EVENTS.length,
             presence: snapshot.presence.length,
             stateVersion: snapshot.stateVersion.presence,
@@ -1677,6 +1707,7 @@ export async function startGatewayServer(
             respond,
             client,
             isWebchatConnect,
+            extraHandlers: pluginRegistry.gatewayHandlers,
             context: {
               deps,
               cron,
@@ -1707,19 +1738,9 @@ export async function startGatewayServer(
               findRunningWizard,
               purgeWizardSession,
               getRuntimeSnapshot,
-              startWhatsAppProvider,
-              stopWhatsAppProvider,
-              startTelegramProvider,
-              stopTelegramProvider,
-              startDiscordProvider,
-              stopDiscordProvider,
-              startSlackProvider,
-              stopSlackProvider,
-              startSignalProvider,
-              stopSignalProvider,
-              startIMessageProvider,
-              stopIMessageProvider,
-              markWhatsAppLoggedOut,
+              startProvider,
+              stopProvider,
+              markProviderLoggedOut,
               wizardRunner,
               broadcastVoiceWakeChanged,
             },
@@ -1859,8 +1880,8 @@ export async function startGatewayServer(
     }
   }
 
-  // Launch configured providers (WhatsApp Web, Discord, Slack, Telegram) so gateway replies via the
-  // surface the message came from. Tests can opt out via CLAWDBOT_SKIP_PROVIDERS.
+  // Launch configured providers so gateway replies via the surface the message came from.
+  // Tests can opt out via CLAWDBOT_SKIP_PROVIDERS.
   if (process.env.CLAWDBOT_SKIP_PROVIDERS !== "1") {
     try {
       await startProviders();
@@ -1869,6 +1890,16 @@ export async function startGatewayServer(
     }
   } else {
     logProviders.info("skipping provider start (CLAWDBOT_SKIP_PROVIDERS=1)");
+  }
+
+  try {
+    pluginServices = await startPluginServices({
+      registry: pluginRegistry,
+      config: cfgAtStart,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  } catch (err) {
+    log.warn(`plugin services failed to start: ${String(err)}`);
   }
 
   const scheduleRestartSentinelWake = async () => {
@@ -1886,13 +1917,11 @@ export async function startGatewayServer(
     }
 
     const { cfg, entry } = loadSessionEntry(sessionKey);
-    const lastProvider =
-      entry?.lastProvider && entry.lastProvider !== "webchat"
-        ? entry.lastProvider
-        : undefined;
+    const lastProvider = entry?.lastProvider;
     const lastTo = entry?.lastTo?.trim();
     const parsedTarget = resolveAnnounceTargetFromKey(sessionKey);
-    const provider = lastProvider ?? parsedTarget?.provider;
+    const providerRaw = lastProvider ?? parsedTarget?.provider;
+    const provider = providerRaw ? normalizeProviderId(providerRaw) : null;
     const to = lastTo || parsedTarget?.to;
     if (!provider || !to) {
       enqueueSystemEvent(message, { sessionKey });
@@ -1900,16 +1929,11 @@ export async function startGatewayServer(
     }
 
     const resolved = resolveOutboundTarget({
-      provider: provider as
-        | "whatsapp"
-        | "telegram"
-        | "discord"
-        | "slack"
-        | "signal"
-        | "imessage"
-        | "webchat",
+      provider,
       to,
-      allowFrom: cfg.whatsapp?.allowFrom ?? [],
+      cfg,
+      accountId: parsedTarget?.accountId ?? entry?.lastAccountId,
+      mode: "implicit",
     });
     if (!resolved.ok) {
       enqueueSystemEvent(message, { sessionKey });
@@ -2011,59 +2035,13 @@ export async function startGatewayServer(
           "skipping provider reload (CLAWDBOT_SKIP_PROVIDERS=1)",
         );
       } else {
-        const restartProvider = async (
-          name: ProviderKind,
-          stop: () => Promise<void>,
-          start: () => Promise<void>,
-        ) => {
+        const restartProvider = async (name: ProviderKind) => {
           logProviders.info(`restarting ${name} provider`);
-          await stop();
-          await start();
+          await stopProvider(name);
+          await startProvider(name);
         };
-        if (plan.restartProviders.has("whatsapp")) {
-          await restartProvider(
-            "whatsapp",
-            stopWhatsAppProvider,
-            startWhatsAppProvider,
-          );
-        }
-        if (plan.restartProviders.has("telegram")) {
-          await restartProvider(
-            "telegram",
-            stopTelegramProvider,
-            startTelegramProvider,
-          );
-        }
-        if (plan.restartProviders.has("discord")) {
-          await restartProvider(
-            "discord",
-            stopDiscordProvider,
-            startDiscordProvider,
-          );
-        }
-        if (plan.restartProviders.has("slack")) {
-          await restartProvider("slack", stopSlackProvider, startSlackProvider);
-        }
-        if (plan.restartProviders.has("signal")) {
-          await restartProvider(
-            "signal",
-            stopSignalProvider,
-            startSignalProvider,
-          );
-        }
-        if (plan.restartProviders.has("imessage")) {
-          await restartProvider(
-            "imessage",
-            stopIMessageProvider,
-            startIMessageProvider,
-          );
-        }
-        if (plan.restartProviders.has("msteams")) {
-          await restartProvider(
-            "msteams",
-            stopMSTeamsProvider,
-            startMSTeamsProvider,
-          );
+        for (const provider of plan.restartProviders) {
+          await restartProvider(provider);
         }
       }
     }
@@ -2158,13 +2136,12 @@ export async function startGatewayServer(
           /* ignore */
         }
       }
-      await stopWhatsAppProvider();
-      await stopTelegramProvider();
-      await stopDiscordProvider();
-      await stopSlackProvider();
-      await stopSignalProvider();
-      await stopIMessageProvider();
-      await stopMSTeamsProvider();
+      for (const plugin of listProviderPlugins()) {
+        await stopProvider(plugin.id);
+      }
+      if (pluginServices) {
+        await pluginServices.stop().catch(() => {});
+      }
       await stopGmailWatcher();
       cron.stop();
       heartbeatRunner.stop();

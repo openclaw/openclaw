@@ -1775,6 +1775,44 @@ Example:
 }
 ```
 
+### `plugins` (extensions)
+
+Controls plugin discovery, allow/deny, and per-plugin config. Plugins are loaded
+from `~/.clawdbot/extensions`, `<workspace>/.clawdbot/extensions`, plus any
+`plugins.load.paths` entries. **Config changes require a gateway restart.**
+See [/plugin](/plugin) for full usage.
+
+Fields:
+- `enabled`: master toggle for plugin loading (default: true).
+- `allow`: optional allowlist of plugin ids; when set, only listed plugins load.
+- `deny`: optional denylist of plugin ids (deny wins).
+- `load.paths`: extra plugin files or directories to load (absolute or `~`).
+- `entries.<pluginId>`: per-plugin overrides.
+  - `enabled`: set `false` to disable.
+  - `config`: plugin-specific config object (validated by the plugin if provided).
+
+Example:
+
+```json5
+{
+  plugins: {
+    enabled: true,
+    allow: ["voice-call"],
+    load: {
+      paths: ["~/Projects/oss/voice-call-extension"]
+    },
+    entries: {
+      "voice-call": {
+        enabled: true,
+        config: {
+          provider: "twilio"
+        }
+      }
+    }
+  }
+}
+```
+
 ### `browser` (clawd-managed Chrome)
 
 Clawdbot can start a **dedicated, isolated** Chrome/Chromium instance for clawd and expose a small loopback control server.
@@ -1942,6 +1980,7 @@ Requires full Gateway restart:
 - `bridge`
 - `discovery`
 - `canvasHost`
+- `plugins`
 - Any unknown/unsupported config path (defaults to restart for safety)
 
 ### Multi-instance isolation

@@ -69,6 +69,7 @@ import {
 import { normalizeModelCompat } from "./model-compat.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 import type { MessagingToolSend } from "./pi-embedded-messaging.js";
+import { ensurePiCompactionReserveTokens } from "./pi-settings.js";
 import { acquireSessionWriteLock } from "./session-write-lock.js";
 
 export type { MessagingToolSend } from "./pi-embedded-messaging.js";
@@ -116,6 +117,7 @@ import {
   type SkillSnapshot,
 } from "./skills.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
+import { buildToolSummaryMap } from "./tool-summaries.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 import {
   filterBootstrapFilesForSession,
@@ -643,6 +645,7 @@ function buildEmbeddedSystemPrompt(params: {
     runtimeInfo: params.runtimeInfo,
     sandboxInfo: params.sandboxInfo,
     toolNames: params.tools.map((tool) => tool.name),
+    toolSummaries: buildToolSummaryMap(params.tools),
     modelAliasLines: params.modelAliasLines,
     userTimezone: params.userTimezone,
     userTime: params.userTime,
@@ -981,6 +984,7 @@ export async function compactEmbeddedPiSession(params: {
             effectiveWorkspace,
             agentDir,
           );
+          ensurePiCompactionReserveTokens({ settingsManager });
           const additionalExtensionPaths = buildEmbeddedExtensionPaths({
             cfg: params.config,
             sessionManager,
@@ -1369,6 +1373,7 @@ export async function runEmbeddedPiAgent(params: {
             effectiveWorkspace,
             agentDir,
           );
+          ensurePiCompactionReserveTokens({ settingsManager });
           const additionalExtensionPaths = buildEmbeddedExtensionPaths({
             cfg: params.config,
             sessionManager,

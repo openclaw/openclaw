@@ -1,5 +1,7 @@
 import type { ClawdbotConfig } from "../config/config.js";
+import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageProvider } from "../utils/message-provider.js";
+import { resolveSessionAgentId } from "./agent-scope.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 import { createCanvasTool } from "./tools/canvas-tool.js";
@@ -25,6 +27,7 @@ export function createClawdbotTools(options?: {
   agentProvider?: GatewayMessageProvider;
   agentAccountId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
   /** Current channel ID for auto-threading (Slack). */
@@ -40,7 +43,7 @@ export function createClawdbotTools(options?: {
     config: options?.config,
     agentDir: options?.agentDir,
   });
-  return [
+  const tools: AnyAgentTool[] = [
     createBrowserTool({
       defaultControlUrl: options?.browserControlUrl,
       allowHostControl: options?.allowHostBrowserControl,
@@ -88,4 +91,23 @@ export function createClawdbotTools(options?: {
     }),
     ...(imageTool ? [imageTool] : []),
   ];
+
+  const pluginTools = resolvePluginTools({
+    context: {
+      config: options?.config,
+      workspaceDir: options?.workspaceDir,
+      agentDir: options?.agentDir,
+      agentId: resolveSessionAgentId({
+        sessionKey: options?.agentSessionKey,
+        config: options?.config,
+      }),
+      sessionKey: options?.agentSessionKey,
+      messageProvider: options?.agentProvider,
+      agentAccountId: options?.agentAccountId,
+      sandboxed: options?.sandboxed,
+    },
+    existingToolNames: new Set(tools.map((tool) => tool.name)),
+  });
+
+  return [...tools, ...pluginTools];
 }

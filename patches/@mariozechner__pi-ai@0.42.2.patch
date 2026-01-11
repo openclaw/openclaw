@@ -15,10 +15,10 @@ index 93aa26c395e9bd0df64376408a13d15ee9e7cce7..beb585e2f2c13eec3bca98acade76110
                      if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
                          // Use server-provided delay or exponential backoff
 diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
-index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c55455332 100644
+index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..ccfe2e835918530ddf9d2ce17b44b0069b41648e 100644
 --- a/dist/providers/openai-codex-responses.js
 +++ b/dist/providers/openai-codex-responses.js
-@@ -515,7 +531,7 @@ function convertTools(tools) {
+@@ -515,7 +515,7 @@ function convertTools(tools) {
          name: tool.name,
          description: tool.description,
          parameters: tool.parameters,
@@ -27,3 +27,41 @@ index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c
      }));
  }
  function mapStopReason(status) {
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index f07085c64390b211340d6a826b28ea9c2e77302f..7f758532246cc7b062df48e9cec4e6c904b76a99 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -396,10 +396,16 @@ function convertMessages(model, context) {
+         }
+         else if (msg.role === "assistant") {
+             const output = [];
++            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`,
++            // but tool-call-only turns still require reasoning replay before the function call.
++            const hasTextBlock = msg.content.some((b) => b.type === "text");
++            const hasToolCallBlock = msg.content.some((b) => b.type === "toolCall");
+             for (const block of msg.content) {
+                 // Do not submit thinking blocks if the completion had an error (i.e. abort)
+                 if (block.type === "thinking" && msg.stopReason !== "error") {
+                     if (block.thinkingSignature) {
++                        if (!hasTextBlock && !hasToolCallBlock)
++                            continue;
+                         const reasoningItem = JSON.parse(block.thinkingSignature);
+                         output.push(reasoningItem);
+                     }
+@@ -434,6 +440,16 @@ function convertMessages(model, context) {
+                     });
+                 }
+             }
++            const hasAssistantMessage = output.some((item) => item.type === "message");
++            const hasFunctionCall = output.some((item) => item.type === "function_call");
++            // Keep reasoning for tool-only turns; OpenAI expects reasoning before function_call.
++            if (!hasAssistantMessage && !hasFunctionCall) {
++                for (let i = output.length - 1; i >= 0; i -= 1) {
++                    if (output[i].type === "reasoning") {
++                        output.splice(i, 1);
++                    }
++                }
++            }
+             if (output.length === 0)
+                 continue;
+             messages.push(...output);

@@ -7,6 +7,7 @@ import {
   buildGroupDisplayName,
   deriveSessionKey,
   loadSessionStore,
+  resolveSessionFilePath,
   resolveSessionKey,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptsDir,
@@ -178,6 +179,31 @@ describe("sessions", () => {
           "main",
           "sessions",
           "sess-1-topic-123.jsonl",
+        ),
+      );
+    } finally {
+      if (prev === undefined) {
+        delete process.env.CLAWDBOT_STATE_DIR;
+      } else {
+        process.env.CLAWDBOT_STATE_DIR = prev;
+      }
+    }
+  });
+
+  it("uses agent id when resolving session file fallback paths", () => {
+    const prev = process.env.CLAWDBOT_STATE_DIR;
+    process.env.CLAWDBOT_STATE_DIR = "/custom/state";
+    try {
+      const sessionFile = resolveSessionFilePath("sess-2", undefined, {
+        agentId: "codex",
+      });
+      expect(sessionFile).toBe(
+        path.join(
+          path.resolve("/custom/state"),
+          "agents",
+          "codex",
+          "sessions",
+          "sess-2.jsonl",
         ),
       );
     } finally {

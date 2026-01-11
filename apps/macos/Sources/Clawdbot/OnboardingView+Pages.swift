@@ -494,9 +494,9 @@ extension OnboardingView {
 
     func cliPage() -> some View {
         self.onboardingPage {
-            Text("Install the helper CLI")
+            Text("Install the CLI")
                 .font(.largeTitle.weight(.semibold))
-            Text("Optional, but recommended: link `clawdbot` so scripts can reach the local gateway.")
+            Text("Required for local mode: installs `clawdbot` so launchd can run the gateway.")
                 .font(.body)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -522,7 +522,7 @@ extension OnboardingView {
                     .buttonStyle(.borderedProminent)
                     .disabled(self.installingCLI)
 
-                    Button(self.copied ? "Copied" : "Copy dev link") {
+                    Button(self.copied ? "Copied" : "Copy install command") {
                         self.copyToPasteboard(self.devLinkCommand)
                     }
                     .disabled(self.installingCLI)
@@ -541,8 +541,8 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        We install into /usr/local/bin and /opt/homebrew/bin.
-                        Rerun anytime if you move the build output.
+                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
+                        Rerun anytime to reinstall or update.
                         """)
                         .font(.footnote)
                         .foregroundStyle(.secondary)

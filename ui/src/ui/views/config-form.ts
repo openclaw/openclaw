@@ -388,7 +388,23 @@ function defaultValue(schema?: JsonSchema): unknown {
 
 function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
   const key = pathKey(path);
-  return hints[key];
+  const direct = hints[key];
+  if (direct) return direct;
+  const segments = key.split(".");
+  for (const [hintKey, hint] of Object.entries(hints)) {
+    if (!hintKey.includes("*")) continue;
+    const hintSegments = hintKey.split(".");
+    if (hintSegments.length !== segments.length) continue;
+    let match = true;
+    for (let i = 0; i < segments.length; i += 1) {
+      if (hintSegments[i] !== "*" && hintSegments[i] !== segments[i]) {
+        match = false;
+        break;
+      }
+    }
+    if (match) return hint;
+  }
+  return undefined;
 }
 
 function pathKey(path: Array<string | number>): string {
