@@ -13,6 +13,7 @@
 - Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.
 - Skills: bundle `skill-creator` to guide creating and packaging skills.
 - Discord: expose channel/category management actions in the message tool. (#730) — thanks @NicholasSpisak
+- Docs: rename README “macOS app” section to “Apps”. (#733) — thanks @AbhisekBasu1.
 
 ### Fixes
 - Doctor: surface plugin diagnostics in the report.
