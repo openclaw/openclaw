@@ -636,13 +636,15 @@ describe("doctor", () => {
 
     expect(
       note.mock.calls.some(
-        ([message, title]) =>
-          title === "Sandbox" &&
-          typeof message === "string" &&
-          message
-            .replace(/\s+/g, " ")
-            .includes('agents.list (id "work") sandbox docker') &&
-          message.replace(/\s+/g, " ").includes('scope resolves to "shared"'),
+        ([message, title]) => {
+          if (title !== "Sandbox") return false;
+          if (typeof message !== "string") return false;
+          const normalized = message.replace(/\s+/g, " ");
+          return (
+            normalized.includes('agents.list (id "work") sandbox docker') &&
+            normalized.includes('scope resolves to "shared"')
+          );
+        },
       ),
     ).toBe(true);
   });
