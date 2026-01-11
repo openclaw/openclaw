@@ -395,13 +395,13 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
     private func controlChannelStatusText(for state: ControlChannel.ConnectionState) -> String {
         switch state {
         case .connected:
-            return "Loading sessions…"
+            "Loading sessions…"
         case .connecting:
-            return "Connecting…"
+            "Connecting…"
         case let .degraded(message):
-            return message.nonEmpty ?? "Gateway disconnected"
+            message.nonEmpty ?? "Gateway disconnected"
         case .disconnected:
-            return "Gateway disconnected"
+            "Gateway disconnected"
         }
     }
 

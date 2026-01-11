@@ -95,7 +95,7 @@ extension OnboardingView {
         self.installingCLI = true
         defer { installingCLI = false }
         await CLIInstaller.install { message in
-            await MainActor.run { self.cliStatus = message }
+            self.cliStatus = message
         }
         self.refreshCLIStatus()
     }
