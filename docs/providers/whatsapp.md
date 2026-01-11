@@ -8,6 +8,22 @@ read_when:
 
 Status: WhatsApp Web via Baileys only. Gateway owns the session(s).
 
+## Quick setup (beginner)
+1) Use a **separate phone number** if possible (recommended).
+2) Configure WhatsApp in `~/.clawdbot/clawdbot.json`.
+3) Run `clawdbot providers login` to scan the QR code (Linked Devices).
+4) Start the gateway.
+
+Minimal config:
+```json5
+{
+  whatsapp: {
+    dmPolicy: "allowlist",
+    allowFrom: ["+15551234567"]
+  }
+}
+```
+
 ## Goals
 - Multiple WhatsApp accounts (multi-account) in one Gateway process.
 - Deterministic routing: replies return to WhatsApp, no model routing.

@@ -12,6 +12,25 @@ Updated: 2026-01-08
 
 Status: text + DM attachments are supported; channel/group attachments require Microsoft Graph permissions. Polls are sent via Adaptive Cards.
 
+## Quick setup (beginner)
+1) Create an **Azure Bot** (App ID + client secret + tenant ID).
+2) Configure Clawdbot with those credentials.
+3) Expose `/api/messages` (port 3978 by default) via a public URL or tunnel.
+4) Install the Teams app package and start the gateway.
+
+Minimal config:
+```json5
+{
+  msteams: {
+    enabled: true,
+    appId: "<APP_ID>",
+    appPassword: "<APP_PASSWORD>",
+    tenantId: "<TENANT_ID>",
+    webhook: { port: 3978, path: "/api/messages" }
+  }
+}
+```
+
 ## Goals
 - Talk to Clawdbot via Teams DMs, group chats, or channels.
 - Keep routing deterministic: replies always go back to the provider they arrived on.
