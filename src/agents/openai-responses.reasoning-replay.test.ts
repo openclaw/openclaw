@@ -52,7 +52,7 @@ function installFailingFetchCapture() {
 }
 
 describe("openai-responses reasoning replay", () => {
-  it("replays reasoning for tool-call-only turns (required by OpenAI)", async () => {
+  it("skips reasoning for tool-call-only turns (OpenAI rejects standalone reasoning)", async () => {
     const cap = installFailingFetchCapture();
     try {
       const model = buildModel();
@@ -141,11 +141,8 @@ describe("openai-responses reasoning replay", () => {
         )
         .filter((t): t is string => typeof t === "string");
 
-      expect(types).toContain("reasoning");
       expect(types).toContain("function_call");
-      expect(types.indexOf("reasoning")).toBeLessThan(
-        types.indexOf("function_call"),
-      );
+      expect(types).not.toContain("reasoning");
     } finally {
       cap.restore();
     }

@@ -36,11 +36,13 @@ import {
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
   applyOpencodeZenConfig,
+  applyOpenrouterConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
   setOpencodeZenApiKey,
+  setOpenrouterApiKey,
   setZaiApiKey,
 } from "./onboard-auth.js";
 import {
@@ -264,6 +266,25 @@ export async function runNonInteractiveOnboarding(
     });
     process.env.OPENAI_API_KEY = key;
     runtime.log(`Saved OPENAI_API_KEY to ${result.path}`);
+  } else if (authChoice === "openrouter-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "openrouter",
+      cfg: baseConfig,
+      flagValue: opts.openrouterApiKey,
+      flagName: "--openrouter-api-key",
+      envVar: "OPENROUTER_API_KEY",
+      runtime,
+    });
+    if (!resolved) return;
+    if (resolved.source !== "profile") {
+      await setOpenrouterApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "openrouter:default",
+      provider: "openrouter",
+      mode: "api_key",
+    });
+    nextConfig = applyOpenrouterConfig(nextConfig);
   } else if (authChoice === "minimax-cloud") {
     const resolved = await resolveNonInteractiveApiKey({
       provider: "minimax",

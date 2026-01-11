@@ -10,6 +10,7 @@
 
 ### New Features and Changes
 - CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
+- CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.
 
 ### Fixes
 - CLI/Status: surface gateway provider runtime errors (Signal/iMessage/Slack) in the Providers table.
