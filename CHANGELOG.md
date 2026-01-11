@@ -5,6 +5,7 @@
 ### Changes
 - Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, config schema, and Control UI labels; ship voice-call plugin stub + skill.
 - Docs: add plugins doc + cross-links from tools/skills/gateway config.
+- Tests: add Docker plugin loader smoke test.
 - Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
 - macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 - Docs: add gog calendar event color IDs from `gog calendar colors`. (#715) — thanks @mjrussell.

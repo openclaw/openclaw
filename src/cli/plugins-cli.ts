@@ -153,7 +153,7 @@ export function registerPluginsCli(program: Command) {
         plugins: {
           ...cfg.plugins,
           entries: {
-            ...(cfg.plugins?.entries ?? {}),
+            ...cfg.plugins?.entries,
             [id]: {
               ...(
                 cfg.plugins?.entries as
@@ -182,7 +182,7 @@ export function registerPluginsCli(program: Command) {
         plugins: {
           ...cfg.plugins,
           entries: {
-            ...(cfg.plugins?.entries ?? {}),
+            ...cfg.plugins?.entries,
             [id]: {
               ...(
                 cfg.plugins?.entries as
