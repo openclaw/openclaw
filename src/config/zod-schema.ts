@@ -62,6 +62,10 @@ const GroupChatSchema = z
   })
   .optional();
 
+const DmConfigSchema = z.object({
+  historyLimit: z.number().int().min(0).optional(),
+});
+
 const IdentitySchema = z
   .object({
     name: z.string().optional(),
@@ -274,6 +278,7 @@ const TelegramAccountSchemaBase = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
   draftChunk: BlockStreamingChunkSchema.optional(),
@@ -364,6 +369,7 @@ const DiscordAccountSchema = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
@@ -437,6 +443,7 @@ const SlackAccountSchema = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
@@ -492,6 +499,7 @@ const SignalAccountSchemaBase = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   blockStreaming: z.boolean().optional(),
   blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
@@ -541,6 +549,7 @@ const IMessageAccountSchemaBase = z.object({
   groupPolicy: GroupPolicySchema.optional().default("open"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
+  dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
   includeAttachments: z.boolean().optional(),
   mediaMaxMb: z.number().int().positive().optional(),
   textChunkLimit: z.number().int().positive().optional(),
@@ -616,6 +625,7 @@ const MSTeamsConfigSchema = z
     requireMention: z.boolean().optional(),
     historyLimit: z.number().int().min(0).optional(),
     dmHistoryLimit: z.number().int().min(0).optional(),
+    dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     replyStyle: MSTeamsReplyStyleSchema.optional(),
     teams: z.record(z.string(), MSTeamsTeamSchema.optional()).optional(),
   })
@@ -1361,6 +1371,7 @@ export const ClawdbotSchema = z
                 groupPolicy: GroupPolicySchema.optional().default("open"),
                 historyLimit: z.number().int().min(0).optional(),
                 dmHistoryLimit: z.number().int().min(0).optional(),
+                dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
                 textChunkLimit: z.number().int().positive().optional(),
                 mediaMaxMb: z.number().int().positive().optional(),
                 blockStreaming: z.boolean().optional(),
@@ -1411,6 +1422,7 @@ export const ClawdbotSchema = z
         groupPolicy: GroupPolicySchema.optional().default("open"),
         historyLimit: z.number().int().min(0).optional(),
         dmHistoryLimit: z.number().int().min(0).optional(),
+        dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
         textChunkLimit: z.number().int().positive().optional(),
         mediaMaxMb: z.number().int().positive().optional().default(50),
         blockStreaming: z.boolean().optional(),

@@ -431,6 +431,71 @@ describe("getDmHistoryLimitFromSessionKey", () => {
       ).toBe(5);
     }
   });
+
+  it("returns per-DM override when set", () => {
+    const config = {
+      telegram: {
+        dmHistoryLimit: 15,
+        dms: { "123": { historyLimit: 5 } },
+      },
+    } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(5);
+  });
+
+  it("falls back to provider default when per-DM not set", () => {
+    const config = {
+      telegram: {
+        dmHistoryLimit: 15,
+        dms: { "456": { historyLimit: 5 } },
+      },
+    } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
+  });
+
+  it("returns per-DM override for agent-prefixed keys", () => {
+    const config = {
+      telegram: {
+        dmHistoryLimit: 20,
+        dms: { "789": { historyLimit: 3 } },
+      },
+    } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:789", config),
+    ).toBe(3);
+  });
+
+  it("handles userId with colons (e.g., email)", () => {
+    const config = {
+      msteams: {
+        dmHistoryLimit: 10,
+        dms: { "user@example.com": { historyLimit: 7 } },
+      },
+    } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("msteams:dm:user@example.com", config),
+    ).toBe(7);
+  });
+
+  it("returns undefined when per-DM historyLimit is not set", () => {
+    const config = {
+      telegram: {
+        dms: { "123": {} },
+      },
+    } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
+    ).toBeUndefined();
+  });
+
+  it("returns 0 when per-DM historyLimit is explicitly 0 (unlimited)", () => {
+    const config = {
+      telegram: {
+        dmHistoryLimit: 15,
+        dms: { "123": { historyLimit: 0 } },
+      },
+    } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(0);
+  });
 });
 
 describe("runEmbeddedPiAgent", () => {
