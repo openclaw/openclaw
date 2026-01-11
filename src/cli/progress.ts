@@ -90,7 +90,11 @@ export function createCliProgress(options: ProgressOptions): ProgressReporter {
     applyState();
   };
 
-  timer = setTimeout(start, delayMs);
+  if (delayMs === 0) {
+    start();
+  } else {
+    timer = setTimeout(start, delayMs);
+  }
 
   const setLabel = (next: string) => {
     label = next;

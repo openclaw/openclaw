@@ -1,9 +1,12 @@
+import { spinner } from "@clack/prompts";
 import type { Command } from "commander";
 
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import {
   runGatewayUpdate,
   type UpdateRunResult,
+  type UpdateStepInfo,
+  type UpdateStepProgress,
 } from "../infra/update-runner.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
@@ -14,6 +17,75 @@ export type UpdateCommandOptions = {
   restart?: boolean;
   timeout?: string;
 };
+
+const STEP_LABELS: Record<string, string> = {
+  "clean check": "Working directory is clean",
+  "upstream check": "Upstream branch exists",
+  "git fetch": "Fetching latest changes",
+  "git rebase": "Rebasing onto upstream",
+  "deps install": "Installing dependencies",
+  build: "Building",
+  "ui:build": "Building UI",
+  "clawdbot doctor": "Running doctor checks",
+  "git rev-parse HEAD (after)": "Verifying update",
+};
+
+function getStepLabel(step: UpdateStepInfo): string {
+  return STEP_LABELS[step.name] ?? step.name;
+}
+
+type ProgressController = {
+  progress: UpdateStepProgress;
+  stop: () => void;
+};
+
+function createUpdateProgress(enabled: boolean): ProgressController {
+  if (!enabled) {
+    return {
+      progress: {},
+      stop: () => {},
+    };
+  }
+
+  let currentSpinner: ReturnType<typeof spinner> | null = null;
+
+  const progress: UpdateStepProgress = {
+    onStepStart: (step) => {
+      currentSpinner = spinner();
+      currentSpinner.start(theme.accent(getStepLabel(step)));
+    },
+    onStepComplete: (step) => {
+      if (!currentSpinner) return;
+
+      const label = getStepLabel(step);
+      const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
+      const icon =
+        step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
+
+      currentSpinner.stop(`${icon} ${label} ${duration}`);
+      currentSpinner = null;
+
+      if (step.exitCode !== 0 && step.stderrTail) {
+        const lines = step.stderrTail.split("\n").slice(-10);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`    ${theme.error(line)}`);
+          }
+        }
+      }
+    },
+  };
+
+  return {
+    progress,
+    stop: () => {
+      if (currentSpinner) {
+        currentSpinner.stop();
+        currentSpinner = null;
+      }
+    },
+  };
+}
 
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
@@ -27,7 +99,11 @@ function formatStepStatus(exitCode: number | null): string {
   return theme.error("\u2717");
 }
 
-function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
+type PrintResultOptions = UpdateCommandOptions & {
+  hideSteps?: boolean;
+};
+
+function printResult(result: UpdateRunResult, opts: PrintResultOptions) {
   if (opts.json) {
     defaultRuntime.log(JSON.stringify(result, null, 2));
     return;
@@ -44,7 +120,6 @@ function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
   defaultRuntime.log(
     `${theme.heading("Update Result:")} ${statusColor(result.status.toUpperCase())}`,
   );
-  defaultRuntime.log(`  Mode: ${theme.muted(result.mode)}`);
   if (result.root) {
     defaultRuntime.log(`  Root: ${theme.muted(result.root)}`);
   }
@@ -62,7 +137,7 @@ function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
     defaultRuntime.log(`  After: ${theme.muted(after)}`);
   }
 
-  if (result.steps.length > 0) {
+  if (!opts.hideSteps && result.steps.length > 0) {
     defaultRuntime.log("");
     defaultRuntime.log(theme.heading("Steps:"));
     for (const step of result.steps) {
@@ -70,7 +145,6 @@ function printResult(result: UpdateRunResult, opts: UpdateCommandOptions) {
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
       defaultRuntime.log(`  ${status} ${step.name} ${duration}`);
 
-      // Show stderr for failed steps
       if (step.exitCode !== 0 && step.stderrTail) {
         const lines = step.stderrTail.split("\n").slice(0, 5);
         for (const line of lines) {
@@ -99,6 +173,8 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     return;
   }
 
+  const showProgress = !opts.json && process.stdout.isTTY;
+
   if (!opts.json) {
     defaultRuntime.log(theme.heading("Updating Clawdbot..."));
     defaultRuntime.log("");
@@ -111,13 +187,18 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       cwd: process.cwd(),
     })) ?? process.cwd();
 
+  const { progress, stop } = createUpdateProgress(showProgress);
+
   const result = await runGatewayUpdate({
     cwd: root,
     argv1: process.argv[1],
     timeoutMs,
+    progress,
   });
 
-  printResult(result, opts);
+  stop();
+
+  printResult(result, { ...opts, hideSteps: showProgress });
 
   if (result.status === "error") {
     defaultRuntime.exit(1);
