@@ -17,6 +17,7 @@ import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildCommandText,
   listNativeCommandSpecsForConfig,
+  normalizeCommandBody,
 } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
 import {
@@ -557,7 +558,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       !wasMentioned &&
       !hasAnyMention &&
       commandAuthorized &&
-      hasControlCommand(msg.text ?? msg.caption ?? "", cfg);
+      hasControlCommand(msg.text ?? msg.caption ?? "", cfg, { botUsername });
     const effectiveWasMentioned = wasMentioned || shouldBypassMention;
     const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
     if (isGroup && requireMention && canDetectMention) {
@@ -682,10 +683,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     ].filter((entry): entry is string => Boolean(entry));
     const groupSystemPrompt =
       systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+    const commandBody = normalizeCommandBody(rawBody, { botUsername });
     const ctxPayload = {
       Body: combinedBody,
       RawBody: rawBody,
-      CommandBody: rawBody,
+      CommandBody: commandBody,
       From: isGroup
         ? buildTelegramGroupFrom(chatId, messageThreadId)
         : `telegram:${chatId}`,
