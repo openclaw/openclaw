@@ -62,7 +62,6 @@ const AllMessageActions = [
   "ban",
 ];
 
-
 const MessageToolCommonSchema = {
   provider: Type.Optional(Type.String()),
   media: Type.Optional(Type.String()),
@@ -379,8 +378,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         const mediaUrl =
           readStringParam(params, "media", { trim: false }) ??
           (parsed.mediaUrls?.[0] || parsed.mediaUrl);
-        const replyTo =
-          readStringParam(params, "replyTo") ?? parsed.replyToId;
+        const replyTo = readStringParam(params, "replyTo") ?? parsed.replyToId;
         const threadId = readStringParam(params, "threadId");
         const buttons = params.buttons;
         const gifPlayback =
@@ -844,8 +842,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         const mediaUrl =
           readStringParam(params, "media", { trim: false }) ??
           (parsed.mediaUrls?.[0] || parsed.mediaUrl);
-        const replyTo =
-          readStringParam(params, "replyTo") ?? parsed.replyToId;
+        const replyTo = readStringParam(params, "replyTo") ?? parsed.replyToId;
         return await handleDiscordAction(
           {
             action: "threadReply",
