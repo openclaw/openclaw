@@ -135,19 +135,21 @@ Runbook + exact service labels: [Gateway runbook](/gateway)
 
 ### Pin (global install)
 
-Install a known-good version:
+Install a known-good version (replace `<version>` with the last working one):
 
 ```bash
-npm i -g clawdbot@2026.1.10
+npm i -g clawdbot@<version>
 ```
 
 ```bash
-pnpm add -g clawdbot@2026.1.10
+pnpm add -g clawdbot@<version>
 ```
 
 ```bash
-bun add -g clawdbot@2026.1.10
+bun add -g clawdbot@<version>
 ```
+
+Tip: to see the current published version, run `npm view clawdbot version`.
 
 Then restart + re-run doctor:
 
