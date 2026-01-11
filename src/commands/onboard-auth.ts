@@ -222,7 +222,8 @@ export function applyOpenrouterConfig(cfg: ClawdbotConfig): ClawdbotConfig {
           ...(existingModel &&
           "fallbacks" in (existingModel as Record<string, unknown>)
             ? {
-                fallbacks: (existingModel as { fallbacks?: string[] }).fallbacks,
+                fallbacks: (existingModel as { fallbacks?: string[] })
+                  .fallbacks,
               }
             : undefined),
           primary: OPENROUTER_DEFAULT_MODEL_REF,
