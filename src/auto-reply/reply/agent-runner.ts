@@ -36,7 +36,7 @@ import {
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   createAudioAsVoiceBuffer,
@@ -485,6 +485,7 @@ export async function runReplyAgent(params: {
                       }
                       text = stripped.text;
                     }
+                    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) return;
                     await typingSignals.signalTextDelta(text);
                     await opts.onPartialReply?.({
                       text,
