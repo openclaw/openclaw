@@ -3,7 +3,7 @@ import Foundation
 extension OnboardingView {
     func maybeKickoffOnboardingChat(for pageIndex: Int) {
         guard pageIndex == self.onboardingChatPageIndex else { return }
-        guard self.needsBootstrap else { return }
+        guard self.showOnboardingChat else { return }
         guard !self.didAutoKickoff else { return }
         self.didAutoKickoff = true
 

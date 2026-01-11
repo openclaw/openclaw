@@ -120,22 +120,26 @@ struct OnboardingView: View {
     let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        needsBootstrap: Bool) -> [Int]
+        showOnboardingChat: Bool) -> [Int]
     {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            needsBootstrap ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
-            needsBootstrap ? [0, 1, 8, 9] : [0, 1, 9]
+            showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            needsBootstrap ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
         }
     }
 
+    var showOnboardingChat: Bool {
+        self.state.connectionMode == .local && self.needsBootstrap
+    }
+
     var pageOrder: [Int] {
-        Self.pageOrder(for: self.state.connectionMode, needsBootstrap: self.needsBootstrap)
+        Self.pageOrder(for: self.state.connectionMode, showOnboardingChat: self.showOnboardingChat)
     }
 
     var pageCount: Int { self.pageOrder.count }
