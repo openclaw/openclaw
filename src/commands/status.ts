@@ -929,4 +929,7 @@ export async function statusCommand(
   runtime.log("");
   runtime.log("FAQ: https://docs.clawd.bot/faq");
   runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
+  runtime.log(
+    "More: clawdbot status --all · clawdbot status --deep · clawdbot gateway status · clawdbot providers status --probe · clawdbot daemon status · clawdbot logs --follow",
+  );
 }
