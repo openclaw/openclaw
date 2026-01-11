@@ -612,6 +612,7 @@ export async function statusAllCommand(
 
       lines.push("");
       lines.push(muted("Pasteable debug report. Auth tokens redacted."));
+      lines.push("Troubleshooting: https://docs.clawd.bot/troubleshooting");
       lines.push("");
 
       progress.setLabel("Rendering…");

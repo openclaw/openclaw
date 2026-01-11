@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.10-3
+
+### Fixes
+- CLI/Status: add troubleshooting link footer to `clawdbot status --all` output.
+
 ## 2026.1.10-2
 
 ### Fixes
