@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.11-4
+
+### Fixes
+- CLI/Status: when gateway is reachable, show which auth was used (`token`/`password`/`none`).
+
 ## 2026.1.11-3
 
 ### Fixes
