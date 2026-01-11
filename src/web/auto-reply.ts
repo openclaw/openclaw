@@ -68,7 +68,7 @@ import { resolveWhatsAppAccount } from "./accounts.js";
 import { setActiveWebListener } from "./active-listener.js";
 import { monitorWebInbox } from "./inbound.js";
 import { loadWebMedia } from "./media.js";
-import { sendMessageWhatsApp } from "./outbound.js";
+import { sendMessageWhatsApp, sendReactionWhatsApp } from "./outbound.js";
 import {
   computeBackoff,
   newConnectionId,
@@ -826,6 +826,7 @@ export async function monitorWebProvider(
     ...baseCfg,
     whatsapp: {
       ...baseCfg.whatsapp,
+      ackReaction: account.ackReaction,
       messagePrefix: account.messagePrefix,
       allowFrom: account.allowFrom,
       groupAllowFrom: account.groupAllowFrom,
@@ -1197,6 +1198,64 @@ export async function monitorWebProvider(
         logVerbose(`Skipping auto-reply: detected echo for combined message`);
         recentlySent.delete(combinedEchoKey);
         return false;
+      }
+
+      // Send ack reaction immediately upon message receipt (post-gating)
+      if (msg.id) {
+        const ackConfig = cfg.whatsapp?.ackReaction;
+        const emoji = (ackConfig?.emoji ?? "").trim();
+        const directEnabled = ackConfig?.direct ?? true;
+        const groupMode = ackConfig?.group ?? "mentions";
+        const conversationIdForCheck = msg.conversationId ?? msg.from;
+
+        const shouldSendReaction = () => {
+          if (!emoji) return false;
+
+          if (msg.chatType === "direct") {
+            return directEnabled;
+          }
+
+          if (msg.chatType === "group") {
+            if (groupMode === "never") return false;
+            if (groupMode === "always") return true;
+            if (groupMode === "mentions") {
+              const activation = resolveGroupActivationFor({
+                agentId: route.agentId,
+                sessionKey: route.sessionKey,
+                conversationId: conversationIdForCheck,
+              });
+              if (activation === "always") return true;
+              return msg.wasMentioned === true;
+            }
+          }
+
+          return false;
+        };
+
+        if (shouldSendReaction()) {
+          replyLogger.info(
+            { chatId: msg.chatId, messageId: msg.id, emoji },
+            "sending ack reaction",
+          );
+          sendReactionWhatsApp(msg.chatId, msg.id, emoji, {
+            verbose,
+            fromMe: false,
+            participant: msg.senderJid,
+            accountId: route.accountId,
+          }).catch((err) => {
+            replyLogger.warn(
+              {
+                error: formatError(err),
+                chatId: msg.chatId,
+                messageId: msg.id,
+              },
+              "failed to send ack reaction",
+            );
+            logVerbose(
+              `WhatsApp ack reaction failed for chat ${msg.chatId}: ${formatError(err)}`,
+            );
+          });
+        }
       }
 
       const correlationId = msg.id ?? newConnectionId();

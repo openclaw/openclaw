@@ -159,6 +159,55 @@ Behavior:
 - WhatsApp Web sends standard messages (no quoted reply threading in the current gateway).
 - Reply tags are ignored on this provider.
 
+## Acknowledgment reactions (auto-react on receipt)
+
+WhatsApp can automatically send emoji reactions to incoming messages immediately upon receipt, before the bot generates a reply. This provides instant feedback to users that their message was received.
+
+**Configuration:**
+```json
+{
+  "whatsapp": {
+    "ackReaction": {
+      "emoji": "👀",
+      "direct": true,
+      "group": "mentions"
+    }
+  }
+}
+```
+
+**Options:**
+- `emoji` (string): Emoji to use for acknowledgment (e.g., "👀", "✅", "📨"). Empty or omitted = feature disabled.
+- `direct` (boolean, default: `true`): Send reactions in direct/DM chats.
+- `group` (string, default: `"mentions"`): Group chat behavior:
+  - `"always"`: React to all group messages (even without @mention)
+  - `"mentions"`: React only when bot is @mentioned
+  - `"never"`: Never react in groups
+
+**Per-account override:**
+```json
+{
+  "whatsapp": {
+    "accounts": {
+      "work": {
+        "ackReaction": {
+          "emoji": "✅",
+          "direct": false,
+          "group": "always"
+        }
+      }
+    }
+  }
+}
+```
+
+**Behavior notes:**
+- Reactions are sent **immediately** upon message receipt, before typing indicators or bot replies.
+- In groups with `requireMention: false` (activation: always), `group: "mentions"` will react to all messages (not just @mentions).
+- Fire-and-forget: reaction failures are logged but don't prevent the bot from replying.
+- Participant JID is automatically included for group reactions.
+- WhatsApp ignores `messages.ackReaction`; use `whatsapp.ackReaction` instead.
+
 ## Agent tool (reactions)
 - Tool: `whatsapp` with `react` action (`chatJid`, `messageId`, `emoji`, optional `remove`).
 - Optional: `participant` (group sender), `fromMe` (reacting to your own message), `accountId` (multi-account).
@@ -205,8 +254,10 @@ Behavior:
 - `whatsapp.selfChatMode` (same-phone setup; bot uses your personal WhatsApp number).
 - `whatsapp.allowFrom` (DM allowlist).
 - `whatsapp.mediaMaxMb` (inbound media save cap).
+- `whatsapp.ackReaction` (auto-reaction on message receipt: `{emoji, direct, group}`).
 - `whatsapp.accounts.<accountId>.*` (per-account settings + optional `authDir`).
 - `whatsapp.accounts.<accountId>.mediaMaxMb` (per-account inbound media cap).
+- `whatsapp.accounts.<accountId>.ackReaction` (per-account ack reaction override).
 - `whatsapp.groupAllowFrom` (group sender allowlist).
 - `whatsapp.groupPolicy` (group policy).
 - `whatsapp.historyLimit` / `whatsapp.accounts.<accountId>.historyLimit` (group history context; `0` disables).
