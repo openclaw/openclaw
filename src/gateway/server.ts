@@ -383,7 +383,7 @@ let broadcastHealthUpdate: ((snap: HealthSummary) => void) | null = null;
 
 const CLOSE_REASON_MAX_BYTES = 120;
 
-function truncateCloseReason(
+export function truncateCloseReason(
   reason: string,
   maxBytes = CLOSE_REASON_MAX_BYTES,
 ): string {
@@ -1352,13 +1352,13 @@ export async function startGatewayServer(
       }
     };
 
-    const close = () => {
+    const close = (code = 1000, reason?: string) => {
       if (closed) return;
       closed = true;
       clearTimeout(handshakeTimer);
       if (client) clients.delete(client);
       try {
-        socket.close(1000);
+        socket.close(code, reason);
       } catch {
         /* ignore */
       }
@@ -1505,8 +1505,7 @@ export async function startGatewayServer(
             const closeReason = truncateCloseReason(
               handshakeError || "invalid handshake",
             );
-            socket.close(1008, closeReason);
-            close();
+            close(1008, closeReason);
             return;
           }
 
@@ -1546,8 +1545,7 @@ export async function startGatewayServer(
                 },
               ),
             });
-            socket.close(1002, "protocol mismatch");
-            close();
+            close(1002, "protocol mismatch");
             return;
           }
 
@@ -1582,8 +1580,7 @@ export async function startGatewayServer(
               ok: false,
               error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
             });
-            socket.close(1008, "unauthorized");
-            close();
+            close(1008, "unauthorized");
             return;
           }
           const authMethod = authResult.method ?? "none";
