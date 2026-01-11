@@ -1,48 +1,18 @@
 # Changelog
 
-## 2026.1.11
-
-### Highlights
-- CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
-- CLI/Status: stronger `status --all` debug report (Tailscale + provider runtime errors + determinate scan progress) and ANSI-safe tables (no clipping / color loss).
-- Agents/Browser: `browser.target` (sandbox/host/custom) with host-control gating + allowlists for custom control URLs/hosts/ports.
-
-### Changes
-- CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.
-- Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).
-
-### Fixes
-- Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
-- Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
-- WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
-- Sandbox/Skills: mirror skills into sandbox workspaces for read-only mounts so SKILL.md stays accessible.
-- CLI/Status: replace the footer with a 3-line “Next steps” recommendation (share/debug/probe), and gate probes behind gateway reachability.
-- CLI/Status: format non-JSON-serializable provider issue values more predictably and show which auth was used when the gateway is reachable (`token`/`password`/`none`).
-- Docs: make `clawdbot status` the first diagnostic step and clarify `status --deep` behavior (requires a reachable gateway).
-- CLI/Providers: fix `providers status` tip about `status --deep` requiring a reachable gateway.
-- CLI/Status: surface gateway provider runtime errors (Signal/iMessage/Slack) in the Providers table.
-- CLI/Status: improve Tailscale reporting in `status --all` and harden parsing of noisy `tailscale status --json` output.
-- CLI/Status: make `status --all` scan progress determinate (OSC progress + spinner).
-- CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
-- Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
-- Docker: allow optional apt packages during image build and document the build arg. (#697) — thanks @gabriel-trigo.
-- CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
-- Gateway/Heartbeat: deliver reasoning even when the main heartbeat reply is `HEARTBEAT_OK`. (#694) — thanks @antons.
-- macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
-- Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).
-- Agents/OpenAI: replay reasoning items for tool-call-only turns in Responses/Codex Responses history (fixes follow-up turns after tools).
-- Docs/Testing: clarify live tool+image probes and how to list your testable `provider/model` ids.
-
 ## 2026.1.10
 
 ### Highlights
-- CLI: `clawdbot status` now table-based + shows OS/update/gateway/daemon/agents/sessions; `status --all` adds a full read-only debug report (tables, log tails, scan progress via OSC-9 + spinner).
+- CLI: `clawdbot status` now table-based + shows OS/update/gateway/daemon/agents/sessions; `status --all` adds a full read-only debug report (tables, log tails, Tailscale summary, and scan progress via OSC-9 + spinner).
+- CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
 - CLI: add `clawdbot update` (safe-ish git checkout update) + `--update` shorthand. (#673) — thanks @fm1randa.
 - Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680) — thanks @steipete.
 
 ### Changes
 - Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
+- CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.
 - Agents: add human-delay pacing between block replies (modes: off/natural/custom, per-agent configurable). (#446) — thanks @tony-freedomology.
+- Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).
 - Onboarding/Models: add catalog-backed default model picker to onboarding + configure. (#611) — thanks @jonasjancarik.
 - Agents/OpenCode Zen: update fallback models + defaults, keep legacy alias mappings. (#669) — thanks @magimetal.
 - Providers: unify group history context wrappers across providers with per-provider/per-account `historyLimit` overrides (fallback to `messages.groupChat.historyLimit`). Set `0` to disable. (#672) — thanks @steipete.
@@ -50,7 +20,20 @@
 - Docker: allow optional home volume + extra bind mounts in `docker-setup.sh`. (#679) — thanks @gabriel-trigo.
 
 ### Fixes
-- CLI/Status: expand tables to full terminal width; clarify provider setup vs runtime warnings; richer per-provider detail; token previews in `status` while keeping `status --all` redacted; add troubleshooting link footer; keep log tails pasteable.
+- CLI/Status: expand tables to full terminal width; clarify provider setup vs runtime warnings; richer per-provider detail; token previews in `status` while keeping `status --all` redacted; add troubleshooting link footer; keep log tails pasteable; show gateway auth used when reachable; surface provider runtime errors (Signal/iMessage/Slack); harden `tailscale status --json` parsing; make `status --all` scan progress determinate; and replace the footer with a 3-line “Next steps” recommendation (share/debug/probe).
+- CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
+- CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
+- Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
+- Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
+- WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
+- Sandbox/Skills: mirror skills into sandbox workspaces for read-only mounts so SKILL.md stays accessible.
+- Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
+- Docker: allow optional apt packages during image build and document the build arg. (#697) — thanks @gabriel-trigo.
+- Gateway/Heartbeat: deliver reasoning even when the main heartbeat reply is `HEARTBEAT_OK`. (#694) — thanks @antons.
+- macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
+- Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).
+- Docs: make `clawdbot status` the first diagnostic step, clarify `status --deep` behavior, and document `/whoami` + `/id`.
+- Docs/Testing: clarify live tool+image probes and how to list your testable `provider/model` ids.
 - WhatsApp: detect @lid mentions in groups using authDir reverse mapping + resolve self JID E.164 for mention gating. (#692) — thanks @peschee.
 - Gateway/Auth: default to token auth on loopback during onboarding, add doctor token generation flow, and tighten audio transcription config to Whisper-only.
 - Providers: dedupe inbound messages across providers to avoid duplicate LLM runs on redeliveries/reconnects. (#689) — thanks @adam91holt.
@@ -66,7 +49,7 @@
 - WhatsApp: fix group reactions by preserving message IDs and sender JIDs in history; normalize participant phone numbers to JIDs in outbound reactions. (#640) — thanks @mcinteerj.
 - WhatsApp: expose group participant IDs to the model so reactions can target the right sender.
 - Cron: `wakeMode: "now"` waits for heartbeat completion (and retries when the main lane is busy). (#666) — thanks @roshanasingh4.
-- Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”).
+- Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone `reasoning` items that trigger 400 “required following item”) and replay reasoning items in Responses/Codex Responses history for tool-call-only turns.
 - Sandbox: add `clawdbot sandbox explain` (effective policy inspector + fix-it keys); improve “sandbox jail” tool-policy/elevated errors with actionable config key paths; link to docs.
 - Hooks/Gmail: keep Tailscale serve path at `/` while preserving the public path. (#668) — thanks @antons.
 - Hooks/Gmail: allow Tailscale target URLs to preserve internal serve paths.
@@ -100,6 +83,8 @@
 - Docs: showcase entries for ParentPay, R2 Upload, iOS TestFlight, and Oura Health. (#650) — thanks @henrino3.
 - Agents: repair session transcripts by dropping duplicate tool results across the whole history (unblocks Anthropic-compatible APIs after retries).
 - Tests/Live: reset the gateway session between model runs to avoid cross-provider transcript incompatibilities (notably OpenAI Responses reasoning replay rules).
+
+
 ## 2026.1.9
 
 ### Highlights
