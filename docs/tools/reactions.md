@@ -8,7 +8,7 @@ read_when:
 Shared reaction semantics across providers:
 
 - `emoji` is required when adding a reaction.
-- `emoji=""` (or omitting `emoji`) removes the bot's reaction(s) when supported.
+- `emoji=""` removes the bot's reaction(s) when supported.
 - `remove: true` removes the specified emoji when supported (requires `emoji`).
 
 Provider notes:
