@@ -209,8 +209,8 @@ stage_relay_deps() {
   local stage_dir="$relay_dir/.relay-deploy"
   rm -rf "$stage_dir"
   mkdir -p "$stage_dir"
-  echo "📦 Staging relay dependencies (pnpm deploy --prod --no-optional --legacy)"
-  (cd "$ROOT_DIR" && pnpm --filter . deploy "$stage_dir" --prod --no-optional --legacy)
+  echo "📦 Staging relay dependencies (pnpm deploy --prod --legacy)"
+  (cd "$ROOT_DIR" && pnpm --filter . deploy "$stage_dir" --prod --legacy)
   rm -rf "$relay_dir/node_modules"
   cp -a "$stage_dir/node_modules" "$relay_dir/node_modules"
   rm -rf "$stage_dir"
