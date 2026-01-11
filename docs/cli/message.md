@@ -58,7 +58,7 @@ Target formats (`--to`):
   - Discord only: `--poll-duration-hours`, `--message`
 
 - `react`
-  - Providers: Discord/Slack/WhatsApp
+  - Providers: Discord/Slack/Telegram/WhatsApp
   - Required: `--to`, `--message-id`
   - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--channel-id`
   - WhatsApp only: `--participant`, `--from-me`
