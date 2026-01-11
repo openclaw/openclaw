@@ -220,7 +220,17 @@ stage_relay_dist() {
   local relay_dir="$1"
   echo "📦 Copying relay dist payload"
   rm -rf "$relay_dir/dist"
-  cp -R "$ROOT_DIR/dist" "$relay_dir/dist"
+  mkdir -p "$relay_dir/dist"
+  # Only ship runtime JS payload; exclude build artifacts (app/zips/dmgs) to avoid
+  # recursive bundling and notarization failures.
+  /usr/bin/rsync -a --delete \
+    --exclude 'Clawdbot.app' \
+    --exclude 'Clawdbot-*.zip' \
+    --exclude 'Clawdbot-*.dmg' \
+    --exclude 'Clawdbot-*.notary.zip' \
+    --exclude 'Clawdbot-*.dSYM.zip' \
+    --exclude 'Clawdbot-*.dSYM' \
+    "$ROOT_DIR/dist/" "$relay_dir/dist/"
 }
 
 stage_relay_payload() {
