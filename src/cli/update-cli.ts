@@ -19,8 +19,8 @@ export type UpdateCommandOptions = {
 };
 
 const STEP_LABELS: Record<string, string> = {
-  "git status": "Checking for uncommitted changes",
-  "git upstream": "Checking upstream branch",
+  "clean check": "Working directory is clean",
+  "upstream check": "Upstream branch exists",
   "git fetch": "Fetching latest changes",
   "git rebase": "Rebasing onto upstream",
   "deps install": "Installing dependencies",
@@ -60,13 +60,8 @@ function createUpdateProgress(enabled: boolean): ProgressController {
 
       const label = getStepLabel(step);
       const duration = theme.muted(`(${formatDuration(step.durationMs)})`);
-
       const icon =
-        step.status === "success"
-          ? theme.success("\u2713")
-          : step.status === "skipped"
-            ? theme.warn("\u25CB")
-            : theme.error("\u2717");
+        step.exitCode === 0 ? theme.success("\u2713") : theme.error("\u2717");
 
       currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
