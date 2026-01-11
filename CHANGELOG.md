@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.11-2
+
+### Fixes
+- CLI/Status: add a “More:” footer with next-step commands and document status/diagnostics commands in troubleshooting.
+
 ## 2026.1.11-1
 
 ### New Features and Changes
