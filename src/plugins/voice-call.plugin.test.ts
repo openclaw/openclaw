@@ -203,12 +203,9 @@ describe("voice-call plugin", () => {
       resolvePath: (p: string) => p,
     });
 
-    await program.parseAsync(
-      ["node", "cli", "voicecall", "start", "--to", "+1"],
-      {
-        from: "user",
-      },
-    );
+    await program.parseAsync(["voicecall", "start", "--to", "+1"], {
+      from: "user",
+    });
     expect(logSpy).toHaveBeenCalled();
     logSpy.mockRestore();
   });

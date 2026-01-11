@@ -1026,6 +1026,27 @@ Each `agents.defaults.models` entry can include:
 - `alias` (optional model shortcut, e.g. `/opus`).
 - `params` (optional provider-specific API params passed through to the model request).
 
+`params` is also applied to streaming runs (embedded agent + compaction). Supported keys today: `temperature`, `maxTokens`. These merge with call-time options; caller-supplied values win. `temperature` is an advanced knob—leave unset unless you know the model’s defaults and need a change.
+
+Example:
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-sonnet-4-5-20250929": {
+          params: { temperature: 0.6 }
+        },
+        "openai/gpt-5.2": {
+          params: { maxTokens: 8192 }
+        }
+      }
+    }
+  }
+}
+```
+
 Z.AI GLM-4.x models automatically enable thinking mode unless you:
 - set `--thinking off`, or
 - define `agents.defaults.models["zai/<model>"].params.thinking` yourself.

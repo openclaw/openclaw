@@ -195,20 +195,16 @@ export function resolveExtraParams(params: {
 /**
  * Create a wrapped streamFn that injects extra params (like temperature) from config.
  *
- * This wraps the default streamSimple with config-driven params for each model.
- * Example config:
- *   agents.defaults.models["anthropic/claude-sonnet-4"].params.temperature = 0.7
- *
  * @internal
  */
 function createStreamFnWithExtraParams(
+  baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
 ): StreamFn | undefined {
   if (!extraParams || Object.keys(extraParams).length === 0) {
     return undefined; // No wrapper needed
   }
 
-  // Extract stream-related params (temperature, maxTokens, etc.)
   const streamParams: Partial<SimpleStreamOptions> = {};
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
@@ -217,7 +213,6 @@ function createStreamFnWithExtraParams(
     streamParams.maxTokens = extraParams.maxTokens;
   }
 
-  // If no stream params to inject, no wrapper needed
   if (Object.keys(streamParams).length === 0) {
     return undefined;
   }
@@ -226,14 +221,12 @@ function createStreamFnWithExtraParams(
     `creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`,
   );
 
-  // Return a wrapper that merges our params with any passed options
-  const wrappedStreamFn: StreamFn = (model, context, options) => {
-    const mergedOptions: SimpleStreamOptions = {
+  const underlying = baseStreamFn ?? streamSimple;
+  const wrappedStreamFn: StreamFn = (model, context, options) =>
+    underlying(model, context, {
       ...streamParams,
       ...options, // Caller options take precedence
-    };
-    return streamSimple(model, context, mergedOptions);
-  };
+    });
 
   return wrappedStreamFn;
 }
@@ -241,10 +234,10 @@ function createStreamFnWithExtraParams(
 /**
  * Apply extra params (like temperature) to an agent's streamFn.
  *
- * Call this after createAgentSession to wire up config-driven model params.
+ * @internal Exported for testing
  */
-function applyExtraParamsToAgent(
-  agent: { streamFn: StreamFn },
+export function applyExtraParamsToAgent(
+  agent: { streamFn?: StreamFn },
   cfg: ClawdbotConfig | undefined,
   provider: string,
   modelId: string,
@@ -256,7 +249,10 @@ function applyExtraParamsToAgent(
     modelId,
     thinkLevel,
   });
-  const wrappedStreamFn = createStreamFnWithExtraParams(extraParams);
+  const wrappedStreamFn = createStreamFnWithExtraParams(
+    agent.streamFn,
+    extraParams,
+  );
 
   if (wrappedStreamFn) {
     log.debug(
@@ -1202,7 +1198,7 @@ export async function compactEmbeddedPiSession(params: {
             additionalExtensionPaths,
           }));
 
-          // Wire up config-driven model params (e.g., temperature)
+          // Wire up config-driven model params (e.g., temperature/maxTokens)
           applyExtraParamsToAgent(
             session.agent,
             params.config,
@@ -1606,7 +1602,7 @@ export async function runEmbeddedPiAgent(params: {
             additionalExtensionPaths,
           }));
 
-          // Wire up config-driven model params (e.g., temperature)
+          // Wire up config-driven model params (e.g., temperature/maxTokens)
           applyExtraParamsToAgent(
             session.agent,
             params.config,

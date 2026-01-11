@@ -1485,10 +1485,7 @@ export async function startGatewayServer(
                 type: "res",
                 id: req.id,
                 ok: false,
-                error: errorShape(
-                  ErrorCodes.INVALID_REQUEST,
-                  handshakeError,
-                ),
+                error: errorShape(ErrorCodes.INVALID_REQUEST, handshakeError),
               });
             } else {
               logWsControl.warn(
