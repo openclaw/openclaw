@@ -1,9 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-
+import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { resolveHomeDir, resolveUserPath } from "../utils.js";
 
 export type RemovalResult = {
@@ -34,7 +33,10 @@ export function collectWorkspaceDirs(
 
 export function isPathWithin(child: string, parent: string): boolean {
   const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+  return (
+    relative === "" ||
+    (!relative.startsWith("..") && !path.isAbsolute(relative))
+  );
 }
 
 function isUnsafeRemovalTarget(target: string): boolean {

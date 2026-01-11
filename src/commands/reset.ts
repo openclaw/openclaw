@@ -1,16 +1,25 @@
 import { cancel, confirm, isCancel, select } from "@clack/prompts";
 
 import {
+  isNixMode,
   loadConfig,
   resolveConfigPath,
   resolveOAuthDir,
   resolveStateDir,
-  isNixMode,
 } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptHint, stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
-import { collectWorkspaceDirs, isPathWithin, listAgentSessionDirs, removePath } from "./cleanup-utils.js";
+import {
+  stylePromptHint,
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../terminal/prompt-style.js";
+import {
+  collectWorkspaceDirs,
+  isPathWithin,
+  listAgentSessionDirs,
+  removePath,
+} from "./cleanup-utils.js";
 
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 
@@ -26,7 +35,9 @@ const selectStyled = <T>(params: Parameters<typeof select<T>>[0]) =>
     ...params,
     message: stylePromptMessage(params.message),
     options: params.options.map((opt) =>
-      opt.hint === undefined ? opt : { ...opt, hint: stylePromptHint(opt.hint) },
+      opt.hint === undefined
+        ? opt
+        : { ...opt, hint: stylePromptHint(opt.hint) },
     ),
   });
 

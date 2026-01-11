@@ -478,7 +478,11 @@ export function buildProgram() {
       "config|config+creds+sessions|full (default: interactive prompt)",
     )
     .option("--yes", "Skip confirmation prompts", false)
-    .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
+    .option(
+      "--non-interactive",
+      "Disable prompts (requires --scope + --yes)",
+      false,
+    )
     .option("--dry-run", "Print actions without removing files", false)
     .action(async (opts) => {
       try {
@@ -501,11 +505,7 @@ export function buildProgram() {
     .option("--state", "Remove state + config", false)
     .option("--workspace", "Remove workspace dirs", false)
     .option("--app", "Remove the macOS app", false)
-    .option(
-      "--all",
-      "Remove service + state + workspace + app",
-      false,
-    )
+    .option("--all", "Remove service + state + workspace + app", false)
     .option("--yes", "Skip confirmation prompts", false)
     .option("--non-interactive", "Disable prompts (requires --yes)", false)
     .option("--dry-run", "Print actions without removing files", false)
