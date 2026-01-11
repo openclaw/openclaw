@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import type {
   AgentMessage,
   AgentTool,
+  StreamFn,
   ThinkingLevel,
 } from "@mariozechner/pi-agent-core";
 import type {
@@ -13,7 +14,9 @@ import type {
   AssistantMessage,
   ImageContent,
   Model,
+  SimpleStreamOptions,
 } from "@mariozechner/pi-ai";
+import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
   discoverAuthStorage,
@@ -187,6 +190,73 @@ export function resolveExtraParams(params: {
   }
 
   return extraParams;
+}
+
+/**
+ * Create a wrapped streamFn that injects extra params (like temperature) from config.
+ *
+ * This wraps the default streamSimple with config-driven params for each model.
+ * Example config:
+ *   agents.defaults.models["anthropic/claude-sonnet-4"].params.temperature = 0.7
+ *
+ * @internal
+ */
+function createStreamFnWithExtraParams(
+  extraParams: Record<string, unknown> | undefined,
+): StreamFn | undefined {
+  if (!extraParams || Object.keys(extraParams).length === 0) {
+    return undefined; // No wrapper needed
+  }
+
+  // Extract stream-related params (temperature, maxTokens, etc.)
+  const streamParams: Partial<SimpleStreamOptions> = {};
+  if (typeof extraParams.temperature === "number") {
+    streamParams.temperature = extraParams.temperature;
+  }
+  if (typeof extraParams.maxTokens === "number") {
+    streamParams.maxTokens = extraParams.maxTokens;
+  }
+
+  // If no stream params to inject, no wrapper needed
+  if (Object.keys(streamParams).length === 0) {
+    return undefined;
+  }
+
+  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+
+  // Return a wrapper that merges our params with any passed options
+  const wrappedStreamFn: StreamFn = (model, context, options) => {
+    const mergedOptions: SimpleStreamOptions = {
+      ...streamParams,
+      ...options, // Caller options take precedence
+    };
+    return streamSimple(model, context, mergedOptions);
+  };
+
+  return wrappedStreamFn;
+}
+
+/**
+ * Apply extra params (like temperature) to an agent's streamFn.
+ *
+ * Call this after createAgentSession to wire up config-driven model params.
+ */
+function applyExtraParamsToAgent(
+  agent: { streamFn: StreamFn },
+  cfg: ClawdbotConfig | undefined,
+  provider: string,
+  modelId: string,
+  thinkLevel?: string,
+): void {
+  const extraParams = resolveExtraParams({ cfg, provider, modelId, thinkLevel });
+  const wrappedStreamFn = createStreamFnWithExtraParams(extraParams);
+
+  if (wrappedStreamFn) {
+    log.debug(
+      `applying extraParams to agent streamFn for ${provider}/${modelId}`,
+    );
+    agent.streamFn = wrappedStreamFn;
+  }
 }
 
 // We configure context pruning per-session via a WeakMap registry keyed by the SessionManager instance.
@@ -1125,6 +1195,15 @@ export async function compactEmbeddedPiSession(params: {
             additionalExtensionPaths,
           }));
 
+          // Wire up config-driven model params (e.g., temperature)
+          applyExtraParamsToAgent(
+            session.agent,
+            params.config,
+            provider,
+            modelId,
+            params.thinkLevel,
+          );
+
           try {
             const prior = await sanitizeSessionHistory({
               messages: session.messages,
@@ -1519,6 +1598,15 @@ export async function runEmbeddedPiAgent(params: {
             contextFiles: [],
             additionalExtensionPaths,
           }));
+
+          // Wire up config-driven model params (e.g., temperature)
+          applyExtraParamsToAgent(
+            session.agent,
+            params.config,
+            provider,
+            modelId,
+            params.thinkLevel,
+          );
 
           try {
             const prior = await sanitizeSessionHistory({
