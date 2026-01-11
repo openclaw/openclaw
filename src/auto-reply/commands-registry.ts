@@ -137,6 +137,12 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/status",
     }),
     defineChatCommand({
+      key: "whoami",
+      nativeName: "whoami",
+      description: "Show your sender id.",
+      textAlias: "/whoami",
+    }),
+    defineChatCommand({
       key: "config",
       nativeName: "config",
       description: "Show or set config values.",
@@ -247,6 +253,7 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
   ];
 
   registerAlias(commands, "status", "/usage");
+  registerAlias(commands, "whoami", "/id");
   registerAlias(commands, "think", "/thinking", "/t");
   registerAlias(commands, "verbose", "/v");
   registerAlias(commands, "reasoning", "/reason");

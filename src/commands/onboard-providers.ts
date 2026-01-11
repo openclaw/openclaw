@@ -470,6 +470,61 @@ async function maybeConfigureDmPolicies(params: {
   return cfg;
 }
 
+function parseTelegramAllowFromEntries(raw: string): {
+  entries: string[];
+  hasUsernames: boolean;
+  error?: string;
+} {
+  const parts = raw
+    .split(/[\n,;]+/g)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length === 0) {
+    return { entries: [], hasUsernames: false, error: "Required" };
+  }
+  const entries: string[] = [];
+  let hasUsernames = false;
+  for (const part of parts) {
+    if (part === "*") {
+      entries.push(part);
+      continue;
+    }
+    const match = part.match(/^(telegram|tg):(.+)$/i);
+    const value = match ? match[2]?.trim() : part;
+    if (!value) {
+      return { entries: [], hasUsernames: false, error: `Invalid entry: ${part}` };
+    }
+    if (/^\d+$/.test(value)) {
+      entries.push(part);
+      continue;
+    }
+    if (value.startsWith("@")) {
+      const username = value.slice(1);
+      if (!/^[a-z0-9_]{5,32}$/i.test(username)) {
+        return {
+          entries: [],
+          hasUsernames: false,
+          error: `Invalid username: ${part}`,
+        };
+      }
+      hasUsernames = true;
+      entries.push(part);
+      continue;
+    }
+    if (/^[a-z0-9_]{5,32}$/i.test(value)) {
+      hasUsernames = true;
+      entries.push(`@${value}`);
+      continue;
+    }
+    return {
+      entries: [],
+      hasUsernames: false,
+      error: `Invalid entry: ${part}`,
+    };
+  }
+  return { entries, hasUsernames };
+}
+
 async function promptTelegramAllowFrom(params: {
   cfg: ClawdbotConfig;
   prompter: WizardPrompter;
@@ -479,22 +534,30 @@ async function promptTelegramAllowFrom(params: {
   const resolved = resolveTelegramAccount({ cfg, accountId });
   const existingAllowFrom = resolved.config.allowFrom ?? [];
   const entry = await prompter.text({
-    message: "Telegram allowFrom (user id)",
-    placeholder: "123456789",
+    message: "Telegram allowFrom (user id or @username)",
+    placeholder: "123456789, @myhandle",
     initialValue: existingAllowFrom[0]
       ? String(existingAllowFrom[0])
       : undefined,
     validate: (value) => {
       const raw = String(value ?? "").trim();
-      if (!raw) return "Required";
-      if (!/^\d+$/.test(raw)) return "Use a numeric Telegram user id";
-      return undefined;
+      const parsed = parseTelegramAllowFromEntries(raw);
+      return parsed.error;
     },
   });
-  const normalized = String(entry).trim();
+  const parsed = parseTelegramAllowFromEntries(String(entry).trim());
+  if (parsed.hasUsernames) {
+    await prompter.note(
+      [
+        "Usernames can change; numeric user IDs are more stable.",
+        "Tip: DM the bot and it will reply with your user ID (pairing message).",
+      ].join("\n"),
+      "Telegram allowFrom",
+    );
+  }
   const merged = [
     ...existingAllowFrom.map((item) => String(item).trim()).filter(Boolean),
-    normalized,
+    ...parsed.entries,
   ];
   const unique = [...new Set(merged)];
 

@@ -257,6 +257,7 @@ export class ClawdbotApp extends LitElement {
   @state() telegramForm: TelegramForm = {
     token: "",
     requireMention: true,
+    groupsWildcardEnabled: false,
     allowFrom: "",
     proxy: "",
     webhookUrl: "",
