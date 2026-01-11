@@ -734,6 +734,24 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
 Run `clawdbot doctor` to surface risky DM policies.
 
+### WhatsApp: will it message my contacts? How does pairing work?
+
+No. Default WhatsApp DM policy is **pairing**. Unknown senders only get a pairing code and their message is **not processed**. Clawdbot only replies to chats it receives or to explicit sends you trigger.
+
+Approve pairing with:
+
+```bash
+clawdbot pairing approve whatsapp <code>
+```
+
+List pending requests:
+
+```bash
+clawdbot pairing list whatsapp
+```
+
+Wizard phone number prompt: it’s used to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that number and enable `whatsapp.selfChatMode`.
+
 ## Chat commands, aborting tasks, and “it won’t stop”
 
 ### How do I stop/cancel a running task?
