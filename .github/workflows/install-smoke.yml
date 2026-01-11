@@ -1,0 +1,34 @@
+name: Install Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  install-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout CLI
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 10
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Clone installer site
+        run: git clone --depth=1 https://github.com/clawdbot/clawd.bot ../clawd.bot
+
+      - name: Install pnpm deps (minimal)
+        run: pnpm install --ignore-scripts --frozen-lockfile
+
+      - name: Run installer docker tests
+        env:
+          CLAWDBOT_INSTALL_URL: file://$GITHUB_WORKSPACE/../clawd.bot/public/install.sh
+          CLAWDBOT_INSTALL_CLI_URL: file://$GITHUB_WORKSPACE/../clawd.bot/public/install-cli.sh
+          CLAWDBOT_NO_ONBOARD: "1"
+        run: pnpm test:install:e2e

@@ -15,6 +15,11 @@
 - Discord: expose channel/category management actions in the message tool. (#730) — thanks @NicholasSpisak
 - Docs: rename README “macOS app” section to “Apps”. (#733) — thanks @AbhisekBasu1.
 
+### Installer
+- Postinstall: replace `git apply` with builtin JS patcher (works npm/pnpm/bun; no git dependency) plus regression tests.
+- Installer tests: add root+non-root docker smokes, CI workflow to fetch clawd.bot scripts and run install sh/cli with onboarding skipped.
+- Installer UX: support `CLAWDBOT_NO_ONBOARD=1` for non-interactive installs; fix npm prefix on Linux and auto-install git.
+
 ### Fixes
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging.
 - Doctor: surface plugin diagnostics in the report.
