@@ -137,6 +137,10 @@ clawdbot daemon restart
 
 Doctor detects a gateway service entrypoint mismatch and offers to rewrite the service config to match the current install (use `--repair` in automation).
 
+### How do I customize skills without keeping the repo dirty?
+
+Use managed overrides instead of editing the repo copy. Put your changes in `~/.clawdbot/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`). Precedence is `<workspace>/skills` > `~/.clawdbot/skills` > bundled, so managed overrides win without touching git. Only upstream-worthy edits should live in the repo and go out as PRs.
+
 ### Is there a dedicated sandboxing doc?
 
 Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).
@@ -704,6 +708,24 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 - Opening DMs publicly requires explicit opt‑in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `clawdbot doctor` to surface risky DM policies.
+
+### WhatsApp: will it message my contacts? How does pairing work?
+
+No. Default WhatsApp DM policy is **pairing**. Unknown senders only get a pairing code and their message is **not processed**. Clawdbot only replies to chats it receives or to explicit sends you trigger.
+
+Approve pairing with:
+
+```bash
+clawdbot pairing approve whatsapp <code>
+```
+
+List pending requests:
+
+```bash
+clawdbot pairing list whatsapp
+```
+
+Wizard phone number prompt: it’s used to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that number and enable `whatsapp.selfChatMode`.
 
 ## Chat commands, aborting tasks, and “it won’t stop”
 

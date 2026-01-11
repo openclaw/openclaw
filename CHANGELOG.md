@@ -4,6 +4,7 @@
 
 ### Changes
 - Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, config schema, and Control UI labels; ship voice-call plugin stub + skill.
+- Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.
 - Docs: add plugins doc + cross-links from tools/skills/gateway config.
 - Tests: add Docker plugin loader smoke test.
 - Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
@@ -12,6 +13,7 @@
 - Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.
 - Skills: bundle `skill-creator` to guide creating and packaging skills.
 - Discord: expose channel/category management actions in the message tool. (#730) — thanks @NicholasSpisak
+- Docs: rename README “macOS app” section to “Apps”. (#733) — thanks @AbhisekBasu1.
 
 ### Fixes
 - Doctor: surface plugin diagnostics in the report.
@@ -48,6 +50,7 @@
 - CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
 - CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
 - Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
+- Heartbeat: strip markup-wrapped `HEARTBEAT_OK` so acks don’t leak to external providers (e.g., Telegram).
 - Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
 - WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
 - Sandbox/Skills: mirror skills into sandbox workspaces for read-only mounts so SKILL.md stays accessible.
