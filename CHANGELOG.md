@@ -63,43 +63,26 @@
 ### New Features and Changes
 - Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).
 
-## 2026.1.10-4
-
-### Fixes
-- CLI/Status: show token previews (first/last chars) in `clawdbot status` provider details; keep `status --all` redacted (hash+length).
-
-## 2026.1.10-3
-
-### Fixes
-- CLI/Status: add troubleshooting link footer to `clawdbot status --all` output.
-
-## 2026.1.10-2
-
-### Fixes
-- CLI/Status: provider table uses `SETUP` for missing credentials (not `WARN`); richer per-provider detail (token sources, missing keys).
-
-## 2026.1.10-1
-
-### Fixes
-- CLI/Status: expand tables to full terminal width; improve update + daemon summary lines; keep `status --all` gateway log tail pasteable.
-- WhatsApp: detect @lid mentions in groups using authDir reverse mapping + resolve self JID E.164 for mention gating. (#692) — thanks @peschee.
-- Gateway/Auth: default to token auth on loopback during onboarding, add doctor token generation flow, and tighten audio transcription config to Whisper-only.
-
 ## 2026.1.10
 
-### New Features and Changes
+### Highlights
+- CLI: `clawdbot status` now table-based + shows OS/update/gateway/daemon/agents/sessions; `status --all` adds a full read-only debug report (tables, log tails, scan progress via OSC-9 + spinner).
+- CLI: add `clawdbot update` (safe-ish git checkout update) + `--update` shorthand. (#673) — thanks @fm1randa.
+- Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680) — thanks @steipete.
+
+### Changes
 - Onboarding/Models: add first-class Z.AI (GLM) auth choice (`zai-api-key`) + `--zai-api-key` flag.
 - Agents: add human-delay pacing between block replies (modes: off/natural/custom, per-agent configurable). (#446) — thanks @tony-freedomology.
 - Onboarding/Models: add catalog-backed default model picker to onboarding + configure. (#611) — thanks @jonasjancarik.
 - Agents/OpenCode Zen: update fallback models + defaults, keep legacy alias mappings. (#669) — thanks @magimetal.
 - Providers: unify group history context wrappers across providers with per-provider/per-account `historyLimit` overrides (fallback to `messages.groupChat.historyLimit`). Set `0` to disable. (#672) — thanks @steipete.
-- CLI: add `clawdbot update` (safe-ish git checkout update) + `--update` shorthand. (#673) — thanks @fm1randa.
-- CLI: improve `clawdbot status` (OS/update/gateway/daemon/agents/sessions) + add `status --all` for full read-only diagnosis with tables, log tails, and scan progress (OSC-9 + spinner).
-- Gateway: add OpenAI-compatible `/v1/chat/completions` HTTP endpoint (auth, SSE streaming, per-agent routing). (#680) — thanks @steipete.
 - Gateway/Heartbeat: optionally deliver heartbeat `Reasoning:` output (`agents.defaults.heartbeat.includeReasoning`). (#690)
 - Docker: allow optional home volume + extra bind mounts in `docker-setup.sh`. (#679) — thanks @gabriel-trigo.
 
 ### Fixes
+- CLI/Status: expand tables to full terminal width; clarify provider setup vs runtime warnings; richer per-provider detail; token previews in `status` while keeping `status --all` redacted; add troubleshooting link footer; keep log tails pasteable.
+- WhatsApp: detect @lid mentions in groups using authDir reverse mapping + resolve self JID E.164 for mention gating. (#692) — thanks @peschee.
+- Gateway/Auth: default to token auth on loopback during onboarding, add doctor token generation flow, and tighten audio transcription config to Whisper-only.
 - Providers: dedupe inbound messages across providers to avoid duplicate LLM runs on redeliveries/reconnects. (#689) — thanks @adam91holt.
 - Agents: strip `<thought>`/`<antthinking>` tags from hidden reasoning output and cover tag variants in tests. (#688) — thanks @theglove44.
 - macOS: save model picker selections as normalized provider/model IDs and keep manual entries aligned. (#683) — thanks @benithors.
