@@ -1377,6 +1377,9 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
           headless: false,
           enableNoVnc: true,
           allowHostControl: false,
+          allowedControlUrls: ["http://10.0.0.42:18791"],
+          allowedControlHosts: ["browser.lab.local", "10.0.0.42"],
+          allowedControlPorts: [18791],
           autoStart: true,
           autoStartTimeoutMs: 12000
         },
@@ -1423,6 +1426,11 @@ URL is injected per session.
 sandboxed sessions to explicitly target the **host** browser control server
 via the browser tool (`target: "host"`). Leave this off if you want strict
 sandbox isolation.
+
+Allowlists for remote control:
+- `allowedControlUrls`: exact control URLs permitted for `target: "custom"`.
+- `allowedControlHosts`: hostnames permitted (hostname only, no port).
+- `allowedControlPorts`: ports permitted (defaults: http=80, https=443).
 
 ### `models` (custom providers + base URLs)
 

@@ -249,6 +249,21 @@ export function buildAgentSystemPrompt(params: {
             : params.sandboxInfo.hostBrowserAllowed === false
               ? "Host browser control: blocked."
               : "",
+          params.sandboxInfo.allowedControlUrls?.length
+            ? `Browser control URL allowlist: ${params.sandboxInfo.allowedControlUrls.join(
+                ", ",
+              )}`
+            : "",
+          params.sandboxInfo.allowedControlHosts?.length
+            ? `Browser control host allowlist: ${params.sandboxInfo.allowedControlHosts.join(
+                ", ",
+              )}`
+            : "",
+          params.sandboxInfo.allowedControlPorts?.length
+            ? `Browser control port allowlist: ${params.sandboxInfo.allowedControlPorts.join(
+                ", ",
+              )}`
+            : "",
           params.sandboxInfo.elevated?.allowed
             ? "Elevated bash is available for this session."
             : "",

@@ -22,6 +22,7 @@ and process access when the model does something dumb.
   - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
     Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
   - `agents.defaults.sandbox.browser.allowHostControl` lets sandboxed sessions target the host browser explicitly.
+  - Optional allowlists gate `target: "custom"`: `allowedControlUrls`, `allowedControlHosts`, `allowedControlPorts`.
 
 Not sandboxed:
 - The Gateway process itself.

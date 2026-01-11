@@ -79,6 +79,9 @@ export type SandboxBrowserConfig = {
   headless: boolean;
   enableNoVnc: boolean;
   allowHostControl: boolean;
+  allowedControlUrls?: string[];
+  allowedControlHosts?: string[];
+  allowedControlPorts?: number[];
   autoStart: boolean;
   autoStartTimeoutMs: number;
 };
@@ -140,6 +143,9 @@ export type SandboxContext = {
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
+  browserAllowedControlUrls?: string[];
+  browserAllowedControlHosts?: string[];
+  browserAllowedControlPorts?: number[];
   browser?: SandboxBrowserContext;
 };
 
@@ -310,6 +316,12 @@ export function resolveSandboxBrowserConfig(params: {
   const agentBrowser =
     params.scope === "shared" ? undefined : params.agentBrowser;
   const globalBrowser = params.globalBrowser;
+  const allowedControlUrls =
+    agentBrowser?.allowedControlUrls ?? globalBrowser?.allowedControlUrls;
+  const allowedControlHosts =
+    agentBrowser?.allowedControlHosts ?? globalBrowser?.allowedControlHosts;
+  const allowedControlPorts =
+    agentBrowser?.allowedControlPorts ?? globalBrowser?.allowedControlPorts;
   return {
     enabled: agentBrowser?.enabled ?? globalBrowser?.enabled ?? false,
     image:
@@ -339,6 +351,18 @@ export function resolveSandboxBrowserConfig(params: {
       agentBrowser?.allowHostControl ??
       globalBrowser?.allowHostControl ??
       false,
+    allowedControlUrls:
+      Array.isArray(allowedControlUrls) && allowedControlUrls.length > 0
+        ? allowedControlUrls
+        : undefined,
+    allowedControlHosts:
+      Array.isArray(allowedControlHosts) && allowedControlHosts.length > 0
+        ? allowedControlHosts
+        : undefined,
+    allowedControlPorts:
+      Array.isArray(allowedControlPorts) && allowedControlPorts.length > 0
+        ? allowedControlPorts
+        : undefined,
     autoStart: agentBrowser?.autoStart ?? globalBrowser?.autoStart ?? true,
     autoStartTimeoutMs:
       agentBrowser?.autoStartTimeoutMs ??
@@ -1331,6 +1355,9 @@ export async function resolveSandboxContext(params: {
     docker: cfg.docker,
     tools: cfg.tools,
     browserAllowHostControl: cfg.browser.allowHostControl,
+    browserAllowedControlUrls: cfg.browser.allowedControlUrls,
+    browserAllowedControlHosts: cfg.browser.allowedControlHosts,
+    browserAllowedControlPorts: cfg.browser.allowedControlPorts,
     browser: browser ?? undefined,
   };
 }

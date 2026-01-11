@@ -480,6 +480,9 @@ type EmbeddedSandboxInfo = {
   browserControlUrl?: string;
   browserNoVncUrl?: string;
   hostBrowserAllowed?: boolean;
+  allowedControlUrls?: string[];
+  allowedControlHosts?: string[];
+  allowedControlPorts?: number[];
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off";
@@ -572,6 +575,9 @@ export function buildEmbeddedSandboxInfo(
     browserControlUrl: sandbox.browser?.controlUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
     hostBrowserAllowed: sandbox.browserAllowHostControl,
+    allowedControlUrls: sandbox.browserAllowedControlUrls,
+    allowedControlHosts: sandbox.browserAllowedControlHosts,
+    allowedControlPorts: sandbox.browserAllowedControlPorts,
     ...(elevatedAllowed
       ? {
           elevated: {

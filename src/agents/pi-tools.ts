@@ -627,6 +627,9 @@ export function createClawdbotCodingTools(options?: {
     ...createClawdbotTools({
       browserControlUrl: sandbox?.browser?.controlUrl,
       allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
+      allowedControlUrls: sandbox?.browserAllowedControlUrls,
+      allowedControlHosts: sandbox?.browserAllowedControlHosts,
+      allowedControlPorts: sandbox?.browserAllowedControlPorts,
       agentSessionKey: options?.sessionKey,
       agentProvider: resolveGatewayMessageProvider(options?.messageProvider),
       agentAccountId: options?.agentAccountId,

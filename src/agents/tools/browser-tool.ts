@@ -136,6 +136,9 @@ function resolveBrowserBaseUrl(params: {
   controlUrl?: string;
   defaultControlUrl?: string;
   allowHostControl?: boolean;
+  allowedControlUrls?: string[];
+  allowedControlHosts?: string[];
+  allowedControlPorts?: number[];
 }) {
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser);
@@ -145,6 +148,51 @@ function resolveBrowserBaseUrl(params: {
     params.target ??
     (normalizedControlUrl ? "custom" : normalizedDefault ? "sandbox" : "host");
 
+  const assertAllowedControlUrl = (url: string) => {
+    const allowedUrls = params.allowedControlUrls?.map((entry) =>
+      entry.trim().replace(/\/$/, ""),
+    );
+    const allowedHosts = params.allowedControlHosts?.map((entry) =>
+      entry.trim().toLowerCase(),
+    );
+    const allowedPorts = params.allowedControlPorts;
+    if (
+      !allowedUrls?.length &&
+      !allowedHosts?.length &&
+      !allowedPorts?.length
+    ) {
+      return;
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error(`Invalid browser controlUrl: ${url}`);
+    }
+    const normalizedUrl = parsed.toString().replace(/\/$/, "");
+    if (allowedUrls?.length && !allowedUrls.includes(normalizedUrl)) {
+      throw new Error("Browser controlUrl is not in the allowed URL list.");
+    }
+    if (allowedHosts?.length && !allowedHosts.includes(parsed.hostname)) {
+      throw new Error(
+        "Browser controlUrl hostname is not in the allowed host list.",
+      );
+    }
+    if (allowedPorts?.length) {
+      const port =
+        parsed.port?.trim() !== ""
+          ? Number(parsed.port)
+          : parsed.protocol === "https:"
+            ? 443
+            : 80;
+      if (!Number.isFinite(port) || !allowedPorts.includes(port)) {
+        throw new Error(
+          "Browser controlUrl port is not in the allowed port list.",
+        );
+      }
+    }
+  };
+
   if (target !== "custom" && params.target && normalizedControlUrl) {
     throw new Error('controlUrl is only supported with target="custom".');
   }
@@ -153,7 +201,9 @@ function resolveBrowserBaseUrl(params: {
     if (!normalizedControlUrl) {
       throw new Error("Custom browser target requires controlUrl.");
     }
-    return normalizedControlUrl.replace(/\/$/, "");
+    const normalized = normalizedControlUrl.replace(/\/$/, "");
+    assertAllowedControlUrl(normalized);
+    return normalized;
   }
 
   if (target === "sandbox") {
@@ -173,18 +223,40 @@ function resolveBrowserBaseUrl(params: {
       "Browser control is disabled. Set browser.enabled=true in ~/.clawdbot/clawdbot.json.",
     );
   }
-  return resolved.controlUrl.replace(/\/$/, "");
+  const normalized = resolved.controlUrl.replace(/\/$/, "");
+  assertAllowedControlUrl(normalized);
+  return normalized;
 }
 
 export function createBrowserTool(opts?: {
   defaultControlUrl?: string;
   allowHostControl?: boolean;
+  allowedControlUrls?: string[];
+  allowedControlHosts?: string[];
+  allowedControlPorts?: number[];
 }): AnyAgentTool {
+  const targetDefault = opts?.defaultControlUrl ? "sandbox" : "host";
+  const hostHint =
+    opts?.allowHostControl === false
+      ? "Host target blocked by policy."
+      : "Host target allowed.";
+  const allowlistHint =
+    opts?.allowedControlUrls?.length ||
+    opts?.allowedControlHosts?.length ||
+    opts?.allowedControlPorts?.length
+      ? "Custom targets are restricted by sandbox allowlists."
+      : "Custom targets are unrestricted.";
   return {
     label: "Browser",
     name: "browser",
-    description:
-      "Control clawd's dedicated browser (status/start/stop/tabs/open/snapshot/screenshot/actions). Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+    description: [
+      "Control clawd's dedicated browser (status/start/stop/tabs/open/snapshot/screenshot/actions).",
+      "Use snapshot+act for UI automation. Avoid act:wait by default; use only in exceptional cases when no reliable UI state exists.",
+      `target selects browser location (sandbox|host|custom). Default: ${targetDefault}.`,
+      "controlUrl implies target=custom (remote control server).",
+      hostHint,
+      allowlistHint,
+    ].join(" "),
     parameters: BrowserToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -201,6 +273,9 @@ export function createBrowserTool(opts?: {
         controlUrl,
         defaultControlUrl: opts?.defaultControlUrl,
         allowHostControl: opts?.allowHostControl,
+        allowedControlUrls: opts?.allowedControlUrls,
+        allowedControlHosts: opts?.allowedControlHosts,
+        allowedControlPorts: opts?.allowedControlPorts,
       });
 
       switch (action) {
