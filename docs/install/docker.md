@@ -43,6 +43,11 @@ This script:
 - starts the gateway via Docker Compose
 - generates a gateway token and writes it to `.env`
 
+Optional env vars:
+- `CLAWDBOT_DOCKER_APT_PACKAGES` — install extra apt packages during build
+- `CLAWDBOT_EXTRA_MOUNTS` — add extra host bind mounts
+- `CLAWDBOT_HOME_VOLUME` — persist `/home/node` in a named volume
+
 After it finishes:
 - Open `http://127.0.0.1:18789/` in your browser.
 - Paste the token into the Control UI (Settings → token).
