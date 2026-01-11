@@ -90,11 +90,10 @@ export function sanitizeToolUseResultPairing(
 
     const role = (msg as { role?: unknown }).role;
     if (role !== "assistant") {
-      if (role === "toolResult") {
-        pushToolResult(msg as Extract<AgentMessage, { role: "toolResult" }>);
-      } else {
-        out.push(msg);
-      }
+      // Tool results must only appear directly after the matching assistant tool call turn.
+      // Any "free-floating" toolResult entries in session history can make strict providers
+      // (Anthropic-compatible APIs, MiniMax, Cloud Code Assist) reject the entire request.
+      if (role !== "toolResult") out.push(msg);
       continue;
     }
 
@@ -141,7 +140,8 @@ export function sanitizeToolUseResultPairing(
         }
       }
 
-      remainder.push(next);
+      // Drop tool results that don't match the current assistant tool calls.
+      if (nextRole !== "toolResult") remainder.push(next);
     }
 
     out.push(msg);
@@ -157,11 +157,6 @@ export function sanitizeToolUseResultPairing(
     for (const rem of remainder) {
       if (!rem || typeof rem !== "object") {
         out.push(rem);
-        continue;
-      }
-      const remRole = (rem as { role?: unknown }).role;
-      if (remRole === "toolResult") {
-        pushToolResult(rem as Extract<AgentMessage, { role: "toolResult" }>);
         continue;
       }
       out.push(rem);

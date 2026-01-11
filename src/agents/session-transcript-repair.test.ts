@@ -92,4 +92,25 @@ describe("sanitizeToolUseResultPairing", () => {
     expect(results).toHaveLength(1);
     expect(results[0]?.toolCallId).toBe("call_1");
   });
+
+  it("drops orphan tool results that do not match any tool call", () => {
+    const input = [
+      { role: "user", content: "hello" },
+      {
+        role: "toolResult",
+        toolCallId: "call_orphan",
+        toolName: "read",
+        content: [{ type: "text", text: "orphan" }],
+        isError: false,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "ok" }],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = sanitizeToolUseResultPairing(input);
+    expect(out.some((m) => m.role === "toolResult")).toBe(false);
+    expect(out.map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
 });
