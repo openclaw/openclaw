@@ -9,10 +9,10 @@ import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
-  applyOpenrouterConfig,
-  applyOpenrouterProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
+  applyOpenrouterConfig,
+  applyOpenrouterProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
   writeOAuthCredentials,
 } from "./onboard-auth.js";

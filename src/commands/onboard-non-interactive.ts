@@ -35,14 +35,14 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxConfig,
   applyMinimaxHostedConfig,
-  applyOpenrouterConfig,
   applyOpencodeZenConfig,
+  applyOpenrouterConfig,
   applyZaiConfig,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
-  setOpenrouterApiKey,
   setOpencodeZenApiKey,
+  setOpenrouterApiKey,
   setZaiApiKey,
 } from "./onboard-auth.js";
 import {
