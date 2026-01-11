@@ -31,7 +31,7 @@ struct GeneralSettings: View {
             VStack(alignment: .leading, spacing: 18) {
                 if !self.state.onboardingSeen {
                     Button {
-                        OnboardingController.shared.show()
+                        DebugActions.restartOnboarding()
                     } label: {
                         Text("Complete onboarding to finish setup")
                             .font(.callout.weight(.semibold))

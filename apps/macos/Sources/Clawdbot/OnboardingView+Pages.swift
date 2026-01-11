@@ -654,7 +654,7 @@ extension OnboardingView {
                 .frame(maxWidth: 520)
                 .fixedSize(horizontal: false, vertical: true)
 
-            self.onboardingCard(padding: 8) {
+            self.onboardingGlassCard(padding: 8) {
                 ClawdbotChatView(viewModel: self.onboardingChatModel, style: .onboarding)
                     .frame(maxHeight: .infinity)
             }
