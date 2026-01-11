@@ -285,12 +285,22 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         headerItem.isEnabled = false
         headerItem.view = self.makeHostedView(
             rootView: AnyView(MenuUsageHeaderView(
-                count: rows.count,
-                statusText: errorText)),
+                count: rows.count)),
             width: width,
             highlighted: false)
         menu.insertItem(headerItem, at: cursor)
         cursor += 1
+
+        if let errorText = errorText?.nonEmpty, !rows.isEmpty {
+            menu.insertItem(
+                self.makeMessageItem(
+                    text: errorText,
+                    symbolName: "exclamationmark.triangle",
+                    width: width,
+                    maxLines: 2),
+                at: cursor)
+            cursor += 1
+        }
 
         if rows.isEmpty {
             menu.insertItem(
@@ -444,13 +454,14 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         return item
     }
 
-    private func makeMessageItem(text: String, symbolName: String, width: CGFloat) -> NSMenuItem {
+    private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = nil) -> NSMenuItem {
         let view = AnyView(
             Label(text, systemImage: symbolName)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.leading)
-                .lineLimit(nil)
+                .lineLimit(maxLines)
+                .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 18)
                 .padding(.trailing, 12)

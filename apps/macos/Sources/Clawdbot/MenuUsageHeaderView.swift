@@ -2,7 +2,6 @@ import SwiftUI
 
 struct MenuUsageHeaderView: View {
     let count: Int
-    let statusText: String?
 
     private let paddingTop: CGFloat = 8
     private let paddingBottom: CGFloat = 6
@@ -19,14 +18,6 @@ struct MenuUsageHeaderView: View {
                 Text(self.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            }
-
-            if let statusText, !statusText.isEmpty {
-                Text(statusText)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
             }
         }
         .padding(.top, self.paddingTop)
