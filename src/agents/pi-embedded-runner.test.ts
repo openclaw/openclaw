@@ -432,6 +432,50 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     }
   });
 
+  it("handles per-DM overrides for all supported providers", () => {
+    const providers = [
+      "telegram",
+      "whatsapp",
+      "discord",
+      "slack",
+      "signal",
+      "imessage",
+      "msteams",
+    ] as const;
+
+    for (const provider of providers) {
+      // Test per-DM override takes precedence
+      const configWithOverride = {
+        [provider]: {
+          dmHistoryLimit: 20,
+          dms: { user123: { historyLimit: 7 } },
+        },
+      } as ClawdbotConfig;
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          `${provider}:dm:user123`,
+          configWithOverride,
+        ),
+      ).toBe(7);
+
+      // Test fallback to provider default when user not in dms
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          `${provider}:dm:otheruser`,
+          configWithOverride,
+        ),
+      ).toBe(20);
+
+      // Test with agent-prefixed key
+      expect(
+        getDmHistoryLimitFromSessionKey(
+          `agent:main:${provider}:dm:user123`,
+          configWithOverride,
+        ),
+      ).toBe(7);
+    }
+  });
+
   it("returns per-DM override when set", () => {
     const config = {
       telegram: {
