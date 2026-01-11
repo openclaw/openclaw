@@ -7,7 +7,7 @@
 
 export { default } from "./context-pruning/extension.js";
 
-export { pruneContextMessages } from "./context-pruning/pruner.js";
+export { pruneContextMessages, estimateMessageChars, estimateContextChars, emergencyTruncateMessages } from "./context-pruning/pruner.js";
 export type {
   ContextPruningConfig,
   ContextPruningToolMatch,

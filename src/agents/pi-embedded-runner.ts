@@ -94,6 +94,10 @@ import {
   extractAssistantThinking,
   formatReasoningMessage,
 } from "./pi-embedded-utils.js";
+import {
+  emergencyTruncateMessages,
+  estimateContextChars,
+} from "./pi-extensions/context-pruning.js";
 import { setContextPruningRuntime } from "./pi-extensions/context-pruning/runtime.js";
 import { computeEffectiveSettings } from "./pi-extensions/context-pruning/settings.js";
 import { makeToolPrunablePredicate } from "./pi-extensions/context-pruning/tools.js";
@@ -950,6 +954,45 @@ export async function compactEmbeddedPiSession(params: {
         }));
 
         try {
+          // Emergency circuit breaker: Check if context is too large before compacting
+          const EMERGENCY_CIRCUIT_BREAKER_RATIO = 0.9;
+          const DEFAULT_CONTEXT_TOKENS = 200_000;
+          const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+          try {
+            const currentMessages = session.messages;
+            const currentChars = estimateContextChars(currentMessages);
+            const currentTokens = Math.ceil(currentChars / CHARS_PER_TOKEN_ESTIMATE);
+
+            const contextWindowTokens = model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+            const emergencyThresholdTokens = Math.floor(
+              contextWindowTokens * EMERGENCY_CIRCUIT_BREAKER_RATIO,
+            );
+
+            if (currentTokens > emergencyThresholdTokens) {
+              log.warn(
+                `Emergency circuit breaker in /compact: session has ${currentTokens} tokens (threshold: ${emergencyThresholdTokens})`,
+              );
+
+              // Truncate to last N user messages before compaction
+              const truncatedMessages = emergencyTruncateMessages({
+                messages: currentMessages,
+                maxTokens: emergencyThresholdTokens,
+                keepLastMessages: 5,
+              });
+
+              // Replace messages in the session
+              session.agent.replaceMessages(truncatedMessages);
+
+              log.info(
+                `Emergency truncation in /compact complete: reduced to ${truncatedMessages.length} messages`,
+              );
+            }
+          } catch (err) {
+            // If emergency truncation fails, log but don't prevent compaction
+            log.warn(`Emergency circuit breaker in /compact failed: ${describeUnknownError(err)}`);
+          }
+
           const prior = await sanitizeSessionHistory({
             messages: session.messages,
             modelApi: model.api,
@@ -1412,6 +1455,47 @@ export async function runEmbeddedPiAgent(params: {
 
           let messagesSnapshot: AgentMessage[] = [];
           let sessionIdUsed = session.sessionId;
+
+          // Emergency circuit breaker: Prevent context overflow deadlock by truncating
+          // before the SDK's auto-compaction can fail.
+          const EMERGENCY_CIRCUIT_BREAKER_RATIO = 0.9; // 90% of context window
+          const DEFAULT_CONTEXT_TOKENS = 200_000;
+          const CHARS_PER_TOKEN_ESTIMATE = 4;
+
+          try {
+            const currentMessages = session.messages;
+            const currentChars = estimateContextChars(currentMessages);
+            const currentTokens = Math.ceil(currentChars / CHARS_PER_TOKEN_ESTIMATE);
+
+            const contextWindowTokens = model.contextWindow ?? DEFAULT_CONTEXT_TOKENS;
+            const emergencyThresholdTokens = Math.floor(
+              contextWindowTokens * EMERGENCY_CIRCUIT_BREAKER_RATIO,
+            );
+
+            if (currentTokens > emergencyThresholdTokens) {
+              log.warn(
+                `Emergency circuit breaker triggered: session has ${currentTokens} tokens (threshold: ${emergencyThresholdTokens})`,
+              );
+
+              // Truncate to last N user messages
+              const truncatedMessages = emergencyTruncateMessages({
+                messages: currentMessages,
+                maxTokens: emergencyThresholdTokens,
+                keepLastMessages: 5,
+              });
+
+              // Replace messages in the session
+              session.agent.replaceMessages(truncatedMessages);
+
+              log.info(
+                `Emergency truncation complete: reduced to ${truncatedMessages.length} messages`,
+              );
+            }
+          } catch (err) {
+            // If emergency truncation fails, log but don't prevent the run
+            log.warn(`Emergency circuit breaker failed: ${describeUnknownError(err)}`);
+          }
+
           const onAbort = () => {
             abortRun();
           };

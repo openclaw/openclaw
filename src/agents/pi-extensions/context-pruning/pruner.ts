@@ -135,6 +135,122 @@ function estimateContextChars(messages: AgentMessage[]): number {
   return messages.reduce((sum, m) => sum + estimateMessageChars(m), 0);
 }
 
+export { estimateMessageChars, estimateContextChars };
+
+/**
+ * Emergency circuit breaker: truncates session to last N messages when context is critically large.
+ * This prevents auto-compaction deadlock when the summarization request itself exceeds the context window.
+ *
+ * @param messages - Current session messages
+ * @param maxTokens - Maximum allowed tokens (e.g., 180,000 for a 200k model)
+ * @returns Truncated messages with system message explaining the truncation
+ */
+export function emergencyTruncateMessages(params: {
+  messages: AgentMessage[];
+  maxTokens: number;
+  keepLastMessages?: number; // Default: 5 user messages
+}): AgentMessage[] {
+  const { messages, maxTokens, keepLastMessages = 5 } = params;
+
+  // Estimate current token count
+  const currentChars = estimateContextChars(messages);
+  const currentTokens = Math.ceil(currentChars / CHARS_PER_TOKEN_ESTIMATE);
+
+  // If we're already under the limit, return as-is (no truncation needed)
+  const needsTruncation = currentTokens > maxTokens;
+  if (!needsTruncation) {
+    return messages;
+  }
+
+  // Find the cutoff index: the first message OF the last N user messages
+  let userMessageCount = 0;
+  let keepFromIndex = 0; // Default to keeping everything
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    if (msg.role === "user") {
+      userMessageCount++;
+      if (userMessageCount === keepLastMessages) {
+        // Found the first user message in our keep range
+        // Keep everything starting from this message
+        keepFromIndex = i;
+        break;
+      }
+    }
+  }
+
+  // Keep system and session header messages at the start
+  const headerMessages: AgentMessage[] = [];
+  let sessionHeaderIndex = -1;
+
+  // Helper to check if a message looks like a session header (JSON with type: "session")
+  function isSessionHeader(msg: AgentMessage): boolean {
+    if (msg.role !== "user") return false;
+    if (typeof msg.content === "string") {
+      try {
+        const parsed = JSON.parse(msg.content);
+        return parsed.type === "session";
+      } catch {
+        return false;
+      }
+    }
+    if (Array.isArray(msg.content) && msg.content.length > 0) {
+      const block = msg.content[0];
+      if (block.type === "text") {
+        try {
+          const parsed = JSON.parse(block.text);
+          return parsed.type === "session";
+        } catch {
+          return false;
+        }
+      }
+    }
+    return false;
+  }
+
+  for (let i = 0; i < messages.length; i++) {
+    const msg = messages[i];
+    if (!msg) continue;
+
+    if (msg.role === "system") {
+      headerMessages.push(msg);
+    } else if (msg.role === "user" && sessionHeaderIndex === -1) {
+      // Check if this looks like a session header (JSON with type: "session")
+      if (isSessionHeader(msg)) {
+        headerMessages.push(msg);
+        sessionHeaderIndex = i;
+      } else {
+        // Not a session header, stop here
+        break;
+      }
+    } else {
+      break;
+    }
+  }
+
+  // Build the truncated message list
+  const truncatedMessages: AgentMessage[] = [
+    ...headerMessages,
+  ];
+
+  // Add a summary message explaining the truncation
+  const summaryText = `[EMERGENCY CONTEXT TRUNCATION] The session history exceeded ${currentTokens} tokens (limit: ${maxTokens}). To prevent a permanent failure state, older messages have been removed. Only the last ${keepLastMessages} user messages and their associated results are kept. Use /compact to create a proper summary.`;
+
+  truncatedMessages.push({
+    role: "assistant",
+    content: [{ type: "text", text: summaryText }],
+  } as unknown as AgentMessage);
+
+  // Add the remaining messages from the cutoff point
+  if (keepFromIndex > 0 && keepFromIndex < messages.length) {
+    truncatedMessages.push(...messages.slice(keepFromIndex));
+  }
+
+  return truncatedMessages;
+}
+
 function findAssistantCutoffIndex(
   messages: AgentMessage[],
   keepLastAssistants: number,
