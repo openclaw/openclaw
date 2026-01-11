@@ -71,7 +71,8 @@ Target formats (`--to`):
 - `read`
   - Providers: Discord/Slack
   - Required: `--to`
-  - Optional: `--limit`, `--before`, `--after`, `--around`, `--channel-id`
+  - Optional: `--limit`, `--before`, `--after`, `--channel-id`
+  - Discord only: `--around`
 
 - `edit`
   - Providers: Discord/Slack
