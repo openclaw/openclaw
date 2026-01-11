@@ -416,7 +416,9 @@ export async function agentCommand(
       catalog: catalogForThinking,
     });
   }
-  const sessionFile = resolveSessionFilePath(sessionId, sessionEntry);
+  const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId: sessionAgentId,
+  });
 
   const startedAt = Date.now();
   let lifecycleEnded = false;
