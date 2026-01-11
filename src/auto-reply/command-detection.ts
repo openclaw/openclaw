@@ -1,5 +1,6 @@
 import type { ClawdbotConfig } from "../config/types.js";
 import {
+  type CommandNormalizeOptions,
   listChatCommands,
   listChatCommandsForConfig,
   normalizeCommandBody,
@@ -8,11 +9,12 @@ import {
 export function hasControlCommand(
   text?: string,
   cfg?: ClawdbotConfig,
+  options?: CommandNormalizeOptions,
 ): boolean {
   if (!text) return false;
   const trimmed = text.trim();
   if (!trimmed) return false;
-  const normalizedBody = normalizeCommandBody(trimmed);
+  const normalizedBody = normalizeCommandBody(trimmed, options);
   if (!normalizedBody) return false;
   const lowered = normalizedBody.toLowerCase();
   const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();

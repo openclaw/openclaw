@@ -71,4 +71,17 @@ describe("control command parsing", () => {
     expect(hasControlCommand("prefix /send on")).toBe(false);
     expect(hasControlCommand("/send on")).toBe(true);
   });
+
+  it("ignores telegram commands addressed to other bots", () => {
+    expect(
+      hasControlCommand("/help@otherbot", undefined, {
+        botUsername: "clawdbot",
+      }),
+    ).toBe(false);
+    expect(
+      hasControlCommand("/help@clawdbot", undefined, {
+        botUsername: "clawdbot",
+      }),
+    ).toBe(true);
+  });
 });
