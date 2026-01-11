@@ -3,26 +3,20 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
 
-function createMockResolver(files: Record<string, unknown>) {
-  const fsModule = {
-    readFileSync: (filePath: string) => {
+function createMockResolver(files: Record<string, unknown>): IncludeResolver {
+  return {
+    readFile: (filePath: string) => {
       if (filePath in files) {
         return JSON.stringify(files[filePath]);
       }
-      const err = new Error(`ENOENT: no such file: ${filePath}`);
-      (err as NodeJS.ErrnoException).code = "ENOENT";
-      throw err;
+      throw new Error(`ENOENT: no such file: ${filePath}`);
     },
-  } as typeof import("node:fs");
-
-  const json5Module = {
-    parse: JSON.parse,
-  } as typeof import("json5");
-
-  return { fsModule, json5Module };
+    parseJson: JSON.parse,
+  };
 }
 
 function resolve(
@@ -124,9 +118,9 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("throws ConfigIncludeError for invalid JSON", () => {
-    const resolver = {
-      fsModule: { readFileSync: () => "{ invalid json }" } as typeof import("node:fs"),
-      json5Module: { parse: JSON.parse } as typeof import("json5"),
+    const resolver: IncludeResolver = {
+      readFile: () => "{ invalid json }",
+      parseJson: JSON.parse,
     };
     const obj = { $include: "./bad.json" };
     expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
@@ -136,19 +130,17 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("throws CircularIncludeError for circular includes", () => {
-    const resolver = {
-      fsModule: {
-        readFileSync: (filePath: string) => {
-          if (filePath === "/config/a.json") {
-            return JSON.stringify({ $include: "./b.json" });
-          }
-          if (filePath === "/config/b.json") {
-            return JSON.stringify({ $include: "./a.json" });
-          }
-          throw new Error(`Unknown file: ${filePath}`);
-        },
-      } as typeof import("node:fs"),
-      json5Module: { parse: JSON.parse } as typeof import("json5"),
+    const resolver: IncludeResolver = {
+      readFile: (filePath: string) => {
+        if (filePath === "/config/a.json") {
+          return JSON.stringify({ $include: "./b.json" });
+        }
+        if (filePath === "/config/b.json") {
+          return JSON.stringify({ $include: "./a.json" });
+        }
+        throw new Error(`Unknown file: ${filePath}`);
+      },
+      parseJson: JSON.parse,
     };
     const obj = { $include: "./a.json" };
     expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))

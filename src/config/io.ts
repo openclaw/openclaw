@@ -162,8 +162,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
       // Resolve $include directives before validation
       const resolved = resolveConfigIncludes(parsed, configPath, {
-        fsModule: deps.fs,
-        json5Module: deps.json5,
+        readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+        parseJson: (raw) => deps.json5.parse(raw),
       });
 
       warnOnConfigMiskeys(resolved, deps.logger);
@@ -267,8 +267,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       let resolved: unknown;
       try {
         resolved = resolveConfigIncludes(parsedRes.parsed, configPath, {
-          fsModule: deps.fs,
-          json5Module: deps.json5,
+          readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+          parseJson: (raw) => deps.json5.parse(raw),
         });
       } catch (err) {
         const message =
