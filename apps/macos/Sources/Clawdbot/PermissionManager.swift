@@ -10,6 +10,10 @@ import Speech
 import UserNotifications
 
 enum PermissionManager {
+    static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways _: Bool) -> Bool {
+        status == .authorizedAlways
+    }
+
     static func ensure(_ caps: [Capability], interactive: Bool) async -> [Capability: Bool] {
         var results: [Capability: Bool] = [:]
         for cap in caps {
@@ -138,18 +142,23 @@ enum PermissionManager {
     }
 
     private static func ensureLocation(interactive: Bool) async -> Bool {
+        guard CLLocationManager.locationServicesEnabled() else {
+            if interactive {
+                await MainActor.run { LocationPermissionHelper.openSettings() }
+            }
+            return false
+        }
         let status = CLLocationManager().authorizationStatus
         switch status {
-        // Note: macOS only supports authorizedAlways, not authorizedWhenInUse (iOS only)
         case .authorizedAlways:
             return true
         case .notDetermined:
             guard interactive else { return false }
             let updated = await LocationPermissionRequester.shared.request(always: false)
-            return updated == .authorizedAlways
+            return self.isLocationAuthorized(status: updated, requireAlways: false)
         case .denied, .restricted:
             if interactive {
-                LocationPermissionHelper.openSettings()
+                await MainActor.run { LocationPermissionHelper.openSettings() }
             }
             return false
         @unknown default:
@@ -202,8 +211,8 @@ enum PermissionManager {
 
             case .location:
                 let status = CLLocationManager().authorizationStatus
-                // Note: macOS only supports authorizedAlways
-                results[cap] = status == .authorizedAlways
+                results[cap] = CLLocationManager.locationServicesEnabled()
+                    && self.isLocationAuthorized(status: status, requireAlways: false)
             }
         }
         return results
@@ -282,13 +291,21 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     }
 
     func request(always: Bool) async -> CLAuthorizationStatus {
-        if always {
-            self.manager.requestAlwaysAuthorization()
-        } else {
-            self.manager.requestWhenInUseAuthorization()
+        let current = self.manager.authorizationStatus
+        if PermissionManager.isLocationAuthorized(status: current, requireAlways: always) {
+            return current
         }
+
         return await withCheckedContinuation { cont in
             self.continuation = cont
+            if always {
+                self.manager.requestAlwaysAuthorization()
+            } else {
+                self.manager.requestWhenInUseAuthorization()
+            }
+
+            // On macOS, requesting an actual fix makes the prompt more reliable.
+            self.manager.requestLocation()
         }
     }
 

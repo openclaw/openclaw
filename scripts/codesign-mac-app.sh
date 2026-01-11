@@ -146,6 +146,8 @@ cat > "$ENT_TMP_APP_BASE" <<'PLIST'
     <true/>
     <key>com.apple.security.device.camera</key>
     <true/>
+    <key>com.apple.security.personal-information.location</key>
+    <true/>
 </dict>
 </plist>
 PLIST
@@ -175,6 +177,8 @@ cat > "$ENT_TMP_APP" <<'PLIST'
     <key>com.apple.security.device.audio-input</key>
     <true/>
     <key>com.apple.security.device.camera</key>
+    <true/>
+    <key>com.apple.security.personal-information.location</key>
     <true/>
 </dict>
 </plist>

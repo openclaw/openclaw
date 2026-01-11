@@ -47,10 +47,14 @@
     <string>Clawdbot captures the screen when the agent needs screenshots for context.</string>
     <key>NSCameraUsageDescription</key>
     <string>Clawdbot can capture photos or short video clips when requested by the agent.</string>
-    <key>NSLocationUsageDescription</key>
-    <string>Clawdbot can share your location when requested by the agent.</string>
-    <key>NSMicrophoneUsageDescription</key>
-    <string>Clawdbot needs the mic for Voice Wake tests and agent audio capture.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>Clawdbot can share your location when requested by the agent.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Clawdbot can share your location when requested by the agent.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Clawdbot can share your location when requested by the agent.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Clawdbot needs the mic for Voice Wake tests and agent audio capture.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
     <string>Clawdbot uses speech recognition to detect your Voice Wake trigger phrase.</string>
     <key>NSAppleEventsUsageDescription</key>
