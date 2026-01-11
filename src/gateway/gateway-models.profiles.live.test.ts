@@ -387,8 +387,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 sessionKey,
                 idempotencyKey: `idem-${runIdTool}-tool`,
                 message:
-                  `Call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments {"path":"${toolProbePath}"}. ` +
-                  `Then reply with exactly: ${nonceA} ${nonceB}. No extra text.`,
+                  "Clawdbot live tool probe (local, safe): " +
+                  `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                  "Then reply with the two nonce values you read (include both).",
                 deliver: false,
               },
               { expectFinal: true },
@@ -404,7 +405,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             }
 
             if (EXTRA_TOOL_PROBES) {
-              const nonceC = `nonceC=${randomUUID()}`;
+              const nonceC = randomUUID();
               const toolWritePath = path.join(
                 tempDir,
                 `write-${runIdTool}.txt`,
@@ -416,10 +417,11 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                   sessionKey,
                   idempotencyKey: `idem-${runIdTool}-bash-read`,
                   message:
-                    `Call the tool named \`bash\` (or \`Bash\` if \`bash\` is unavailable) and run: ` +
-                    `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}" ` +
-                    `Then call the tool named \`read\` (or \`Read\` if \`read\` is unavailable) with JSON arguments: {"path":"${toolWritePath}"} ` +
-                    `Finally reply with exactly: ${nonceC}.`,
+                    "Clawdbot live tool probe (local, safe): " +
+                    "use the tool named `bash` (or `Bash`) to run this command: " +
+                    `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                    `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                    "Finally reply including the nonce text you read back.",
                   deliver: false,
                 },
                 { expectFinal: true },
