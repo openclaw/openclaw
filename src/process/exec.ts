@@ -66,7 +66,7 @@ export async function runCommandWithTimeout(
     const child = spawn(argv[0], argv.slice(1), {
       stdio: [hasInput ? "pipe" : "inherit", "pipe", "pipe"],
       cwd,
-      env: env ?? process.env,
+      env: env ? { ...process.env, ...env } : process.env,
     });
     let stdout = "";
     let stderr = "";
