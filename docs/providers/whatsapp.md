@@ -206,6 +206,7 @@ WhatsApp can automatically send emoji reactions to incoming messages immediately
 - In groups with `requireMention: false` (activation: always), `group: "mentions"` will react to all messages (not just @mentions).
 - Fire-and-forget: reaction failures are logged but don't prevent the bot from replying.
 - Participant JID is automatically included for group reactions.
+- WhatsApp ignores `messages.ackReaction`; use `whatsapp.ackReaction` instead.
 
 ## Agent tool (reactions)
 - Tool: `whatsapp` with `react` action (`chatJid`, `messageId`, `emoji`, optional `remove`).

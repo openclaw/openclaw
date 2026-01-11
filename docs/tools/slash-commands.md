@@ -40,8 +40,10 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 Text + native (when enabled):
 - `/help`
 - `/commands`
-- `/status` (show current status; includes a short usage line when available; alias: `/usage`)
-- `/whoami` (show your sender id; alias: `/id`)
+- `/status`
+- `/status` (show current status; includes a short usage line when available)
+- `/usage` (alias: `/status`)
+- `/whoami` (alias: `/id`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
 - `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/cost on|off` (toggle per-response usage line)

@@ -76,6 +76,17 @@ describe("WhatsApp ack reaction logic", () => {
         }),
       ).toBe(false);
     });
+
+    it("should not react when message id is missing", () => {
+      const cfg: ClawdbotConfig = {
+        whatsapp: { ackReaction: { emoji: "👀", direct: true } },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          chatType: "direct",
+        }),
+      ).toBe(false);
+    });
   });
 
   describe("group chat - always mode", () => {
@@ -255,6 +266,20 @@ describe("WhatsApp ack reaction logic", () => {
           wasMentioned: true,
         }),
       ).toBe(true);
+    });
+  });
+
+  describe("legacy config is ignored", () => {
+    it("does not use messages.ackReaction for WhatsApp", () => {
+      const cfg: ClawdbotConfig = {
+        messages: { ackReaction: "👀", ackReactionScope: "all" },
+      };
+      expect(
+        shouldSendReaction(cfg, {
+          id: "m1",
+          chatType: "direct",
+        }),
+      ).toBe(false);
     });
   });
 });
