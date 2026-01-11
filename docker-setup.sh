@@ -132,7 +132,7 @@ upsert_env() {
       local replaced=false
       for k in "${keys[@]}"; do
         if [[ "$key" == "$k" ]]; then
-          printf '%s=%s\n' "$k" "${!k}" >>"$tmp"
+          printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
           seen["$k"]=1
           replaced=true
           break
@@ -146,7 +146,7 @@ upsert_env() {
 
   for k in "${keys[@]}"; do
     if [[ -z "${seen[$k]:-}" ]]; then
-      printf '%s=%s\n' "$k" "${!k}" >>"$tmp"
+      printf '%s=%s\n' "$k" "${!k-}" >>"$tmp"
     fi
   done
 
