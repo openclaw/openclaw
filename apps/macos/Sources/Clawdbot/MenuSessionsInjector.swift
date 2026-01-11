@@ -454,7 +454,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         return item
     }
 
-    private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = nil) -> NSMenuItem {
+    private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = 2) -> NSMenuItem {
         let view = AnyView(
             Label(text, systemImage: symbolName)
                 .font(.caption)
@@ -466,7 +466,7 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
                 .padding(.leading, 18)
                 .padding(.trailing, 12)
                 .padding(.vertical, 6)
-                .frame(minWidth: 300, alignment: .leading))
+                .frame(width: max(1, width), alignment: .leading))
 
         let item = NSMenuItem()
         item.tag = self.tag

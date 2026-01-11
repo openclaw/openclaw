@@ -37,12 +37,14 @@ struct UsageMenuLabelView: View {
 
                 Spacer(minLength: 4)
 
-                Text(self.row.detailText())
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(self.secondaryTextColor)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(2)
+                if !self.row.hasError {
+                    Text(self.row.detailText())
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(self.secondaryTextColor)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .layoutPriority(2)
+                }
 
                 if self.showsChevron {
                     Image(systemName: "chevron.right")
@@ -50,6 +52,16 @@ struct UsageMenuLabelView: View {
                         .foregroundStyle(self.secondaryTextColor)
                         .padding(.leading, 2)
                 }
+            }
+
+            if let error = self.row.error?.nonEmpty {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(self.secondaryTextColor)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding(.vertical, 10)

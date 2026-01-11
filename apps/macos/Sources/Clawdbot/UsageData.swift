@@ -29,6 +29,11 @@ struct UsageRow: Identifiable {
     let resetAt: Date?
     let error: String?
 
+    var hasError: Bool {
+        if let error, !error.isEmpty { return true }
+        return false
+    }
+
     var titleText: String {
         if let plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
         return self.displayName
@@ -41,7 +46,6 @@ struct UsageRow: Identifiable {
     }
 
     func detailText(now: Date = .init()) -> String {
-        if let error, !error.isEmpty { return error }
         guard let remaining = self.remainingPercent else { return "No data" }
         var parts = ["\(remaining)% left"]
         if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
