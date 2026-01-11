@@ -75,6 +75,10 @@ function isGoogleModelNotFoundText(text: string): boolean {
   return false;
 }
 
+function isRefreshTokenReused(error: string): boolean {
+  return /refresh_token_reused/i.test(error);
+}
+
 function randomImageProbeCode(len = 10): string {
   const alphabet = "2345689ABCEF";
   const bytes = randomBytes(len);
@@ -533,7 +537,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               }
             }
           } catch (err) {
-            failures.push({ model: modelKey, error: String(err) });
+            const message = String(err);
+            // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
+            if (
+              model.provider === "openai-codex" &&
+              isRefreshTokenReused(message)
+            ) {
+              continue;
+            }
+            failures.push({ model: modelKey, error: message });
           }
         }
 
