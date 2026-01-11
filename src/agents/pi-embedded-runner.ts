@@ -413,6 +413,38 @@ async function sanitizeSessionHistory(params: {
   }).messages;
 }
 
+/**
+ * Limits conversation history to the last N user turns (and their associated
+ * assistant responses). This reduces token usage for long-running DM sessions.
+ *
+ * @param messages - The full message history
+ * @param limit - Max number of user turns to keep (undefined = no limit)
+ * @returns Messages trimmed to the last `limit` user turns
+ */
+export function limitHistoryTurns(
+  messages: AgentMessage[],
+  limit: number | undefined,
+): AgentMessage[] {
+  if (!limit || limit <= 0 || messages.length === 0) return messages;
+
+  // Count user messages from the end, find cutoff point
+  let userCount = 0;
+  let lastUserIndex = messages.length;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      userCount++;
+      if (userCount > limit) {
+        // We exceeded the limit; keep from the last valid user turn onwards
+        return messages.slice(lastUserIndex);
+      }
+      lastUserIndex = i;
+    }
+  }
+  // Fewer than limit user turns, keep all
+  return messages;
+}
+
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
@@ -1026,8 +1058,12 @@ export async function compactEmbeddedPiSession(params: {
               sessionId: params.sessionId,
             });
             const validated = validateGeminiTurns(prior);
-            if (validated.length > 0) {
-              session.agent.replaceMessages(validated);
+            const limited = limitHistoryTurns(
+              validated,
+              params.config?.session?.dmHistoryLimit,
+            );
+            if (limited.length > 0) {
+              session.agent.replaceMessages(limited);
             }
             const result = await session.compact(params.customInstructions);
             return {
@@ -1417,8 +1453,12 @@ export async function runEmbeddedPiAgent(params: {
               sessionId: params.sessionId,
             });
             const validated = validateGeminiTurns(prior);
-            if (validated.length > 0) {
-              session.agent.replaceMessages(validated);
+            const limited = limitHistoryTurns(
+              validated,
+              params.config?.session?.dmHistoryLimit,
+            );
+            if (limited.length > 0) {
+              session.agent.replaceMessages(limited);
             }
           } catch (err) {
             session.dispose();

@@ -630,6 +630,7 @@ const SessionSchema = z
     resetTriggers: z.array(z.string()).optional(),
     idleMinutes: z.number().int().positive().optional(),
     heartbeatIdleMinutes: z.number().int().positive().optional(),
+    dmHistoryLimit: z.number().int().positive().optional(),
     store: z.string().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
     typingMode: z

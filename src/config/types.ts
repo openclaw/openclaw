@@ -57,6 +57,7 @@ export type SessionConfig = {
   resetTriggers?: string[];
   idleMinutes?: number;
   heartbeatIdleMinutes?: number;
+  dmHistoryLimit?: number;
   store?: string;
   typingIntervalSeconds?: number;
   typingMode?: TypingMode;
