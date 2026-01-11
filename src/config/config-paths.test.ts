@@ -14,6 +14,8 @@ describe("config paths", () => {
       error: "Invalid path. Use dot notation (e.g. foo.bar).",
     });
     expect(parseConfigPath("__proto__.polluted").ok).toBe(false);
+    expect(parseConfigPath("constructor.polluted").ok).toBe(false);
+    expect(parseConfigPath("prototype.polluted").ok).toBe(false);
   });
 
   it("sets, gets, and unsets nested values", () => {

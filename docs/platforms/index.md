@@ -42,5 +42,5 @@ Use one of these (all supported):
 - Repair/migrate: `clawdbot doctor` (offers to install or fix the service)
 
 The service target depends on OS:
-- macOS: LaunchAgent (`com.clawdbot.gateway`)
-- Linux/WSL2: systemd user service
+- macOS: LaunchAgent (`com.clawdbot.gateway` or `com.clawdbot.<profile>`)
+- Linux/WSL2: systemd user service (`clawdbot-gateway[-<profile>].service`)

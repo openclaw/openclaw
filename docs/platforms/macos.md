@@ -31,12 +31,15 @@ node.
 
 ## Launchd control
 
-The app manages a per‑user LaunchAgent labeled `com.clawdbot.gateway`.
+The app manages a per‑user LaunchAgent labeled `com.clawdbot.gateway`
+(or `com.clawdbot.<profile>` when using `--profile`/`CLAWDBOT_PROFILE`).
 
 ```bash
 launchctl kickstart -k gui/$UID/com.clawdbot.gateway
 launchctl bootout gui/$UID/com.clawdbot.gateway
 ```
+
+Replace the label with `com.clawdbot.<profile>` when running a named profile.
 
 If the LaunchAgent isn’t installed, enable it from the app or run
 `clawdbot daemon install`.

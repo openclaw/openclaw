@@ -685,6 +685,8 @@ const CommandsSchema = z
   .object({
     native: z.boolean().optional(),
     text: z.boolean().optional(),
+    config: z.boolean().optional(),
+    debug: z.boolean().optional(),
     restart: z.boolean().optional(),
     useAccessGroups: z.boolean().optional(),
   })

@@ -39,4 +39,17 @@ describe("runtime overrides", () => {
     expect(removed.removed).toBe(true);
     expect(Object.keys(getConfigOverrides()).length).toBe(0);
   });
+
+  it("rejects prototype pollution paths", () => {
+    const attempts = [
+      "__proto__.polluted",
+      "constructor.polluted",
+      "prototype.polluted",
+    ];
+    for (const path of attempts) {
+      const result = setConfigOverride(path, true);
+      expect(result.ok).toBe(false);
+      expect(Object.keys(getConfigOverrides()).length).toBe(0);
+    }
+  });
 });

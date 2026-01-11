@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import {
-  GATEWAY_LAUNCH_AGENT_LABEL,
-  GATEWAY_SYSTEMD_SERVICE_NAME,
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 
 export type RestartAttempt = {
@@ -41,9 +41,11 @@ function formatSpawnDetail(result: {
   return "unknown error";
 }
 
-function normalizeSystemdUnit(raw?: string): string {
+function normalizeSystemdUnit(raw?: string, profile?: string): string {
   const unit = raw?.trim();
-  if (!unit) return `${GATEWAY_SYSTEMD_SERVICE_NAME}.service`;
+  if (!unit) {
+    return `${resolveGatewaySystemdServiceName(profile)}.service`;
+  }
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
@@ -54,7 +56,10 @@ export function triggerClawdbotRestart(): RestartAttempt {
   const tried: string[] = [];
   if (process.platform !== "darwin") {
     if (process.platform === "linux") {
-      const unit = normalizeSystemdUnit(process.env.CLAWDBOT_SYSTEMD_UNIT);
+      const unit = normalizeSystemdUnit(
+        process.env.CLAWDBOT_SYSTEMD_UNIT,
+        process.env.CLAWDBOT_PROFILE,
+      );
       const userArgs = ["--user", "restart", unit];
       tried.push(`systemctl ${userArgs.join(" ")}`);
       const userRestart = spawnSync("systemctl", userArgs, {
@@ -87,7 +92,8 @@ export function triggerClawdbotRestart(): RestartAttempt {
   }
 
   const label =
-    process.env.CLAWDBOT_LAUNCHD_LABEL || GATEWAY_LAUNCH_AGENT_LABEL;
+    process.env.CLAWDBOT_LAUNCHD_LABEL ||
+    resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE);
   const uid =
     typeof process.getuid === "function" ? process.getuid() : undefined;
   const target = uid !== undefined ? `gui/${uid}/${label}` : label;

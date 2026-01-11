@@ -14,7 +14,8 @@ manually in a terminal.
 
 ## Default behavior (launchd)
 
-- The app installs a per‑user LaunchAgent labeled `com.clawdbot.gateway`.
+- The app installs a per‑user LaunchAgent labeled `com.clawdbot.gateway`
+  (or `com.clawdbot.<profile>` when using `--profile`/`CLAWDBOT_PROFILE`).
 - When Local mode is enabled, the app ensures the LaunchAgent is loaded and
   starts the Gateway if needed.
 - Logs are written to the launchd gateway log path (visible in Debug Settings).
@@ -25,6 +26,8 @@ Common commands:
 launchctl kickstart -k gui/$UID/com.clawdbot.gateway
 launchctl bootout gui/$UID/com.clawdbot.gateway
 ```
+
+Replace the label with `com.clawdbot.<profile>` when running a named profile.
 
 ## Attach‑only (developer mode)
 

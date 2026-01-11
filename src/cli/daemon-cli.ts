@@ -19,9 +19,9 @@ import type {
   GatewayControlUiConfig,
 } from "../config/types.js";
 import {
-  GATEWAY_LAUNCH_AGENT_LABEL,
-  GATEWAY_SYSTEMD_SERVICE_NAME,
-  GATEWAY_WINDOWS_TASK_NAME,
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
 } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import {
@@ -309,31 +309,42 @@ function renderRuntimeHints(
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (process.platform === "linux") {
+      const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
       hints.push(
-        "Logs: journalctl --user -u clawdbot-gateway.service -n 200 --no-pager",
+        `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
       );
     } else if (process.platform === "win32") {
-      hints.push('Logs: schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST');
+      const task = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+      hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
     }
   }
   return hints;
 }
 
-function renderGatewayServiceStartHints(): string[] {
+function renderGatewayServiceStartHints(
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
   const base = ["clawdbot daemon install", "clawdbot gateway"];
+  const profile = env.CLAWDBOT_PROFILE;
   switch (process.platform) {
-    case "darwin":
+    case "darwin": {
+      const label = resolveGatewayLaunchAgentLabel(profile);
       return [
         ...base,
-        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${GATEWAY_LAUNCH_AGENT_LABEL}.plist`,
+        `launchctl bootstrap gui/$UID ~/Library/LaunchAgents/${label}.plist`,
       ];
-    case "linux":
+    }
+    case "linux": {
+      const unit = resolveGatewaySystemdServiceName(profile);
       return [
         ...base,
-        `systemctl --user start ${GATEWAY_SYSTEMD_SERVICE_NAME}.service`,
+        `systemctl --user start ${unit}.service`,
       ];
-    case "win32":
-      return [...base, `schtasks /Run /TN "${GATEWAY_WINDOWS_TASK_NAME}"`];
+    }
+    case "win32": {
+      const task = resolveGatewayWindowsTaskName(profile);
+      return [...base, `schtasks /Run /TN "${task}"`];
+    }
     default:
       return base;
   }
@@ -346,7 +357,9 @@ async function gatherDaemonStatus(opts: {
 }): Promise<DaemonStatus> {
   const service = resolveGatewayService();
   const [loaded, command, runtime] = await Promise.all([
-    service.isLoaded({ env: process.env }).catch(() => false),
+    service
+      .isLoaded({ profile: process.env.CLAWDBOT_PROFILE })
+      .catch(() => false),
     service.readCommand(process.env).catch(() => null),
     service.readRuntime(process.env).catch(() => undefined),
   ]);
@@ -713,9 +726,11 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     spacer();
   }
   if (service.runtime?.cachedLabel) {
+    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+    const label = resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
     defaultRuntime.error(
       errorText(
-        `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
+        `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
       ),
     );
     defaultRuntime.error(errorText("Then reinstall: clawdbot daemon install"));
@@ -767,9 +782,11 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       );
     }
     if (process.platform === "linux") {
+      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+      const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
       defaultRuntime.error(
         errorText(
-          `Logs: journalctl --user -u ${GATEWAY_SYSTEMD_SERVICE_NAME}.service -n 200 --no-pager`,
+          `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
         ),
       );
     } else if (process.platform === "darwin") {
@@ -872,9 +889,10 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
 
   const service = resolveGatewayService();
+  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -910,7 +928,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       cfg.gateway?.auth?.token ||
       process.env.CLAWDBOT_GATEWAY_TOKEN,
     launchdLabel:
-      process.platform === "darwin" ? GATEWAY_LAUNCH_AGENT_LABEL : undefined,
+      process.platform === "darwin"
+        ? resolveGatewayLaunchAgentLabel(profile)
+        : undefined,
   });
 
   try {
@@ -945,9 +965,10 @@ export async function runDaemonUninstall() {
 
 export async function runDaemonStart() {
   const service = resolveGatewayService();
+  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -961,7 +982,7 @@ export async function runDaemonStart() {
     return;
   }
   try {
-    await service.restart({ stdout: process.stdout });
+    await service.restart({ profile, stdout: process.stdout });
   } catch (err) {
     defaultRuntime.error(`Gateway start failed: ${String(err)}`);
     for (const hint of renderGatewayServiceStartHints()) {
@@ -973,9 +994,10 @@ export async function runDaemonStart() {
 
 export async function runDaemonStop() {
   const service = resolveGatewayService();
+  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -986,7 +1008,7 @@ export async function runDaemonStop() {
     return;
   }
   try {
-    await service.stop({ stdout: process.stdout });
+    await service.stop({ profile, stdout: process.stdout });
   } catch (err) {
     defaultRuntime.error(`Gateway stop failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -1000,9 +1022,10 @@ export async function runDaemonStop() {
  */
 export async function runDaemonRestart(): Promise<boolean> {
   const service = resolveGatewayService();
+  const profile = process.env.CLAWDBOT_PROFILE;
   let loaded = false;
   try {
-    loaded = await service.isLoaded({ env: process.env });
+    loaded = await service.isLoaded({ profile });
   } catch (err) {
     defaultRuntime.error(`Gateway service check failed: ${String(err)}`);
     defaultRuntime.exit(1);
@@ -1016,7 +1039,7 @@ export async function runDaemonRestart(): Promise<boolean> {
     return false;
   }
   try {
-    await service.restart({ stdout: process.stdout });
+    await service.restart({ profile, stdout: process.stdout });
     return true;
   } catch (err) {
     defaultRuntime.error(`Gateway restart failed: ${String(err)}`);

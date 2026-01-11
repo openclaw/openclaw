@@ -124,9 +124,9 @@ clawdbot logs --follow
 ```
 
 If you’re supervised:
-- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`
-- Linux systemd user service: `systemctl --user restart clawdbot-gateway.service`
-- Windows (WSL2): `systemctl --user restart clawdbot-gateway.service`
+- macOS launchd (app-bundled LaunchAgent): `launchctl kickstart -k gui/$UID/com.clawdbot.gateway` (use `com.clawdbot.<profile>` if set)
+- Linux systemd user service: `systemctl --user restart clawdbot-gateway[-<profile>].service`
+- Windows (WSL2): `systemctl --user restart clawdbot-gateway[-<profile>].service`
   - `launchctl`/`systemctl` only work if the service is installed; otherwise run `clawdbot daemon install`.
 
 Runbook + exact service labels: [Gateway runbook](/gateway)

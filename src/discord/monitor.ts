@@ -26,7 +26,7 @@ import { resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildCommandText,
-  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
   shouldHandleTextCommands,
 } from "../auto-reply/commands-registry.js";
 import {
@@ -416,7 +416,9 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     throw new Error("Failed to resolve Discord application id");
   }
 
-  const commandSpecs = nativeEnabled ? listNativeCommandSpecs() : [];
+  const commandSpecs = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg)
+    : [];
   const commands = commandSpecs.map((spec) =>
     createDiscordNativeCommand({
       command: spec,
@@ -928,7 +930,7 @@ export function createDiscordMessageHandler(params: {
         !wasMentioned &&
         !hasAnyMention &&
         commandAuthorized &&
-        hasControlCommand(baseText);
+        hasControlCommand(baseText, cfg);
       const effectiveWasMentioned = wasMentioned || shouldBypassMention;
       const canDetectMention = Boolean(botId) || mentionRegexes.length > 0;
       if (isGuildMessage && shouldRequireMention) {

@@ -115,6 +115,8 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.cliBackends": "CLI Backends",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
+  "commands.config": "Allow /config",
+  "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
   "commands.useAccessGroups": "Use Access Groups",
   "ui.seamColor": "Accent Color",
@@ -203,6 +205,10 @@ const FIELD_HELP: Record<string, string> = {
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
+  "commands.config":
+    "Allow /config chat command to read/write config on disk (default: false).",
+  "commands.debug":
+    "Allow /debug chat command for runtime-only overrides (default: false).",
   "commands.restart":
     "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups":

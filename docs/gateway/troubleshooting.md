@@ -48,8 +48,8 @@ Doctor/daemon will show runtime state (PID/last exit) and log hints.
 - Preferred: `clawdbot logs --follow`
 - File logs (always): `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or your configured `logging.file`)
 - macOS LaunchAgent (if installed): `$CLAWDBOT_STATE_DIR/logs/gateway.log` and `gateway.err.log`
-- Linux systemd (if installed): `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
-- Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
+- Linux systemd (if installed): `journalctl --user -u clawdbot-gateway[-<profile>].service -n 200 --no-pager`
+- Windows: `schtasks /Query /TN "Clawdbot Gateway (<profile>)" /V /FO LIST`
 
 **Enable more logging:**
 - Bump file log detail (persisted JSONL):
@@ -324,7 +324,7 @@ If the gateway is supervised by launchd, killing the PID will just respawn it. S
 ```bash
 clawdbot daemon status
 clawdbot daemon stop
-# Or: launchctl bootout gui/$UID/com.clawdbot.gateway
+# Or: launchctl bootout gui/$UID/com.clawdbot.gateway (replace with com.clawdbot.<profile> if needed)
 ```
 
 **Fix 2: Port is busy (find the listener)**
@@ -360,7 +360,7 @@ clawdbot providers login --verbose
 | Log | Location |
 |-----|----------|
 | Gateway file logs (structured) | `/tmp/clawdbot/clawdbot-YYYY-MM-DD.log` (or `logging.file`) |
-| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br />Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`<br />Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST` |
+| Gateway service logs (supervisor) | macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` + `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)<br />Linux: `journalctl --user -u clawdbot-gateway[-<profile>].service -n 200 --no-pager`<br />Windows: `schtasks /Query /TN "Clawdbot Gateway (<profile>)" /V /FO LIST` |
 | Session files | `$CLAWDBOT_STATE_DIR/agents/<agentId>/sessions/` |
 | Media cache | `$CLAWDBOT_STATE_DIR/media/` |
 | Credentials | `$CLAWDBOT_STATE_DIR/credentials/` |

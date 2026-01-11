@@ -14,7 +14,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
-import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
@@ -505,15 +505,15 @@ export async function runNonInteractiveOnboarding(
           runtime: daemonRuntimeRaw,
           nodePath,
         });
-      const environment = buildServiceEnvironment({
-        env: process.env,
-        port,
-        token: gatewayToken,
-        launchdLabel:
-          process.platform === "darwin"
-            ? GATEWAY_LAUNCH_AGENT_LABEL
-            : undefined,
-      });
+        const environment = buildServiceEnvironment({
+          env: process.env,
+          port,
+          token: gatewayToken,
+          launchdLabel:
+            process.platform === "darwin"
+              ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
+              : undefined,
+        });
       await service.install({
         env: process.env,
         stdout: process.stdout,

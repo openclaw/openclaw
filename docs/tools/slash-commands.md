@@ -18,6 +18,8 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
   commands: {
     native: false,
     text: true,
+    config: false,
+    debug: false,
     restart: false,
     useAccessGroups: true
   }
@@ -29,6 +31,8 @@ Directives (`/think`, `/verbose`, `/reasoning`, `/elevated`) are parsed even whe
 - `commands.native` (default `false`) registers native commands on Discord/Slack/Telegram.
   - `false` clears previously registered commands on Discord/Telegram at startup.
   - Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
+- `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
 
 ## Command list
@@ -39,8 +43,8 @@ Text + native (when enabled):
 - `/status`
 - `/status` (show current status; includes a short usage line when available)
 - `/usage` (alias: `/status`)
-- `/config show|get|set|unset` (persist config to disk, owner-only)
-- `/debug show|set|unset|reset` (runtime overrides, owner-only)
+- `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
+- `/debug show|set|unset|reset` (runtime overrides, owner-only; requires `commands.debug: true`)
 - `/cost on|off` (toggle per-response usage line)
 - `/stop`
 - `/restart`
@@ -67,7 +71,7 @@ Notes:
 
 ## Debug overrides
 
-`/debug` lets you set **runtime-only** config overrides (memory, not disk). Owner-only.
+`/debug` lets you set **runtime-only** config overrides (memory, not disk). Owner-only. Disabled by default; enable with `commands.debug: true`.
 
 Examples:
 
@@ -85,7 +89,7 @@ Notes:
 
 ## Config updates
 
-`/config` writes to your on-disk config (`clawdbot.json`). Owner-only.
+`/config` writes to your on-disk config (`clawdbot.json`). Owner-only. Disabled by default; enable with `commands.config: true`.
 
 Examples:
 

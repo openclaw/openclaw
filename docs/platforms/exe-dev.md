@@ -164,7 +164,7 @@ Control UI details: [Control UI](/web/control-ui)
 On Linux, Clawdbot uses a systemd **user** service. After `--install-daemon`, verify:
 
 ```bash
-systemctl --user status clawdbot-gateway.service
+systemctl --user status clawdbot-gateway[-<profile>].service
 ```
 
 If the service dies after logout, enable lingering:

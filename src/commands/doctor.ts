@@ -24,7 +24,7 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
-import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
+import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
@@ -421,7 +421,9 @@ export async function doctorCommand(
     const service = resolveGatewayService();
     let loaded = false;
     try {
-      loaded = await service.isLoaded({ env: process.env });
+      loaded = await service.isLoaded({
+        profile: process.env.CLAWDBOT_PROFILE,
+      });
     } catch {
       loaded = false;
     }
@@ -503,7 +505,9 @@ export async function doctorCommand(
 
   if (!healthOk) {
     const service = resolveGatewayService();
-    const loaded = await service.isLoaded({ env: process.env });
+    const loaded = await service.isLoaded({
+      profile: process.env.CLAWDBOT_PROFILE,
+    });
     let serviceRuntime:
       | Awaited<ReturnType<typeof service.readRuntime>>
       | undefined;
@@ -562,7 +566,7 @@ export async function doctorCommand(
               cfg.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
             launchdLabel:
               process.platform === "darwin"
-                ? GATEWAY_LAUNCH_AGENT_LABEL
+                ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
                 : undefined,
           });
           await service.install({
@@ -592,13 +596,19 @@ export async function doctorCommand(
           initialValue: true,
         });
         if (start) {
-          await service.restart({ stdout: process.stdout });
+          await service.restart({
+            profile: process.env.CLAWDBOT_PROFILE,
+            stdout: process.stdout,
+          });
           await sleep(1500);
         }
       }
       if (process.platform === "darwin") {
+        const label = resolveGatewayLaunchAgentLabel(
+          process.env.CLAWDBOT_PROFILE,
+        );
         note(
-          `LaunchAgent loaded; stopping requires "clawdbot daemon stop" or launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}.`,
+          `LaunchAgent loaded; stopping requires "clawdbot daemon stop" or launchctl bootout gui/$UID/${label}.`,
           "Gateway",
         );
       }
@@ -608,7 +618,10 @@ export async function doctorCommand(
           initialValue: true,
         });
         if (restart) {
-          await service.restart({ stdout: process.stdout });
+          await service.restart({
+            profile: process.env.CLAWDBOT_PROFILE,
+            stdout: process.stdout,
+          });
           await sleep(1500);
           try {
             await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
