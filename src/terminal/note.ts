@@ -1,6 +1,7 @@
 import { note as clackNote } from "@clack/prompts";
 import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
+
 function splitLongWord(word: string, maxLen: number): string[] {
   if (maxLen <= 0) return [word];
   const chars = Array.from(word);
