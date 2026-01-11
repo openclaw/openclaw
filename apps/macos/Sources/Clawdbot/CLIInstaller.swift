@@ -35,9 +35,69 @@ enum CLIInstaller {
     }
 
     static func install(statusHandler: @escaping @Sendable (String) async -> Void) async {
-        let expected = GatewayEnvironment.expectedGatewayVersion()
-        await GatewayEnvironment.installGlobal(version: expected) { message in
-            Task { @MainActor in await statusHandler(message) }
+        let expected = GatewayEnvironment.expectedGatewayVersion()?.description ?? "latest"
+        let prefix = Self.installPrefix()
+        await statusHandler("Installing clawdbot CLI…")
+        let cmd = self.installScriptCommand(version: expected, prefix: prefix)
+        let response = await ShellExecutor.runDetailed(command: cmd, cwd: nil, env: nil, timeout: 900)
+
+        if response.success {
+            let parsed = self.parseInstallEvents(response.stdout)
+            let installedVersion = parsed.last { $0.event == "done" }?.version
+            let summary = installedVersion.map { "Installed clawdbot \($0)." } ?? "Installed clawdbot."
+            await statusHandler(summary)
+            return
         }
+
+        let parsed = self.parseInstallEvents(response.stdout)
+        if let error = parsed.last(where: { $0.event == "error" })?.message {
+            await statusHandler("Install failed: \(error)")
+            return
+        }
+
+        let detail = response.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallback = response.errorMessage ?? "install failed"
+        await statusHandler("Install failed: \(detail.isEmpty ? fallback : detail)")
     }
+
+    private static func installPrefix() -> String {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".clawdbot")
+            .path
+    }
+
+    private static func installScriptCommand(version: String, prefix: String) -> [String] {
+        let escapedVersion = self.shellEscape(version)
+        let escapedPrefix = self.shellEscape(prefix)
+        let script = """
+        curl -fsSL https://clawd.bot/install-cli.sh | \
+        bash -s -- --json --no-onboard --prefix \(escapedPrefix) --version \(escapedVersion)
+        """
+        return ["/bin/bash", "-lc", script]
+    }
+
+    private static func parseInstallEvents(_ output: String) -> [InstallEvent] {
+        let decoder = JSONDecoder()
+        let lines = output
+            .split(whereSeparator: \.isNewline)
+            .map { String($0) }
+        var events: [InstallEvent] = []
+        for line in lines {
+            guard let data = line.data(using: .utf8) else { continue }
+            if let event = try? decoder.decode(InstallEvent.self, from: data) {
+                events.append(event)
+            }
+        }
+        return events
+    }
+
+    private static func shellEscape(_ raw: String) -> String {
+        "'" + raw.replacingOccurrences(of: "'", with: "'\"'\"'") + "'"
+    }
+}
+
+private struct InstallEvent: Decodable {
+    let event: String
+    let version: String?
+    let message: String?
 }

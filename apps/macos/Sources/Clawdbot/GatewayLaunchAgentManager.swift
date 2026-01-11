@@ -50,7 +50,7 @@ enum GatewayLaunchAgentManager {
             return .success(cmd)
         }
 
-        return .failure("clawdbot CLI not found in PATH; install the global package.")
+        return .failure("clawdbot CLI not found in PATH; install the CLI.")
     }
 
     static func isLoaded() async -> Bool {

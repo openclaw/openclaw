@@ -393,7 +393,7 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else {
-                Text("Installs via npm/pnpm/bun; requires Node 22+.")
+                Text("Installs a user-space Node 22+ runtime and the CLI (no Homebrew).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

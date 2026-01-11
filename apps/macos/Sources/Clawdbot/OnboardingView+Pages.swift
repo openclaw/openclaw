@@ -541,7 +541,7 @@ extension OnboardingView {
                 } else if !self.cliInstalled, self.cliInstallLocation == nil {
                     Text(
                         """
-                        Uses npm/pnpm/bun. Requires Node 22+ on this Mac.
+                        Installs a user-space Node 22+ runtime and the CLI (no Homebrew).
                         Rerun anytime to reinstall or update.
                         """)
                         .font(.footnote)

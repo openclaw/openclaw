@@ -3,7 +3,7 @@
 ## 2026.1.11 (Unreleased)
 
 ### Changes
-- macOS: prompt to install the global `clawdbot` CLI when missing in local mode, and use external launchd/CLI instead of the embedded gateway runtime.
+- macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 
 ## 2026.1.10
 

@@ -119,7 +119,7 @@ enum GatewayEnvironment {
                     nodeVersion: runtime.version.description,
                     gatewayVersion: nil,
                     requiredGateway: expected?.description,
-                    message: "clawdbot CLI not found in PATH; install the global package.")
+                    message: "clawdbot CLI not found in PATH; install the CLI.")
             }
 
             let installed = gatewayBin.flatMap { self.readGatewayVersion(binary: $0) }
