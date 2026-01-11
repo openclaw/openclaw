@@ -150,4 +150,29 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
     expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
   });
+
+  it("shows gateway auth when reachable", async () => {
+    const prevToken = process.env.CLAWDBOT_GATEWAY_TOKEN;
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "abcd1234";
+    try {
+      mocks.probeGateway.mockResolvedValueOnce({
+        ok: true,
+        url: "ws://127.0.0.1:18789",
+        connectLatencyMs: 123,
+        error: null,
+        close: null,
+        health: {},
+        status: {},
+        presence: [],
+        configSnapshot: null,
+      });
+      (runtime.log as vi.Mock).mockClear();
+      await statusCommand({}, runtime as never);
+      const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+      expect(logs.some((l) => l.includes("auth token"))).toBe(true);
+    } finally {
+      if (prevToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+      else process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
+    }
+  });
 });

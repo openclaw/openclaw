@@ -31,6 +31,7 @@ import { getAgentLocalStatuses } from "./status-all/agents.js";
 import {
   formatAge,
   formatDuration,
+  formatGatewayAuthUsed,
   redactSecrets,
 } from "./status-all/format.js";
 import {
@@ -282,6 +283,9 @@ export async function statusAllCommand(
         : gatewayProbe?.error
           ? `unreachable (${gatewayProbe.error})`
           : "unreachable";
+      const gatewayAuth = gatewayReachable
+        ? ` · auth ${formatGatewayAuthUsed(remoteUrlMissing ? localFallbackAuth : remoteAuth)}`
+        : "";
       const gatewaySelfLine =
         gatewaySelf?.host ||
         gatewaySelf?.ip ||
@@ -319,7 +323,7 @@ export async function statusAllCommand(
         { Item: "Update", Value: updateLine },
         {
           Item: "Gateway",
-          Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}`,
+          Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
         },
         gatewaySelfLine
           ? { Item: "Gateway self", Value: gatewaySelfLine }
