@@ -475,6 +475,7 @@ export function getDmHistoryLimitFromSessionKey(
   // The userId may contain colons (e.g., email addresses), so join remaining parts
   const kind = providerParts[1]?.toLowerCase();
   const userId = providerParts.slice(2).join(":");
+  if (kind !== "dm") return undefined;
 
   // Helper to get limit with per-DM override support
   const getLimit = (

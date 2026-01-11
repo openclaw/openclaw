@@ -399,6 +399,19 @@ describe("getDmHistoryLimitFromSessionKey", () => {
     ).toBe(10);
   });
 
+  it("returns undefined for non-dm session kinds", () => {
+    const config = {
+      slack: { dmHistoryLimit: 10 },
+      telegram: { dmHistoryLimit: 15 },
+    } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:beta:slack:channel:C1", config),
+    ).toBeUndefined();
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:slash:123", config),
+    ).toBeUndefined();
+  });
+
   it("returns undefined for unknown provider", () => {
     const config = { telegram: { dmHistoryLimit: 15 } } as ClawdbotConfig;
     expect(
