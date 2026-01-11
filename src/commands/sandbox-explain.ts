@@ -11,7 +11,6 @@ import {
   resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
-import { normalizeProviderId } from "../providers/registry.js";
 import {
   buildAgentMainSessionKey,
   normalizeAgentId,
@@ -22,7 +21,6 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 
 type SandboxExplainOptions = {
   session?: string;
@@ -31,6 +29,16 @@ type SandboxExplainOptions = {
 };
 
 const SANDBOX_DOCS_URL = "https://docs.clawd.bot/sandbox";
+
+const KNOWN_PROVIDER_KEYS = new Set([
+  "whatsapp",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "webchat",
+]);
 
 function normalizeExplainSessionKey(params: {
   cfg: ClawdbotConfig;
@@ -65,9 +73,9 @@ function inferProviderFromSessionKey(params: {
   const configuredMainKey = normalizeMainKey(params.cfg.session?.mainKey);
   if (parts[0] === configuredMainKey) return undefined;
   const candidate = parts[0]?.trim().toLowerCase();
-  if (!candidate) return undefined;
-  if (candidate === INTERNAL_MESSAGE_PROVIDER) return INTERNAL_MESSAGE_PROVIDER;
-  return normalizeProviderId(candidate) ?? undefined;
+  return candidate && KNOWN_PROVIDER_KEYS.has(candidate)
+    ? candidate
+    : undefined;
 }
 
 function resolveActiveProvider(params: {
@@ -88,13 +96,41 @@ function resolveActiveProvider(params: {
   )
     .trim()
     .toLowerCase();
-  if (candidate === INTERNAL_MESSAGE_PROVIDER) return INTERNAL_MESSAGE_PROVIDER;
-  const normalized = normalizeProviderId(candidate);
-  if (normalized) return normalized;
+  if (candidate && KNOWN_PROVIDER_KEYS.has(candidate)) return candidate;
   return inferProviderFromSessionKey({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
   });
+}
+
+function resolveElevatedAllowListForProvider(params: {
+  provider: string;
+  allowFrom?: Record<string, Array<string | number> | undefined>;
+  discordFallback?: Array<string | number>;
+}): Array<string | number> | undefined {
+  switch (params.provider) {
+    case "whatsapp":
+      return params.allowFrom?.whatsapp;
+    case "telegram":
+      return params.allowFrom?.telegram;
+    case "discord": {
+      const hasExplicit = Boolean(
+        params.allowFrom && Object.hasOwn(params.allowFrom, "discord"),
+      );
+      if (hasExplicit) return params.allowFrom?.discord;
+      return params.discordFallback;
+    }
+    case "slack":
+      return params.allowFrom?.slack;
+    case "signal":
+      return params.allowFrom?.signal;
+    case "imessage":
+      return params.allowFrom?.imessage;
+    case "webchat":
+      return params.allowFrom?.webchat;
+    default:
+      return undefined;
+  }
 }
 
 export async function sandboxExplainCommand(
@@ -146,11 +182,26 @@ export async function sandboxExplainCommand(
   const elevatedAgentEnabled = elevatedAgent?.enabled !== false;
   const elevatedEnabled = elevatedGlobalEnabled && elevatedAgentEnabled;
 
+  const discordFallback =
+    provider === "discord" ? cfg.discord?.dm?.allowFrom : undefined;
   const globalAllow = provider
-    ? elevatedGlobal?.allowFrom?.[provider]
+    ? resolveElevatedAllowListForProvider({
+        provider,
+        allowFrom: elevatedGlobal?.allowFrom as unknown as Record<
+          string,
+          Array<string | number> | undefined
+        >,
+        discordFallback,
+      })
     : undefined;
   const agentAllow = provider
-    ? elevatedAgent?.allowFrom?.[provider]
+    ? resolveElevatedAllowListForProvider({
+        provider,
+        allowFrom: elevatedAgent?.allowFrom as unknown as Record<
+          string,
+          Array<string | number> | undefined
+        >,
+      })
     : undefined;
 
   const allowTokens = (values?: Array<string | number>) =>
@@ -182,7 +233,10 @@ export async function sandboxExplainCommand(
   if (provider && globalAllowTokens.length === 0) {
     elevatedFailures.push({
       gate: "allowFrom",
-      key: `tools.elevated.allowFrom.${provider}`,
+      key:
+        provider === "discord" && discordFallback
+          ? "tools.elevated.allowFrom.discord (or discord.dm.allowFrom fallback)"
+          : `tools.elevated.allowFrom.${provider}`,
     });
   }
   if (provider && elevatedAgent?.allowFrom && agentAllowTokens.length === 0) {

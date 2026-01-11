@@ -1,10 +1,4 @@
 import { generateUUID } from "./uuid";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../../src/gateway/protocol/client-info.js";
 
 export type GatewayEventFrame = {
   type: "event";
@@ -39,10 +33,10 @@ export type GatewayBrowserClientOptions = {
   url: string;
   token?: string;
   password?: string;
-  clientName?: GatewayClientName;
+  clientName?: string;
   clientVersion?: string;
   platform?: string;
-  mode?: GatewayClientMode;
+  mode?: string;
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
@@ -113,13 +107,13 @@ export class GatewayBrowserClient {
           }
         : undefined;
     const params = {
-      minProtocol: 3,
-      maxProtocol: 3,
+      minProtocol: 2,
+      maxProtocol: 2,
       client: {
-        id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        name: this.opts.clientName ?? "clawdbot-control-ui",
         version: this.opts.clientVersion ?? "dev",
         platform: this.opts.platform ?? navigator.platform ?? "web",
-        mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.WEBCHAT,
+        mode: this.opts.mode ?? "webchat",
         instanceId: this.opts.instanceId,
       },
       caps: [],

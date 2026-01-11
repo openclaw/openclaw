@@ -120,26 +120,22 @@ struct OnboardingView: View {
     let permissionsPageIndex = 5
     static func pageOrder(
         for mode: AppState.ConnectionMode,
-        showOnboardingChat: Bool) -> [Int]
+        needsBootstrap: Bool) -> [Int]
     {
         switch mode {
         case .remote:
             // Remote setup doesn't need local gateway/CLI/workspace setup pages,
             // and WhatsApp/Telegram setup is optional.
-            showOnboardingChat ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
+            needsBootstrap ? [0, 1, 5, 8, 9] : [0, 1, 5, 9]
         case .unconfigured:
-            showOnboardingChat ? [0, 1, 8, 9] : [0, 1, 9]
+            needsBootstrap ? [0, 1, 8, 9] : [0, 1, 9]
         case .local:
-            showOnboardingChat ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
+            needsBootstrap ? [0, 1, 3, 5, 8, 9] : [0, 1, 3, 5, 9]
         }
     }
 
-    var showOnboardingChat: Bool {
-        self.state.connectionMode == .local && self.needsBootstrap
-    }
-
     var pageOrder: [Int] {
-        Self.pageOrder(for: self.state.connectionMode, showOnboardingChat: self.showOnboardingChat)
+        Self.pageOrder(for: self.state.connectionMode, needsBootstrap: self.needsBootstrap)
     }
 
     var pageCount: Int { self.pageOrder.count }
@@ -155,8 +151,8 @@ struct OnboardingView: View {
 
     var canAdvance: Bool { !self.isWizardBlocking }
     var devLinkCommand: String {
-        let version = GatewayEnvironment.expectedGatewayVersion()?.description ?? "latest"
-        return "npm install -g clawdbot@\(version)"
+        let bundlePath = Bundle.main.bundlePath
+        return "ln -sf '\(bundlePath)/Contents/Resources/Relay/clawdbot' /usr/local/bin/clawdbot"
     }
 
     struct LocalGatewayProbe: Equatable {

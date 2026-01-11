@@ -100,12 +100,9 @@ extension ConnectionsStore {
         self.whatsappBusy = true
         defer { self.whatsappBusy = false }
         do {
-            let params: [String: AnyCodable] = [
-                "provider": AnyCodable("whatsapp"),
-            ]
-            let result: ProviderLogoutResult = try await GatewayConnection.shared.requestDecoded(
-                method: .providersLogout,
-                params: params,
+            let result: WhatsAppLogoutResult = try await GatewayConnection.shared.requestDecoded(
+                method: .webLogout,
+                params: nil,
                 timeoutMs: 15000)
             self.whatsappLoginMessage = result.cleared
                 ? "Logged out and cleared credentials."
@@ -122,12 +119,9 @@ extension ConnectionsStore {
         self.telegramBusy = true
         defer { self.telegramBusy = false }
         do {
-            let params: [String: AnyCodable] = [
-                "provider": AnyCodable("telegram"),
-            ]
-            let result: ProviderLogoutResult = try await GatewayConnection.shared.requestDecoded(
-                method: .providersLogout,
-                params: params,
+            let result: TelegramLogoutResult = try await GatewayConnection.shared.requestDecoded(
+                method: .telegramLogout,
+                params: nil,
                 timeoutMs: 15000)
             if result.envToken == true {
                 self.configStatus = "Telegram token still set via env; config cleared."
@@ -154,9 +148,11 @@ private struct WhatsAppLoginWaitResult: Codable {
     let message: String
 }
 
-private struct ProviderLogoutResult: Codable {
-    let provider: String?
-    let accountId: String?
+private struct WhatsAppLogoutResult: Codable {
+    let cleared: Bool
+}
+
+private struct TelegramLogoutResult: Codable {
     let cleared: Bool
     let envToken: Bool?
 }

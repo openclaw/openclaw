@@ -13,10 +13,14 @@ import {
 
 export async function loginWeb(
   verbose: boolean,
+  provider = "whatsapp",
   waitForConnection?: typeof waitForWaConnection,
   runtime: RuntimeEnv = defaultRuntime,
   accountId?: string,
 ) {
+  if (provider !== "whatsapp" && provider !== "web") {
+    throw new Error(`Unsupported provider: ${provider}`);
+  }
   const wait = waitForConnection ?? waitForWaConnection;
   const cfg = loadConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
@@ -48,7 +52,11 @@ export async function loginWeb(
       });
       try {
         await wait(retry);
-        console.log(success("✅ Linked after restart; web session ready."));
+        console.log(
+          success(
+            "✅ Linked after restart; web session ready. You can now send with provider=web.",
+          ),
+        );
         return;
       } finally {
         setTimeout(() => retry.ws?.close(), 500);

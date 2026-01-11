@@ -3,33 +3,22 @@ import { loadConfig } from "../../config/config.js";
 import { callGateway, randomIdempotencyKey } from "../../gateway/call.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../../providers/plugins/index.js";
-import type { ProviderId } from "../../providers/plugins/types.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-} from "../../utils/message-provider.js";
+import { normalizeMessageProvider } from "../../utils/message-provider.js";
 import {
   deliverOutboundPayloads,
   type OutboundDeliveryResult,
   type OutboundSendDeps,
 } from "./deliver.js";
-import { resolveMessageProviderSelection } from "./provider-selection.js";
-import type { OutboundProvider } from "./targets.js";
 import { resolveOutboundTarget } from "./targets.js";
+
+type GatewayCallMode = "cli" | "agent";
 
 export type MessageGatewayOptions = {
   url?: string;
   token?: string;
   timeoutMs?: number;
-  clientName?: GatewayClientName;
-  clientDisplayName?: string;
-  mode?: GatewayClientMode;
+  clientName?: GatewayCallMode;
+  mode?: GatewayCallMode;
 };
 
 type MessageSendParams = {
@@ -95,56 +84,47 @@ function resolveGatewayOptions(opts?: MessageGatewayOptions) {
       typeof opts?.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
         ? Math.max(1, Math.floor(opts.timeoutMs))
         : 10_000,
-    clientName: opts?.clientName ?? GATEWAY_CLIENT_NAMES.CLI,
-    clientDisplayName: opts?.clientDisplayName,
-    mode: opts?.mode ?? GATEWAY_CLIENT_MODES.CLI,
+    clientName: opts?.clientName ?? "cli",
+    mode: opts?.mode ?? "cli",
   };
 }
 
 export async function sendMessage(
   params: MessageSendParams,
 ): Promise<MessageSendResult> {
+  const provider = normalizeMessageProvider(params.provider) ?? "whatsapp";
   const cfg = params.cfg ?? loadConfig();
-  const provider = params.provider?.trim()
-    ? normalizeProviderId(params.provider)
-    : (await resolveMessageProviderSelection({ cfg })).provider;
-  if (!provider) {
-    throw new Error(`Unknown provider: ${params.provider}`);
-  }
-  const plugin = getProviderPlugin(provider as ProviderId);
-  if (!plugin) {
-    throw new Error(`Unknown provider: ${provider}`);
-  }
-  const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
 
   if (params.dryRun) {
     return {
       provider,
       to: params.to,
-      via: deliveryMode === "gateway" ? "gateway" : "direct",
+      via: provider === "whatsapp" ? "gateway" : "direct",
       mediaUrl: params.mediaUrl ?? null,
       dryRun: true,
     };
   }
 
-  if (deliveryMode !== "gateway") {
-    const outboundProvider = provider as Exclude<OutboundProvider, "none">;
+  if (
+    provider === "telegram" ||
+    provider === "discord" ||
+    provider === "slack" ||
+    provider === "signal" ||
+    provider === "imessage" ||
+    provider === "msteams"
+  ) {
     const resolvedTarget = resolveOutboundTarget({
-      provider: outboundProvider,
+      provider,
       to: params.to,
-      cfg,
-      accountId: params.accountId,
-      mode: "explicit",
     });
     if (!resolvedTarget.ok) throw resolvedTarget.error;
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider: outboundProvider,
+      provider,
       to: resolvedTarget.to,
       accountId: params.accountId,
       payloads: [{ text: params.content, mediaUrl: params.mediaUrl }],
-      gifPlayback: params.gifPlayback,
       deps: params.deps,
       bestEffort: params.bestEffort,
     });
@@ -174,7 +154,6 @@ export async function sendMessage(
     },
     timeoutMs: gateway.timeoutMs,
     clientName: gateway.clientName,
-    clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
   });
 
@@ -190,12 +169,13 @@ export async function sendMessage(
 export async function sendPoll(
   params: MessagePollParams,
 ): Promise<MessagePollResult> {
-  const cfg = params.cfg ?? loadConfig();
-  const provider = params.provider?.trim()
-    ? normalizeProviderId(params.provider)
-    : (await resolveMessageProviderSelection({ cfg })).provider;
-  if (!provider) {
-    throw new Error(`Unknown provider: ${params.provider}`);
+  const provider = normalizeMessageProvider(params.provider) ?? "whatsapp";
+  if (
+    provider !== "whatsapp" &&
+    provider !== "discord" &&
+    provider !== "msteams"
+  ) {
+    throw new Error(`Unsupported poll provider: ${provider}`);
   }
 
   const pollInput: PollInput = {
@@ -204,14 +184,8 @@ export async function sendPoll(
     maxSelections: params.maxSelections,
     durationHours: params.durationHours,
   };
-  const plugin = getProviderPlugin(provider as ProviderId);
-  const outbound = plugin?.outbound;
-  if (!outbound?.sendPoll) {
-    throw new Error(`Unsupported poll provider: ${provider}`);
-  }
-  const normalized = outbound.pollMaxOptions
-    ? normalizePollInput(pollInput, { maxOptions: outbound.pollMaxOptions })
-    : normalizePollInput(pollInput);
+  const maxOptions = provider === "discord" ? 10 : 12;
+  const normalized = normalizePollInput(pollInput, { maxOptions });
 
   if (params.dryRun) {
     return {
@@ -248,7 +222,6 @@ export async function sendPoll(
     },
     timeoutMs: gateway.timeoutMs,
     clientName: gateway.clientName,
-    clientDisplayName: gateway.clientDisplayName,
     mode: gateway.mode,
   });
 

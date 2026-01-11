@@ -4,10 +4,6 @@ import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
-import {
   agentCommand,
   bridgeInvoke,
   bridgeListConnected,
@@ -874,10 +870,10 @@ describe("gateway server node/bridge", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+        name: "webchat",
         version: "1.0.0",
         platform: "test",
-        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        mode: "webchat",
       },
     });
 

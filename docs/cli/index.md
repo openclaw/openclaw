@@ -48,8 +48,6 @@ clawdbot [--dev] [--profile <name>] <command>
   onboard
   configure (alias: config)
   doctor
-  reset
-  uninstall
   update
   providers
     list
@@ -63,13 +61,6 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     info
     check
-  plugins
-    list
-    info
-    install
-    enable
-    disable
-    doctor
   message
   agent
   agents
@@ -174,20 +165,6 @@ clawdbot [--dev] [--profile <name>] <command>
   tui
 ```
 
-Note: plugins can add additional top-level commands (for example `clawdbot voicecall`).
-
-## Plugins
-
-Manage extensions and their config:
-
-- `clawdbot plugins list` — discover plugins (use `--json` for machine output).
-- `clawdbot plugins info <id>` — show details for a plugin.
-- `clawdbot plugins install <path>` — add a plugin path to `plugins.load.paths`.
-- `clawdbot plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
-- `clawdbot plugins doctor` — report plugin load errors.
-
-Most plugin changes require a gateway restart. See [/plugin](/plugin).
-
 ## Chat slash commands
 
 Chat messages support `/...` commands (text and native). See [/tools/slash-commands](/tools/slash-commands).
@@ -276,7 +253,7 @@ Subcommands:
 - `providers add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
 - `providers remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `providers login`: interactive provider login (WhatsApp Web only).
-- `providers logout`: log out of a provider session (if supported).
+- `providers logout`: log out of a provider session (WhatsApp Web only).
 
 Common options:
 - `--provider <name>`: `whatsapp|telegram|discord|slack|signal|imessage|msteams`
@@ -289,7 +266,7 @@ Common options:
 - `--verbose`
 
 `providers logout` options:
-- `--provider <provider>` (default `whatsapp`)
+- `--provider <provider>` (default `whatsapp`; supports `whatsapp`/`web`)
 - `--account <id>`
 
 `providers list` options:
@@ -464,36 +441,6 @@ Options:
 - `--verbose`
 - `--store <path>`
 - `--active <minutes>`
-
-## Reset / Uninstall
-
-### `reset`
-Reset local config/state (keeps the CLI installed).
-
-Options:
-- `--scope <config|config+creds+sessions|full>`
-- `--yes`
-- `--non-interactive`
-- `--dry-run`
-
-Notes:
-- `--non-interactive` requires `--scope` and `--yes`.
-
-### `uninstall`
-Uninstall the gateway service + local data (CLI remains).
-
-Options:
-- `--service`
-- `--state`
-- `--workspace`
-- `--app`
-- `--all`
-- `--yes`
-- `--non-interactive`
-- `--dry-run`
-
-Notes:
-- `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
 
 ## Gateway
 

@@ -157,8 +157,8 @@ All endpoints accept `?profile=<name>`.
 ### Playwright requirement
 
 Some features (navigate/act/ai snapshot, element screenshots, PDF) require
-Playwright. If Playwright isn’t installed, those endpoints return a clear 501
-error. ARIA snapshots and basic screenshots still work.
+Playwright. In embedded gateway builds, Playwright may be unavailable; those
+endpoints return a clear 501 error. ARIA snapshots and basic screenshots still work.
 
 ## How it works (internal)
 

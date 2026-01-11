@@ -27,27 +27,17 @@ if [[ -z "$VERSION" ]]; then
   fi
 fi
 
-TMP_DIR="$(mktemp -d)"
-cleanup() {
-  rm -rf "$TMP_DIR"
-  if [[ "${KEEP_SPARKLE_NOTES:-0}" != "1" ]]; then
-    rm -f "$NOTES_HTML"
-  fi
-}
-trap cleanup EXIT
-cp -f "$ZIP" "$TMP_DIR/$ZIP_NAME"
-if [[ -f "$ROOT/appcast.xml" ]]; then
-  cp -f "$ROOT/appcast.xml" "$TMP_DIR/appcast.xml"
-fi
-
 NOTES_HTML="${ZIP_DIR}/${ZIP_BASE}.html"
+KEEP_NOTES=${KEEP_SPARKLE_NOTES:-0}
 if [[ -x "$ROOT/scripts/changelog-to-html.sh" ]]; then
   "$ROOT/scripts/changelog-to-html.sh" "$VERSION" >"$NOTES_HTML"
 else
   echo "Missing scripts/changelog-to-html.sh; cannot generate HTML release notes." >&2
   exit 1
 fi
-cp -f "$NOTES_HTML" "$TMP_DIR/${ZIP_BASE}.html"
+if [[ "$KEEP_NOTES" != "1" ]]; then
+  trap 'rm -f "$NOTES_HTML"' EXIT
+fi
 
 DOWNLOAD_URL_PREFIX=${SPARKLE_DOWNLOAD_URL_PREFIX:-"https://github.com/clawdbot/clawdbot/releases/download/v${VERSION}/"}
 
@@ -62,8 +52,6 @@ generate_appcast \
   --download-url-prefix "$DOWNLOAD_URL_PREFIX" \
   --embed-release-notes \
   --link "$FEED_URL" \
-  "$TMP_DIR"
-
-cp -f "$TMP_DIR/appcast.xml" "$ROOT/appcast.xml"
+  "$ZIP_DIR"
 
 echo "Appcast generated (appcast.xml). Upload alongside $ZIP at $FEED_URL"

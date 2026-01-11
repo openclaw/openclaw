@@ -162,10 +162,6 @@ Legacy single‑agent path: `~/.clawdbot/agent/*` (migrated by `clawdbot doctor`
 
 Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate and configured via `agents.defaults.workspace` (default: `~/clawd`).
 
-### How do I completely uninstall Clawdbot?
-
-See the dedicated guide: [Uninstall](/install/uninstall).
-
 ### Can agents work outside the workspace?
 
 Yes. The workspace is the **default cwd** and memory anchor, not a hard sandbox.
@@ -318,31 +314,6 @@ This runs your login shell and imports only missing expected keys (never overrid
 ### How do I start a fresh conversation?
 
 Send `/new` or `/reset` as a standalone message. See [Session management](/concepts/session).
-
-### How do I completely reset Clawdbot (but keep it installed)?
-
-Use the reset command:
-
-```bash
-clawdbot reset
-```
-
-Non-interactive full reset:
-
-```bash
-clawdbot reset --scope full --yes --non-interactive
-```
-
-Then re-run onboarding:
-
-```bash
-clawdbot onboard --install-daemon
-```
-
-Notes:
-- The onboarding wizard also offers **Reset** if it sees an existing config. See [Wizard](/start/wizard).
-- If you used profiles (`--profile` / `CLAWDBOT_PROFILE`), reset each state dir (defaults are `~/.clawdbot-<profile>`).
-- Dev reset: `clawdbot gateway --dev --reset` (dev-only; wipes dev config + credentials + sessions + workspace).
 
 ### Do I need to add a “bot account” to a WhatsApp group?
 

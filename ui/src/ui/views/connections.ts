@@ -1,15 +1,7 @@
 import { html, nothing } from "lit";
 
 import { formatAgo } from "../format";
-import type {
-  DiscordStatus,
-  IMessageStatus,
-  ProvidersStatusSnapshot,
-  SignalStatus,
-  SlackStatus,
-  TelegramStatus,
-  WhatsAppStatus,
-} from "../types";
+import type { ProvidersStatusSnapshot } from "../types";
 import type {
   DiscordActionForm,
   DiscordForm,
@@ -92,17 +84,12 @@ export type ConnectionsProps = {
 };
 
 export function renderConnections(props: ConnectionsProps) {
-  const providers = props.snapshot?.providers as Record<string, unknown> | null;
-  const whatsapp = (providers?.whatsapp ?? undefined) as
-    | WhatsAppStatus
-    | undefined;
-  const telegram = (providers?.telegram ?? undefined) as
-    | TelegramStatus
-    | undefined;
-  const discord = (providers?.discord ?? null) as DiscordStatus | null;
-  const slack = (providers?.slack ?? null) as SlackStatus | null;
-  const signal = (providers?.signal ?? null) as SignalStatus | null;
-  const imessage = (providers?.imessage ?? null) as IMessageStatus | null;
+  const whatsapp = props.snapshot?.whatsapp;
+  const telegram = props.snapshot?.telegram;
+  const discord = props.snapshot?.discord ?? null;
+  const slack = props.snapshot?.slack ?? null;
+  const signal = props.snapshot?.signal ?? null;
+  const imessage = props.snapshot?.imessage ?? null;
   const providerOrder: ProviderKey[] = [
     "whatsapp",
     "telegram",
@@ -176,31 +163,24 @@ type ProviderKey =
 
 function providerEnabled(key: ProviderKey, props: ConnectionsProps) {
   const snapshot = props.snapshot;
-  const providers = snapshot?.providers as Record<string, unknown> | null;
-  if (!snapshot || !providers) return false;
-  const whatsapp = providers.whatsapp as WhatsAppStatus | undefined;
-  const telegram = providers.telegram as TelegramStatus | undefined;
-  const discord = (providers.discord ?? null) as DiscordStatus | null;
-  const slack = (providers.slack ?? null) as SlackStatus | null;
-  const signal = (providers.signal ?? null) as SignalStatus | null;
-  const imessage = (providers.imessage ?? null) as IMessageStatus | null;
+  if (!snapshot) return false;
   switch (key) {
     case "whatsapp":
       return (
-        Boolean(whatsapp?.configured) ||
-        Boolean(whatsapp?.linked) ||
-        Boolean(whatsapp?.running)
+        snapshot.whatsapp.configured ||
+        snapshot.whatsapp.linked ||
+        snapshot.whatsapp.running
       );
     case "telegram":
-      return Boolean(telegram?.configured) || Boolean(telegram?.running);
+      return snapshot.telegram.configured || snapshot.telegram.running;
     case "discord":
-      return Boolean(discord?.configured || discord?.running);
+      return Boolean(snapshot.discord?.configured || snapshot.discord?.running);
     case "slack":
-      return Boolean(slack?.configured || slack?.running);
+      return Boolean(snapshot.slack?.configured || snapshot.slack?.running);
     case "signal":
-      return Boolean(signal?.configured || signal?.running);
+      return Boolean(snapshot.signal?.configured || snapshot.signal?.running);
     case "imessage":
-      return Boolean(imessage?.configured || imessage?.running);
+      return Boolean(snapshot.imessage?.configured || snapshot.imessage?.running);
     default:
       return false;
   }
@@ -210,12 +190,12 @@ function renderProvider(
   key: ProviderKey,
   props: ConnectionsProps,
   data: {
-    whatsapp?: WhatsAppStatus;
-    telegram?: TelegramStatus;
-    discord?: DiscordStatus | null;
-    slack?: SlackStatus | null;
-    signal?: SignalStatus | null;
-    imessage?: IMessageStatus | null;
+    whatsapp?: ProvidersStatusSnapshot["whatsapp"];
+    telegram?: ProvidersStatusSnapshot["telegram"];
+    discord?: ProvidersStatusSnapshot["discord"] | null;
+    slack?: ProvidersStatusSnapshot["slack"] | null;
+    signal?: ProvidersStatusSnapshot["signal"] | null;
+    imessage?: ProvidersStatusSnapshot["imessage"] | null;
   },
 ) {
   switch (key) {

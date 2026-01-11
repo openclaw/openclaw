@@ -1,8 +1,13 @@
-import type { ProviderId } from "../providers/plugins/types.js";
-import type { InternalMessageProvider } from "../utils/message-provider.js";
-
 /** Valid provider channels for message routing. */
-export type OriginatingChannelType = ProviderId | InternalMessageProvider;
+export type OriginatingChannelType =
+  | "telegram"
+  | "slack"
+  | "discord"
+  | "signal"
+  | "imessage"
+  | "whatsapp"
+  | "webchat"
+  | "msteams";
 
 export type MsgContext = {
   Body?: string;
@@ -45,7 +50,7 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
-  /** Provider label (e.g. whatsapp, telegram). */
+  /** Provider label (whatsapp|telegram|discord|imessage|...). */
   Provider?: string;
   /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
   Surface?: string;

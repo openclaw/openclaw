@@ -10,7 +10,7 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
-vi.mock("../web/auth-store.js", () => ({
+vi.mock("../web/session.js", () => ({
   webAuthExists: vi.fn(async () => true),
   getWebAuthAgeMs: vi.fn(() => 0),
   logWebSelfId: (...args: unknown[]) => logWebSelfIdMock(...args),
@@ -32,29 +32,22 @@ describe("healthCommand (coverage)", () => {
       ok: true,
       ts: Date.now(),
       durationMs: 5,
-      providers: {
-        whatsapp: {
-          linked: true,
-          authAgeMs: 5 * 60_000,
-        },
-        telegram: {
-          configured: true,
-          probe: {
-            ok: true,
-            elapsedMs: 7,
-            bot: { username: "bot" },
-            webhook: { url: "https://example.com/h" },
-          },
-        },
-        discord: {
-          configured: false,
+      web: {
+        linked: true,
+        authAgeMs: 5 * 60_000,
+        connect: { ok: true, status: 200, elapsedMs: 10 },
+      },
+      telegram: {
+        configured: true,
+        probe: {
+          ok: true,
+          elapsedMs: 7,
+          bot: { username: "bot" },
+          webhook: { url: "https://example.com/h" },
         },
       },
-      providerOrder: ["whatsapp", "telegram", "discord"],
-      providerLabels: {
-        whatsapp: "WhatsApp",
-        telegram: "Telegram",
-        discord: "Discord",
+      discord: {
+        configured: false,
       },
       heartbeatSeconds: 60,
       sessions: {
@@ -71,7 +64,7 @@ describe("healthCommand (coverage)", () => {
 
     expect(runtime.exit).not.toHaveBeenCalled();
     expect(runtime.log.mock.calls.map((c) => String(c[0])).join("\n")).toMatch(
-      /WhatsApp: linked/i,
+      /Web: linked/i,
     );
     expect(logWebSelfIdMock).toHaveBeenCalled();
   });

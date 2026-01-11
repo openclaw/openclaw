@@ -804,9 +804,16 @@ const ToolPolicySchema = z
   })
   .optional();
 
-// Provider docking: allowlists keyed by provider id (no schema updates when adding providers).
 const ElevatedAllowFromSchema = z
-  .record(z.string(), z.array(z.union([z.string(), z.number()])))
+  .object({
+    whatsapp: z.array(z.string()).optional(),
+    telegram: z.array(z.union([z.string(), z.number()])).optional(),
+    discord: z.array(z.union([z.string(), z.number()])).optional(),
+    slack: z.array(z.union([z.string(), z.number()])).optional(),
+    signal: z.array(z.union([z.string(), z.number()])).optional(),
+    imessage: z.array(z.union([z.string(), z.number()])).optional(),
+    webchat: z.array(z.union([z.string(), z.number()])).optional(),
+  })
   .optional();
 
 const AgentSandboxSchema = z
@@ -1602,29 +1609,6 @@ export const ClawdbotSchema = z
                 enabled: z.boolean().optional(),
                 apiKey: z.string().optional(),
                 env: z.record(z.string(), z.string()).optional(),
-              })
-              .passthrough(),
-          )
-          .optional(),
-      })
-      .optional(),
-    plugins: z
-      .object({
-        enabled: z.boolean().optional(),
-        allow: z.array(z.string()).optional(),
-        deny: z.array(z.string()).optional(),
-        load: z
-          .object({
-            paths: z.array(z.string()).optional(),
-          })
-          .optional(),
-        entries: z
-          .record(
-            z.string(),
-            z
-              .object({
-                enabled: z.boolean().optional(),
-                config: z.record(z.string(), z.unknown()).optional(),
               })
               .passthrough(),
           )

@@ -15,18 +15,15 @@ import {
   resolveAgentIdFromSessionKey,
   resolveMainSessionKey,
   resolveStorePath,
+  type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging.js";
 import { getQueueSize } from "../process/command-queue.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
-import type { ProviderHeartbeatDeps } from "../providers/plugins/types.js";
+import { webAuthExists } from "../providers/web/index.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { getActiveWebListener } from "../web/active-listener.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import {
   type HeartbeatRunResult,
@@ -37,12 +34,13 @@ import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
 
-type HeartbeatDeps = OutboundSendDeps &
-  ProviderHeartbeatDeps & {
-    runtime?: RuntimeEnv;
-    getQueueSize?: (lane?: string) => number;
-    nowMs?: () => number;
-  };
+type HeartbeatDeps = OutboundSendDeps & {
+  runtime?: RuntimeEnv;
+  getQueueSize?: (lane?: string) => number;
+  nowMs?: () => number;
+  webAuthExists?: () => Promise<boolean>;
+  hasActiveWebListener?: () => boolean;
+};
 
 const log = createSubsystemLogger("gateway/heartbeat");
 let heartbeatsEnabled = true;
@@ -131,12 +129,13 @@ function resolveHeartbeatReasoningPayloads(
 function resolveHeartbeatSender(params: {
   allowFrom: Array<string | number>;
   lastTo?: string;
-  provider?: string | null;
+  lastProvider?: SessionEntry["lastProvider"];
 }) {
-  const { allowFrom, lastTo, provider } = params;
+  const { allowFrom, lastTo, lastProvider } = params;
   const candidates = [
     lastTo?.trim(),
-    provider && lastTo ? `${provider}:${lastTo}` : undefined,
+    lastProvider === "telegram" && lastTo ? `telegram:${lastTo}` : undefined,
+    lastProvider === "whatsapp" && lastTo ? `whatsapp:${lastTo}` : undefined,
   ].filter((val): val is string => Boolean(val?.trim()));
 
   const allowList = allowFrom
@@ -156,6 +155,26 @@ function resolveHeartbeatSender(params: {
   }
   if (allowList.length > 0) return allowList[0];
   return candidates[0] ?? "heartbeat";
+}
+
+async function resolveWhatsAppReadiness(
+  cfg: ClawdbotConfig,
+  deps?: HeartbeatDeps,
+): Promise<{ ok: boolean; reason: string }> {
+  if (cfg.web?.enabled === false) {
+    return { ok: false, reason: "whatsapp-disabled" };
+  }
+  const authExists = await (deps?.webAuthExists ?? webAuthExists)();
+  if (!authExists) {
+    return { ok: false, reason: "whatsapp-not-linked" };
+  }
+  const listenerActive = deps?.hasActiveWebListener
+    ? deps.hasActiveWebListener()
+    : Boolean(getActiveWebListener());
+  if (!listenerActive) {
+    return { ok: false, reason: "whatsapp-not-running" };
+  }
+  return { ok: true, reason: "ok" };
 }
 
 async function restoreHeartbeatUpdatedAt(params: {
@@ -220,24 +239,11 @@ export async function runHeartbeatOnce(opts: {
   const startedAt = opts.deps?.nowMs?.() ?? Date.now();
   const { entry, sessionKey, storePath } = resolveHeartbeatSession(cfg);
   const previousUpdatedAt = entry?.updatedAt;
-  const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
-  const lastProvider =
-    entry?.lastProvider && entry.lastProvider !== INTERNAL_MESSAGE_PROVIDER
-      ? normalizeProviderId(entry.lastProvider)
-      : undefined;
-  const senderProvider =
-    delivery.provider !== "none" ? delivery.provider : lastProvider;
-  const senderAllowFrom = senderProvider
-    ? (getProviderPlugin(senderProvider)?.config.resolveAllowFrom?.({
-        cfg,
-        accountId:
-          senderProvider === lastProvider ? entry?.lastAccountId : undefined,
-      }) ?? [])
-    : [];
+  const allowFrom = cfg.whatsapp?.allowFrom ?? [];
   const sender = resolveHeartbeatSender({
-    allowFrom: senderAllowFrom,
+    allowFrom,
     lastTo: entry?.lastTo,
-    provider: senderProvider,
+    lastProvider: entry?.lastProvider,
   });
   const prompt = resolveHeartbeatPrompt(cfg);
   const ctx = {
@@ -305,6 +311,7 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
+    const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry });
     const mediaUrls =
       replyPayload.mediaUrls ??
       (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
@@ -327,15 +334,8 @@ export async function runHeartbeatOnce(opts: {
       return { status: "ran", durationMs: Date.now() - startedAt };
     }
 
-    const deliveryAccountId =
-      delivery.provider === lastProvider ? entry?.lastAccountId : undefined;
-    const heartbeatPlugin = getProviderPlugin(delivery.provider);
-    if (heartbeatPlugin?.heartbeat?.checkReady) {
-      const readiness = await heartbeatPlugin.heartbeat.checkReady({
-        cfg,
-        accountId: deliveryAccountId,
-        deps: opts.deps,
-      });
+    if (delivery.provider === "whatsapp") {
+      const readiness = await resolveWhatsAppReadiness(cfg, opts.deps);
       if (!readiness.ok) {
         emitHeartbeatEvent({
           status: "skipped",
@@ -344,8 +344,7 @@ export async function runHeartbeatOnce(opts: {
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
         });
-        log.info("heartbeat: provider not ready", {
-          provider: delivery.provider,
+        log.info("heartbeat: whatsapp not ready", {
           reason: readiness.reason,
         });
         return { status: "skipped", reason: readiness.reason };
@@ -356,7 +355,6 @@ export async function runHeartbeatOnce(opts: {
       cfg,
       provider: delivery.provider,
       to: delivery.to,
-      accountId: deliveryAccountId,
       payloads: [
         ...reasoningPayloads,
         ...(shouldSkipMain

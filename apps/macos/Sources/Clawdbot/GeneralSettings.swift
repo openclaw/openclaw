@@ -354,7 +354,7 @@ struct GeneralSettings: View {
                 Button {
                     Task { await self.installCLI() }
                 } label: {
-                    let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
+                    let title = self.cliInstalled ? "Reinstall CLI helper" : "Install CLI helper"
                     ZStack {
                         Text(title)
                             .opacity(self.isInstallingCLI ? 0 : 1)
@@ -393,7 +393,7 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else {
-                Text("Installs a user-space Node 22+ runtime and the CLI (no Homebrew).")
+                Text("Symlink \"clawdbot\" into /usr/local/bin and /opt/homebrew/bin for scripts.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
@@ -461,8 +461,10 @@ struct GeneralSettings: View {
         self.isInstallingCLI = true
         defer { isInstallingCLI = false }
         await CLIInstaller.install { status in
-            self.cliStatus = status
-            self.refreshCLIStatus()
+            await MainActor.run {
+                self.cliStatus = status
+                self.refreshCLIStatus()
+            }
         }
     }
 
@@ -501,19 +503,7 @@ struct GeneralSettings: View {
             }
 
             if let snap = snapshot {
-                let linkId = snap.providerOrder?.first(where: {
-                    if let summary = snap.providers[$0] { return summary.linked != nil }
-                    return false
-                }) ?? snap.providers.keys.first(where: {
-                    if let summary = snap.providers[$0] { return summary.linked != nil }
-                    return false
-                })
-                let linkLabel =
-                    linkId.flatMap { snap.providerLabels?[$0] } ??
-                    linkId?.capitalized ??
-                    "Link provider"
-                let linkAge = linkId.flatMap { snap.providers[$0]?.authAgeMs }
-                Text("\(linkLabel) auth age: \(healthAgeString(linkAge))")
+                Text("Linked auth age: \(healthAgeString(snap.web.authAgeMs))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("Session store: \(snap.sessions.path) (\(snap.sessions.count) entries)")

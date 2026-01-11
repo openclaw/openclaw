@@ -19,10 +19,6 @@ import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { VERSION } from "../version.js";
 import type {
@@ -336,8 +332,8 @@ export async function probeGatewayReachable(params: {
       password: params.password,
       method: "health",
       timeoutMs,
-      clientName: GATEWAY_CLIENT_NAMES.PROBE,
-      mode: GATEWAY_CLIENT_MODES.PROBE,
+      clientName: "clawdbot-probe",
+      mode: "probe",
     });
     return { ok: true };
   } catch (err) {

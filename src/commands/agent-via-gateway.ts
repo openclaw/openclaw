@@ -7,14 +7,9 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway, randomIdempotencyKey } from "../gateway/call.js";
-import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  normalizeMessageProvider,
-} from "../utils/message-provider.js";
+import { normalizeMessageProvider } from "../utils/message-provider.js";
 import { agentCommand } from "./agent.js";
 
 type AgentGatewayResult = {
@@ -129,8 +124,7 @@ export async function agentViaGatewayCommand(
     sessionId: opts.sessionId,
   });
 
-  const provider =
-    normalizeMessageProvider(opts.provider) ?? DEFAULT_CHAT_PROVIDER;
+  const provider = normalizeMessageProvider(opts.provider) ?? "whatsapp";
   const idempotencyKey = opts.runId?.trim() || randomIdempotencyKey();
 
   const response = await withProgress(
@@ -157,8 +151,8 @@ export async function agentViaGatewayCommand(
         },
         expectFinal: true,
         timeoutMs: gatewayTimeoutMs,
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: "cli",
+        mode: "cli",
       }),
   );
 

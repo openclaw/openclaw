@@ -9,10 +9,6 @@ import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { resolveStateDir } from "../config/paths.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
 import { truncateUtf16Safe } from "../utils.js";
 import type { BlockReplyChunking } from "./pi-embedded-block-chunker.js";
 import { EmbeddedBlockChunker } from "./pi-embedded-block-chunker.js";
@@ -100,17 +96,6 @@ function sanitizeToolResult(result: unknown): unknown {
   return { ...record, content: sanitized };
 }
 
-function isToolResultError(result: unknown): boolean {
-  if (!result || typeof result !== "object") return false;
-  const record = result as { details?: unknown };
-  const details = record.details;
-  if (!details || typeof details !== "object") return false;
-  const status = (details as { status?: unknown }).status;
-  if (typeof status !== "string") return false;
-  const normalized = status.trim().toLowerCase();
-  return normalized === "error" || normalized === "timeout";
-}
-
 function stripThinkingSegments(text: string): string {
   if (!text || !THINKING_TAG_RE.test(text)) return text;
   THINKING_TAG_RE.lastIndex = 0;
@@ -146,37 +131,59 @@ function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
 ): MessagingToolSend | undefined {
-  // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = typeof args.action === "string" ? args.action.trim() : "";
   const accountIdRaw =
     typeof args.accountId === "string" ? args.accountId.trim() : undefined;
   const accountId = accountIdRaw ? accountIdRaw : undefined;
+  if (toolName === "slack") {
+    if (action !== "sendMessage") return undefined;
+    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    if (!toRaw) return undefined;
+    const to = normalizeTargetForProvider("slack", toRaw);
+    return to
+      ? { tool: toolName, provider: "slack", accountId, to }
+      : undefined;
+  }
+  if (toolName === "discord") {
+    if (action === "sendMessage") {
+      const toRaw = typeof args.to === "string" ? args.to : undefined;
+      if (!toRaw) return undefined;
+      const to = normalizeTargetForProvider("discord", toRaw);
+      return to
+        ? { tool: toolName, provider: "discord", accountId, to }
+        : undefined;
+    }
+    if (action === "threadReply") {
+      const channelId =
+        typeof args.channelId === "string" ? args.channelId.trim() : "";
+      if (!channelId) return undefined;
+      const to = normalizeTargetForProvider("discord", `channel:${channelId}`);
+      return to
+        ? { tool: toolName, provider: "discord", accountId, to }
+        : undefined;
+    }
+    return undefined;
+  }
+  if (toolName === "telegram") {
+    if (action !== "sendMessage") return undefined;
+    const toRaw = typeof args.to === "string" ? args.to : undefined;
+    if (!toRaw) return undefined;
+    const to = normalizeTargetForProvider("telegram", toRaw);
+    return to
+      ? { tool: toolName, provider: "telegram", accountId, to }
+      : undefined;
+  }
   if (toolName === "message") {
     if (action !== "send" && action !== "thread-reply") return undefined;
     const toRaw = typeof args.to === "string" ? args.to : undefined;
     if (!toRaw) return undefined;
     const providerRaw =
       typeof args.provider === "string" ? args.provider.trim() : "";
-    const providerId = providerRaw ? normalizeProviderId(providerRaw) : null;
-    const provider =
-      providerId ?? (providerRaw ? providerRaw.toLowerCase() : "message");
+    const provider = providerRaw ? providerRaw.toLowerCase() : "message";
     const to = normalizeTargetForProvider(provider, toRaw);
     return to ? { tool: toolName, provider, accountId, to } : undefined;
   }
-  const providerId = normalizeProviderId(toolName);
-  if (!providerId) return undefined;
-  const plugin = getProviderPlugin(providerId);
-  const extracted = plugin?.actions?.extractToolSend?.({ args });
-  if (!extracted?.to) return undefined;
-  const to = normalizeTargetForProvider(providerId, extracted.to);
-  return to
-    ? {
-        tool: toolName,
-        provider: providerId,
-        accountId: extracted.accountId ?? accountId,
-        to,
-      }
-    : undefined;
+  return undefined;
 }
 
 export function subscribeEmbeddedPiSession(params: {
@@ -546,10 +553,7 @@ export function subscribeEmbeddedPiSession(params: {
             typeof argsRecord.action === "string"
               ? argsRecord.action.trim()
               : "";
-          const isMessagingSend = isMessagingToolSendAction(
-            toolName,
-            argsRecord,
-          );
+          const isMessagingSend = isMessagingToolSendAction(toolName, action);
           if (isMessagingSend) {
             const sendTarget = extractMessagingToolSend(toolName, argsRecord);
             if (sendTarget) {
@@ -609,7 +613,6 @@ export function subscribeEmbeddedPiSession(params: {
           (evt as AgentEvent & { isError: boolean }).isError,
         );
         const result = (evt as AgentEvent & { result?: unknown }).result;
-        const isToolError = isError || isToolResultError(result);
         const sanitizedResult = sanitizeToolResult(result);
         const meta = toolMetaById.get(toolCallId);
         toolMetas.push({ toolName, meta });
@@ -621,7 +624,7 @@ export function subscribeEmbeddedPiSession(params: {
         const pendingTarget = pendingMessagingTargets.get(toolCallId);
         if (pendingText) {
           pendingMessagingTexts.delete(toolCallId);
-          if (!isToolError) {
+          if (!isError) {
             messagingToolSentTexts.push(pendingText);
             messagingToolSentTextsNormalized.push(
               normalizeTextForComparison(pendingText),
@@ -634,7 +637,7 @@ export function subscribeEmbeddedPiSession(params: {
         }
         if (pendingTarget) {
           pendingMessagingTargets.delete(toolCallId);
-          if (!isToolError) {
+          if (!isError) {
             messagingToolSentTargets.push(pendingTarget);
             trimMessagingToolSent();
           }
@@ -648,7 +651,7 @@ export function subscribeEmbeddedPiSession(params: {
             name: toolName,
             toolCallId,
             meta,
-            isError: isToolError,
+            isError,
             result: sanitizedResult,
           },
         });
@@ -659,7 +662,7 @@ export function subscribeEmbeddedPiSession(params: {
             name: toolName,
             toolCallId,
             meta,
-            isError: isToolError,
+            isError,
           },
         });
       }

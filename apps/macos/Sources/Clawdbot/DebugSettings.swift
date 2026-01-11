@@ -107,7 +107,7 @@ struct DebugSettings: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 GridRow {
-                    self.gridLabel("CLI")
+                    self.gridLabel("CLI helper")
                     let loc = CLIInstaller.installedLocation()
                     Text(loc ?? "missing")
                         .font(.caption.monospaced())

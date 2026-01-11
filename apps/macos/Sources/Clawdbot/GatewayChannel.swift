@@ -192,17 +192,15 @@ actor GatewayChannelActor {
         let osVersion = ProcessInfo.processInfo.operatingSystemVersion
         let platform = "macos \(osVersion.majorVersion).\(osVersion.minorVersion).\(osVersion.patchVersion)"
         let primaryLocale = Locale.preferredLanguages.first ?? Locale.current.identifier
-        let clientDisplayName = InstanceIdentity.displayName
-        let clientId = "clawdbot-macos"
+        let clientName = InstanceIdentity.displayName
 
         let reqId = UUID().uuidString
         var client: [String: ProtoAnyCodable] = [
-            "id": ProtoAnyCodable(clientId),
-            "displayName": ProtoAnyCodable(clientDisplayName),
+            "name": ProtoAnyCodable(clientName),
             "version": ProtoAnyCodable(
                 Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"),
             "platform": ProtoAnyCodable(platform),
-            "mode": ProtoAnyCodable("ui"),
+            "mode": ProtoAnyCodable("app"),
             "instanceId": ProtoAnyCodable(InstanceIdentity.instanceId),
         ]
         client["deviceFamily"] = ProtoAnyCodable("Mac")

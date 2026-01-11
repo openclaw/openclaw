@@ -6,17 +6,6 @@ enum GatewayLaunchAgentManager {
     private static let legacyGatewayLaunchdLabel = "com.steipete.clawdbot.gateway"
     private static let disableLaunchAgentMarker = ".clawdbot/disable-launchagent"
 
-    private enum GatewayProgramArgumentsError: LocalizedError {
-        case cliNotFound
-
-        var errorDescription: String? {
-            switch self {
-            case .cliNotFound:
-                "clawdbot CLI not found in PATH; install the CLI."
-            }
-        }
-    }
-
     private static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
@@ -27,50 +16,32 @@ enum GatewayLaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(legacyGatewayLaunchdLabel).plist")
     }
 
-    private static func gatewayProgramArguments(
-        port: Int,
-        bind: String) -> Result<[String], GatewayProgramArgumentsError>
-    {
+    private static func gatewayExecutablePath(bundlePath: String) -> String {
+        "\(bundlePath)/Contents/Resources/Relay/clawdbot"
+    }
+
+    private static func relayDir(bundlePath: String) -> String {
+        "\(bundlePath)/Contents/Resources/Relay"
+    }
+
+    private static func gatewayProgramArguments(bundlePath: String, port: Int, bind: String) -> [String] {
         #if DEBUG
         let projectRoot = CommandResolver.projectRoot()
         if let localBin = CommandResolver.projectClawdbotExecutable(projectRoot: projectRoot) {
-            return .success([localBin, "gateway-daemon", "--port", "\(port)", "--bind", bind])
+            return [localBin, "gateway", "--port", "\(port)", "--bind", bind]
         }
-        if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot) {
-            switch CommandResolver.runtimeResolution() {
-            case let .success(runtime):
-                let cmd = CommandResolver.makeRuntimeCommand(
-                    runtime: runtime,
-                    entrypoint: entry,
-                    subcommand: "gateway-daemon",
-                    extraArgs: ["--port", "\(port)", "--bind", bind])
-                return .success(cmd)
-            case .failure:
-                break
-            }
+        if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot),
+           case let .success(runtime) = CommandResolver.runtimeResolution()
+        {
+            return CommandResolver.makeRuntimeCommand(
+                runtime: runtime,
+                entrypoint: entry,
+                subcommand: "gateway",
+                extraArgs: ["--port", "\(port)", "--bind", bind])
         }
         #endif
-        let searchPaths = CommandResolver.preferredPaths()
-        if let gatewayBin = CommandResolver.clawdbotExecutable(searchPaths: searchPaths) {
-            return .success([gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind])
-        }
-
-        let fallbackProjectRoot = CommandResolver.projectRoot()
-        if let entry = CommandResolver.gatewayEntrypoint(in: fallbackProjectRoot) {
-            switch CommandResolver.runtimeResolution(searchPaths: searchPaths) {
-            case let .success(runtime):
-                let cmd = CommandResolver.makeRuntimeCommand(
-                    runtime: runtime,
-                    entrypoint: entry,
-                    subcommand: "gateway-daemon",
-                    extraArgs: ["--port", "\(port)", "--bind", bind])
-                return .success(cmd)
-            case .failure:
-                break
-            }
-        }
-
-        return .failure(.cliNotFound)
+        let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
+        return [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
     }
 
     static func isLoaded() async -> Bool {
@@ -80,7 +51,6 @@ enum GatewayLaunchAgentManager {
     }
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
-        _ = bundlePath
         if enabled, self.isLaunchAgentWriteDisabled() {
             self.logger.info("launchd enable skipped (attach-only or disable marker set)")
             return nil
@@ -88,6 +58,11 @@ enum GatewayLaunchAgentManager {
         if enabled {
             _ = await Launchctl.run(["bootout", "gui/\(getuid())/\(self.legacyGatewayLaunchdLabel)"])
             try? FileManager.default.removeItem(at: self.legacyPlistURL)
+            let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
+            guard FileManager.default.isExecutableFile(atPath: gatewayBin) else {
+                self.logger.error("launchd enable failed: gateway missing at \(gatewayBin)")
+                return "Embedded gateway missing in bundle; rebuild via scripts/package-mac-app.sh"
+            }
 
             let desiredBind = self.preferredGatewayBind() ?? "loopback"
             let desiredToken = self.preferredGatewayToken()
@@ -97,31 +72,22 @@ enum GatewayLaunchAgentManager {
                 bind: desiredBind,
                 token: desiredToken,
                 password: desiredPassword)
-            let programArgumentsResult = self.gatewayProgramArguments(port: port, bind: desiredBind)
-            let programArguments: [String]
-            switch programArgumentsResult {
-            case let .success(args):
-                programArguments = args
-            case let .failure(error):
-                let message = error.errorDescription ?? "Failed to resolve gateway CLI"
-                self.logger.error("launchd enable failed: \(message)")
-                return message
-            }
 
             // If launchd already loaded the job (common on login), avoid `bootout` unless we must
             // change the config. `bootout` can kill a just-started gateway and cause attach loops.
             let loaded = await self.isLoaded()
-            if loaded {
-                if let existing = self.readPlistConfig(), existing.matches(desiredConfig) {
-                    self.logger.info("launchd job already loaded with desired config; skipping bootout")
-                    await self.ensureEnabled()
-                    _ = await Launchctl.run(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
-                    return nil
-                }
+            if loaded,
+               let existing = self.readPlistConfig(),
+               existing.matches(desiredConfig)
+            {
+                self.logger.info("launchd job already loaded with desired config; skipping bootout")
+                await self.ensureEnabled()
+                _ = await Launchctl.run(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+                return nil
             }
 
             self.logger.info("launchd enable requested port=\(port) bind=\(desiredBind)")
-            self.writePlist(programArguments: programArguments)
+            self.writePlist(bundlePath: bundlePath, port: port)
 
             await self.ensureEnabled()
             if loaded {
@@ -150,13 +116,19 @@ enum GatewayLaunchAgentManager {
         _ = await Launchctl.run(["kickstart", "-k", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
     }
 
-    private static func writePlist(programArguments: [String]) {
-        let preferredPath = CommandResolver.preferredPaths().joined(separator: ":")
+    private static func writePlist(bundlePath: String, port: Int) {
+        let relayDir = self.relayDir(bundlePath: bundlePath)
+        let preferredPath = ([relayDir] + CommandResolver.preferredPaths())
+            .joined(separator: ":")
+        let bind = self.preferredGatewayBind() ?? "loopback"
+        let programArguments = self.gatewayProgramArguments(bundlePath: bundlePath, port: port, bind: bind)
         let token = self.preferredGatewayToken()
         let password = self.preferredGatewayPassword()
         var envEntries = """
             <key>PATH</key>
             <string>\(preferredPath)</string>
+            <key>CLAWDBOT_IMAGE_BACKEND</key>
+            <string>sips</string>
         """
         if let token {
             let escapedToken = self.escapePlistValue(token)
@@ -347,6 +319,14 @@ extension GatewayLaunchAgentManager {
 
 #if DEBUG
 extension GatewayLaunchAgentManager {
+    static func _testGatewayExecutablePath(bundlePath: String) -> String {
+        self.gatewayExecutablePath(bundlePath: bundlePath)
+    }
+
+    static func _testRelayDir(bundlePath: String) -> String {
+        self.relayDir(bundlePath: bundlePath)
+    }
+
     static func _testPreferredGatewayBind() -> String? {
         self.preferredGatewayBind()
     }

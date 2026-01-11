@@ -76,11 +76,7 @@ type AgentSummary = {
 };
 
 type GatewayStatusSummary = {
-  linkProvider?: {
-    label?: string;
-    linked?: boolean;
-    authAgeMs?: number | null;
-  };
+  web?: { linked?: boolean; authAgeMs?: number | null };
   heartbeatSeconds?: number;
   providerSummary?: string[];
   queuedSystemEvents?: string[];
@@ -332,17 +328,12 @@ export async function runTui(opts: TuiOptions) {
     const lines: string[] = [];
     lines.push("Gateway status");
 
-    if (!summary.linkProvider) {
-      lines.push("Link provider: unknown");
-    } else {
-      const linkLabel = summary.linkProvider.label ?? "Link provider";
-      const linked = summary.linkProvider.linked === true;
-      const authAge =
-        linked && typeof summary.linkProvider.authAgeMs === "number"
-          ? ` (last refreshed ${formatAge(summary.linkProvider.authAgeMs)})`
-          : "";
-      lines.push(`${linkLabel}: ${linked ? "linked" : "not linked"}${authAge}`);
-    }
+    const webLinked = summary.web?.linked === true;
+    const authAge =
+      webLinked && typeof summary.web?.authAgeMs === "number"
+        ? ` (last refreshed ${formatAge(summary.web.authAgeMs)})`
+        : "";
+    lines.push(`Web session: ${webLinked ? "linked" : "not linked"}${authAge}`);
 
     const providerSummary = Array.isArray(summary.providerSummary)
       ? summary.providerSummary

@@ -18,28 +18,28 @@ describe("gateway server providers", () => {
     await connectOk(ws);
 
     const res = await rpcReq<{
-      providers?: Record<
-        string,
-        | {
-            configured?: boolean;
-            tokenSource?: string;
-            probe?: unknown;
-            lastProbeAt?: unknown;
-          }
-        | { linked?: boolean }
-      >;
+      whatsapp?: { linked?: boolean };
+      telegram?: {
+        configured?: boolean;
+        tokenSource?: string;
+        probe?: unknown;
+        lastProbeAt?: unknown;
+      };
+      signal?: {
+        configured?: boolean;
+        probe?: unknown;
+        lastProbeAt?: unknown;
+      };
     }>(ws, "providers.status", { probe: false, timeoutMs: 2000 });
     expect(res.ok).toBe(true);
-    const telegram = res.payload?.providers?.telegram;
-    const signal = res.payload?.providers?.signal;
-    expect(res.payload?.providers?.whatsapp).toBeTruthy();
-    expect(telegram?.configured).toBe(false);
-    expect(telegram?.tokenSource).toBe("none");
-    expect(telegram?.probe).toBeUndefined();
-    expect(telegram?.lastProbeAt).toBeNull();
-    expect(signal?.configured).toBe(false);
-    expect(signal?.probe).toBeUndefined();
-    expect(signal?.lastProbeAt).toBeNull();
+    expect(res.payload?.whatsapp).toBeTruthy();
+    expect(res.payload?.telegram?.configured).toBe(false);
+    expect(res.payload?.telegram?.tokenSource).toBe("none");
+    expect(res.payload?.telegram?.probe).toBeUndefined();
+    expect(res.payload?.telegram?.lastProbeAt).toBeNull();
+    expect(res.payload?.signal?.configured).toBe(false);
+    expect(res.payload?.signal?.probe).toBeUndefined();
+    expect(res.payload?.signal?.lastProbeAt).toBeNull();
 
     ws.close();
     await server.close();
@@ -50,24 +50,19 @@ describe("gateway server providers", () => {
     }
   });
 
-  test("providers.logout reports no session when missing", async () => {
+  test("web.logout reports no session when missing", async () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const res = await rpcReq<{ cleared?: boolean; provider?: string }>(
-      ws,
-      "providers.logout",
-      { provider: "whatsapp" },
-    );
+    const res = await rpcReq<{ cleared?: boolean }>(ws, "web.logout");
     expect(res.ok).toBe(true);
-    expect(res.payload?.provider).toBe("whatsapp");
     expect(res.payload?.cleared).toBe(false);
 
     ws.close();
     await server.close();
   });
 
-  test("providers.logout clears telegram bot token from config", async () => {
+  test("telegram.logout clears bot token from config", async () => {
     const prevToken = process.env.TELEGRAM_BOT_TOKEN;
     delete process.env.TELEGRAM_BOT_TOKEN;
     const { readConfigFileSnapshot, writeConfigFile } =
@@ -82,13 +77,11 @@ describe("gateway server providers", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
 
-    const res = await rpcReq<{
-      cleared?: boolean;
-      envToken?: boolean;
-      provider?: string;
-    }>(ws, "providers.logout", { provider: "telegram" });
+    const res = await rpcReq<{ cleared?: boolean; envToken?: boolean }>(
+      ws,
+      "telegram.logout",
+    );
     expect(res.ok).toBe(true);
-    expect(res.payload?.provider).toBe("telegram");
     expect(res.payload?.cleared).toBe(true);
     expect(res.payload?.envToken).toBe(false);
 

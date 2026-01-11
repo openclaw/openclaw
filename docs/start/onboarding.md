@@ -17,7 +17,7 @@ wizard, and let the agent bootstrap itself.
 3) **Auth (Anthropic OAuth)** — local only
 4) **Setup Wizard** (Gateway‑driven)
 5) **Permissions** (TCC prompts)
-6) **CLI** (optional)
+6) **CLI helper** (optional)
 7) **Onboarding chat** (dedicated session)
 8) Ready
 
@@ -62,10 +62,10 @@ Onboarding requests TCC permissions needed for:
 - Microphone / Speech Recognition
 - Automation (AppleScript)
 
-## 5) CLI (optional)
+## 5) CLI helper (optional)
 
-The app can install the global `clawdbot` CLI via npm/pnpm/bun so terminal
-workflows and launchd tasks work out of the box.
+The app can symlink the bundled `clawdbot` CLI into `/usr/local/bin` and
+`/opt/homebrew/bin` so terminal workflows work out of the box.
 
 ## 6) Onboarding chat (dedicated session)
 

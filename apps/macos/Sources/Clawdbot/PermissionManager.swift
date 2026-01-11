@@ -345,10 +345,7 @@ final class LocationPermissionRequester: NSObject, CLLocationManagerDelegate {
     }
 
     // Legacy callback (still used on some macOS versions / configurations).
-    nonisolated func locationManager(
-        _ manager: CLLocationManager,
-        didChangeAuthorization status: CLAuthorizationStatus)
-    {
+    nonisolated func locationManager(_ manager: CLLocationManager, didChangeAuthorization status: CLAuthorizationStatus) {
         Task { @MainActor in
             self.finish(status: status)
         }

@@ -47,20 +47,10 @@ Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native
 ## 1) Install the CLI (recommended)
 
 ```bash
-curl -fsSL https://clawd.bot/install.sh | bash
-```
-
-Windows (PowerShell):
-
-```powershell
-iwr -useb https://clawd.bot/install.ps1 | iex
-```
-
-Alternative (global install):
-
-```bash
 npm install -g clawdbot@latest
 ```
+
+Or:
 
 ```bash
 pnpm add -g clawdbot@latest

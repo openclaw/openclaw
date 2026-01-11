@@ -1,63 +1,15 @@
 import type { ClawdbotConfig } from "../config/config.js";
-import type { ProviderDock } from "../providers/dock.js";
-import { getProviderDock, listProviderDocks } from "../providers/dock.js";
-import type { ProviderId } from "../providers/plugins/types.js";
-import { normalizeProviderId } from "../providers/registry.js";
+import { normalizeE164 } from "../utils.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
-  providerId?: ProviderId;
+  isWhatsAppProvider: boolean;
   ownerList: string[];
-  senderId?: string;
+  senderE164?: string;
   isAuthorizedSender: boolean;
   from?: string;
   to?: string;
 };
-
-function resolveProviderFromContext(
-  ctx: MsgContext,
-  cfg: ClawdbotConfig,
-): ProviderId | undefined {
-  const direct =
-    normalizeProviderId(ctx.Provider) ??
-    normalizeProviderId(ctx.Surface) ??
-    normalizeProviderId(ctx.OriginatingChannel);
-  if (direct) return direct;
-  const candidates = [ctx.From, ctx.To]
-    .filter((value): value is string => Boolean(value?.trim()))
-    .flatMap((value) => value.split(":").map((part) => part.trim()));
-  for (const candidate of candidates) {
-    const normalized = normalizeProviderId(candidate);
-    if (normalized) return normalized;
-  }
-  const configured = listProviderDocks()
-    .map((dock) => {
-      if (!dock.config?.resolveAllowFrom) return null;
-      const allowFrom = dock.config.resolveAllowFrom({
-        cfg,
-        accountId: ctx.AccountId,
-      });
-      if (!Array.isArray(allowFrom) || allowFrom.length === 0) return null;
-      return dock.id;
-    })
-    .filter((value): value is ProviderId => Boolean(value));
-  if (configured.length === 1) return configured[0];
-  return undefined;
-}
-
-function formatAllowFromList(params: {
-  dock?: ProviderDock;
-  cfg: ClawdbotConfig;
-  accountId?: string | null;
-  allowFrom: Array<string | number>;
-}): string[] {
-  const { dock, cfg, accountId, allowFrom } = params;
-  if (!allowFrom || allowFrom.length === 0) return [];
-  if (dock?.config?.formatAllowFrom) {
-    return dock.config.formatAllowFrom({ cfg, accountId, allowFrom });
-  }
-  return allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
-}
 
 export function resolveCommandAuthorization(params: {
   ctx: MsgContext;
@@ -65,59 +17,56 @@ export function resolveCommandAuthorization(params: {
   commandAuthorized: boolean;
 }): CommandAuthorization {
   const { ctx, cfg, commandAuthorized } = params;
-  const providerId = resolveProviderFromContext(ctx, cfg);
-  const dock = providerId ? getProviderDock(providerId) : undefined;
-  const from = (ctx.From ?? "").trim();
-  const to = (ctx.To ?? "").trim();
-  const allowFromRaw = dock?.config?.resolveAllowFrom
-    ? dock.config.resolveAllowFrom({ cfg, accountId: ctx.AccountId })
-    : [];
-  const allowFromList = formatAllowFromList({
-    dock,
-    cfg,
-    accountId: ctx.AccountId,
-    allowFrom: Array.isArray(allowFromRaw) ? allowFromRaw : [],
-  });
+  const provider = (ctx.Provider ?? "").trim().toLowerCase();
+  const from = (ctx.From ?? "").replace(/^whatsapp:/, "");
+  const to = (ctx.To ?? "").replace(/^whatsapp:/, "");
+  const hasWhatsappPrefix =
+    (ctx.From ?? "").startsWith("whatsapp:") ||
+    (ctx.To ?? "").startsWith("whatsapp:");
+  const looksLikeE164 = (value: string) =>
+    Boolean(value && /^\+?\d{3,}$/.test(value.replace(/[^\d+]/g, "")));
+  const inferWhatsApp =
+    !provider &&
+    Boolean(cfg.whatsapp?.allowFrom?.length) &&
+    (looksLikeE164(from) || looksLikeE164(to));
+  const isWhatsAppProvider =
+    provider === "whatsapp" || hasWhatsappPrefix || inferWhatsApp;
+
+  const configuredAllowFrom = isWhatsAppProvider
+    ? cfg.whatsapp?.allowFrom
+    : undefined;
+  const allowFromList =
+    configuredAllowFrom?.filter((entry) => entry?.trim()) ?? [];
   const allowAll =
+    !isWhatsAppProvider ||
     allowFromList.length === 0 ||
     allowFromList.some((entry) => entry.trim() === "*");
 
-  const ownerCandidates = allowAll
-    ? []
-    : allowFromList.filter((entry) => entry !== "*");
-  if (!allowAll && ownerCandidates.length === 0 && to) {
-    const normalizedTo = formatAllowFromList({
-      dock,
-      cfg,
-      accountId: ctx.AccountId,
-      allowFrom: [to],
-    })[0];
-    if (normalizedTo) ownerCandidates.push(normalizedTo);
+  const senderE164 = normalizeE164(
+    ctx.SenderE164 ?? (isWhatsAppProvider ? from : ""),
+  );
+  const ownerCandidates =
+    isWhatsAppProvider && !allowAll
+      ? allowFromList.filter((entry) => entry !== "*")
+      : [];
+  if (isWhatsAppProvider && !allowAll && ownerCandidates.length === 0 && to) {
+    ownerCandidates.push(to);
   }
-  const ownerList = ownerCandidates;
+  const ownerList = ownerCandidates
+    .map((entry) => normalizeE164(entry))
+    .filter((entry): entry is string => Boolean(entry));
 
-  const senderRaw = ctx.SenderId ?? ctx.SenderE164 ?? from;
-  const senderId = senderRaw
-    ? formatAllowFromList({
-        dock,
-        cfg,
-        accountId: ctx.AccountId,
-        allowFrom: [senderRaw],
-      })[0]
-    : undefined;
-
-  const enforceOwner = Boolean(dock?.commands?.enforceOwnerForCommands);
   const isOwner =
-    !enforceOwner ||
+    !isWhatsAppProvider ||
     allowAll ||
     ownerList.length === 0 ||
-    (senderId ? ownerList.includes(senderId) : false);
+    (senderE164 ? ownerList.includes(senderE164) : false);
   const isAuthorizedSender = commandAuthorized && isOwner;
 
   return {
-    providerId,
+    isWhatsAppProvider,
     ownerList,
-    senderId: senderId || undefined,
+    senderE164: senderE164 || undefined,
     isAuthorizedSender,
     from: from || undefined,
     to: to || undefined,

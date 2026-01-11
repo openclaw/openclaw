@@ -4,10 +4,6 @@ import { WebSocket } from "ws";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
-import {
   connectOk,
   getFreePort,
   installGatewayTestHooks,
@@ -242,12 +238,12 @@ describe("gateway server health/presence", () => {
     const { server, ws } = await startServerWithClient();
     await connectOk(ws, {
       client: {
-        id: GATEWAY_CLIENT_NAMES.FINGERPRINT,
+        name: "fingerprint",
         version: "9.9.9",
         platform: "test",
         deviceFamily: "iPad",
         modelIdentifier: "iPad16,6",
-        mode: GATEWAY_CLIENT_MODES.UI,
+        mode: "ui",
         instanceId: "abc",
       },
     });
@@ -268,7 +264,7 @@ describe("gateway server health/presence", () => {
     const presenceRes = await presenceP;
     const entries = presenceRes.payload as Array<Record<string, unknown>>;
     const clientEntry = entries.find((e) => e.instanceId === "abc");
-    expect(clientEntry?.host).toBe(GATEWAY_CLIENT_NAMES.FINGERPRINT);
+    expect(clientEntry?.host).toBe("fingerprint");
     expect(clientEntry?.version).toBe("9.9.9");
     expect(clientEntry?.mode).toBe("ui");
     expect(clientEntry?.deviceFamily).toBe("iPad");
@@ -283,10 +279,10 @@ describe("gateway server health/presence", () => {
     const cliId = `cli-${randomUUID()}`;
     await connectOk(ws, {
       client: {
-        id: GATEWAY_CLIENT_NAMES.CLI,
+        name: "cli",
         version: "dev",
         platform: "test",
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        mode: "cli",
         instanceId: cliId,
       },
     });

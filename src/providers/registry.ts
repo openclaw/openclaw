@@ -1,5 +1,5 @@
-// Provider docking: add new providers here (order + meta + aliases), then
-// register the plugin in src/providers/plugins/index.ts and keep protocol IDs in sync.
+import { normalizeMessageProvider } from "../utils/message-provider.js";
+
 export const CHAT_PROVIDER_ORDER = [
   "telegram",
   "whatsapp",
@@ -12,10 +12,6 @@ export const CHAT_PROVIDER_ORDER = [
 
 export type ChatProviderId = (typeof CHAT_PROVIDER_ORDER)[number];
 
-export const PROVIDER_IDS = [...CHAT_PROVIDER_ORDER] as const;
-
-export const DEFAULT_CHAT_PROVIDER: ChatProviderId = "whatsapp";
-
 export type ChatProviderMeta = {
   id: ChatProviderId;
   label: string;
@@ -23,14 +19,7 @@ export type ChatProviderMeta = {
   docsPath: string;
   docsLabel?: string;
   blurb: string;
-  // Provider docking: selection-line formatting for onboarding prompts.
-  // Keep this data-driven to avoid provider-specific branches in shared code.
-  selectionDocsPrefix?: string;
-  selectionDocsOmitLabel?: boolean;
-  selectionExtras?: string[];
 };
-
-const WEBSITE_URL = "https://clawd.bot";
 
 const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
   telegram: {
@@ -41,9 +30,6 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
     docsLabel: "telegram",
     blurb:
       "simplest way to get started — register a bot with @BotFather and get going.",
-    selectionDocsPrefix: "",
-    selectionDocsOmitLabel: true,
-    selectionExtras: [WEBSITE_URL],
   },
   whatsapp: {
     id: "whatsapp",
@@ -96,22 +82,10 @@ const CHAT_PROVIDER_META: Record<ChatProviderId, ChatProviderMeta> = {
   },
 };
 
-export const CHAT_PROVIDER_ALIASES: Record<string, ChatProviderId> = {
-  imsg: "imessage",
-  teams: "msteams",
-};
-
-const normalizeProviderKey = (raw?: string | null): string | undefined => {
-  const normalized = raw?.trim().toLowerCase();
-  return normalized || undefined;
-};
+const WEBSITE_URL = "https://clawd.bot";
 
 export function listChatProviders(): ChatProviderMeta[] {
   return CHAT_PROVIDER_ORDER.map((id) => CHAT_PROVIDER_META[id]);
-}
-
-export function listChatProviderAliases(): string[] {
-  return Object.keys(CHAT_PROVIDER_ALIASES);
 }
 
 export function getChatProviderMeta(id: ChatProviderId): ChatProviderMeta {
@@ -121,20 +95,11 @@ export function getChatProviderMeta(id: ChatProviderId): ChatProviderMeta {
 export function normalizeChatProviderId(
   raw?: string | null,
 ): ChatProviderId | null {
-  const normalized = normalizeProviderKey(raw);
+  const normalized = normalizeMessageProvider(raw);
   if (!normalized) return null;
-  const resolved = CHAT_PROVIDER_ALIASES[normalized] ?? normalized;
-  return CHAT_PROVIDER_ORDER.includes(resolved as ChatProviderId)
-    ? (resolved as ChatProviderId)
+  return CHAT_PROVIDER_ORDER.includes(normalized as ChatProviderId)
+    ? (normalized as ChatProviderId)
     : null;
-}
-
-// Provider docking: prefer this helper in shared code. Importing from
-// `src/providers/plugins/*` can eagerly load provider implementations.
-export function normalizeProviderId(
-  raw?: string | null,
-): ChatProviderId | null {
-  return normalizeChatProviderId(raw);
 }
 
 export function formatProviderPrimerLine(meta: ChatProviderMeta): string {
@@ -145,11 +110,13 @@ export function formatProviderSelectionLine(
   meta: ChatProviderMeta,
   docsLink: (path: string, label?: string) => string,
 ): string {
-  const docsPrefix = meta.selectionDocsPrefix ?? "Docs:";
-  const docsLabel = meta.docsLabel ?? meta.id;
-  const docs = meta.selectionDocsOmitLabel
-    ? docsLink(meta.docsPath)
-    : docsLink(meta.docsPath, docsLabel);
-  const extras = (meta.selectionExtras ?? []).filter(Boolean).join(" ");
-  return `${meta.label} — ${meta.blurb} ${docsPrefix ? `${docsPrefix} ` : ""}${docs}${extras ? ` ${extras}` : ""}`;
+  if (meta.id === "telegram") {
+    return `${meta.label} — ${meta.blurb} ${docsLink(
+      meta.docsPath,
+    )} ${WEBSITE_URL}`;
+  }
+  return `${meta.label} — ${meta.blurb} Docs: ${docsLink(
+    meta.docsPath,
+    meta.docsLabel ?? meta.id,
+  )}`;
 }

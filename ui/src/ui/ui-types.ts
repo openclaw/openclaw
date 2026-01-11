@@ -176,8 +176,7 @@ export type CronFormState = {
     | "discord"
     | "slack"
     | "signal"
-    | "imessage"
-    | "msteams";
+    | "imessage";
   to: string;
   timeoutSeconds: string;
   postToMainPrefix: string;

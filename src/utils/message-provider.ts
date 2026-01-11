@@ -1,65 +1,28 @@
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-  type GatewayClientMode,
-  type GatewayClientName,
-  normalizeGatewayClientMode,
-  normalizeGatewayClientName,
-} from "../gateway/protocol/client-info.js";
-import {
-  listChatProviderAliases,
-  normalizeChatProviderId,
-  PROVIDER_IDS,
-} from "../providers/registry.js";
-
-export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
-export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
-
-export { GATEWAY_CLIENT_NAMES, GATEWAY_CLIENT_MODES };
-export type { GatewayClientName, GatewayClientMode };
-export { normalizeGatewayClientName, normalizeGatewayClientMode };
-
-type GatewayClientInfoLike = {
-  mode?: string | null;
-  id?: string | null;
-};
-
-export function isGatewayCliClient(
-  client?: GatewayClientInfoLike | null,
-): boolean {
-  return normalizeGatewayClientMode(client?.mode) === GATEWAY_CLIENT_MODES.CLI;
-}
-
-export function isInternalMessageProvider(
-  raw?: string | null,
-): raw is InternalMessageProvider {
-  return normalizeMessageProvider(raw) === INTERNAL_MESSAGE_PROVIDER;
-}
-
-export function isWebchatClient(
-  client?: GatewayClientInfoLike | null,
-): boolean {
-  const mode = normalizeGatewayClientMode(client?.mode);
-  if (mode === GATEWAY_CLIENT_MODES.WEBCHAT) return true;
-  return (
-    normalizeGatewayClientName(client?.id) === GATEWAY_CLIENT_NAMES.WEBCHAT_UI
-  );
-}
-
 export function normalizeMessageProvider(
   raw?: string | null,
 ): string | undefined {
   const normalized = raw?.trim().toLowerCase();
   if (!normalized) return undefined;
-  if (normalized === INTERNAL_MESSAGE_PROVIDER)
-    return INTERNAL_MESSAGE_PROVIDER;
-  return normalizeChatProviderId(normalized) ?? normalized;
+  if (normalized === "imsg") return "imessage";
+  if (normalized === "teams") return "msteams";
+  return normalized;
 }
 
-export const DELIVERABLE_MESSAGE_PROVIDERS = PROVIDER_IDS;
+export const DELIVERABLE_MESSAGE_PROVIDERS = [
+  "whatsapp",
+  "telegram",
+  "discord",
+  "slack",
+  "signal",
+  "imessage",
+  "msteams",
+] as const;
 
 export type DeliverableMessageProvider =
   (typeof DELIVERABLE_MESSAGE_PROVIDERS)[number];
+
+export const INTERNAL_MESSAGE_PROVIDER = "webchat" as const;
+export type InternalMessageProvider = typeof INTERNAL_MESSAGE_PROVIDER;
 
 export type GatewayMessageProvider =
   | DeliverableMessageProvider
@@ -67,20 +30,23 @@ export type GatewayMessageProvider =
 
 export const GATEWAY_MESSAGE_PROVIDERS = [
   ...DELIVERABLE_MESSAGE_PROVIDERS,
-  INTERNAL_MESSAGE_PROVIDER,
+  "webchat",
 ] as const;
 
-export const GATEWAY_AGENT_PROVIDER_ALIASES = listChatProviderAliases();
+export const GATEWAY_AGENT_PROVIDER_ALIASES = ["imsg", "teams"] as const;
+export type GatewayAgentProviderAlias =
+  (typeof GATEWAY_AGENT_PROVIDER_ALIASES)[number];
 
-export type GatewayAgentProviderHint = GatewayMessageProvider | "last";
+export type GatewayAgentProviderHint =
+  | GatewayMessageProvider
+  | "last"
+  | GatewayAgentProviderAlias;
 
-export const GATEWAY_AGENT_PROVIDER_VALUES = Array.from(
-  new Set([
-    ...GATEWAY_MESSAGE_PROVIDERS,
-    "last",
-    ...GATEWAY_AGENT_PROVIDER_ALIASES,
-  ]),
-);
+export const GATEWAY_AGENT_PROVIDER_VALUES = [
+  ...GATEWAY_MESSAGE_PROVIDERS,
+  "last",
+  ...GATEWAY_AGENT_PROVIDER_ALIASES,
+] as const;
 
 export function isGatewayMessageProvider(
   value: string,

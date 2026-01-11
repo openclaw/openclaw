@@ -32,14 +32,8 @@ import {
 import { resolveSessionFilePath } from "../config/sessions.js";
 import { logVerbose } from "../globals.js";
 import { clearCommandLane, getQueueSize } from "../process/command-queue.js";
-import { getProviderDock } from "../providers/dock.js";
-import {
-  CHAT_PROVIDER_ORDER,
-  normalizeProviderId,
-} from "../providers/registry.js";
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
-import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import {
@@ -133,41 +127,53 @@ function slugAllowToken(value?: string) {
   return text.replace(/-{2,}/g, "-").replace(/^-+|-+$/g, "");
 }
 
-const SENDER_PREFIXES = [
-  ...CHAT_PROVIDER_ORDER,
-  INTERNAL_MESSAGE_PROVIDER,
-  "user",
-  "group",
-  "channel",
-];
-const SENDER_PREFIX_RE = new RegExp(`^(${SENDER_PREFIXES.join("|")}):`, "i");
-
 function stripSenderPrefix(value?: string) {
   if (!value) return "";
   const trimmed = value.trim();
-  return trimmed.replace(SENDER_PREFIX_RE, "");
+  return trimmed.replace(
+    /^(whatsapp|telegram|discord|signal|imessage|webchat|user|group|channel):/i,
+    "",
+  );
 }
 
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   provider: string,
-  fallbackAllowFrom?: Array<string | number>,
+  discordFallback?: Array<string | number>,
 ): Array<string | number> | undefined {
-  if (!allowFrom) return fallbackAllowFrom;
-  const value = allowFrom[provider];
-  return Array.isArray(value) ? value : fallbackAllowFrom;
+  switch (provider) {
+    case "whatsapp":
+      return allowFrom?.whatsapp;
+    case "telegram":
+      return allowFrom?.telegram;
+    case "discord": {
+      const hasExplicit = Boolean(
+        allowFrom && Object.hasOwn(allowFrom, "discord"),
+      );
+      if (hasExplicit) return allowFrom?.discord;
+      return discordFallback;
+    }
+    case "signal":
+      return allowFrom?.signal;
+    case "imessage":
+      return allowFrom?.imessage;
+    case "webchat":
+      return allowFrom?.webchat;
+    default:
+      return undefined;
+  }
 }
 
 function isApprovedElevatedSender(params: {
   provider: string;
   ctx: MsgContext;
   allowFrom?: AgentElevatedAllowFromConfig;
-  fallbackAllowFrom?: Array<string | number>;
+  discordFallback?: Array<string | number>;
 }): boolean {
   const rawAllow = resolveElevatedAllowList(
     params.allowFrom,
     params.provider,
-    params.fallbackAllowFrom,
+    params.discordFallback,
   );
   if (!rawAllow || rawAllow.length === 0) return false;
 
@@ -242,24 +248,23 @@ function resolveElevatedPermissions(params: {
     return { enabled, allowed: false, failures };
   }
 
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const dockFallbackAllowFrom = normalizedProvider
-    ? getProviderDock(normalizedProvider)?.elevated?.allowFromFallback?.({
-        cfg: params.cfg,
-        accountId: params.ctx.AccountId,
-      })
-    : undefined;
-  const fallbackAllowFrom = dockFallbackAllowFrom;
+  const discordFallback =
+    params.provider === "discord"
+      ? params.cfg.discord?.dm?.allowFrom
+      : undefined;
   const globalAllowed = isApprovedElevatedSender({
     provider: params.provider,
     ctx: params.ctx,
     allowFrom: globalConfig?.allowFrom,
-    fallbackAllowFrom,
+    discordFallback,
   });
   if (!globalAllowed) {
     failures.push({
       gate: "allowFrom",
-      key: `tools.elevated.allowFrom.${params.provider}`,
+      key:
+        params.provider === "discord" && discordFallback
+          ? "tools.elevated.allowFrom.discord (or discord.dm.allowFrom fallback)"
+          : `tools.elevated.allowFrom.${params.provider}`,
     });
     return { enabled, allowed: false, failures };
   }
@@ -269,7 +274,6 @@ function resolveElevatedPermissions(params: {
         provider: params.provider,
         ctx: params.ctx,
         allowFrom: agentConfig.allowFrom,
-        fallbackAllowFrom,
       })
     : true;
   if (!agentAllowed) {
@@ -601,8 +605,7 @@ export async function getReplyFromConfig(
     agentCfg?.blockStreamingBreak === "message_end"
       ? "message_end"
       : "text_end";
-  const blockStreamingEnabled =
-    resolvedBlockStreaming === "on" && opts?.disableBlockStreaming !== true;
+  const blockStreamingEnabled = resolvedBlockStreaming === "on";
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(
         cfg,
@@ -779,13 +782,8 @@ export async function getReplyFromConfig(
       : undefined;
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
-  const skipWhenConfigEmpty = command.providerId
-    ? Boolean(
-        getProviderDock(command.providerId)?.commands?.skipWhenConfigEmpty,
-      )
-    : false;
   if (
-    skipWhenConfigEmpty &&
+    command.isWhatsAppProvider &&
     isEmptyConfig &&
     command.from &&
     command.to &&
@@ -856,7 +854,6 @@ export async function getReplyFromConfig(
   );
   const groupIntro = shouldInjectGroupIntro
     ? buildGroupIntro({
-        cfg,
         sessionCtx,
         sessionEntry,
         defaultActivation,

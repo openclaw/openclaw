@@ -1,7 +1,6 @@
 import AppKit
 import ClawdbotDiscovery
 import ClawdbotIPC
-import Foundation
 import SwiftUI
 
 extension OnboardingView {
@@ -42,9 +41,7 @@ extension OnboardingView {
     func openSettings(tab: SettingsTab) {
         SettingsTabRouter.request(tab)
         self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .clawdbotSelectSettingsTab, object: tab)
-        }
+        NotificationCenter.default.post(name: .clawdbotSelectSettingsTab, object: tab)
     }
 
     func handleBack() {

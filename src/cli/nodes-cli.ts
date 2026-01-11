@@ -5,10 +5,6 @@ import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
-import {
   type CameraFacing,
   cameraTempPath,
   parseCameraClipPayload,
@@ -156,8 +152,8 @@ const callGatewayCli = async (
         method,
         params,
         timeoutMs: Number(opts.timeout ?? 10_000),
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: "cli",
+        mode: "cli",
       }),
   );
 

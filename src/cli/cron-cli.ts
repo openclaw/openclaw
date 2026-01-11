@@ -1,17 +1,11 @@
 import type { Command } from "commander";
 import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
-
-const CRON_PROVIDER_OPTIONS = [
-  "last",
-  ...listProviderPlugins().map((plugin) => plugin.id),
-].join("|");
 
 async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {
@@ -302,15 +296,11 @@ export function registerCronCli(program: Command) {
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high)",
       )
-      .option(
-        "--model <model>",
-        "Model override for agent jobs (provider/model or alias)",
-      )
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
         "--provider <provider>",
-        `Delivery provider (${CRON_PROVIDER_OPTIONS})`,
+        "Delivery provider (last|whatsapp|telegram|discord|slack|signal|imessage)",
         "last",
       )
       .option(
@@ -401,10 +391,6 @@ export function registerCronCli(program: Command) {
             return {
               kind: "agentTurn" as const,
               message,
-              model:
-                typeof opts.model === "string" && opts.model.trim()
-                  ? opts.model.trim()
-                  : undefined,
               thinking:
                 typeof opts.thinking === "string" && opts.thinking.trim()
                   ? opts.thinking.trim()
@@ -572,12 +558,11 @@ export function registerCronCli(program: Command) {
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
       .option("--thinking <level>", "Thinking level for agent jobs")
-      .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
         "--provider <provider>",
-        `Delivery provider (${CRON_PROVIDER_OPTIONS})`,
+        "Delivery provider (last|whatsapp|telegram|discord|slack|signal|imessage)",
       )
       .option(
         "--to <dest>",
@@ -652,22 +637,14 @@ export function registerCronCli(program: Command) {
               text: String(opts.systemEvent),
             };
           } else if (opts.message) {
-            const model =
-              typeof opts.model === "string" && opts.model.trim()
-                ? opts.model.trim()
-                : undefined;
-            const thinking =
-              typeof opts.thinking === "string" && opts.thinking.trim()
-                ? opts.thinking.trim()
-                : undefined;
             const timeoutSeconds = opts.timeoutSeconds
               ? Number.parseInt(String(opts.timeoutSeconds), 10)
               : undefined;
             patch.payload = {
               kind: "agentTurn",
               message: String(opts.message),
-              model,
-              thinking,
+              thinking:
+                typeof opts.thinking === "string" ? opts.thinking : undefined,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds)
                   ? timeoutSeconds

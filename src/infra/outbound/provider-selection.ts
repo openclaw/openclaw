@@ -1,11 +1,20 @@
 import type { ClawdbotConfig } from "../../config/config.js";
-import { listProviderPlugins } from "../../providers/plugins/index.js";
-import type { ProviderPlugin } from "../../providers/plugins/types.js";
+import { listEnabledDiscordAccounts } from "../../discord/accounts.js";
+import { listEnabledIMessageAccounts } from "../../imessage/accounts.js";
+import { resolveMSTeamsCredentials } from "../../msteams/token.js";
+import { listEnabledSignalAccounts } from "../../signal/accounts.js";
+import { listEnabledSlackAccounts } from "../../slack/accounts.js";
+import { listEnabledTelegramAccounts } from "../../telegram/accounts.js";
 import {
   DELIVERABLE_MESSAGE_PROVIDERS,
   type DeliverableMessageProvider,
   normalizeMessageProvider,
 } from "../../utils/message-provider.js";
+import {
+  listEnabledWhatsAppAccounts,
+  resolveWhatsAppAccount,
+} from "../../web/accounts.js";
+import { webAuthExists } from "../../web/session.js";
 
 export type MessageProviderId = DeliverableMessageProvider;
 
@@ -15,43 +24,60 @@ function isKnownProvider(value: string): value is MessageProviderId {
   return (MESSAGE_PROVIDERS as readonly string[]).includes(value);
 }
 
-function isAccountEnabled(account: unknown): boolean {
-  if (!account || typeof account !== "object") return true;
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
+async function isWhatsAppConfigured(cfg: ClawdbotConfig): Promise<boolean> {
+  const accounts = listEnabledWhatsAppAccounts(cfg);
+  if (accounts.length === 0) {
+    const fallback = resolveWhatsAppAccount({ cfg });
+    return await webAuthExists(fallback.authDir);
+  }
+  for (const account of accounts) {
+    if (await webAuthExists(account.authDir)) return true;
+  }
+  return false;
 }
 
-async function isPluginConfigured(
-  plugin: ProviderPlugin,
-  cfg: ClawdbotConfig,
-): Promise<boolean> {
-  const accountIds = plugin.config.listAccountIds(cfg);
-  if (accountIds.length === 0) return false;
+function isTelegramConfigured(cfg: ClawdbotConfig): boolean {
+  return listEnabledTelegramAccounts(cfg).some(
+    (account) => account.token.trim().length > 0,
+  );
+}
 
-  for (const accountId of accountIds) {
-    const account = plugin.config.resolveAccount(cfg, accountId);
-    const enabled = plugin.config.isEnabled
-      ? plugin.config.isEnabled(account, cfg)
-      : isAccountEnabled(account);
-    if (!enabled) continue;
-    if (!plugin.config.isConfigured) return true;
-    const configured = await plugin.config.isConfigured(account, cfg);
-    if (configured) return true;
-  }
+function isDiscordConfigured(cfg: ClawdbotConfig): boolean {
+  return listEnabledDiscordAccounts(cfg).some(
+    (account) => account.token.trim().length > 0,
+  );
+}
 
-  return false;
+function isSlackConfigured(cfg: ClawdbotConfig): boolean {
+  return listEnabledSlackAccounts(cfg).some(
+    (account) => (account.botToken ?? "").trim().length > 0,
+  );
+}
+
+function isSignalConfigured(cfg: ClawdbotConfig): boolean {
+  return listEnabledSignalAccounts(cfg).some((account) => account.configured);
+}
+
+function isIMessageConfigured(cfg: ClawdbotConfig): boolean {
+  return listEnabledIMessageAccounts(cfg).some((account) => account.configured);
+}
+
+function isMSTeamsConfigured(cfg: ClawdbotConfig): boolean {
+  if (!cfg.msteams || cfg.msteams.enabled === false) return false;
+  return Boolean(resolveMSTeamsCredentials(cfg.msteams));
 }
 
 export async function listConfiguredMessageProviders(
   cfg: ClawdbotConfig,
 ): Promise<MessageProviderId[]> {
   const providers: MessageProviderId[] = [];
-  for (const plugin of listProviderPlugins()) {
-    if (!isKnownProvider(plugin.id)) continue;
-    if (await isPluginConfigured(plugin, cfg)) {
-      providers.push(plugin.id);
-    }
-  }
+  if (await isWhatsAppConfigured(cfg)) providers.push("whatsapp");
+  if (isTelegramConfigured(cfg)) providers.push("telegram");
+  if (isDiscordConfigured(cfg)) providers.push("discord");
+  if (isSlackConfigured(cfg)) providers.push("slack");
+  if (isSignalConfigured(cfg)) providers.push("signal");
+  if (isIMessageConfigured(cfg)) providers.push("imessage");
+  if (isMSTeamsConfigured(cfg)) providers.push("msteams");
   return providers;
 }
 

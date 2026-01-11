@@ -1,12 +1,8 @@
 import { loadConfig } from "../config/config.js";
 import { setVerbose } from "../globals.js";
-import { resolveProviderDefaultAccountId } from "../providers/plugins/helpers.js";
-import {
-  getProviderPlugin,
-  normalizeProviderId,
-} from "../providers/plugins/index.js";
-import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
+import { loginWeb, logoutWeb } from "../provider-web.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+import { resolveWhatsAppAccount } from "../web/accounts.js";
 
 type ProviderAuthOptions = {
   provider?: string;
@@ -14,55 +10,44 @@ type ProviderAuthOptions = {
   verbose?: boolean;
 };
 
+function normalizeProvider(raw?: string): "whatsapp" | "web" {
+  const value = String(raw ?? "whatsapp")
+    .trim()
+    .toLowerCase();
+  if (value === "whatsapp" || value === "web") return value;
+  throw new Error(`Unsupported provider: ${value}`);
+}
+
 export async function runProviderLogin(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const providerInput = opts.provider ?? DEFAULT_CHAT_PROVIDER;
-  const providerId = normalizeProviderId(providerInput);
-  if (!providerId) {
-    throw new Error(`Unsupported provider: ${providerInput}`);
-  }
-  const plugin = getProviderPlugin(providerId);
-  if (!plugin?.auth?.login) {
-    throw new Error(`Provider ${providerId} does not support login`);
-  }
+  const provider = normalizeProvider(opts.provider);
   // Auth-only flow: do not mutate provider config here.
   setVerbose(Boolean(opts.verbose));
-  const cfg = loadConfig();
-  const accountId =
-    opts.account?.trim() || resolveProviderDefaultAccountId({ plugin, cfg });
-  await plugin.auth.login({
-    cfg,
-    accountId,
+  await loginWeb(
+    Boolean(opts.verbose),
+    provider,
+    undefined,
     runtime,
-    verbose: Boolean(opts.verbose),
-    providerInput,
-  });
+    opts.account,
+  );
 }
 
 export async function runProviderLogout(
   opts: ProviderAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const providerInput = opts.provider ?? DEFAULT_CHAT_PROVIDER;
-  const providerId = normalizeProviderId(providerInput);
-  if (!providerId) {
-    throw new Error(`Unsupported provider: ${providerInput}`);
-  }
-  const plugin = getProviderPlugin(providerId);
-  if (!plugin?.gateway?.logoutAccount) {
-    throw new Error(`Provider ${providerId} does not support logout`);
-  }
+  const _provider = normalizeProvider(opts.provider);
   // Auth-only flow: resolve account + clear session state only.
   const cfg = loadConfig();
-  const accountId =
-    opts.account?.trim() || resolveProviderDefaultAccountId({ plugin, cfg });
-  const account = plugin.config.resolveAccount(cfg, accountId);
-  await plugin.gateway.logoutAccount({
+  const account = resolveWhatsAppAccount({
     cfg,
-    accountId,
-    account,
+    accountId: opts.account,
+  });
+  await logoutWeb({
     runtime,
+    authDir: account.authDir,
+    isLegacyAuthDir: account.isLegacyAuthDir,
   });
 }

@@ -800,7 +800,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("uses tools.elevated.allowFrom.discord for elevated approval", async () => {
+  it("falls back to discord dm allowFrom for elevated approval", async () => {
     await withTempHome(async (home) => {
       const cfg = {
         agents: {
@@ -809,7 +809,11 @@ describe("trigger handling", () => {
             workspace: join(home, "clawd"),
           },
         },
-        tools: { elevated: { allowFrom: { discord: ["steipete"] } } },
+        discord: {
+          dm: {
+            allowFrom: ["steipete"],
+          },
+        },
         session: { store: join(home, "sessions.json") },
       };
 
@@ -850,6 +854,11 @@ describe("trigger handling", () => {
         tools: {
           elevated: {
             allowFrom: { discord: [] },
+          },
+        },
+        discord: {
+          dm: {
+            allowFrom: ["steipete"],
           },
         },
         session: { store: join(home, "sessions.json") },

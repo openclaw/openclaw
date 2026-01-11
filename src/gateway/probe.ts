@@ -1,10 +1,6 @@
 import { randomUUID } from "node:crypto";
 
 import type { SystemPresence } from "../infra/system-presence.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
 import { GatewayClient } from "./client.js";
 
 export type GatewayProbeAuth = {
@@ -60,9 +56,9 @@ export async function probeGateway(opts: {
       url: opts.url,
       token: opts.auth?.token,
       password: opts.auth?.password,
-      clientName: GATEWAY_CLIENT_NAMES.CLI,
+      clientName: "cli",
       clientVersion: "dev",
-      mode: GATEWAY_CLIENT_MODES.PROBE,
+      mode: "probe",
       instanceId,
       onConnectError: (err) => {
         connectError = formatError(err);

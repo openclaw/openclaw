@@ -1,7 +1,5 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../../config/config.js";
-import { getProviderDock } from "../../providers/dock.js";
-import { normalizeProviderId } from "../../providers/registry.js";
 import type { MsgContext } from "../templating.js";
 
 function escapeRegExp(text: string): string {
@@ -114,14 +112,9 @@ export function stripMentions(
   agentId?: string,
 ): string {
   let result = text;
-  const providerId = ctx.Provider ? normalizeProviderId(ctx.Provider) : null;
-  const providerMentions = providerId
-    ? getProviderDock(providerId)?.mentions
-    : undefined;
-  const patterns = normalizeMentionPatterns([
-    ...resolveMentionPatterns(cfg, agentId),
-    ...(providerMentions?.stripPatterns?.({ ctx, cfg, agentId }) ?? []),
-  ]);
+  const rawPatterns = resolveMentionPatterns(cfg, agentId);
+  const patterns = normalizeMentionPatterns(rawPatterns);
+
   for (const p of patterns) {
     try {
       const re = new RegExp(p, "gi");
@@ -130,15 +123,16 @@ export function stripMentions(
       // ignore invalid regex
     }
   }
-  if (providerMentions?.stripMentions) {
-    result = providerMentions.stripMentions({
-      text: result,
-      ctx,
-      cfg,
-      agentId,
-    });
+  const selfE164 = (ctx.To ?? "").replace(/^whatsapp:/, "");
+  if (selfE164) {
+    const esc = selfE164.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    result = result
+      .replace(new RegExp(esc, "gi"), " ")
+      .replace(new RegExp(`@${esc}`, "gi"), " ");
   }
   // Generic mention patterns like @123456789 or plain digits
   result = result.replace(/@[0-9+]{5,}/g, " ");
+  // Discord-style mentions (<@123> or <@!123>)
+  result = result.replace(/<@!?\d+>/g, " ");
   return result.replace(/\s+/g, " ").trim();
 }

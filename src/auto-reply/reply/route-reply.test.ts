@@ -236,12 +236,11 @@ describe("routeReply", () => {
       to: "conversation:19:abc@thread.tacv2",
       cfg,
     });
-    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg,
-        to: "conversation:19:abc@thread.tacv2",
-        text: "hi",
-      }),
-    );
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      to: "conversation:19:abc@thread.tacv2",
+      text: "hi",
+      mediaUrl: undefined,
+    });
   });
 });

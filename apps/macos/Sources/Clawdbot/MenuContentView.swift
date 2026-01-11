@@ -153,9 +153,6 @@ struct MenuContent: View {
             self.micRefreshTask = nil
             self.micObserver.stop()
         }
-        .task { @MainActor in
-            SettingsWindowOpener.shared.register(openSettings: self.openSettings)
-        }
     }
 
     private var connectionLabel: String {
@@ -304,9 +301,7 @@ struct MenuContent: View {
         SettingsTabRouter.request(tab)
         NSApp.activate(ignoringOtherApps: true)
         self.openSettings()
-        DispatchQueue.main.async {
-            NotificationCenter.default.post(name: .clawdbotSelectSettingsTab, object: tab)
-        }
+        NotificationCenter.default.post(name: .clawdbotSelectSettingsTab, object: tab)
     }
 
     @MainActor

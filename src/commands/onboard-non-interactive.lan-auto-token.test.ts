@@ -8,10 +8,6 @@ import { WebSocket } from "ws";
 
 import { PROTOCOL_VERSION } from "../gateway/protocol/index.js";
 import { rawDataToString } from "../infra/ws.js";
-import {
-  GATEWAY_CLIENT_MODES,
-  GATEWAY_CLIENT_NAMES,
-} from "../utils/message-provider.js";
 
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -95,11 +91,10 @@ async function connectReq(params: { url: string; token?: string }) {
         minProtocol: PROTOCOL_VERSION,
         maxProtocol: PROTOCOL_VERSION,
         client: {
-          id: GATEWAY_CLIENT_NAMES.TEST,
-          displayName: "vitest",
+          name: "vitest",
           version: "dev",
           platform: process.platform,
-          mode: GATEWAY_CLIENT_MODES.TEST,
+          mode: "test",
         },
         caps: [],
         auth: params.token ? { token: params.token } : undefined,
