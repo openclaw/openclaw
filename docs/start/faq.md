@@ -7,30 +7,29 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
 
 ## First 60 seconds if something's broken
 
-1) **Run the doctor**
+1) **Quick status (first check)**
    ```bash
-   clawdbot doctor
+   clawdbot status
    ```
-   Repairs/migrates config/state + runs health checks. See [Doctor](/gateway/doctor).
+   Fast local summary: OS + update, gateway/daemon reachability, agents/sessions, provider config + runtime issues (when gateway is reachable).
 
-2) **Daemon + port state**
+2) **Pasteable report (safe to share)**
+   ```bash
+   clawdbot status --all
+   ```
+   Read-only diagnosis with log tail (tokens redacted).
+
+3) **Daemon + port state**
    ```bash
    clawdbot daemon status
    ```
    Shows supervisor runtime vs RPC reachability, the probe target URL, and which config the daemon likely used.
 
-3) **Local probes**
+4) **Deep probes**
    ```bash
    clawdbot status --deep
    ```
-   Checks provider connectivity and local health. See [Health](/gateway/health).
-
-4) **Gateway snapshot**
-   ```bash
-   clawdbot health --json
-   clawdbot health --verbose   # shows the target URL + config path on errors
-   ```
-   Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
+   Runs gateway health checks + provider probes (requires a reachable gateway). See [Health](/gateway/health).
 
 5) **Tail the latest log**
    ```bash
@@ -41,6 +40,19 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
    tail -f "$(ls -t /tmp/clawdbot/clawdbot-*.log | head -1)"
    ```
    File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
+
+6) **Run the doctor (repairs)**
+   ```bash
+   clawdbot doctor
+   ```
+   Repairs/migrates config/state + runs health checks. See [Doctor](/gateway/doctor).
+
+7) **Gateway snapshot**
+   ```bash
+   clawdbot health --json
+   clawdbot health --verbose   # shows the target URL + config path on errors
+   ```
+   Asks the running gateway for a full snapshot (WS-only). See [Health](/gateway/health).
 
 ## What is Clawdbot?
 

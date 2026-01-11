@@ -160,6 +160,7 @@ node dist/entry.js gateway --port 18789 --verbose
 In a new terminal:
 
 ```bash
+clawdbot status
 clawdbot health
 clawdbot message send --to +15555550123 --message "Hello from Clawdbot"
 ```
