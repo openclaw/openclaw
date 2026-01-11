@@ -26,6 +26,12 @@ You can use Claude CLI **without any config** (Clawdbot ships a built-in default
 clawdbot agent --message "hi" --model claude-cli/opus-4.5
 ```
 
+Codex CLI also works out of the box:
+
+```bash
+clawdbot agent --message "hi" --model codex-cli/gpt-5.2-codex
+```
+
 If your gateway runs under launchd/systemd and PATH is minimal, add just the
 command path:
 
@@ -133,7 +139,12 @@ The provider id becomes the left side of your model ref:
 
 ## Sessions
 
-- If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`).
+- If the CLI supports sessions, set `sessionArg` (e.g. `--session-id`) or
+  `sessionArgs` (placeholder `{sessionId}`) when the ID needs to be inserted
+  into multiple flags.
+- If the CLI uses a **resume subcommand** with different flags, set
+  `resumeArgs` (replaces `args` when resuming) and optionally `resumeOutput`
+  (for non-JSON resumes).
 - `sessionMode`:
   - `always`: always send a session id (new UUID if none stored).
   - `existing`: only send a session id if one was stored before.
@@ -156,6 +167,8 @@ load local files from plain paths (Claude CLI behavior).
 ## Inputs / outputs
 
 - `output: "json"` (default) tries to parse JSON and extract text + session id.
+- `output: "jsonl"` parses JSONL streams (Codex CLI `--json`) and extracts the
+  last agent message plus `thread_id` when present.
 - `output: "text"` treats stdout as the final response.
 
 Input modes:
@@ -175,17 +188,33 @@ Clawdbot ships a default for `claude-cli`:
 - `systemPromptWhen: "first"`
 - `sessionMode: "always"`
 
+Clawdbot also ships a default for `codex-cli`:
+
+- `command: "codex"`
+- `args: ["exec","--json","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
+- `resumeArgs: ["exec","resume","{sessionId}","--color","never","--sandbox","read-only","--skip-git-repo-check"]`
+- `output: "jsonl"`
+- `resumeOutput: "text"`
+- `modelArg: "--model"`
+- `imageArg: "--image"`
+- `sessionMode: "existing"`
+
 Override only if needed (common: absolute `command` path).
 
 ## Limitations
 
-- **No tools** (tool calls are disabled by design).
+- **No Clawdbot tools** (the CLI backend never receives tool calls). Some CLIs
+  may still run their own agent tooling.
 - **No streaming** (CLI output is collected then returned).
 - **Structured outputs** depend on the CLI’s JSON format.
+- **Codex CLI sessions** resume via text output (no JSONL), which is less
+  structured than the initial `--json` run. Clawdbot sessions still work
+  normally.
 
 ## Troubleshooting
 
 - **CLI not found**: set `command` to a full path.
 - **Wrong model name**: use `modelAliases` to map `provider/model` → CLI model.
-- **No session continuity**: ensure `sessionArg` is set and `sessionMode` is not `none`.
+- **No session continuity**: ensure `sessionArg` is set and `sessionMode` is not
+  `none` (Codex CLI currently cannot resume with JSON output).
 - **Images ignored**: set `imageArg` (and verify CLI supports file paths).

@@ -178,7 +178,10 @@ function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
       : undefined;
   const input = pick("input_tokens") ?? pick("inputTokens");
   const output = pick("output_tokens") ?? pick("outputTokens");
-  const cacheRead = pick("cache_read_input_tokens") ?? pick("cacheRead");
+  const cacheRead =
+    pick("cache_read_input_tokens") ??
+    pick("cached_input_tokens") ??
+    pick("cacheRead");
   const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total)
@@ -244,6 +247,47 @@ function parseCliJson(
     collectText(parsed.result) ||
     collectText(parsed);
   return { text: text.trim(), sessionId, usage };
+}
+
+function parseCliJsonl(
+  raw: string,
+  backend: CliBackendConfig,
+): CliOutput | null {
+  const lines = raw
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) return null;
+  let sessionId: string | undefined;
+  let usage: CliUsage | undefined;
+  const texts: string[] = [];
+  for (const line of lines) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!isRecord(parsed)) continue;
+    if (!sessionId) sessionId = pickSessionId(parsed, backend);
+    if (!sessionId && typeof parsed.thread_id === "string") {
+      sessionId = parsed.thread_id.trim();
+    }
+    if (isRecord(parsed.usage)) {
+      usage = toUsage(parsed.usage) ?? usage;
+    }
+    const item = isRecord(parsed.item) ? parsed.item : null;
+    if (item && typeof item.text === "string") {
+      const type =
+        typeof item.type === "string" ? item.type.toLowerCase() : "";
+      if (!type || type.includes("message")) {
+        texts.push(item.text);
+      }
+    }
+  }
+  const text = texts.join("\n").trim();
+  if (!text) return null;
+  return { text, sessionId, usage };
 }
 
 function resolveSystemPromptUsage(params: {
@@ -328,21 +372,33 @@ async function writeCliImages(
 
 function buildCliArgs(params: {
   backend: CliBackendConfig;
+  baseArgs: string[];
   modelId: string;
   sessionId?: string;
   systemPrompt?: string | null;
   imagePaths?: string[];
   promptArg?: string;
+  useResume: boolean;
 }): string[] {
-  const args: string[] = [...(params.backend.args ?? [])];
-  if (params.backend.modelArg && params.modelId) {
+  const args: string[] = [...params.baseArgs];
+  if (!params.useResume && params.backend.modelArg && params.modelId) {
     args.push(params.backend.modelArg, params.modelId);
   }
-  if (params.systemPrompt && params.backend.systemPromptArg) {
+  if (
+    !params.useResume &&
+    params.systemPrompt &&
+    params.backend.systemPromptArg
+  ) {
     args.push(params.backend.systemPromptArg, params.systemPrompt);
   }
-  if (params.sessionId && params.backend.sessionArg) {
-    args.push(params.backend.sessionArg, params.sessionId);
+  if (!params.useResume && params.sessionId) {
+    if (params.backend.sessionArgs && params.backend.sessionArgs.length > 0) {
+      for (const entry of params.backend.sessionArgs) {
+        args.push(entry.replaceAll("{sessionId}", params.sessionId));
+      }
+    } else if (params.backend.sessionArg) {
+      args.push(params.backend.sessionArg, params.sessionId);
+    }
   }
   if (params.imagePaths && params.imagePaths.length > 0) {
     const mode = params.backend.imageMode ?? "repeat";
@@ -434,8 +490,19 @@ export async function runCliAgent(params: {
     backend,
     cliSessionId: params.cliSessionId,
   });
-  const sessionIdSent =
-    backend.sessionArg && cliSessionIdToSend ? cliSessionIdToSend : undefined;
+  const useResume = Boolean(
+    params.cliSessionId &&
+      cliSessionIdToSend &&
+      backend.resumeArgs &&
+      backend.resumeArgs.length > 0,
+  );
+  const sessionIdSent = cliSessionIdToSend
+    ? useResume ||
+      Boolean(backend.sessionArg) ||
+      Boolean(backend.sessionArgs?.length)
+      ? cliSessionIdToSend
+      : undefined
+    : undefined;
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
     isNewSession: isNew,
@@ -459,13 +526,23 @@ export async function runCliAgent(params: {
     prompt,
   });
   const stdinPayload = stdin ?? "";
+  const baseArgs = useResume
+    ? (backend.resumeArgs ?? backend.args ?? [])
+    : (backend.args ?? []);
+  const resolvedArgs = useResume
+    ? baseArgs.map((entry) =>
+        entry.replaceAll("{sessionId}", cliSessionIdToSend ?? ""),
+      )
+    : baseArgs;
   const args = buildCliArgs({
     backend,
+    baseArgs: resolvedArgs,
     modelId: normalizedModel,
     sessionId: cliSessionIdToSend,
     systemPrompt: systemPromptArg,
     imagePaths,
     promptArg: argsPrompt,
+    useResume,
   });
 
   const serialize = backend.serialize ?? true;
@@ -556,8 +633,15 @@ export async function runCliAgent(params: {
         });
       }
 
-      if (backend.output === "text") {
+      const outputMode =
+        useResume ? backend.resumeOutput ?? backend.output : backend.output;
+
+      if (outputMode === "text") {
         return { text: stdout, sessionId: undefined };
+      }
+      if (outputMode === "jsonl") {
+        const parsed = parseCliJsonl(stdout, backend);
+        return parsed ?? { text: stdout };
       }
 
       const parsed = parseCliJson(stdout, backend);
@@ -572,7 +656,7 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId: output.sessionId ?? sessionIdSent ?? params.sessionId,
+          sessionId: output.sessionId ?? sessionIdSent,
           provider: params.provider,
           model: modelId,
           usage: output.usage,
