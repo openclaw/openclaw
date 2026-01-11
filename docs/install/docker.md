@@ -43,6 +43,11 @@ This script:
 - starts the gateway via Docker Compose
 - generates a gateway token and writes it to `.env`
 
+Optional env vars:
+- `CLAWDBOT_DOCKER_APT_PACKAGES` — install extra apt packages during build
+- `CLAWDBOT_EXTRA_MOUNTS` — add extra host bind mounts
+- `CLAWDBOT_HOME_VOLUME` — persist `/home/node` in a named volume
+
 After it finishes:
 - Open `http://127.0.0.1:18789/` in your browser.
 - Paste the token into the Control UI (Settings → token).
@@ -108,6 +113,25 @@ Notes:
 - If you change `CLAWDBOT_HOME_VOLUME`, rerun `docker-setup.sh` to regenerate the
   extra compose file.
 - The named volume persists until removed with `docker volume rm <name>`.
+
+### Install extra apt packages (optional)
+
+If you need system packages inside the image (for example, build tools or media
+libraries), set `CLAWDBOT_DOCKER_APT_PACKAGES` before running `docker-setup.sh`.
+This installs the packages during the image build, so they persist even if the
+container is deleted.
+
+Example:
+
+```bash
+export CLAWDBOT_DOCKER_APT_PACKAGES="ffmpeg build-essential"
+./docker-setup.sh
+```
+
+Notes:
+- This accepts a space-separated list of apt package names.
+- If you change `CLAWDBOT_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
+  the image.
 
 ### Faster rebuilds (recommended)
 
