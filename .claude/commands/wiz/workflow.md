@@ -1,25 +1,24 @@
 ---
 description: Summon workflow wizard - prime agent with dev workflow and project management
 allowed-tools: [Bash, Glob, Grep, Read, Task, Write]
-argument-hint: "[output-file|stdout|show]"
+argument-hint: "[path]"
 ---
 
 # Wizard: Development Workflow
 
 You are summoning a workflow wizard. Prime yourself with understanding of the development workflow, project management, and processes we use together.
 
-**Arguments:** $ARGUMENTS
+**Output path:** `$PATH` (default: `/dev/null`)
 
-**Output file:** `$ARGUMENTS` (default: `/dev/null`)
-- Use `stdout`, `show`, `screen`, or `console` to display report on screen
-- Use a file path to write report to that location
-- Default `/dev/null` or empty suppresses output
-- If `$ARGUMENTS` contains a question or topic, tailor the report to that topic
+**Path conventions:**
+- `/dev/null` - Suppress output (silent mode, default)
+- `/dev/stdout` - Display report to screen
+- Any other path - Write report to that file
 
 ## CRITICAL: Always Explore
 
 You MUST explore the workflow docs and project state regardless of output destination.
-The exploration phases happen always - the argument only controls where the final report is written.
+The exploration phases happen always - `$PATH` only controls where the final report is written.
 
 Generate your internal summary to ensure context is loaded. Then write it to the specified destination.
 
@@ -139,27 +138,22 @@ Ready for questions about workflow or releases.
 
 **Output handling:**
 
-Follow this conditional pattern based on `$ARGUMENTS`:
+Follow this conditional pattern based on `$PATH`:
 
-1. **Detect output mode** from `$ARGUMENTS` (default: `/dev/null` if empty)
+1. **Normalize path:** If `$PATH` is empty, treat as `/dev/null`
 
-2. **If argument is empty or `/dev/null`:**
-   - Write nothing
-   - Respond with: "Primed for workflow and project management questions."
+2. **Route output based on path:**
+   - **If `$PATH` is `/dev/null`:**
+     - Write nothing
+     - Respond with: "Primed for workflow and project management questions."
 
-3. **If argument matches `stdout|show|screen|console` (case-insensitive):**
-   - Display the full report above directly in your response
-   - End with: "Primed for workflow and project management questions."
+   - **If `$PATH` is `/dev/stdout`:**
+     - Display the full report above directly in your response
+     - End with: "Primed for workflow and project management questions."
 
-4. **If argument is a file path (contains `/` or `.`):**
-   - Use Write tool to save the report to that path
-   - Respond with: "Report written to [path]. Primed for workflow and project management questions."
-
-5. **If argument contains a question or topic (none of the above):**
-   - Generate the standard report internally for context
-   - Create a tailored response focused on the user's specific question/topic
-   - Display the tailored response
-   - End with: "Primed for workflow and project management questions."
+   - **Otherwise (any other path):**
+     - Use Write tool to save the report to `$PATH`
+     - Respond with: "Report written to `$PATH`. Primed for workflow and project management questions."
 
 ---
 
