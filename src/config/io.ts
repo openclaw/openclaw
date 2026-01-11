@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import JSON5 from "json5";
+
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -128,6 +129,240 @@ export function parseConfigJson5(
   }
 }
 
+// ============================================================================
+// Config Includes ($include directive)
+// ============================================================================
+
+const INCLUDE_KEY = "$include";
+const MAX_INCLUDE_DEPTH = 10;
+
+export class ConfigIncludeError extends Error {
+  constructor(
+    message: string,
+    public readonly includePath: string,
+    public readonly cause?: Error,
+  ) {
+    super(message);
+    this.name = "ConfigIncludeError";
+  }
+}
+
+export class CircularIncludeError extends ConfigIncludeError {
+  constructor(
+    public readonly chain: string[],
+  ) {
+    super(
+      `Circular include detected: ${chain.join(" -> ")}`,
+      chain[chain.length - 1],
+    );
+    this.name = "CircularIncludeError";
+  }
+}
+
+type IncludeContext = {
+  basePath: string;
+  visited: Set<string>;
+  depth: number;
+  fsModule: typeof fs;
+  json5Module: typeof JSON5;
+  logger: Pick<typeof console, "error" | "warn">;
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.prototype.toString.call(value) === "[object Object]"
+  );
+}
+
+function deepMerge(target: unknown, source: unknown): unknown {
+  if (Array.isArray(target) && Array.isArray(source)) {
+    return [...target, ...source];
+  }
+  if (isPlainObject(target) && isPlainObject(source)) {
+    const result: Record<string, unknown> = { ...target };
+    for (const key of Object.keys(source)) {
+      if (key in result) {
+        result[key] = deepMerge(result[key], source[key]);
+      } else {
+        result[key] = source[key];
+      }
+    }
+    return result;
+  }
+  return source;
+}
+
+function resolveIncludePath(includePath: string, basePath: string): string {
+  if (path.isAbsolute(includePath)) {
+    return includePath;
+  }
+  const baseDir = path.dirname(basePath);
+  return path.resolve(baseDir, includePath);
+}
+
+function loadIncludeFile(
+  includePath: string,
+  ctx: IncludeContext,
+): unknown {
+  const resolvedPath = resolveIncludePath(includePath, ctx.basePath);
+  const normalizedPath = path.normalize(resolvedPath);
+
+  // Check for circular includes
+  if (ctx.visited.has(normalizedPath)) {
+    throw new CircularIncludeError([...ctx.visited, normalizedPath]);
+  }
+
+  // Check depth limit
+  if (ctx.depth >= MAX_INCLUDE_DEPTH) {
+    throw new ConfigIncludeError(
+      `Maximum include depth (${MAX_INCLUDE_DEPTH}) exceeded at: ${includePath}`,
+      includePath,
+    );
+  }
+
+  // Read and parse the file
+  let raw: string;
+  try {
+    raw = ctx.fsModule.readFileSync(normalizedPath, "utf-8");
+  } catch (err) {
+    throw new ConfigIncludeError(
+      `Failed to read include file: ${includePath} (resolved: ${normalizedPath})`,
+      includePath,
+      err instanceof Error ? err : undefined,
+    );
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = ctx.json5Module.parse(raw);
+  } catch (err) {
+    throw new ConfigIncludeError(
+      `Failed to parse include file: ${includePath} (resolved: ${normalizedPath})`,
+      includePath,
+      err instanceof Error ? err : undefined,
+    );
+  }
+
+  // Recursively resolve includes in the loaded file
+  const newCtx: IncludeContext = {
+    ...ctx,
+    basePath: normalizedPath,
+    visited: new Set([...ctx.visited, normalizedPath]),
+    depth: ctx.depth + 1,
+  };
+
+  return resolveIncludes(parsed, newCtx);
+}
+
+function resolveIncludeDirective(
+  includeValue: unknown,
+  ctx: IncludeContext,
+): unknown {
+  if (typeof includeValue === "string") {
+    // Single file include
+    return loadIncludeFile(includeValue, ctx);
+  }
+
+  if (Array.isArray(includeValue)) {
+    // Multiple files - deep merge them
+    let result: unknown = {};
+    for (const item of includeValue) {
+      if (typeof item !== "string") {
+        throw new ConfigIncludeError(
+          `Invalid $include array item: expected string, got ${typeof item}`,
+          String(item),
+        );
+      }
+      const loaded = loadIncludeFile(item, ctx);
+      result = deepMerge(result, loaded);
+    }
+    return result;
+  }
+
+  throw new ConfigIncludeError(
+    `Invalid $include value: expected string or array of strings, got ${typeof includeValue}`,
+    String(includeValue),
+  );
+}
+
+/**
+ * Recursively resolves $include directives in the config object.
+ *
+ * Supports:
+ * - `{ "$include": "./path/to/file.json5" }` - replaces object with file contents
+ * - `{ "$include": ["./a.json5", "./b.json5"] }` - deep merges multiple files
+ * - Nested includes up to MAX_INCLUDE_DEPTH levels
+ *
+ * @example
+ * ```json5
+ * // clawdbot.json
+ * {
+ *   gateway: { port: 18789 },
+ *   agents: { "$include": "./agents.json5" },
+ *   broadcast: { "$include": ["./clients/a.json5", "./clients/b.json5"] }
+ * }
+ * ```
+ */
+export function resolveIncludes(
+  obj: unknown,
+  ctx: IncludeContext,
+): unknown {
+  if (Array.isArray(obj)) {
+    return obj.map((item) => resolveIncludes(item, ctx));
+  }
+
+  if (isPlainObject(obj)) {
+    // Check if this object is an include directive
+    if (INCLUDE_KEY in obj) {
+      const includeValue = obj[INCLUDE_KEY];
+      const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
+
+      if (otherKeys.length > 0) {
+        // Has other keys besides $include - merge include result with them
+        const included = resolveIncludeDirective(includeValue, ctx);
+        const rest: Record<string, unknown> = {};
+        for (const key of otherKeys) {
+          rest[key] = resolveIncludes(obj[key], ctx);
+        }
+        return deepMerge(included, rest);
+      }
+
+      // Pure include directive
+      return resolveIncludeDirective(includeValue, ctx);
+    }
+
+    // Regular object - recurse into properties
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj)) {
+      result[key] = resolveIncludes(value, ctx);
+    }
+    return result;
+  }
+
+  // Primitives pass through unchanged
+  return obj;
+}
+
+/**
+ * Creates an include context for resolving $include directives.
+ */
+function createIncludeContext(
+  configPath: string,
+  deps: Required<ConfigIoDeps>,
+): IncludeContext {
+  return {
+    basePath: configPath,
+    visited: new Set([path.normalize(configPath)]),
+    depth: 0,
+    fsModule: deps.fs,
+    json5Module: deps.json5,
+    logger: deps.logger,
+  };
+}
+
 export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const deps = normalizeDeps(overrides);
   const configPath = resolveConfigPathForDeps(deps);
@@ -148,9 +383,14 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
-      warnOnConfigMiskeys(parsed, deps.logger);
-      if (typeof parsed !== "object" || parsed === null) return {};
-      const validated = ClawdbotSchema.safeParse(parsed);
+
+      // Resolve $include directives before validation
+      const includeCtx = createIncludeContext(configPath, deps);
+      const resolved = resolveIncludes(parsed, includeCtx);
+
+      warnOnConfigMiskeys(resolved, deps.logger);
+      if (typeof resolved !== "object" || resolved === null) return {};
+      const validated = ClawdbotSchema.safeParse(resolved);
       if (!validated.success) {
         deps.logger.error("Invalid config:");
         for (const iss of validated.error.issues) {
@@ -245,9 +485,31 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      const legacyIssues = findLegacyConfigIssues(parsedRes.parsed);
+      // Resolve $include directives
+      let resolved: unknown;
+      try {
+        const includeCtx = createIncludeContext(configPath, deps);
+        resolved = resolveIncludes(parsedRes.parsed, includeCtx);
+      } catch (err) {
+        const message =
+          err instanceof ConfigIncludeError
+            ? err.message
+            : `Include resolution failed: ${String(err)}`;
+        return {
+          path: configPath,
+          exists: true,
+          raw,
+          parsed: parsedRes.parsed,
+          valid: false,
+          config: {},
+          issues: [{ path: "", message }],
+          legacyIssues: [],
+        };
+      }
 
-      const validated = validateConfigObject(parsedRes.parsed);
+      const legacyIssues = findLegacyConfigIssues(resolved);
+
+      const validated = validateConfigObject(resolved);
       if (!validated.ok) {
         return {
           path: configPath,
