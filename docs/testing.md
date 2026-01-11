@@ -178,9 +178,9 @@ CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFI
   - `CLAWDBOT_LIVE_CLI_BACKEND_COMMAND="/full/path/to/claude"`
   - `CLAWDBOT_LIVE_CLI_BACKEND_ARGS='["-p","--output-format","json","--permission-mode","bypassPermissions"]'`
   - `CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV='["ANTHROPIC_API_KEY","ANTHROPIC_API_KEY_OLD"]'`
-  - `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (requires `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG`).
-  - `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths to the CLI.
-  - `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed.
+  - `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE=1` to send a real image attachment (paths are injected into the prompt).
+  - `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
+  - `CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `CLAWDBOT_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG=0` to keep Claude CLI MCP config enabled (default disables MCP config with a temporary empty file).
 
 Example:

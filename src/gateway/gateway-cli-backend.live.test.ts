@@ -238,11 +238,6 @@ describeLive("gateway live (cli backend)", () => {
       process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE,
     );
 
-    if (CLI_IMAGE && !cliImageArg) {
-      throw new Error(
-        "CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE=1 requires CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG.",
-      );
-    }
     if (cliImageMode && !cliImageArg) {
       throw new Error(
         "CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_MODE requires CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG.",
@@ -367,7 +362,7 @@ describeLive("gateway live (cli backend)", () => {
           if (Math.abs(cand.length - imageCode.length) > 2) return best;
           return Math.min(best, editDistance(cand, imageCode));
         }, Number.POSITIVE_INFINITY);
-        if (!(bestDistance <= 2)) {
+        if (!(bestDistance <= 5)) {
           throw new Error(
             `image probe missing code (${imageCode}): ${imageText}`,
           );

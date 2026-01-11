@@ -298,6 +298,13 @@ function resolveImageExtension(mimeType: string): string {
   return "bin";
 }
 
+function appendImagePathsToPrompt(prompt: string, paths: string[]): string {
+  if (!paths.length) return prompt;
+  const trimmed = prompt.trimEnd();
+  const separator = trimmed ? "\n\n" : "";
+  return `${trimmed}${separator}${paths.join("\n")}`;
+}
+
 async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
@@ -437,23 +444,19 @@ export async function runCliAgent(params: {
 
   let imagePaths: string[] | undefined;
   let cleanupImages: (() => Promise<void>) | undefined;
+  let prompt = params.prompt;
   if (params.images && params.images.length > 0) {
-    if (!backend.imageArg) {
-      throw new FailoverError("CLI backend does not support images.", {
-        reason: "format",
-        provider: params.provider,
-        model: modelId,
-        status: resolveFailoverStatus("format"),
-      });
-    }
     const imagePayload = await writeCliImages(params.images);
     imagePaths = imagePayload.paths;
     cleanupImages = imagePayload.cleanup;
+    if (!backend.imageArg) {
+      prompt = appendImagePathsToPrompt(prompt, imagePaths);
+    }
   }
 
   const { argsPrompt, stdin } = resolvePromptInput({
     backend,
-    prompt: params.prompt,
+    prompt,
   });
   const stdinPayload = stdin ?? "";
   const args = buildCliArgs({
