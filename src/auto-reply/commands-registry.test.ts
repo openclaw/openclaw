@@ -20,6 +20,7 @@ describe("commands registry", () => {
     const specs = listNativeCommandSpecs();
     expect(specs.find((spec) => spec.name === "help")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "stop")).toBeTruthy();
+    expect(specs.find((spec) => spec.name === "whoami")).toBeTruthy();
     expect(specs.find((spec) => spec.name === "compact")).toBeFalsy();
   });
 
@@ -47,6 +48,8 @@ describe("commands registry", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);
     expect(detection.exact.has("/compact")).toBe(true);
+    expect(detection.exact.has("/whoami")).toBe(true);
+    expect(detection.exact.has("/id")).toBe(true);
     for (const command of listChatCommands()) {
       for (const alias of command.textAliases) {
         expect(detection.exact.has(alias.toLowerCase())).toBe(true);

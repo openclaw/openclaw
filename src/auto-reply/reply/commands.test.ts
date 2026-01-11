@@ -5,7 +5,11 @@ import type { MsgContext } from "../templating.js";
 import { buildCommandContext, handleCommands } from "./commands.js";
 import { parseInlineDirectives } from "./directive-handling.js";
 
-function buildParams(commandBody: string, cfg: ClawdbotConfig) {
+function buildParams(
+  commandBody: string,
+  cfg: ClawdbotConfig,
+  ctxOverrides?: Partial<MsgContext>,
+) {
   const ctx = {
     Body: commandBody,
     CommandBody: commandBody,
@@ -13,6 +17,7 @@ function buildParams(commandBody: string, cfg: ClawdbotConfig) {
     CommandAuthorized: true,
     Provider: "whatsapp",
     Surface: "whatsapp",
+    ...ctxOverrides,
   } as MsgContext;
 
   const command = buildCommandContext({
@@ -62,5 +67,25 @@ describe("handleCommands gating", () => {
     const result = await handleCommands(params);
     expect(result.shouldContinue).toBe(false);
     expect(result.reply?.text).toContain("/debug is disabled");
+  });
+});
+
+describe("handleCommands identity", () => {
+  it("returns sender details for /whoami", async () => {
+    const cfg = {
+      commands: { text: true },
+      whatsapp: { allowFrom: ["*"] },
+    } as ClawdbotConfig;
+    const params = buildParams("/whoami", cfg, {
+      SenderId: "12345",
+      SenderUsername: "TestUser",
+      ChatType: "direct",
+    });
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Provider: whatsapp");
+    expect(result.reply?.text).toContain("User id: 12345");
+    expect(result.reply?.text).toContain("Username: @TestUser");
+    expect(result.reply?.text).toContain("AllowFrom: 12345");
   });
 });
