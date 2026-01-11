@@ -173,13 +173,15 @@ it’s present in your workspace/managed skills locations.
 
 ## Example plugin: Voice Call
 
-This repo includes a voice‑call placeholder plugin:
+This repo includes a voice‑call plugin (Twilio or log fallback):
 
 - Source: `extensions/voice-call`
 - Skill: `skills/voice-call`
-- CLI: `clawdbot voicecall status`
+- CLI: `clawdbot voicecall start|status`
 - Tool: `voice_call`
-- RPC: `voicecall.status`
+- RPC: `voicecall.start`, `voicecall.status`
+- Config (twilio): `provider: "twilio"` + `twilio.accountSid/authToken/from` (optional `statusCallbackUrl`, `twimlUrl`)
+- Config (dev): `provider: "log"` (no network)
 
 See `extensions/voice-call/README.md` for setup and usage.
 

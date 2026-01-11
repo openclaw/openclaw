@@ -6,13 +6,13 @@ metadata: {"clawdbot":{"emoji":"📞","skillKey":"voice-call","requires":{"confi
 
 # Voice Call
 
-Use the voice-call plugin to start or inspect calls.
+Use the voice-call plugin to start or inspect calls (Twilio or log fallback).
 
 ## CLI
 
 ```bash
-clawdbot voicecall status
-clawdbot voicecall start --to "+15555550123" --message "Hello"
+clawdbot voicecall start --to "+15555550123" --message "Hello from Clawdbot"
+clawdbot voicecall status --sid CAxxxxxxxx
 ```
 
 ## Tool
@@ -20,10 +20,13 @@ clawdbot voicecall start --to "+15555550123" --message "Hello"
 Use `voice_call` for agent-initiated calls.
 
 Parameters:
-- `to` (string): phone number or provider target
+- `mode` ("call" | "status", optional, default call)
+- `to` (string): phone number / target (required for call)
+- `sid` (string): call SID (required for status)
 - `message` (string, optional): optional intro or instruction
-- `mode` ("call" | "status", optional)
 
 Notes:
 - Requires the voice-call plugin to be enabled.
 - Plugin config lives under `plugins.entries.voice-call.config`.
+- Twilio config: `provider: "twilio"` + `twilio.accountSid/authToken/from` (statusCallbackUrl/twimlUrl optional).
+- Dev fallback: `provider: "log"` (no network).

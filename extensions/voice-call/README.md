@@ -1,7 +1,6 @@
-# Voice Call Plugin (Placeholder)
+# Voice Call Plugin
 
-This is a **stub** plugin used to validate the Clawdbot plugin API.
-It does not place real calls yet.
+Twilio-backed outbound voice calls (with a log-only fallback for dev).
 
 ## Install (local dev)
 
@@ -19,20 +18,41 @@ Option 2: add via config:
 {
   plugins: {
     load: { paths: ["/absolute/path/to/extensions/voice-call"] },
-    entries: {
-      "voice-call": { enabled: true, config: { provider: "twilio" } }
-    }
+    entries: { "voice-call": { enabled: true } }
   }
 }
 ```
 
 Restart the Gateway after changes.
 
+## Config
+
+Put under `plugins.entries.voice-call.config`:
+
+```json5
+{
+  provider: "twilio",
+  twilio: {
+    accountSid: "ACxxxxxxxx",
+    authToken: "your_token",
+    from: "+15551234567",
+    statusCallbackUrl: "https://example.com/twilio-status", // optional
+    twimlUrl: "https://example.com/twiml" // optional, else auto-generates <Say>
+  }
+}
+```
+
+Dev fallback (no network):
+
+```json5
+{ provider: "log" }
+```
+
 ## CLI
 
 ```bash
-clawdbot voicecall status
-clawdbot voicecall start --to "+15555550123" --message "Hello"
+clawdbot voicecall start --to "+15555550123" --message "Hello from Clawdbot"
+clawdbot voicecall status --sid CAxxxxxxxx
 ```
 
 ## Tool
@@ -40,13 +60,15 @@ clawdbot voicecall start --to "+15555550123" --message "Hello"
 Tool name: `voice_call`
 
 Parameters:
-- `mode`: `"call" | "status"`
-- `to`: target string
+- `mode`: `"call" | "status"` (default: `call`)
+- `to`: target string (required for call)
+- `sid`: call SID (required for status)
 - `message`: optional intro text
 
 ## Gateway RPC
 
-- `voicecall.status`
+- `voicecall.start` (to, message?)
+- `voicecall.status` (sid)
 
 ## Skill
 
@@ -59,6 +81,5 @@ setting:
 
 ## Notes
 
-- This plugin is a placeholder. Implement your real call flow in the tool and
-  RPC handlers.
+- Uses Twilio REST API via fetch (no SDK). Provide valid SID/token/from.
 - Use `voicecall.*` for RPC names and `voice_call` for tool naming consistency.
