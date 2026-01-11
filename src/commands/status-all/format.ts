@@ -15,6 +15,20 @@ export const formatDuration = (ms: number | null | undefined) => {
   return `${(ms / 1000).toFixed(1)}s`;
 };
 
+export function formatGatewayAuthUsed(
+  auth: {
+    token?: string;
+    password?: string;
+  } | null,
+): "token" | "password" | "token+password" | "none" {
+  const hasToken = Boolean(auth?.token?.trim());
+  const hasPassword = Boolean(auth?.password?.trim());
+  if (hasToken && hasPassword) return "token+password";
+  if (hasToken) return "token";
+  if (hasPassword) return "password";
+  return "none";
+}
+
 export function redactSecrets(text: string): string {
   if (!text) return text;
   let out = text;

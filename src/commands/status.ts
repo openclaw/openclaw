@@ -44,6 +44,7 @@ import { resolveHeartbeatSeconds } from "../web/reconnect.js";
 import { getWebAuthAgeMs, webAuthExists } from "../web/session.js";
 import type { HealthSummary } from "./health.js";
 import { resolveControlUiLinks } from "./onboard-helpers.js";
+import { formatGatewayAuthUsed } from "./status-all/format.js";
 import { buildProvidersTable } from "./status-all/providers.js";
 import { statusAllCommand } from "./status-all.js";
 
@@ -714,6 +715,10 @@ export async function statusCommand(
               ? `unreachable (${gatewayProbe.error})`
               : "unreachable",
           );
+    const auth =
+      gatewayReachable && !remoteUrlMissing
+        ? ` · auth ${formatGatewayAuthUsed(resolveGatewayProbeAuth(cfg))}`
+        : "";
     const self =
       gatewaySelf?.host || gatewaySelf?.version || gatewaySelf?.platform
         ? [
@@ -726,7 +731,7 @@ export async function statusCommand(
             .join(" ")
         : null;
     const suffix = self ? ` · ${self}` : "";
-    return `${gatewayMode} · ${target} · ${reach}${suffix}`;
+    return `${gatewayMode} · ${target} · ${reach}${auth}${suffix}`;
   })();
 
   const agentsValue = (() => {
