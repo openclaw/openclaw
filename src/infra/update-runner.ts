@@ -305,15 +305,17 @@ export async function runGatewayUpdate(
     const beforeSha = beforeShaResult.stdout.trim() || null;
     const beforeVersion = await readPackageVersion(gitRoot);
 
-    const cleanCheck = await runStep(
+    const statusCheck = await runStep(
       step(
-        "clean check",
-        ["sh", "-c", `test -z "$(git -C '${gitRoot}' status --porcelain)"`],
+        "Running git status",
+        ["git", "-C", gitRoot, "status", "--porcelain"],
         gitRoot,
       ),
     );
-    steps.push(cleanCheck);
-    if (cleanCheck.exitCode !== 0) {
+    steps.push(statusCheck);
+    const hasUncommittedChanges =
+      statusCheck.stdoutTail && statusCheck.stdoutTail.trim().length > 0;
+    if (hasUncommittedChanges) {
       return {
         status: "skipped",
         mode: "git",
