@@ -10,8 +10,16 @@ import Speech
 import UserNotifications
 
 enum PermissionManager {
-    static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways _: Bool) -> Bool {
-        status == .authorizedAlways
+    static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
+        if requireAlways { return status == .authorizedAlways }
+        switch status {
+        case .authorizedAlways, .authorizedWhenInUse:
+            return true
+        case .authorized: // deprecated, but still shows up on some macOS versions
+            return true
+        default:
+            return false
+        }
     }
 
     static func ensure(_ caps: [Capability], interactive: Bool) async -> [Capability: Bool] {
@@ -150,7 +158,7 @@ enum PermissionManager {
         }
         let status = CLLocationManager().authorizationStatus
         switch status {
-        case .authorizedAlways:
+        case .authorizedAlways, .authorizedWhenInUse, .authorized:
             return true
         case .notDetermined:
             guard interactive else { return false }

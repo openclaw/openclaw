@@ -15,7 +15,7 @@ struct PermissionsSettings: View {
                 .padding(.horizontal, 2)
                 .padding(.vertical, 6)
 
-            Button("Show onboarding") { self.showOnboarding() }
+            Button("Restart onboarding") { self.showOnboarding() }
                 .buttonStyle(.bordered)
             Spacer()
         }

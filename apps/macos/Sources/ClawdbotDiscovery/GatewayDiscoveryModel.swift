@@ -166,26 +166,22 @@ public final class GatewayDiscoveryModel {
     }
 
     private func recomputeGateways() {
-        var next = self.gatewaysByDomain.values
-            .flatMap(\.self)
-            .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
-        if self.gatewaysByDomain[ClawdbotBonjour.wideAreaBridgeServiceDomain]?.isEmpty ?? true,
-           !self.wideAreaFallbackGateways.isEmpty
-        {
-            next.append(contentsOf: self.wideAreaFallbackGateways)
+        let primary = self.sortedDeduped(gateways: self.gatewaysByDomain.values.flatMap(\.self))
+        let primaryFiltered = self.filterLocalGateways ? primary.filter { !$0.isLocal } : primary
+        if !primaryFiltered.isEmpty {
+            self.gateways = primaryFiltered
+            return
         }
-        var seen = Set<String>()
-        let deduped = next.filter { gateway in
-            if seen.contains(gateway.stableID) { return false }
-            seen.insert(gateway.stableID)
-            return true
+
+        // Bonjour can return only "local" results for the wide-area domain (or no results at all),
+        // which makes onboarding look empty even though Tailscale DNS-SD can already see bridges.
+        guard !self.wideAreaFallbackGateways.isEmpty else {
+            self.gateways = primaryFiltered
+            return
         }
-        let sorted = deduped.sorted {
-            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
-        }
-        self.gateways = self.filterLocalGateways
-            ? sorted.filter { !$0.isLocal }
-            : sorted
+
+        let combined = self.sortedDeduped(gateways: primary + self.wideAreaFallbackGateways)
+        self.gateways = self.filterLocalGateways ? combined.filter { !$0.isLocal } : combined
     }
 
     private func updateGateways(for domain: String) {
@@ -240,7 +236,7 @@ public final class GatewayDiscoveryModel {
         .sorted { $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending }
 
         if domain == ClawdbotBonjour.wideAreaBridgeServiceDomain,
-           !(self.gatewaysByDomain[domain]?.isEmpty ?? true)
+           self.hasUsableWideAreaResults
         {
             self.wideAreaFallbackGateways = []
         }
@@ -256,7 +252,7 @@ public final class GatewayDiscoveryModel {
             let startedAt = Date()
             while !Task.isCancelled, Date().timeIntervalSince(startedAt) < 35.0 {
                 let hasResults = await MainActor.run {
-                    !(self.gatewaysByDomain[domain]?.isEmpty ?? true)
+                    self.hasUsableWideAreaResults
                 }
                 if hasResults { return }
 
@@ -276,6 +272,25 @@ public final class GatewayDiscoveryModel {
                 let backoff = min(8.0, 0.6 + (Double(attempt) * 0.7))
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
             }
+        }
+    }
+
+    private var hasUsableWideAreaResults: Bool {
+        let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
+        guard let gateways = self.gatewaysByDomain[domain], !gateways.isEmpty else { return false }
+        if !self.filterLocalGateways { return true }
+        return gateways.contains(where: { !$0.isLocal })
+    }
+
+    private func sortedDeduped(gateways: [DiscoveredGateway]) -> [DiscoveredGateway] {
+        var seen = Set<String>()
+        let deduped = gateways.filter { gateway in
+            if seen.contains(gateway.stableID) { return false }
+            seen.insert(gateway.stableID)
+            return true
+        }
+        return deduped.sorted {
+            $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
         }
     }
 
