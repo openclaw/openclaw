@@ -278,8 +278,7 @@ function parseCliJsonl(
     }
     const item = isRecord(parsed.item) ? parsed.item : null;
     if (item && typeof item.text === "string") {
-      const type =
-        typeof item.type === "string" ? item.type.toLowerCase() : "";
+      const type = typeof item.type === "string" ? item.type.toLowerCase() : "";
       if (!type || type.includes("message")) {
         texts.push(item.text);
       }
@@ -633,8 +632,9 @@ export async function runCliAgent(params: {
         });
       }
 
-      const outputMode =
-        useResume ? backend.resumeOutput ?? backend.output : backend.output;
+      const outputMode = useResume
+        ? (backend.resumeOutput ?? backend.output)
+        : backend.output;
 
       if (outputMode === "text") {
         return { text: stdout, sessionId: undefined };
@@ -656,7 +656,7 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId: output.sessionId ?? sessionIdSent,
+          sessionId: output.sessionId ?? sessionIdSent ?? params.sessionId,
           provider: params.provider,
           model: modelId,
           usage: output.usage,

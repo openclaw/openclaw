@@ -378,17 +378,13 @@ describeLive("gateway live (cli backend)", () => {
           { expectFinal: true },
         );
         if (resumePayload?.status !== "ok") {
-          throw new Error(
-            `resume status=${String(resumePayload?.status)}`,
-          );
+          throw new Error(`resume status=${String(resumePayload?.status)}`);
         }
         const resumeText = extractPayloadText(resumePayload?.result);
         if (providerId === "codex-cli") {
           expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
         } else {
-          expect(resumeText).toContain(
-            `CLI backend RESUME OK ${resumeNonce}.`,
-          );
+          expect(resumeText).toContain(`CLI backend RESUME OK ${resumeNonce}.`);
         }
       }
 
