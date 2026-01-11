@@ -891,6 +891,29 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       delete raw.identity;
     },
   },
+  {
+    id: "bind-tailnet->auto",
+    describe: "Remap gateway/bridge bind 'tailnet' to 'auto'",
+    apply: (raw, changes) => {
+      const migrateBind = (
+        obj: Record<string, unknown> | null | undefined,
+        key: string,
+      ) => {
+        if (!obj) return;
+        const bind = obj.bind;
+        if (bind === "tailnet") {
+          obj.bind = "auto";
+          changes.push(`Migrated ${key}.bind from 'tailnet' to 'auto'.`);
+        }
+      };
+
+      const gateway = getRecord(raw.gateway);
+      migrateBind(gateway, "gateway");
+
+      const bridge = getRecord(raw.bridge);
+      migrateBind(bridge, "bridge");
+    },
+  },
 ];
 
 export function findLegacyConfigIssues(raw: unknown): LegacyConfigIssue[] {

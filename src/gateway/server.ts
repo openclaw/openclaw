@@ -490,12 +490,9 @@ export async function startGatewayServer(
   }
   let pluginServices: PluginServicesHandle | null = null;
   const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
-  const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
-  if (!bindHost) {
-    throw new Error(
-      "gateway bind is tailnet, but no tailnet interface was found; refusing to start gateway",
-    );
-  }
+  const customBindHost = cfgAtStart.gateway?.customBindHost;
+  const bindHost =
+    opts.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
   const controlUiEnabled =
     opts.controlUiEnabled ?? cfgAtStart.gateway?.controlUi?.enabled ?? true;
   const openAiChatCompletionsEnabled =
@@ -960,17 +957,19 @@ export async function startGatewayServer(
     }
 
     const bind =
-      cfgAtStart.bridge?.bind ?? (wideAreaDiscoveryEnabled ? "tailnet" : "lan");
+      cfgAtStart.bridge?.bind ?? (wideAreaDiscoveryEnabled ? "auto" : "lan");
     if (bind === "loopback") return "127.0.0.1";
     if (bind === "lan") return "0.0.0.0";
 
     const tailnetIPv4 = pickPrimaryTailnetIPv4();
     const tailnetIPv6 = pickPrimaryTailnetIPv6();
-    if (bind === "tailnet") {
-      return tailnetIPv4 ?? tailnetIPv6 ?? null;
-    }
     if (bind === "auto") {
       return tailnetIPv4 ?? tailnetIPv6 ?? "0.0.0.0";
+    }
+    if (bind === "custom") {
+      // For bridge, customBindHost is not currently supported on GatewayConfig.
+      // This will fall back to "0.0.0.0" until we add customBindHost to BridgeConfig.
+      return "0.0.0.0";
     }
     return "0.0.0.0";
   })();

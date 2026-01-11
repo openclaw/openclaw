@@ -678,14 +678,14 @@ async function runGatewayCommand(
   const bindRaw = toOptionString(opts.bind) ?? cfg.gateway?.bind ?? "loopback";
   const bind =
     bindRaw === "loopback" ||
-    bindRaw === "tailnet" ||
     bindRaw === "lan" ||
-    bindRaw === "auto"
+    bindRaw === "auto" ||
+    bindRaw === "custom"
       ? bindRaw
       : null;
   if (!bind) {
     defaultRuntime.error(
-      'Invalid --bind (use "loopback", "tailnet", "lan", or "auto")',
+      'Invalid --bind (use "loopback", "lan", "auto", or "custom")',
     );
     defaultRuntime.exit(1);
     return;

@@ -410,16 +410,21 @@ export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
 export function resolveControlUiLinks(params: {
   port: number;
-  bind?: "auto" | "lan" | "tailnet" | "loopback";
+  bind?: "auto" | "lan" | "loopback" | "custom";
+  customBindHost?: string;
   basePath?: string;
 }): { httpUrl: string; wsUrl: string } {
   const port = params.port;
   const bind = params.bind ?? "loopback";
+  const customBindHost = params.customBindHost?.trim();
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const host =
-    bind === "tailnet" || (bind === "auto" && tailnetIPv4)
-      ? (tailnetIPv4 ?? "127.0.0.1")
-      : "127.0.0.1";
+  const host = (() => {
+    if (bind === "custom" && customBindHost && isValidIPv4(customBindHost)) {
+      return customBindHost;
+    }
+    if (bind === "auto" && tailnetIPv4) return tailnetIPv4 ?? "127.0.0.1";
+    return "127.0.0.1";
+  })();
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
   const wsPath = basePath ? basePath : "";
@@ -427,4 +432,13 @@ export function resolveControlUiLinks(params: {
     httpUrl: `http://${host}:${port}${uiPath}`,
     wsUrl: `ws://${host}:${port}${wsPath}`,
   };
+}
+
+function isValidIPv4(host: string): boolean {
+  const parts = host.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => {
+    const n = Number.parseInt(part, 10);
+    return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
+  });
 }

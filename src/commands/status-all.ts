@@ -271,6 +271,7 @@ export async function statusAllCommand(
         ? resolveControlUiLinks({
             port,
             bind: cfg.gateway?.bind,
+            customBindHost: cfg.gateway?.customBindHost,
             basePath: cfg.gateway?.controlUi?.basePath,
           }).httpUrl
         : null;

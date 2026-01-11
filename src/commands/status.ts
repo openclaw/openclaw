@@ -818,6 +818,7 @@ export async function statusCommand(
     const links = resolveControlUiLinks({
       port: resolveGatewayPort(cfg),
       bind: cfg.gateway?.bind,
+      customBindHost: cfg.gateway?.customBindHost,
       basePath: cfg.gateway?.controlUi?.basePath,
     });
     return links.httpUrl;

@@ -25,6 +25,7 @@ import {
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
+import { findTailscaleBinary } from "../infra/tailscale.js";
 import { listChatProviders } from "../providers/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -220,16 +221,59 @@ async function promptGatewayConfig(
 
   let bind = guardCancel(
     await select({
-      message: "Gateway bind",
+      message: "Gateway bind mode",
       options: [
-        { value: "loopback", label: "Loopback (127.0.0.1)" },
-        { value: "lan", label: "LAN" },
-        { value: "tailnet", label: "Tailnet" },
-        { value: "auto", label: "Auto" },
+        {
+          value: "auto",
+          label: "Auto (Tailnet → LAN)",
+          hint: "Prefer Tailnet IP, fall back to all interfaces if unavailable",
+        },
+        {
+          value: "lan",
+          label: "LAN (All interfaces)",
+          hint: "Bind to 0.0.0.0 - accessible from anywhere on your network",
+        },
+        {
+          value: "loopback",
+          label: "Loopback (Local only)",
+          hint: "Bind to 127.0.0.1 - secure, local-only access",
+        },
+        {
+          value: "custom",
+          label: "Custom IP",
+          hint: "Specify a specific IP address, with 0.0.0.0 fallback if unavailable",
+        },
       ],
     }),
     runtime,
-  ) as "loopback" | "lan" | "tailnet" | "auto";
+  ) as "auto" | "lan" | "loopback" | "custom";
+
+  let customBindHost: string | undefined;
+  if (bind === "custom") {
+    const input = guardCancel(
+      await text({
+        message: "Custom IP address",
+        placeholder: "192.168.1.100",
+        validate: (value) => {
+          if (!value) return "IP address is required for custom bind mode";
+          const trimmed = value.trim();
+          const parts = trimmed.split(".");
+          if (parts.length !== 4)
+            return "Invalid IPv4 address (e.g., 192.168.1.100)";
+          if (
+            parts.every((part) => {
+              const n = parseInt(part, 10);
+              return !Number.isNaN(n) && n >= 0 && n <= 255 && part === String(n);
+            })
+          )
+            return undefined;
+          return "Invalid IPv4 address (each octet must be 0-255)";
+        },
+      }),
+      runtime,
+    );
+    customBindHost = typeof input === "string" ? input : undefined;
+  }
 
   let authMode = guardCancel(
     await select({
@@ -267,6 +311,23 @@ async function promptGatewayConfig(
     }),
     runtime,
   ) as "off" | "serve" | "funnel";
+
+  // Detect Tailscale binary before proceeding with serve/funnel setup
+  if (tailscaleMode !== "off") {
+    const tailscaleBin = await findTailscaleBinary();
+    if (!tailscaleBin) {
+      note(
+        [
+          "Tailscale binary not found in PATH or /Applications.",
+          "Ensure Tailscale is installed from:",
+          "  https://tailscale.com/download/mac",
+          "",
+          "You can continue setup, but serve/funnel will fail at runtime.",
+        ].join("\n"),
+        "Tailscale Warning",
+      );
+    }
+  }
 
   let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
@@ -348,6 +409,7 @@ async function promptGatewayConfig(
       port,
       bind,
       auth: authConfig,
+      ...(customBindHost && { customBindHost }),
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
@@ -943,16 +1005,32 @@ export async function runConfigureWizard(
     const links = resolveControlUiLinks({
       bind,
       port: gatewayPort,
+      customBindHost: nextConfig.gateway?.customBindHost,
       basePath: nextConfig.gateway?.controlUi?.basePath,
     });
-    const gatewayProbe = await probeGatewayReachable({
+    // Try both new and old passwords since gateway may still have old config
+    const newPassword =
+      nextConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    const oldPassword =
+      baseConfig.gateway?.auth?.password ??
+      process.env.CLAWDBOT_GATEWAY_PASSWORD;
+    const token =
+      nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN;
+
+    let gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
-      token:
-        nextConfig.gateway?.auth?.token ?? process.env.CLAWDBOT_GATEWAY_TOKEN,
-      password:
-        nextConfig.gateway?.auth?.password ??
-        process.env.CLAWDBOT_GATEWAY_PASSWORD,
+      token,
+      password: newPassword,
     });
+    // If new password failed and it's different from old password, try old too
+    if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
+      gatewayProbe = await probeGatewayReachable({
+        url: links.wsUrl,
+        token,
+        password: oldPassword,
+      });
+    }
     const gatewayStatusLine = gatewayProbe.ok
       ? "Gateway: reachable"
       : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
