@@ -124,6 +124,20 @@ Behavior:
 - Self-chat mode (allowFrom includes your number) avoids auto read receipts and ignores mention JIDs.
 - Read receipts sent for non-self-chat DMs.
 
+## WhatsApp FAQ: sending messages + pairing
+
+**Will Clawdbot message random contacts when I link WhatsApp?**  
+No. Default DM policy is **pairing**, so unknown senders only get a pairing code and their message is **not processed**. Clawdbot only replies to chats it receives, or to sends you explicitly trigger (agent/CLI).
+
+**How does pairing work on WhatsApp?**  
+Pairing is a DM gate for unknown senders:
+- First DM from a new sender returns a short code (message is not processed).
+- Approve with: `clawdbot pairing approve whatsapp <code>` (list with `clawdbot pairing list whatsapp`).
+- Codes expire after 1 hour; pending requests are capped at 3 per provider.
+
+**Why do you ask for my phone number in the wizard?**  
+The wizard uses it to set your **allowlist/owner** so your own DMs are permitted. It’s not used for auto-sending. If you run on your personal WhatsApp number, use that same number and enable `whatsapp.selfChatMode`.
+
 ## Message normalization (what the model sees)
 - `Body` is the current message body with envelope.
 - Quoted reply context is **always appended**:
