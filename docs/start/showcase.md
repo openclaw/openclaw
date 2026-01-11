@@ -136,6 +136,12 @@ Full setup walkthrough (28m) by VelvetShark.
 
 <CardGroup cols={2}>
 
+<Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
+  **@buddyhadry** • `automation` `briefing` `images` `telegram`
+
+  A scheduled prompt generates a single "scene" image each morning (weather, tasks, date, favorite post/quote) via a Clawdbot persona.
+</Card>
+
 <Card title="Grocery Autopilot" icon="cart-shopping" href="https://github.com/timkrase/clawdis-picnic-skill">
   **@timkrase** • `automation` `groceries` `api`
   
