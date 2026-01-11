@@ -463,9 +463,7 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
       const name = readStringParam(params, "name", { required: true });
       const type = readNumberParam(params, "type", { integer: true });
       const parentId =
-        params.parentId === null
-          ? null
-          : readStringParam(params, "parentId");
+        params.parentId === null ? null : readStringParam(params, "parentId");
       const topic = readStringParam(params, "topic");
       const position = readNumberParam(params, "position", { integer: true });
       const nsfw = typeof params.nsfw === "boolean" ? params.nsfw : undefined;
@@ -492,9 +490,7 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
       const topic = readStringParam(params, "topic");
       const position = readNumberParam(params, "position", { integer: true });
       const parentId =
-        params.parentId === null
-          ? null
-          : readStringParam(params, "parentId");
+        params.parentId === null ? null : readStringParam(params, "parentId");
       const nsfw = typeof params.nsfw === "boolean" ? params.nsfw : undefined;
       const rateLimitPerUser = readNumberParam(params, "rateLimitPerUser", {
         integer: true,
@@ -530,9 +526,7 @@ export const discordMessageActions: ProviderMessageActionAdapter = {
         required: true,
       });
       const parentId =
-        params.parentId === null
-          ? null
-          : readStringParam(params, "parentId");
+        params.parentId === null ? null : readStringParam(params, "parentId");
       const position = readNumberParam(params, "position", { integer: true });
       return await handleDiscordAction(
         {
