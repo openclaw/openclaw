@@ -64,6 +64,23 @@ Key behaviors:
 Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
 
+### Payload shapes (what runs)
+Two payload kinds are supported:
+- `systemEvent`: main-session only, routed through the heartbeat prompt.
+- `agentTurn`: isolated-session only, runs a dedicated agent turn.
+
+Common `agentTurn` fields:
+- `message`: required text prompt.
+- `model` / `thinking`: optional overrides (see below).
+- `timeoutSeconds`: optional timeout override.
+- `deliver`: `true` to send output to a provider target.
+- `provider`: `last` or a specific provider.
+- `to`: provider-specific target (phone/chat/channel id).
+- `bestEffortDeliver`: avoid failing the job if delivery fails.
+
+Isolation options (only for `session=isolated`):
+- `postToMainPrefix` (CLI: `--post-prefix`): prefix for the summary system event in main.
+
 ### Model and thinking overrides
 Isolated jobs (`agentTurn`) can override the model and thinking level:
 - `model`: Provider/model string (e.g., `anthropic/claude-sonnet-4-20250514`) or alias (e.g., `opus`)
@@ -85,6 +102,10 @@ Isolated jobs can deliver output to a provider. The job payload can specify:
 
 If `provider` or `to` is omitted, cron can fall back to the main session’s “last route”
 (the last place the agent replied).
+
+Target format reminders:
+- Slack/Discord targets should use explicit prefixes (e.g. `channel:<id>`, `user:<id>`) to avoid ambiguity.
+- Telegram topics should use the `:topic:` form (see below).
 
 #### Telegram delivery targets (topics / forum threads)
 Telegram supports forum topics via `message_thread_id`. For cron delivery, you can encode
@@ -174,6 +195,14 @@ clawdbot cron add \
 Manual run (debug):
 ```bash
 clawdbot cron run <jobId> --force
+```
+
+Edit an existing job (patch fields):
+```bash
+clawdbot cron edit <jobId> \
+  --message "Updated prompt" \
+  --model "opus" \
+  --thinking low
 ```
 
 Run history:
