@@ -2,9 +2,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-
-// Avoid pulling optional runtime deps during isolated runs.
-vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import * as replyModule from "../auto-reply/reply.js";
 import type { ClawdbotConfig } from "../config/config.js";
@@ -19,6 +16,9 @@ import {
   runHeartbeatOnce,
 } from "./heartbeat-runner.js";
 import { resolveHeartbeatDeliveryTarget } from "./outbound/targets.js";
+
+// Avoid pulling optional runtime deps during isolated runs.
+vi.mock("jiti", () => ({ createJiti: () => () => ({}) }));
 
 describe("resolveHeartbeatIntervalMs", () => {
   it("returns default when unset", () => {
