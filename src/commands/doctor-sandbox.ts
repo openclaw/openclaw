@@ -290,7 +290,7 @@ export function noteSandboxScopeWarnings(cfg: ClawdbotConfig) {
     warnings.push(
       `- agents.list (id "${agentId}") sandbox ${overrides.join(
         "/",
-      )} overrides ignored (scope resolves to "shared").`,
+      )} overrides ignored\n  scope resolves to "shared".`,
     );
   }
 
