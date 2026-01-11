@@ -13,6 +13,11 @@ Status: the macOS/iOS SwiftUI chat UI talks directly to the Gateway WebSocket.
 - Uses the same sessions and routing rules as other providers.
 - Deterministic routing: replies always go back to WebChat.
 
+## Quick start
+1) Start the gateway.
+2) Open the WebChat UI (macOS/iOS app) or the Control UI chat tab.
+3) Ensure gateway auth is configured if you are not on loopback.
+
 ## How it works (behavior)
 - The UI connects to the Gateway WebSocket and uses `chat.history` + `chat.send`.
 - History is always fetched from the gateway (no local file watching).

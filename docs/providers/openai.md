@@ -7,7 +7,8 @@ read_when:
 # OpenAI
 
 OpenAI provides developer APIs for GPT models. Codex supports **ChatGPT sign-in** for subscription
-access or **API key** sign-in for usage-based access. The Codex CLI caches login details in
+access or **API key** sign-in for usage-based access. Codex cloud requires ChatGPT sign-in, while
+the Codex CLI supports either sign-in method. The Codex CLI caches login details in
 `~/.codex/auth.json` (or your OS credential store), which Clawdbot can reuse.
 
 ## Option A: OpenAI API key (OpenAI Platform)

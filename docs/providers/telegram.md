@@ -8,6 +8,25 @@ read_when:
 
 Status: production-ready for bot DMs + groups via grammY. Long-polling by default; webhook optional.
 
+## Quick setup (beginner)
+1) Create a bot with **@BotFather** and copy the token.
+2) Set the token:
+   - Env: `TELEGRAM_BOT_TOKEN=...`
+   - Or config: `telegram.botToken: "..."`.
+3) Start the gateway.
+4) DM access is pairing by default; approve the pairing code on first contact.
+
+Minimal config:
+```json5
+{
+  telegram: {
+    enabled: true,
+    botToken: "123:abc",
+    dmPolicy: "pairing"
+  }
+}
+```
+
 ## What it is
 - A Telegram Bot API provider owned by the Gateway.
 - Deterministic routing: replies go back to Telegram; the model never chooses providers.
@@ -37,9 +56,11 @@ Example:
 }
 ```
 
+Env option: `TELEGRAM_BOT_TOKEN=...` (works for the default account).
+
 Multi-account support: use `telegram.accounts` with per-account tokens and optional `name`. See [`gateway/configuration`](/gateway/configuration#telegramaccounts--discordaccounts--slackaccounts--signalaccounts--imessageaccounts) for the shared pattern.
 
-3) Start the gateway. Telegram starts when a `telegram` config section exists and a token is resolved.
+3) Start the gateway. Telegram starts when a token is resolved (env or config).
 4) DM access defaults to pairing. Approve the code when the bot is first contacted.
 5) For groups: add the bot, decide privacy/admin behavior (below), then set `telegram.groups` to control mention gating + allowlists.
 

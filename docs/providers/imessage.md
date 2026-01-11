@@ -9,6 +9,24 @@ read_when:
 
 Status: external CLI integration. Gateway spawns `imsg rpc` (JSON-RPC over stdio).
 
+## Quick setup (beginner)
+1) Ensure Messages is signed in on this Mac.
+2) Install `imsg`:
+   - `brew install steipete/tap/imsg`
+3) Configure Clawdbot with `imessage.cliPath` and `imessage.dbPath`.
+4) Start the gateway and approve any macOS prompts (Automation + Full Disk Access).
+
+Minimal config:
+```json5
+{
+  imessage: {
+    enabled: true,
+    cliPath: "/usr/local/bin/imsg",
+    dbPath: "/Users/<you>/Library/Messages/chat.db"
+  }
+}
+```
+
 ## What it is
 - iMessage provider backed by `imsg` on macOS.
 - Deterministic routing: replies always go back to iMessage.

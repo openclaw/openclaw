@@ -1,40 +1,28 @@
 ---
-summary: "All supported providers (models + messaging) in one place"
+summary: "Messaging platforms Clawdbot can connect to"
 read_when:
-  - You want a single hub for every provider we document
-  - You want model providers vs chat providers split clearly
+  - You want to choose a chat provider for Clawdbot
+  - You need a quick overview of supported messaging platforms
 ---
-# Providers hub
+# Chat Providers
 
-This hub covers **model providers** (LLMs) and **messaging/chat providers** (WhatsApp, Telegram, etc).
-For model selection rules, see [/concepts/models](/concepts/models). For the full provider catalog, see
-[/concepts/model-providers](/concepts/model-providers).
+Clawdbot can talk to you on any chat app you already use. Each provider connects via the Gateway.
+Text is supported everywhere; media and reactions vary by provider.
 
-## Model providers
+## Supported providers
 
-- [OpenAI (API + Codex)](/providers/openai)
-- [Anthropic (API + Claude CLI)](/providers/anthropic)
-- [OpenRouter](/providers/openrouter)
-- [OpenCode Zen](/providers/opencode)
-- [Z.AI](/providers/zai)
-- [GLM models](/providers/glm)
+- [WhatsApp](/providers/whatsapp) — Most popular; uses Baileys and requires QR pairing.
+- [Telegram](/providers/telegram) — Bot API via grammY; supports groups.
+- [Discord](/providers/discord) — Discord Bot API + Gateway; supports servers, channels, and DMs.
+- [Slack](/providers/slack) — Bolt SDK; workspace apps.
+- [Signal](/providers/signal) — signal-cli; privacy-focused.
+- [iMessage](/providers/imessage) — macOS only; native integration.
+- [Microsoft Teams](/providers/msteams) — Bot Framework; enterprise support.
+- [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 
-Full list (xAI, Groq, Mistral, etc.): [/concepts/model-providers](/concepts/model-providers)
+## Notes
 
-## Messaging + chat providers
-
-- [WhatsApp](/providers/whatsapp)
-- [Telegram](/providers/telegram)
-- [Telegram (grammY notes)](/providers/grammy)
-- [Slack](/providers/slack)
-- [Discord](/providers/discord)
-- [Signal](/providers/signal)
-- [iMessage](/providers/imessage)
-- [Location parsing](/providers/location)
-- [Provider troubleshooting](/providers/troubleshooting)
-
-## Ingress + web
-
-- [WebChat](/web/webchat)
-- [Webhooks](/automation/webhook)
-- [Gmail Pub/Sub](/automation/gmail-pubsub)
+- Providers can run simultaneously; configure multiple and Clawdbot will route per chat.
+- Group behavior varies by provider; see [Groups](/concepts/groups).
+- DM pairing and allowlists are enforced for safety; see [Security](/gateway/security).
+- Model providers are documented separately; see [Model Providers](/providers/models).
