@@ -226,7 +226,10 @@ actor GatewayEndpointStore {
         }
         let config = try await self.ensureRemoteConfig(detail: Self.remoteConnectingDetail)
         guard let portInt = config.0.port, let port = UInt16(exactly: portInt) else {
-            throw NSError(domain: "GatewayEndpoint", code: 1, userInfo: [NSLocalizedDescriptionKey: "Missing tunnel port"])
+            throw NSError(
+                domain: "GatewayEndpoint",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Missing tunnel port"])
         }
         return port
     }
@@ -290,7 +293,10 @@ actor GatewayEndpointStore {
             let forwarded = try await ensure.task.value
             let stillRemote = await self.deps.mode() == .remote
             guard stillRemote else {
-                throw NSError(domain: "RemoteTunnel", code: 1, userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
+                throw NSError(
+                    domain: "RemoteTunnel",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Remote mode is not enabled"])
             }
 
             if self.remoteEnsure?.token == ensure.token {

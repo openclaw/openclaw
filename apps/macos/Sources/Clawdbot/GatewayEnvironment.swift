@@ -319,5 +319,4 @@ enum GatewayEnvironment {
         else { return nil }
         return Semver.parse(version)
     }
-
 }

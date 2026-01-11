@@ -6,6 +6,17 @@ enum GatewayLaunchAgentManager {
     private static let legacyGatewayLaunchdLabel = "com.steipete.clawdbot.gateway"
     private static let disableLaunchAgentMarker = ".clawdbot/disable-launchagent"
 
+    private enum GatewayProgramArgumentsError: LocalizedError {
+        case cliNotFound
+
+        var errorDescription: String? {
+            switch self {
+            case .cliNotFound:
+                "clawdbot CLI not found in PATH; install the CLI."
+            }
+        }
+    }
+
     private static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
@@ -16,21 +27,27 @@ enum GatewayLaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(legacyGatewayLaunchdLabel).plist")
     }
 
-    private static func gatewayProgramArguments(port: Int, bind: String) -> Result<[String], String> {
+    private static func gatewayProgramArguments(
+        port: Int,
+        bind: String) -> Result<[String], GatewayProgramArgumentsError>
+    {
         #if DEBUG
         let projectRoot = CommandResolver.projectRoot()
         if let localBin = CommandResolver.projectClawdbotExecutable(projectRoot: projectRoot) {
             return .success([localBin, "gateway-daemon", "--port", "\(port)", "--bind", bind])
         }
-        if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot),
-           case let .success(runtime) = CommandResolver.runtimeResolution()
-        {
-            let cmd = CommandResolver.makeRuntimeCommand(
-                runtime: runtime,
-                entrypoint: entry,
-                subcommand: "gateway-daemon",
-                extraArgs: ["--port", "\(port)", "--bind", bind])
-            return .success(cmd)
+        if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot) {
+            switch CommandResolver.runtimeResolution() {
+            case let .success(runtime):
+                let cmd = CommandResolver.makeRuntimeCommand(
+                    runtime: runtime,
+                    entrypoint: entry,
+                    subcommand: "gateway-daemon",
+                    extraArgs: ["--port", "\(port)", "--bind", bind])
+                return .success(cmd)
+            case .failure:
+                break
+            }
         }
         #endif
         let searchPaths = CommandResolver.preferredPaths()
@@ -38,19 +55,22 @@ enum GatewayLaunchAgentManager {
             return .success([gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind])
         }
 
-        let projectRoot = CommandResolver.projectRoot()
-        if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot),
-           case let .success(runtime) = CommandResolver.runtimeResolution(searchPaths: searchPaths)
-        {
-            let cmd = CommandResolver.makeRuntimeCommand(
-                runtime: runtime,
-                entrypoint: entry,
-                subcommand: "gateway-daemon",
-                extraArgs: ["--port", "\(port)", "--bind", bind])
-            return .success(cmd)
+        let fallbackProjectRoot = CommandResolver.projectRoot()
+        if let entry = CommandResolver.gatewayEntrypoint(in: fallbackProjectRoot) {
+            switch CommandResolver.runtimeResolution(searchPaths: searchPaths) {
+            case let .success(runtime):
+                let cmd = CommandResolver.makeRuntimeCommand(
+                    runtime: runtime,
+                    entrypoint: entry,
+                    subcommand: "gateway-daemon",
+                    extraArgs: ["--port", "\(port)", "--bind", bind])
+                return .success(cmd)
+            case .failure:
+                break
+            }
         }
 
-        return .failure("clawdbot CLI not found in PATH; install the CLI.")
+        return .failure(.cliNotFound)
     }
 
     static func isLoaded() async -> Bool {
@@ -78,25 +98,26 @@ enum GatewayLaunchAgentManager {
                 token: desiredToken,
                 password: desiredPassword)
             let programArgumentsResult = self.gatewayProgramArguments(port: port, bind: desiredBind)
-            guard case let .success(programArguments) = programArgumentsResult else {
-                if case let .failure(message) = programArgumentsResult {
-                    self.logger.error("launchd enable failed: \(message)")
-                    return message
-                }
-                return "Failed to resolve gateway command."
+            let programArguments: [String]
+            switch programArgumentsResult {
+            case let .success(args):
+                programArguments = args
+            case let .failure(error):
+                let message = error.errorDescription ?? "Failed to resolve gateway CLI"
+                self.logger.error("launchd enable failed: \(message)")
+                return message
             }
 
             // If launchd already loaded the job (common on login), avoid `bootout` unless we must
             // change the config. `bootout` can kill a just-started gateway and cause attach loops.
             let loaded = await self.isLoaded()
-            if loaded,
-               let existing = self.readPlistConfig(),
-               existing.matches(desiredConfig)
-            {
-                self.logger.info("launchd job already loaded with desired config; skipping bootout")
-                await self.ensureEnabled()
-                _ = await Launchctl.run(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
-                return nil
+            if loaded {
+                if let existing = self.readPlistConfig(), existing.matches(desiredConfig) {
+                    self.logger.info("launchd job already loaded with desired config; skipping bootout")
+                    await self.ensureEnabled()
+                    _ = await Launchctl.run(["kickstart", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
+                    return nil
+                }
             }
 
             self.logger.info("launchd enable requested port=\(port) bind=\(desiredBind)")
@@ -129,7 +150,6 @@ enum GatewayLaunchAgentManager {
         _ = await Launchctl.run(["kickstart", "-k", "gui/\(getuid())/\(gatewayLaunchdLabel)"])
     }
 
-    private static func writePlist(bundlePath: String, port: Int) {
     private static func writePlist(programArguments: [String]) {
         let preferredPath = CommandResolver.preferredPaths().joined(separator: ":")
         let token = self.preferredGatewayToken()
