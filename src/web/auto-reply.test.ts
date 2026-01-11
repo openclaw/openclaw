@@ -1135,6 +1135,151 @@ describe("web auto-reply", () => {
     expect(payload.Body).toContain("[from: Bob (+222)]");
   });
 
+  it("detects LID mentions using authDir mapping", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const authDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-wa-auth-"),
+    );
+
+    try {
+      await fs.writeFile(
+        path.join(authDir, "lid-mapping-555_reverse.json"),
+        JSON.stringify("15551234"),
+      );
+
+      setLoadConfigMock(() => ({
+        whatsapp: {
+          allowFrom: ["*"],
+          accounts: {
+            default: { authDir },
+          },
+        },
+      }));
+
+      await monitorWebProvider(false, listenerFactory, false, resolver);
+      expect(capturedOnMessage).toBeDefined();
+
+      await capturedOnMessage?.({
+        body: "hello group",
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        chatId: "123@g.us",
+        chatType: "group",
+        to: "+2",
+        id: "g1",
+        senderE164: "+111",
+        senderName: "Alice",
+        selfE164: "+15551234",
+        sendComposing,
+        reply,
+        sendMedia,
+      });
+
+      await capturedOnMessage?.({
+        body: "@bot ping",
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        chatId: "123@g.us",
+        chatType: "group",
+        to: "+2",
+        id: "g2",
+        senderE164: "+222",
+        senderName: "Bob",
+        mentionedJids: ["555@lid"],
+        selfE164: "+15551234",
+        selfJid: "15551234@s.whatsapp.net",
+        sendComposing,
+        reply,
+        sendMedia,
+      });
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+    } finally {
+      resetLoadConfigMock();
+      await rmDirWithRetries(authDir);
+    }
+  });
+
+  it("derives self E.164 from LID selfJid for mention gating", async () => {
+    const sendMedia = vi.fn();
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn();
+    const resolver = vi.fn().mockResolvedValue({ text: "ok" });
+
+    let capturedOnMessage:
+      | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
+      | undefined;
+    const listenerFactory = async (opts: {
+      onMessage: (
+        msg: import("./inbound.js").WebInboundMessage,
+      ) => Promise<void>;
+    }) => {
+      capturedOnMessage = opts.onMessage;
+      return { close: vi.fn() };
+    };
+
+    const authDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-wa-auth-"),
+    );
+
+    try {
+      await fs.writeFile(
+        path.join(authDir, "lid-mapping-777_reverse.json"),
+        JSON.stringify("15550077"),
+      );
+
+      setLoadConfigMock(() => ({
+        whatsapp: {
+          allowFrom: ["*"],
+          accounts: {
+            default: { authDir },
+          },
+        },
+      }));
+
+      await monitorWebProvider(false, listenerFactory, false, resolver);
+      expect(capturedOnMessage).toBeDefined();
+
+      await capturedOnMessage?.({
+        body: "@bot ping",
+        from: "123@g.us",
+        conversationId: "123@g.us",
+        chatId: "123@g.us",
+        chatType: "group",
+        to: "+2",
+        id: "g3",
+        senderE164: "+333",
+        senderName: "Cara",
+        mentionedJids: ["777@lid"],
+        selfJid: "777@lid",
+        sendComposing,
+        reply,
+        sendMedia,
+      });
+
+      expect(resolver).toHaveBeenCalledTimes(1);
+    } finally {
+      resetLoadConfigMock();
+      await rmDirWithRetries(authDir);
+    }
+  });
+
   it("sets OriginatingTo to the sender for queued routing", async () => {
     const sendMedia = vi.fn();
     const reply = vi.fn().mockResolvedValue(undefined);
