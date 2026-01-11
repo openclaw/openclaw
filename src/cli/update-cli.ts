@@ -64,6 +64,15 @@ function createUpdateProgress(enabled: boolean): ProgressController {
 
       currentSpinner.stop(`${icon} ${label} ${duration}`);
       currentSpinner = null;
+
+      if (step.exitCode !== 0 && step.stderrTail) {
+        const lines = step.stderrTail.split("\n").slice(-10);
+        for (const line of lines) {
+          if (line.trim()) {
+            defaultRuntime.log(`    ${theme.error(line)}`);
+          }
+        }
+      }
     },
   };
 
