@@ -15,6 +15,7 @@ import {
   buildGroupDisplayName,
   loadSessionStore,
   resolveAgentIdFromSessionKey,
+  resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
@@ -172,7 +173,16 @@ export function loadSessionEntry(sessionKey: string) {
   const store = loadSessionStore(storePath);
   const parsed = parseAgentSessionKey(sessionKey);
   const legacyKey = parsed?.rest;
-  const entry = store[sessionKey] ?? (legacyKey ? store[legacyKey] : undefined);
+  // Also try the canonical key if sessionKey is the short mainKey alias
+  const rawMainKey = normalizeMainKey(sessionCfg?.mainKey);
+  const canonicalKey =
+    sessionKey === rawMainKey
+      ? resolveAgentMainSessionKey({ cfg, agentId })
+      : undefined;
+  const entry =
+    store[sessionKey] ??
+    (legacyKey ? store[legacyKey] : undefined) ??
+    (canonicalKey ? store[canonicalKey] : undefined);
   return { cfg, storePath, store, entry };
 }
 
