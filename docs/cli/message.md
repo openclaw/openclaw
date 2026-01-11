@@ -27,7 +27,7 @@ Target formats (`--to`):
 - Discord: `channel:<id>` or `user:<id>` (or `<@id>` mention; raw numeric ids are rejected)
 - Slack: `channel:<id>` or `user:<id>` (raw channel id is accepted)
 - Signal: `+E.164`, `group:<id>`, `signal:+E.164`, `signal:group:<id>`, or `username:<name>`/`u:<name>`
-- iMessage: handle or `chat_id:<id>`
+- iMessage: handle, `chat_id:<id>`, `chat_guid:<guid>`, or `chat_identifier:<id>`
 - MS Teams: conversation id (`19:...@thread.tacv2`) or `conversation:<id>` or `user:<aad-object-id>`
 
 ## Common flags
