@@ -446,12 +446,16 @@ export function limitHistoryTurns(
 }
 
 /**
- * Extracts the provider name from a session key and looks up dmHistoryLimit
- * from the provider config.
+ * Extracts the provider name and user ID from a session key and looks up
+ * dmHistoryLimit from the provider config, with per-DM override support.
  *
  * Session key formats:
- * - `telegram:dm:123` → provider = telegram
- * - `agent:main:telegram:dm:123` → provider = telegram (skip "agent:<id>:")
+ * - `telegram:dm:123` → provider = telegram, userId = 123
+ * - `agent:main:telegram:dm:123` → provider = telegram, userId = 123
+ *
+ * Resolution order:
+ * 1. Per-DM override: provider.dms[userId].historyLimit
+ * 2. Provider default: provider.dmHistoryLimit
  */
 export function getDmHistoryLimitFromSessionKey(
   sessionKey: string | undefined,
@@ -467,22 +471,49 @@ export function getDmHistoryLimitFromSessionKey(
   const provider = providerParts[0]?.toLowerCase();
   if (!provider) return undefined;
 
+  // Extract userId: format is provider:dm:userId or provider:dm:userId:...
+  // The userId may contain colons (e.g., email addresses), so join remaining parts
+  const kind = providerParts[1]?.toLowerCase();
+  const userId = providerParts.slice(2).join(":");
+
+  // Helper to get limit with per-DM override support
+  const getLimit = (
+    providerConfig:
+      | {
+          dmHistoryLimit?: number;
+          dms?: Record<string, { historyLimit?: number }>;
+        }
+      | undefined,
+  ): number | undefined => {
+    if (!providerConfig) return undefined;
+    // Check per-DM override first
+    if (
+      userId &&
+      kind === "dm" &&
+      providerConfig.dms?.[userId]?.historyLimit !== undefined
+    ) {
+      return providerConfig.dms[userId].historyLimit;
+    }
+    // Fall back to provider default
+    return providerConfig.dmHistoryLimit;
+  };
+
   // Map provider to config key
   switch (provider) {
     case "telegram":
-      return config.telegram?.dmHistoryLimit;
+      return getLimit(config.telegram);
     case "whatsapp":
-      return config.whatsapp?.dmHistoryLimit;
+      return getLimit(config.whatsapp);
     case "discord":
-      return config.discord?.dmHistoryLimit;
+      return getLimit(config.discord);
     case "slack":
-      return config.slack?.dmHistoryLimit;
+      return getLimit(config.slack);
     case "signal":
-      return config.signal?.dmHistoryLimit;
+      return getLimit(config.signal);
     case "imessage":
-      return config.imessage?.dmHistoryLimit;
+      return getLimit(config.imessage);
     case "msteams":
-      return config.msteams?.dmHistoryLimit;
+      return getLimit(config.msteams);
     default:
       return undefined;
   }
