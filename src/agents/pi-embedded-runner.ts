@@ -413,6 +413,113 @@ async function sanitizeSessionHistory(params: {
   }).messages;
 }
 
+/**
+ * Limits conversation history to the last N user turns (and their associated
+ * assistant responses). This reduces token usage for long-running DM sessions.
+ *
+ * @param messages - The full message history
+ * @param limit - Max number of user turns to keep (undefined = no limit)
+ * @returns Messages trimmed to the last `limit` user turns
+ */
+export function limitHistoryTurns(
+  messages: AgentMessage[],
+  limit: number | undefined,
+): AgentMessage[] {
+  if (!limit || limit <= 0 || messages.length === 0) return messages;
+
+  // Count user messages from the end, find cutoff point
+  let userCount = 0;
+  let lastUserIndex = messages.length;
+
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].role === "user") {
+      userCount++;
+      if (userCount > limit) {
+        // We exceeded the limit; keep from the last valid user turn onwards
+        return messages.slice(lastUserIndex);
+      }
+      lastUserIndex = i;
+    }
+  }
+  // Fewer than limit user turns, keep all
+  return messages;
+}
+
+/**
+ * Extracts the provider name and user ID from a session key and looks up
+ * dmHistoryLimit from the provider config, with per-DM override support.
+ *
+ * Session key formats:
+ * - `telegram:dm:123` → provider = telegram, userId = 123
+ * - `agent:main:telegram:dm:123` → provider = telegram, userId = 123
+ *
+ * Resolution order:
+ * 1. Per-DM override: provider.dms[userId].historyLimit
+ * 2. Provider default: provider.dmHistoryLimit
+ */
+export function getDmHistoryLimitFromSessionKey(
+  sessionKey: string | undefined,
+  config: ClawdbotConfig | undefined,
+): number | undefined {
+  if (!sessionKey || !config) return undefined;
+
+  const parts = sessionKey.split(":").filter(Boolean);
+  // Handle agent-prefixed keys: agent:<agentId>:<provider>:...
+  const providerParts =
+    parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
+
+  const provider = providerParts[0]?.toLowerCase();
+  if (!provider) return undefined;
+
+  // Extract userId: format is provider:dm:userId or provider:dm:userId:...
+  // The userId may contain colons (e.g., email addresses), so join remaining parts
+  const kind = providerParts[1]?.toLowerCase();
+  const userId = providerParts.slice(2).join(":");
+  if (kind !== "dm") return undefined;
+
+  // Helper to get limit with per-DM override support
+  const getLimit = (
+    providerConfig:
+      | {
+          dmHistoryLimit?: number;
+          dms?: Record<string, { historyLimit?: number }>;
+        }
+      | undefined,
+  ): number | undefined => {
+    if (!providerConfig) return undefined;
+    // Check per-DM override first
+    if (
+      userId &&
+      kind === "dm" &&
+      providerConfig.dms?.[userId]?.historyLimit !== undefined
+    ) {
+      return providerConfig.dms[userId].historyLimit;
+    }
+    // Fall back to provider default
+    return providerConfig.dmHistoryLimit;
+  };
+
+  // Map provider to config key
+  switch (provider) {
+    case "telegram":
+      return getLimit(config.telegram);
+    case "whatsapp":
+      return getLimit(config.whatsapp);
+    case "discord":
+      return getLimit(config.discord);
+    case "slack":
+      return getLimit(config.slack);
+    case "signal":
+      return getLimit(config.signal);
+    case "imessage":
+      return getLimit(config.imessage);
+    case "msteams":
+      return getLimit(config.msteams);
+    default:
+      return undefined;
+  }
+}
+
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
@@ -1026,8 +1133,12 @@ export async function compactEmbeddedPiSession(params: {
               sessionId: params.sessionId,
             });
             const validated = validateGeminiTurns(prior);
-            if (validated.length > 0) {
-              session.agent.replaceMessages(validated);
+            const limited = limitHistoryTurns(
+              validated,
+              getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            );
+            if (limited.length > 0) {
+              session.agent.replaceMessages(limited);
             }
             const result = await session.compact(params.customInstructions);
             return {
@@ -1417,8 +1528,12 @@ export async function runEmbeddedPiAgent(params: {
               sessionId: params.sessionId,
             });
             const validated = validateGeminiTurns(prior);
-            if (validated.length > 0) {
-              session.agent.replaceMessages(validated);
+            const limited = limitHistoryTurns(
+              validated,
+              getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+            );
+            if (limited.length > 0) {
+              session.agent.replaceMessages(limited);
             }
           } catch (err) {
             session.dispose();
