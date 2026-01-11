@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatGatewayServiceDescription,
   GATEWAY_LAUNCH_AGENT_LABEL,
   GATEWAY_SYSTEMD_SERVICE_NAME,
   GATEWAY_WINDOWS_TASK_NAME,
-  formatGatewayServiceDescription,
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
   resolveGatewayWindowsTaskName,
@@ -149,15 +149,15 @@ describe("formatGatewayServiceDescription", () => {
   });
 
   it("includes profile when set", () => {
-    expect(
-      formatGatewayServiceDescription({ profile: "work" }),
-    ).toBe("Clawdbot Gateway (profile: work)");
+    expect(formatGatewayServiceDescription({ profile: "work" })).toBe(
+      "Clawdbot Gateway (profile: work)",
+    );
   });
 
   it("includes version when set", () => {
-    expect(
-      formatGatewayServiceDescription({ version: "2026.1.10" }),
-    ).toBe("Clawdbot Gateway (v2026.1.10)");
+    expect(formatGatewayServiceDescription({ version: "2026.1.10" })).toBe(
+      "Clawdbot Gateway (v2026.1.10)",
+    );
   });
 
   it("includes profile and version when set", () => {

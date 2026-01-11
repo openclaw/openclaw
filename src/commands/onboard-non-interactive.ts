@@ -505,15 +505,15 @@ export async function runNonInteractiveOnboarding(
           runtime: daemonRuntimeRaw,
           nodePath,
         });
-        const environment = buildServiceEnvironment({
-          env: process.env,
-          port,
-          token: gatewayToken,
-          launchdLabel:
-            process.platform === "darwin"
-              ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
-              : undefined,
-        });
+      const environment = buildServiceEnvironment({
+        env: process.env,
+        port,
+        token: gatewayToken,
+        launchdLabel:
+          process.platform === "darwin"
+            ? resolveGatewayLaunchAgentLabel(process.env.CLAWDBOT_PROFILE)
+            : undefined,
+      });
       await service.install({
         env: process.env,
         stdout: process.stdout,

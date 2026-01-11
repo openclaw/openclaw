@@ -336,10 +336,7 @@ function renderGatewayServiceStartHints(
     }
     case "linux": {
       const unit = resolveGatewaySystemdServiceName(profile);
-      return [
-        ...base,
-        `systemctl --user start ${unit}.service`,
-      ];
+      return [...base, `systemctl --user start ${unit}.service`];
     }
     case "win32": {
       const task = resolveGatewayWindowsTaskName(profile);
@@ -726,7 +723,8 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     spacer();
   }
   if (service.runtime?.cachedLabel) {
-    const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+    const env = (service.command?.environment ??
+      process.env) as NodeJS.ProcessEnv;
     const label = resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
     defaultRuntime.error(
       errorText(
@@ -782,7 +780,8 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       );
     }
     if (process.platform === "linux") {
-      const env = (service.command?.environment ?? process.env) as NodeJS.ProcessEnv;
+      const env = (service.command?.environment ??
+        process.env) as NodeJS.ProcessEnv;
       const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
       defaultRuntime.error(
         errorText(
