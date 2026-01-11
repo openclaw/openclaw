@@ -249,7 +249,7 @@ Send these in WhatsApp/Telegram/Slack/WebChat (group commands are owner-only):
 - `/restart` — restart the gateway (owner-only in groups)
 - `/activation mention|always` — group activation toggle (groups only)
 
-## macOS app (optional)
+## Apps (optional)
 
 The Gateway alone delivers a great experience. All apps are optional and add extra features.
 
