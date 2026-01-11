@@ -107,4 +107,59 @@ describe("cron cli", () => {
     expect(patch?.patch?.payload?.model).toBeUndefined();
     expect(patch?.patch?.payload?.thinking).toBeUndefined();
   });
+
+  it("trims model and thinking on cron edit", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    await program.parseAsync(
+      [
+        "cron",
+        "edit",
+        "job-1",
+        "--message",
+        "hello",
+        "--model",
+        "  opus  ",
+        "--thinking",
+        "  high  ",
+      ],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find(
+      (call) => call[0] === "cron.update",
+    );
+    const patch = updateCall?.[2] as {
+      patch?: { payload?: { model?: string; thinking?: string } };
+    };
+
+    expect(patch?.patch?.payload?.model).toBe("opus");
+    expect(patch?.patch?.payload?.thinking).toBe("high");
+  });
+
+  it("does not include model/thinking when no payload change is requested", async () => {
+    callGatewayFromCli.mockClear();
+
+    const { registerCronCli } = await import("./cron-cli.js");
+    const program = new Command();
+    program.exitOverride();
+    registerCronCli(program);
+
+    await program.parseAsync(
+      ["cron", "edit", "job-1", "--model", "opus", "--thinking", "low"],
+      { from: "user" },
+    );
+
+    const updateCall = callGatewayFromCli.mock.calls.find(
+      (call) => call[0] === "cron.update",
+    );
+    const patch = updateCall?.[2] as { patch?: { payload?: unknown } };
+
+    expect(patch?.patch?.payload).toBeUndefined();
+  });
 });
