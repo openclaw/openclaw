@@ -332,7 +332,7 @@ Create, edit, delete, and move channels and categories. Enable via `discord.acti
 }
 ```
 
-- `type`: 0 = text, 2 = voice, 4 = category (use `categoryCreate` for convenience)
+- `type`: Discord channel type integer (0 = text, 2 = voice, 4 = category; other values supported)
 - `parentId`: category ID to nest under (optional)
 - `topic`, `position`, `nsfw`: optional
 
