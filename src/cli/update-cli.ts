@@ -31,8 +31,7 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 function getStepLabel(step: UpdateStepInfo): string {
-  const friendlyLabel = STEP_LABELS[step.name] ?? step.name;
-  return `${friendlyLabel} (${step.name})`;
+  return STEP_LABELS[step.name] ?? step.name;
 }
 
 type ProgressController = {
