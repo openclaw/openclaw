@@ -1313,7 +1313,7 @@ export async function resolveSandboxContext(params: {
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
     );
-    if (cfg.workspaceAccess === "none") {
+    if (cfg.workspaceAccess !== "rw") {
       try {
         await syncSkillsToWorkspace({
           sourceWorkspaceDir: agentWorkspaceDir,
@@ -1391,7 +1391,7 @@ export async function ensureSandboxWorkspaceForSession(params: {
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
     );
-    if (cfg.workspaceAccess === "none") {
+    if (cfg.workspaceAccess !== "rw") {
       try {
         await syncSkillsToWorkspace({
           sourceWorkspaceDir: agentWorkspaceDir,

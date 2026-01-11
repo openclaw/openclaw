@@ -15,6 +15,7 @@
 - Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
 - Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
 - WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
+- Sandbox/Skills: mirror skills into sandbox workspaces for read-only mounts so SKILL.md stays accessible.
 - CLI/Status: replace the footer with a 3-line “Next steps” recommendation (share/debug/probe), and gate probes behind gateway reachability.
 - CLI/Status: format non-JSON-serializable provider issue values more predictably and show which auth was used when the gateway is reachable (`token`/`password`/`none`).
 - Docs: make `clawdbot status` the first diagnostic step and clarify `status --deep` behavior (requires a reachable gateway).
