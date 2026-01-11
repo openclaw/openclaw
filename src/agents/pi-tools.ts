@@ -127,6 +127,18 @@ function extractEnumValues(schema: unknown): unknown[] | undefined {
   const record = schema as Record<string, unknown>;
   if (Array.isArray(record.enum)) return record.enum;
   if ("const" in record) return [record.const];
+  const variants = Array.isArray(record.anyOf)
+    ? record.anyOf
+    : Array.isArray(record.oneOf)
+      ? record.oneOf
+      : null;
+  if (variants) {
+    const values = variants.flatMap((variant) => {
+      const extracted = extractEnumValues(variant);
+      return extracted ?? [];
+    });
+    return values.length > 0 ? values : undefined;
+  }
   return undefined;
 }
 
