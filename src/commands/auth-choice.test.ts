@@ -15,6 +15,7 @@ describe("applyAuthChoice", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
   const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
   const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  const previousOpenrouterKey = process.env.OPENROUTER_API_KEY;
   let tempStateDir: string | null = null;
 
   afterEach(async () => {
@@ -36,6 +37,11 @@ describe("applyAuthChoice", () => {
       delete process.env.PI_CODING_AGENT_DIR;
     } else {
       process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+    }
+    if (previousOpenrouterKey === undefined) {
+      delete process.env.OPENROUTER_API_KEY;
+    } else {
+      process.env.OPENROUTER_API_KEY = previousOpenrouterKey;
     }
   });
 
