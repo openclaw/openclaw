@@ -32,6 +32,7 @@ export function buildAgentSystemPrompt(params: {
     agentWorkspaceMount?: string;
     browserControlUrl?: string;
     browserNoVncUrl?: string;
+    hostBrowserAllowed?: boolean;
     elevated?: {
       allowed: boolean;
       defaultLevel: "on" | "off";
@@ -243,6 +244,11 @@ export function buildAgentSystemPrompt(params: {
           params.sandboxInfo.browserNoVncUrl
             ? `Sandbox browser observer (noVNC): ${params.sandboxInfo.browserNoVncUrl}`
             : "",
+          params.sandboxInfo.hostBrowserAllowed === true
+            ? "Host browser control: allowed."
+            : params.sandboxInfo.hostBrowserAllowed === false
+              ? "Host browser control: blocked."
+              : "",
           params.sandboxInfo.elevated?.allowed
             ? "Elevated bash is available for this session."
             : "",

@@ -25,6 +25,7 @@ describe("createClawdbotCodingTools", () => {
       required?: string[];
     };
     expect(parameters.properties?.action).toBeDefined();
+    expect(parameters.properties?.target).toBeDefined();
     expect(parameters.properties?.controlUrl).toBeDefined();
     expect(parameters.properties?.targetUrl).toBeDefined();
     expect(parameters.properties?.request).toBeDefined();
@@ -326,6 +327,7 @@ describe("createClawdbotCodingTools", () => {
         allow: ["bash"],
         deny: ["browser"],
       },
+      browserAllowHostControl: false,
     };
     const tools = createClawdbotCodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "bash")).toBe(true);
@@ -357,6 +359,7 @@ describe("createClawdbotCodingTools", () => {
         allow: ["read", "write", "edit"],
         deny: [],
       },
+      browserAllowHostControl: false,
     };
     const tools = createClawdbotCodingTools({ sandbox });
     expect(tools.some((tool) => tool.name === "read")).toBe(true);

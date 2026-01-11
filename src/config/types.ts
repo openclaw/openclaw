@@ -861,6 +861,11 @@ export type SandboxBrowserSettings = {
   headless?: boolean;
   enableNoVnc?: boolean;
   /**
+   * Allow sandboxed sessions to target the host browser control server.
+   * Default: false.
+   */
+  allowHostControl?: boolean;
+  /**
    * When true (default), sandboxed browser control will try to start/reattach to
    * the sandbox browser container when a tool call needs it.
    */

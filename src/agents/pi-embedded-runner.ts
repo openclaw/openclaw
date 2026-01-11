@@ -479,6 +479,7 @@ type EmbeddedSandboxInfo = {
   agentWorkspaceMount?: string;
   browserControlUrl?: string;
   browserNoVncUrl?: string;
+  hostBrowserAllowed?: boolean;
   elevated?: {
     allowed: boolean;
     defaultLevel: "on" | "off";
@@ -570,6 +571,7 @@ export function buildEmbeddedSandboxInfo(
       sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
     browserControlUrl: sandbox.browser?.controlUrl,
     browserNoVncUrl: sandbox.browser?.noVncUrl,
+    hostBrowserAllowed: sandbox.browserAllowHostControl,
     ...(elevatedAllowed
       ? {
           elevated: {

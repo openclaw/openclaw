@@ -186,6 +186,7 @@ describe("sandboxed workspace paths", () => {
             env: { LANG: "C.UTF-8" },
           },
           tools: { allow: [], deny: [] },
+          browserAllowHostControl: false,
         };
 
         const testFile = "sandbox.txt";

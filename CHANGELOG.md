@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.11-1
+
+### New Features and Changes
+- Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, and expand browser tool docs (remote control, profiles, internals).
+
 ## 2026.1.10-4
 
 ### Fixes

@@ -45,6 +45,7 @@ describe("buildEmbeddedSandboxInfo", () => {
         allow: ["bash"],
         deny: ["browser"],
       },
+      browserAllowHostControl: true,
       browser: {
         controlUrl: "http://localhost:9222",
         noVncUrl: "http://localhost:6080",
@@ -59,6 +60,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       agentWorkspaceMount: undefined,
       browserControlUrl: "http://localhost:9222",
       browserNoVncUrl: "http://localhost:6080",
+      hostBrowserAllowed: true,
     });
   });
 
@@ -86,6 +88,7 @@ describe("buildEmbeddedSandboxInfo", () => {
         allow: ["bash"],
         deny: ["browser"],
       },
+      browserAllowHostControl: false,
     } satisfies SandboxContext;
 
     expect(
@@ -99,6 +102,7 @@ describe("buildEmbeddedSandboxInfo", () => {
       workspaceDir: "/tmp/clawdbot-sandbox",
       workspaceAccess: "none",
       agentWorkspaceMount: undefined,
+      hostBrowserAllowed: false,
       elevated: { allowed: true, defaultLevel: "on" },
     });
   });

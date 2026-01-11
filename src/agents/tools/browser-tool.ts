@@ -105,6 +105,13 @@ const BrowserToolSchema = Type.Object({
     Type.Literal("dialog"),
     Type.Literal("act"),
   ]),
+  target: Type.Optional(
+    Type.Union([
+      Type.Literal("sandbox"),
+      Type.Literal("host"),
+      Type.Literal("custom"),
+    ]),
+  ),
   profile: Type.Optional(Type.String()),
   controlUrl: Type.Optional(Type.String()),
   targetUrl: Type.Optional(Type.String()),
@@ -124,20 +131,60 @@ const BrowserToolSchema = Type.Object({
   request: Type.Optional(BrowserActSchema),
 });
 
-function resolveBrowserBaseUrl(controlUrl?: string) {
+function resolveBrowserBaseUrl(params: {
+  target?: "sandbox" | "host" | "custom";
+  controlUrl?: string;
+  defaultControlUrl?: string;
+  allowHostControl?: boolean;
+}) {
   const cfg = loadConfig();
   const resolved = resolveBrowserConfig(cfg.browser);
-  if (!resolved.enabled && !controlUrl?.trim()) {
+  const normalizedControlUrl = params.controlUrl?.trim() ?? "";
+  const normalizedDefault = params.defaultControlUrl?.trim() ?? "";
+  const target =
+    params.target ??
+    (normalizedControlUrl
+      ? "custom"
+      : normalizedDefault
+        ? "sandbox"
+        : "host");
+
+  if (target !== "custom" && params.target && normalizedControlUrl) {
+    throw new Error(
+      'controlUrl is only supported with target="custom".',
+    );
+  }
+
+  if (target === "custom") {
+    if (!normalizedControlUrl) {
+      throw new Error('Custom browser target requires controlUrl.');
+    }
+    return normalizedControlUrl.replace(/\/$/, "");
+  }
+
+  if (target === "sandbox") {
+    if (!normalizedDefault) {
+      throw new Error(
+        'Sandbox browser is unavailable. Enable agents.defaults.sandbox.browser.enabled or use target="host" if allowed.',
+      );
+    }
+    return normalizedDefault.replace(/\/$/, "");
+  }
+
+  if (params.allowHostControl === false) {
+    throw new Error("Host browser control is disabled by sandbox policy.");
+  }
+  if (!resolved.enabled) {
     throw new Error(
       "Browser control is disabled. Set browser.enabled=true in ~/.clawdbot/clawdbot.json.",
     );
   }
-  const url = controlUrl?.trim() ? controlUrl.trim() : resolved.controlUrl;
-  return url.replace(/\/$/, "");
+  return resolved.controlUrl.replace(/\/$/, "");
 }
 
 export function createBrowserTool(opts?: {
   defaultControlUrl?: string;
+  allowHostControl?: boolean;
 }): AnyAgentTool {
   return {
     label: "Browser",
@@ -149,10 +196,18 @@ export function createBrowserTool(opts?: {
       const params = args as Record<string, unknown>;
       const action = readStringParam(params, "action", { required: true });
       const controlUrl = readStringParam(params, "controlUrl");
+      const target = readStringParam(params, "target") as
+        | "sandbox"
+        | "host"
+        | "custom"
+        | undefined;
       const profile = readStringParam(params, "profile");
-      const baseUrl = resolveBrowserBaseUrl(
-        controlUrl ?? opts?.defaultControlUrl,
-      );
+      const baseUrl = resolveBrowserBaseUrl({
+        target,
+        controlUrl,
+        defaultControlUrl: opts?.defaultControlUrl,
+        allowHostControl: opts?.allowHostControl,
+      });
 
       switch (action) {
         case "status":
