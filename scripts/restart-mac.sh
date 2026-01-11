@@ -18,6 +18,8 @@ LOG_PATH="${CLAWDBOT_RESTART_LOG:-/tmp/clawdbot-restart.log}"
 NO_SIGN=0
 SIGN=0
 AUTO_DETECT_SIGNING=1
+GATEWAY_WAIT_SECONDS="${CLAWDBOT_GATEWAY_WAIT_SECONDS:-0}"
+LAUNCHAGENT_DISABLE_MARKER="${HOME}/.clawdbot/disable-launchagent"
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -85,6 +87,18 @@ for arg in "$@"; do
       log "  --no-sign Force no code signing (fastest for development)"
       log "  --sign    Force code signing (will fail if no signing key available)"
       log ""
+      log "Env:"
+      log "  CLAWDBOT_GATEWAY_WAIT_SECONDS=0  Wait time before gateway port check (unsigned only)"
+      log ""
+      log "Unsigned recovery:"
+      log "  defaults write <bundle-id> clawdbot.gateway.attachExistingOnly -bool YES"
+      log "  node dist/entry.js daemon install --force --runtime node"
+      log "  node dist/entry.js daemon restart"
+      log ""
+      log "Reset unsigned overrides:"
+      log "  rm ~/.clawdbot/disable-launchagent"
+      log "  defaults write <bundle-id> clawdbot.gateway.attachExistingOnly -bool NO"
+      log ""
       log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
       exit 0
       ;;
@@ -100,6 +114,9 @@ mkdir -p "$(dirname "$LOG_PATH")"
 rm -f "$LOG_PATH"
 exec > >(tee "$LOG_PATH") 2>&1
 log "==> Log: ${LOG_PATH}"
+if [[ "$NO_SIGN" -eq 1 ]]; then
+  log "==> Using --no-sign (unsigned flow enabled)"
+fi
 
 acquire_lock
 
@@ -150,6 +167,8 @@ fi
 if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
+  mkdir -p "${HOME}/.clawdbot"
+  run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
 elif [ "$SIGN" -eq 1 ]; then
   if ! check_signing_keys; then
     fail "No signing identity found. Use --no-sign or install a signing key."
@@ -184,6 +203,22 @@ choose_app_bundle() {
 
 choose_app_bundle
 
+APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true)"
+
+# When unsigned, avoid the app overwriting the LaunchAgent with the relay binary.
+if [ "$NO_SIGN" -eq 1 ]; then
+  if [[ -n "${APP_BUNDLE_ID}" ]]; then
+    run_step "set attach-existing-only" \
+      /usr/bin/defaults write "${APP_BUNDLE_ID}" clawdbot.gateway.attachExistingOnly -bool YES
+  fi
+elif [[ -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then
+  run_step "clear launchagent disable marker" /bin/rm -f "${LAUNCHAGENT_DISABLE_MARKER}"
+  if [[ -n "${APP_BUNDLE_ID}" ]]; then
+    run_step "unset attach-existing-only" \
+      /usr/bin/defaults write "${APP_BUNDLE_ID}" clawdbot.gateway.attachExistingOnly -bool NO
+  fi
+fi
+
 # 4) Launch the installed app in the foreground so the menu bar extra appears.
 # LaunchServices can inherit a huge environment from this shell (secrets, prompt vars, etc.).
 # That can cause launchd spawn failures and is undesirable for a GUI app anyway.
@@ -202,4 +237,16 @@ if pgrep -f "${APP_PROCESS_PATTERN}" >/dev/null 2>&1; then
   log "OK: Clawdbot is running."
 else
   fail "App exited immediately. Check ${LOG_PATH} or Console.app (User Reports)."
+fi
+
+# When unsigned, launchd cannot exec the app relay binary. Ensure the gateway
+# LaunchAgent targets the repo CLI instead (after the app has launched).
+if [ "$NO_SIGN" -eq 1 ]; then
+  run_step "install gateway launch agent (unsigned)" bash -lc "cd '${ROOT_DIR}' && node dist/entry.js daemon install --force --runtime node"
+  run_step "restart gateway daemon (unsigned)" bash -lc "cd '${ROOT_DIR}' && node dist/entry.js daemon restart"
+  if [[ "${GATEWAY_WAIT_SECONDS}" -gt 0 ]]; then
+    run_step "wait for gateway (unsigned)" sleep "${GATEWAY_WAIT_SECONDS}"
+  fi
+  run_step "verify gateway port 18789 (unsigned)" bash -lc "lsof -iTCP:18789 -sTCP:LISTEN | head -n 5 || true"
+  run_step "show gateway launch agent args (unsigned)" bash -lc "/usr/bin/plutil -p '${HOME}/Library/LaunchAgents/com.clawdbot.gateway.plist' | head -n 40 || true"
 fi
