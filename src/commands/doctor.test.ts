@@ -635,17 +635,15 @@ describe("doctor", () => {
     await doctorCommand(runtime, { nonInteractive: true });
 
     expect(
-      note.mock.calls.some(
-        ([message, title]) => {
-          if (title !== "Sandbox") return false;
-          if (typeof message !== "string") return false;
-          const normalized = message.replace(/\s+/g, " ");
-          return (
-            normalized.includes('agents.list (id "work") sandbox docker') &&
-            normalized.includes('scope resolves to "shared"')
-          );
-        },
-      ),
+      note.mock.calls.some(([message, title]) => {
+        if (title !== "Sandbox") return false;
+        if (typeof message !== "string") return false;
+        const normalized = message.replace(/\s+/g, " ");
+        return (
+          normalized.includes('agents.list (id "work") sandbox docker') &&
+          normalized.includes('scope resolves to "shared"')
+        );
+      }),
     ).toBe(true);
   });
 

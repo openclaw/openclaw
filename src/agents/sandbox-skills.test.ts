@@ -130,41 +130,33 @@ describe("sandbox skill mirroring", () => {
     return { context, workspaceDir };
   };
 
-  it(
-    "copies skills into the sandbox when workspaceAccess is ro",
-    async () => {
-      const { context } = await runContext("ro");
+  it("copies skills into the sandbox when workspaceAccess is ro", async () => {
+    const { context } = await runContext("ro");
 
-      expect(context?.enabled).toBe(true);
-      const skillPath = path.join(
-        context?.workspaceDir ?? "",
-        "skills",
-        "demo-skill",
-        "SKILL.md",
-      );
-      await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain(
-        "demo-skill",
-      );
-    },
-    20_000,
-  );
+    expect(context?.enabled).toBe(true);
+    const skillPath = path.join(
+      context?.workspaceDir ?? "",
+      "skills",
+      "demo-skill",
+      "SKILL.md",
+    );
+    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain(
+      "demo-skill",
+    );
+  }, 20_000);
 
-  it(
-    "copies skills into the sandbox when workspaceAccess is none",
-    async () => {
-      const { context } = await runContext("none");
+  it("copies skills into the sandbox when workspaceAccess is none", async () => {
+    const { context } = await runContext("none");
 
-      expect(context?.enabled).toBe(true);
-      const skillPath = path.join(
-        context?.workspaceDir ?? "",
-        "skills",
-        "demo-skill",
-        "SKILL.md",
-      );
-      await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain(
-        "demo-skill",
-      );
-    },
-    20_000,
-  );
+    expect(context?.enabled).toBe(true);
+    const skillPath = path.join(
+      context?.workspaceDir ?? "",
+      "skills",
+      "demo-skill",
+      "SKILL.md",
+    );
+    await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain(
+      "demo-skill",
+    );
+  }, 20_000);
 });
