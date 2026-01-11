@@ -1,5 +1,11 @@
 export type ProviderStatusIssue = {
-  provider: "discord" | "telegram" | "whatsapp";
+  provider:
+    | "discord"
+    | "telegram"
+    | "whatsapp"
+    | "slack"
+    | "signal"
+    | "imessage";
   accountId: string;
   kind: "intent" | "permissions" | "config" | "auth" | "runtime";
   message: string;
@@ -40,10 +46,35 @@ type WhatsAppAccountStatus = {
   lastError?: unknown;
 };
 
+type RuntimeAccountStatus = {
+  accountId?: unknown;
+  enabled?: unknown;
+  configured?: unknown;
+  running?: unknown;
+  lastError?: unknown;
+};
+
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
     : undefined;
+}
+
+function formatValue(value: unknown): string | undefined {
+  const s = asString(value);
+  if (s) return s;
+  if (value == null) return undefined;
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function shorten(message: string, maxLen = 140): string {
+  const cleaned = message.replace(/\s+/g, " ").trim();
+  if (cleaned.length <= maxLen) return cleaned;
+  return `${cleaned.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -187,6 +218,17 @@ function readWhatsAppAccountStatus(
     connected: value.connected,
     running: value.running,
     reconnectAttempts: value.reconnectAttempts,
+    lastError: value.lastError,
+  };
+}
+
+function readRuntimeAccountStatus(value: unknown): RuntimeAccountStatus | null {
+  if (!isRecord(value)) return null;
+  return {
+    accountId: value.accountId,
+    enabled: value.enabled,
+    configured: value.configured,
+    running: value.running,
     lastError: value.lastError,
   };
 }
@@ -339,6 +381,69 @@ export function collectProvidersStatusIssues(
           fix: "Run: clawdbot doctor (or restart the gateway). If it persists, relink via providers login and check logs.",
         });
       }
+    }
+  }
+
+  const slackAccountsRaw = payload.slackAccounts;
+  if (Array.isArray(slackAccountsRaw)) {
+    for (const entry of slackAccountsRaw) {
+      const account = readRuntimeAccountStatus(entry);
+      if (!account) continue;
+      const accountId = asString(account.accountId) ?? "default";
+      const enabled = account.enabled !== false;
+      const configured = account.configured === true;
+      if (!enabled || !configured) continue;
+      const lastError = formatValue(account.lastError);
+      if (!lastError) continue;
+      issues.push({
+        provider: "slack",
+        accountId,
+        kind: "runtime",
+        message: `Provider error: ${shorten(lastError)}`,
+        fix: "Check gateway logs (`clawdbot logs --follow`) and re-auth/restart if needed.",
+      });
+    }
+  }
+
+  const signalAccountsRaw = payload.signalAccounts;
+  if (Array.isArray(signalAccountsRaw)) {
+    for (const entry of signalAccountsRaw) {
+      const account = readRuntimeAccountStatus(entry);
+      if (!account) continue;
+      const accountId = asString(account.accountId) ?? "default";
+      const enabled = account.enabled !== false;
+      const configured = account.configured === true;
+      if (!enabled || !configured) continue;
+      const lastError = formatValue(account.lastError);
+      if (!lastError) continue;
+      issues.push({
+        provider: "signal",
+        accountId,
+        kind: "runtime",
+        message: `Provider error: ${shorten(lastError)}`,
+        fix: "Check gateway logs (`clawdbot logs --follow`) and verify signal CLI/service setup.",
+      });
+    }
+  }
+
+  const imessageAccountsRaw = payload.imessageAccounts;
+  if (Array.isArray(imessageAccountsRaw)) {
+    for (const entry of imessageAccountsRaw) {
+      const account = readRuntimeAccountStatus(entry);
+      if (!account) continue;
+      const accountId = asString(account.accountId) ?? "default";
+      const enabled = account.enabled !== false;
+      const configured = account.configured === true;
+      if (!enabled || !configured) continue;
+      const lastError = formatValue(account.lastError);
+      if (!lastError) continue;
+      issues.push({
+        provider: "imessage",
+        accountId,
+        kind: "runtime",
+        message: `Provider error: ${shorten(lastError)}`,
+        fix: "Check macOS permissions/TCC and gateway logs (`clawdbot logs --follow`).",
+      });
     }
   }
 

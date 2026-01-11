@@ -118,7 +118,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 7) **Health check**
    - Starts the Gateway (if needed) and runs `clawdbot health`.
-   - Tip: `clawdbot status --deep` runs local provider probes without a gateway.
+   - Tip: `clawdbot status --deep` adds gateway health probes to status output (requires a reachable gateway).
 
 8) **Skills (recommended)**
    - Reads the available skills and checks requirements.

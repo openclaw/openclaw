@@ -9,6 +9,7 @@ import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { probeGateway } from "../gateway/probe.js";
 import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
@@ -18,10 +19,12 @@ import {
   readRestartSentinel,
   summarizeRestartSentinel,
 } from "../infra/restart-sentinel.js";
+import { readTailscaleStatusJson } from "../infra/tailscale.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
 } from "../infra/update-check.js";
+import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { isRich, theme } from "../terminal/theme.js";
@@ -46,12 +49,54 @@ export async function statusAllCommand(
   opts?: { timeoutMs?: number },
 ): Promise<void> {
   await withProgress(
-    { label: "Scanning status --all…", indeterminate: true },
+    { label: "Scanning status --all…", total: 11 },
     async (progress) => {
       progress.setLabel("Loading config…");
       const cfg = loadConfig();
       const osSummary = resolveOsSummary();
       const snap = await readConfigFileSnapshot().catch(() => null);
+      progress.tick();
+
+      progress.setLabel("Checking Tailscale…");
+      const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+      const tailscale = await (async () => {
+        try {
+          const parsed = await readTailscaleStatusJson(runExec, {
+            timeoutMs: 1200,
+          });
+          const backendState =
+            typeof parsed.BackendState === "string"
+              ? parsed.BackendState
+              : null;
+          const self =
+            typeof parsed.Self === "object" && parsed.Self !== null
+              ? (parsed.Self as Record<string, unknown>)
+              : null;
+          const dnsNameRaw =
+            self && typeof self.DNSName === "string" ? self.DNSName : null;
+          const dnsName = dnsNameRaw ? dnsNameRaw.replace(/\.$/, "") : null;
+          const ips =
+            self && Array.isArray(self.TailscaleIPs)
+              ? (self.TailscaleIPs as unknown[])
+                  .filter((v) => typeof v === "string" && v.trim().length > 0)
+                  .map((v) => (v as string).trim())
+              : [];
+          return { ok: true as const, backendState, dnsName, ips, error: null };
+        } catch (err) {
+          return {
+            ok: false as const,
+            backendState: null,
+            dnsName: null,
+            ips: [] as string[],
+            error: String(err),
+          };
+        }
+      })();
+      const tailscaleHttpsUrl =
+        tailscaleMode !== "off" && tailscale.dnsName
+          ? `https://${tailscale.dnsName}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
+          : null;
+      progress.tick();
 
       progress.setLabel("Checking for updates…");
       const root = await resolveClawdbotPackageRoot({
@@ -65,6 +110,7 @@ export async function statusAllCommand(
         fetchGit: true,
         includeRegistry: true,
       });
+      progress.tick();
 
       progress.setLabel("Probing gateway…");
       const connection = buildGatewayConnectionDetails({ config: cfg });
@@ -113,6 +159,7 @@ export async function statusAllCommand(
       const gatewaySelf = pickGatewaySelfPresence(
         gatewayProbe?.presence ?? null,
       );
+      progress.tick();
 
       progress.setLabel("Checking daemon…");
       const daemon = await (async () => {
@@ -137,11 +184,14 @@ export async function statusAllCommand(
           return null;
         }
       })();
+      progress.tick();
 
       progress.setLabel("Scanning agents…");
       const agentStatus = await getAgentLocalStatuses(cfg);
+      progress.tick();
       progress.setLabel("Summarizing providers…");
       const providers = await buildProvidersTable(cfg, { showSecrets: false });
+      progress.tick();
 
       const connectionDetailsForReport = (() => {
         if (!remoteUrlMissing) return connection.message;
@@ -187,6 +237,7 @@ export async function statusAllCommand(
       const providerIssues = providersStatus
         ? collectProvidersStatusIssues(providersStatus)
         : [];
+      progress.tick();
 
       progress.setLabel("Checking local state…");
       const sentinel = await readRestartSentinel().catch(() => null);
@@ -195,6 +246,7 @@ export async function statusAllCommand(
       );
       const port = resolveGatewayPort(cfg);
       const portUsage = await inspectPortUsage(port).catch(() => null);
+      progress.tick();
 
       const defaultWorkspace =
         agentStatus.agents.find((a) => a.id === agentStatus.defaultId)
@@ -322,6 +374,15 @@ export async function statusAllCommand(
         dashboard
           ? { Item: "Dashboard", Value: dashboard }
           : { Item: "Dashboard", Value: "disabled" },
+        {
+          Item: "Tailscale",
+          Value:
+            tailscaleMode === "off"
+              ? `off${tailscale.backendState ? ` · ${tailscale.backendState}` : ""}${tailscale.dnsName ? ` · ${tailscale.dnsName}` : ""}`
+              : tailscale.dnsName && tailscaleHttpsUrl
+                ? `${tailscaleMode} · ${tailscale.backendState ?? "unknown"} · ${tailscale.dnsName} · ${tailscaleHttpsUrl}`
+                : `${tailscaleMode} · ${tailscale.backendState ?? "unknown"} · magicdns unknown`,
+        },
         { Item: "Update", Value: updateLine },
         {
           Item: "Gateway",
@@ -376,6 +437,46 @@ export async function statusAllCommand(
                 : theme.accentDim("SETUP"),
         Detail: row.detail,
       }));
+      const providerIssuesByProvider = (() => {
+        const map = new Map<string, typeof providerIssues>();
+        for (const issue of providerIssues) {
+          const key = issue.provider;
+          const list = map.get(key);
+          if (list) list.push(issue);
+          else map.set(key, [issue]);
+        }
+        return map;
+      })();
+      const providerKeyForLabel = (label: string) => {
+        switch (label) {
+          case "WhatsApp":
+            return "whatsapp";
+          case "Telegram":
+            return "telegram";
+          case "Discord":
+            return "discord";
+          case "Slack":
+            return "slack";
+          case "Signal":
+            return "signal";
+          case "iMessage":
+            return "imessage";
+          default:
+            return label.toLowerCase();
+        }
+      };
+      const providerRowsWithIssues = providerRows.map((row) => {
+        const providerKey = providerKeyForLabel(row.Provider);
+        const issues = providerIssuesByProvider.get(providerKey) ?? [];
+        if (issues.length === 0) return row;
+        const issue = issues[0];
+        const suffix = ` · ${warn(`gateway: ${String(issue.message).slice(0, 90)}`)}`;
+        return {
+          ...row,
+          State: warn("WARN"),
+          Detail: `${row.Detail}${suffix}`,
+        };
+      });
 
       const providersTable = renderTable({
         width: tableWidth,
@@ -385,7 +486,7 @@ export async function statusAllCommand(
           { key: "State", header: "State", minWidth: 8 },
           { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
         ],
-        rows: providerRows,
+        rows: providerRowsWithIssues,
       });
 
       const agentRows = agentStatus.agents.map((a) => ({
@@ -531,6 +632,31 @@ export async function statusAllCommand(
         }
       }
 
+      {
+        const backend = tailscale.backendState ?? "unknown";
+        const okBackend = backend === "Running";
+        const hasDns = Boolean(tailscale.dnsName);
+        const label =
+          tailscaleMode === "off"
+            ? `Tailscale: off · ${backend}${tailscale.dnsName ? ` · ${tailscale.dnsName}` : ""}`
+            : `Tailscale: ${tailscaleMode} · ${backend}${tailscale.dnsName ? ` · ${tailscale.dnsName}` : ""}`;
+        emitCheck(
+          label,
+          okBackend && (tailscaleMode === "off" || hasDns) ? "ok" : "warn",
+        );
+        if (tailscale.error) {
+          lines.push(`  ${muted(`error: ${tailscale.error}`)}`);
+        }
+        if (tailscale.ips.length > 0) {
+          lines.push(
+            `  ${muted(`ips: ${tailscale.ips.slice(0, 3).join(", ")}${tailscale.ips.length > 3 ? "…" : ""}`)}`,
+          );
+        }
+        if (tailscaleHttpsUrl) {
+          lines.push(`  ${muted(`https: ${tailscaleHttpsUrl}`)}`);
+        }
+      }
+
       if (skillStatus) {
         const eligible = skillStatus.skills.filter((s) => s.eligible).length;
         const missing = skillStatus.skills.filter(
@@ -543,6 +669,7 @@ export async function statusAllCommand(
         );
       }
 
+      progress.setLabel("Reading logs…");
       const logPaths = (() => {
         try {
           return resolveGatewayLogPaths(process.env);
@@ -575,6 +702,7 @@ export async function statusAllCommand(
           }
         }
       }
+      progress.tick();
 
       if (providersStatus) {
         emitCheck(
@@ -623,6 +751,7 @@ export async function statusAllCommand(
 
       progress.setLabel("Rendering…");
       runtime.log(lines.join("\n"));
+      progress.tick();
     },
   );
 }

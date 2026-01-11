@@ -207,7 +207,7 @@ Clawdbot extracts these and sends them as media alongside the text.
 ```bash
 clawdbot status          # local status (creds, sessions, queued events)
 clawdbot status --all    # full diagnosis (read-only, pasteable)
-clawdbot status --deep   # also probes the running Gateway (WA connect + Telegram)
+clawdbot status --deep   # adds gateway health probes (Telegram + Discord)
 clawdbot health --json   # gateway health snapshot (WS)
 ```
 

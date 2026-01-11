@@ -33,6 +33,9 @@ export function buildAgentSystemPrompt(params: {
     browserControlUrl?: string;
     browserNoVncUrl?: string;
     hostBrowserAllowed?: boolean;
+    allowedControlUrls?: string[];
+    allowedControlHosts?: string[];
+    allowedControlPorts?: number[];
     elevated?: {
       allowed: boolean;
       defaultLevel: "on" | "off";

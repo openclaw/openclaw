@@ -431,4 +431,38 @@ describe("providers command", () => {
     });
     expect(disconnected.join("\n")).toMatch(/disconnected/i);
   });
+
+  it("surfaces Signal runtime errors in providers status output", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      signalAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          running: false,
+          lastError: "signal-cli unreachable",
+        },
+      ],
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/signal/i);
+    expect(lines.join("\n")).toMatch(/Provider error/i);
+  });
+
+  it("surfaces iMessage runtime errors in providers status output", () => {
+    const lines = formatGatewayProvidersStatusLines({
+      imessageAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          running: false,
+          lastError: "imsg permission denied",
+        },
+      ],
+    });
+    expect(lines.join("\n")).toMatch(/Warnings:/);
+    expect(lines.join("\n")).toMatch(/imessage/i);
+    expect(lines.join("\n")).toMatch(/Provider error/i);
+  });
 });

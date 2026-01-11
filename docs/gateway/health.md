@@ -10,7 +10,7 @@ Short guide to verify the WhatsApp Web / Baileys stack without guessing.
 ## Quick checks
 - `clawdbot status` — local summary: gateway reachability/mode, update hint, creds/auth age, sessions + recent activity.
 - `clawdbot status --all` — full local diagnosis (read-only, color, safe to paste for debugging).
-- `clawdbot status --deep` — also probes the running Gateway (WhatsApp connect + Telegram + Discord APIs).
+- `clawdbot status --deep` — adds gateway health probes to status output (Telegram + Discord APIs; requires reachable gateway).
 - `clawdbot health --json` — asks the running Gateway for a full health snapshot (WS-only; no direct Baileys socket).
 - Send `/status` as a standalone message in WhatsApp/WebChat to get a status reply without invoking the agent.
 - Logs: tail `/tmp/clawdbot/clawdbot-*.log` and filter for `web-heartbeat`, `web-reconnect`, `web-auto-reply`, `web-inbound`.

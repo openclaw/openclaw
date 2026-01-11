@@ -39,74 +39,130 @@ function padCell(text: string, width: number, align: Align): string {
 
 function wrapLine(text: string, width: number): string[] {
   if (width <= 0) return [text];
-  const words = text.split(/(\s+)/).filter(Boolean);
-  const lines: string[] = [];
-  let current = "";
-  let currentWidth = 0;
-  const push = (value: string) => lines.push(value.replace(/\s+$/, ""));
 
-  const flush = () => {
-    if (current.trim().length === 0) return;
-    push(current);
-    current = "";
-    currentWidth = 0;
-  };
+  // ANSI-aware wrapping: never split inside ANSI SGR/OSC-8 sequences.
+  // We don't attempt to re-open styling per line; terminals keep SGR state
+  // across newlines, so as long as we don't corrupt escape sequences we're safe.
+  const ESC = "\u001b";
 
-  const breakLong = (word: string) => {
-    const parts: string[] = [];
-    let buf = "";
-    let lastBreakAt = 0;
-    const isBreakChar = (ch: string) =>
-      ch === "/" || ch === "-" || ch === "_" || ch === ".";
-    for (const ch of Array.from(word)) {
-      const next = buf + ch;
-      if (visibleWidth(next) > width && buf) {
-        if (lastBreakAt > 0) {
-          parts.push(buf.slice(0, lastBreakAt));
-          buf = `${buf.slice(lastBreakAt)}${ch}`;
-          lastBreakAt = 0;
-          for (let i = 0; i < buf.length; i += 1) {
-            const c = buf[i];
-            if (c && isBreakChar(c)) lastBreakAt = i + 1;
+  type Token = { kind: "ansi" | "char"; value: string };
+  const tokens: Token[] = [];
+  for (let i = 0; i < text.length; ) {
+    if (text[i] === ESC) {
+      // SGR: ESC [ ... m
+      if (text[i + 1] === "[") {
+        let j = i + 2;
+        while (j < text.length) {
+          const ch = text[j];
+          if (ch === "m") break;
+          if (ch && ch >= "0" && ch <= "9") {
+            j += 1;
+            continue;
           }
-        } else {
-          parts.push(buf);
-          buf = ch;
+          if (ch === ";") {
+            j += 1;
+            continue;
+          }
+          break;
         }
-      } else {
-        buf = next;
-        if (isBreakChar(ch)) lastBreakAt = buf.length;
+        if (text[j] === "m") {
+          tokens.push({ kind: "ansi", value: text.slice(i, j + 1) });
+          i = j + 1;
+          continue;
+        }
+      }
+
+      // OSC-8 link open/close: ESC ] 8 ; ; ... ST (ST = ESC \)
+      if (text[i + 1] === "]" && text.slice(i + 2, i + 5) === "8;;") {
+        const st = text.indexOf(`${ESC}\\`, i + 5);
+        if (st >= 0) {
+          tokens.push({ kind: "ansi", value: text.slice(i, st + 2) });
+          i = st + 2;
+          continue;
+        }
       }
     }
-    if (buf) parts.push(buf);
-    return parts;
+
+    const cp = text.codePointAt(i);
+    if (!cp) break;
+    const ch = String.fromCodePoint(cp);
+    tokens.push({ kind: "char", value: ch });
+    i += ch.length;
+  }
+
+  const lines: string[] = [];
+  const isBreakChar = (ch: string) =>
+    ch === " " ||
+    ch === "\t" ||
+    ch === "\n" ||
+    ch === "\r" ||
+    ch === "/" ||
+    ch === "-" ||
+    ch === "_" ||
+    ch === ".";
+  const isSpaceChar = (ch: string) => ch === " " || ch === "\t";
+
+  const buf: Token[] = [];
+  let bufVisible = 0;
+  let lastBreakIndex: number | null = null;
+
+  const bufToString = (slice?: Token[]) =>
+    (slice ?? buf).map((t) => t.value).join("");
+
+  const bufVisibleWidth = (slice: Token[]) =>
+    slice.reduce((acc, t) => acc + (t.kind === "char" ? 1 : 0), 0);
+
+  const pushLine = (value: string) => {
+    const cleaned = value.replace(/\s+$/, "");
+    if (cleaned.trim().length === 0) return;
+    lines.push(cleaned);
   };
 
-  for (const token of words) {
-    const tokenWidth = visibleWidth(token);
-    const isSpace = /^\s+$/.test(token);
+  const flushAt = (breakAt: number | null) => {
+    if (buf.length === 0) return;
+    if (breakAt == null || breakAt <= 0) {
+      pushLine(bufToString());
+      buf.length = 0;
+      bufVisible = 0;
+      lastBreakIndex = null;
+      return;
+    }
 
-    if (tokenWidth > width && !isSpace) {
-      flush();
-      for (const part of breakLong(token.replace(/^\s+/, ""))) {
-        push(part);
-      }
+    const left = buf.slice(0, breakAt);
+    const rest = buf.slice(breakAt);
+    pushLine(bufToString(left));
+
+    while (
+      rest.length > 0 &&
+      rest[0]?.kind === "char" &&
+      isSpaceChar(rest[0].value)
+    ) {
+      rest.shift();
+    }
+
+    buf.length = 0;
+    buf.push(...rest);
+    bufVisible = bufVisibleWidth(buf);
+    lastBreakIndex = null;
+  };
+
+  for (const token of tokens) {
+    if (token.kind === "ansi") {
+      buf.push(token);
       continue;
     }
 
-    if (
-      currentWidth + tokenWidth > width &&
-      current.trim().length > 0 &&
-      !isSpace
-    ) {
-      flush();
+    const ch = token.value;
+    if (bufVisible + 1 > width && bufVisible > 0) {
+      flushAt(lastBreakIndex);
     }
 
-    current += token;
-    currentWidth = visibleWidth(current);
+    buf.push(token);
+    bufVisible += 1;
+    if (isBreakChar(ch)) lastBreakIndex = buf.length;
   }
 
-  flush();
+  flushAt(buf.length);
   return lines.length ? lines : [""];
 }
 

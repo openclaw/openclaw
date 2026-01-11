@@ -285,6 +285,8 @@ export async function buildProvidersTable(
   );
   const siEnabledAccounts = siAccounts.filter((a) => a.enabled);
   const siConfiguredAccounts = siEnabledAccounts.filter((a) => a.configured);
+  const siSample = siConfiguredAccounts[0] ?? siEnabledAccounts[0] ?? null;
+  const siBaseUrl = siSample?.baseUrl?.trim() ? siSample.baseUrl.trim() : "";
   rows.push({
     provider: "Signal",
     enabled: siEnabled,
@@ -295,7 +297,7 @@ export async function buildProvidersTable(
         : "setup",
     detail: siEnabled
       ? siConfiguredAccounts.length > 0
-        ? `configured · accounts ${siConfiguredAccounts.length}/${siEnabledAccounts.length || 1}`
+        ? `configured${siBaseUrl ? ` · baseUrl ${siBaseUrl}` : ""} · accounts ${siConfiguredAccounts.length}/${siEnabledAccounts.length || 1}`
         : "default config (no overrides)"
       : "disabled",
   });
@@ -307,6 +309,9 @@ export async function buildProvidersTable(
   );
   const imEnabledAccounts = imAccounts.filter((a) => a.enabled);
   const imConfiguredAccounts = imEnabledAccounts.filter((a) => a.configured);
+  const imSample = imEnabledAccounts[0] ?? null;
+  const imCliPath = imSample?.config?.cliPath?.trim() || "";
+  const imDbPath = imSample?.config?.dbPath?.trim() || "";
   rows.push({
     provider: "iMessage",
     enabled: imEnabled,
@@ -317,7 +322,7 @@ export async function buildProvidersTable(
         : "setup",
     detail: imEnabled
       ? imConfiguredAccounts.length > 0
-        ? `configured · accounts ${imConfiguredAccounts.length}/${imEnabledAccounts.length || 1}`
+        ? `configured${imCliPath ? ` · cliPath ${imCliPath}` : ""}${imDbPath ? ` · dbPath ${imDbPath}` : ""} · accounts ${imConfiguredAccounts.length}/${imEnabledAccounts.length || 1}`
         : "default config (no overrides)"
       : "disabled",
   });

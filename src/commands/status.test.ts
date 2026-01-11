@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
     presence: null,
     configSnapshot: null,
   }),
+  callGateway: vi.fn().mockResolvedValue({}),
 }));
 
 vi.mock("../config/sessions.js", () => ({
@@ -47,6 +48,10 @@ vi.mock("../web/session.js", () => ({
 vi.mock("../gateway/probe.js", () => ({
   probeGateway: mocks.probeGateway,
 }));
+vi.mock("../gateway/call.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../gateway/call.js")>();
+  return { ...actual, callGateway: mocks.callGateway };
+});
 vi.mock("../gateway/session-utils.js", () => ({
   listAgentsForGateway: () => ({
     defaultId: "main",
@@ -174,5 +179,47 @@ describe("statusCommand", () => {
       if (prevToken === undefined) delete process.env.CLAWDBOT_GATEWAY_TOKEN;
       else process.env.CLAWDBOT_GATEWAY_TOKEN = prevToken;
     }
+  });
+
+  it("surfaces provider runtime errors from the gateway", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: true,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: 10,
+      error: null,
+      close: null,
+      health: {},
+      status: {},
+      presence: [],
+      configSnapshot: null,
+    });
+    mocks.callGateway.mockResolvedValueOnce({
+      signalAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          running: false,
+          lastError: "signal-cli unreachable",
+        },
+      ],
+      imessageAccounts: [
+        {
+          accountId: "default",
+          enabled: true,
+          configured: true,
+          running: false,
+          lastError: "imessage permission denied",
+        },
+      ],
+    });
+
+    (runtime.log as vi.Mock).mockClear();
+    await statusCommand({}, runtime as never);
+    const logs = (runtime.log as vi.Mock).mock.calls.map((c) => String(c[0]));
+    expect(logs.join("\n")).toMatch(/Signal/i);
+    expect(logs.join("\n")).toMatch(/iMessage/i);
+    expect(logs.join("\n")).toMatch(/gateway:/i);
+    expect(logs.join("\n")).toMatch(/WARN/);
   });
 });

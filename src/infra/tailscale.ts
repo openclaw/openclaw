@@ -12,6 +12,16 @@ import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import { ensureBinary } from "./binaries.js";
 
+function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
+  const trimmed = stdout.trim();
+  const start = trimmed.indexOf("{");
+  const end = trimmed.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
+  }
+  return JSON.parse(trimmed) as Record<string, unknown>;
+}
+
 export async function getTailnetHostname(exec: typeof runExec = runExec) {
   // Derive tailnet hostname (or IP fallback) from tailscale status JSON.
   const candidates = [
@@ -24,9 +34,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec) {
     if (candidate.startsWith("/") && !existsSync(candidate)) continue;
     try {
       const { stdout } = await exec(candidate, ["status", "--json"]);
-      const parsed = stdout
-        ? (JSON.parse(stdout) as Record<string, unknown>)
-        : {};
+      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
       const self =
         typeof parsed.Self === "object" && parsed.Self !== null
           ? (parsed.Self as Record<string, unknown>)
@@ -47,6 +55,17 @@ export async function getTailnetHostname(exec: typeof runExec = runExec) {
   }
 
   throw lastError ?? new Error("Could not determine Tailscale DNS or IP");
+}
+
+export async function readTailscaleStatusJson(
+  exec: typeof runExec = runExec,
+  opts?: { timeoutMs?: number },
+): Promise<Record<string, unknown>> {
+  const { stdout } = await exec("tailscale", ["status", "--json"], {
+    timeoutMs: opts?.timeoutMs ?? 5000,
+    maxBuffer: 400_000,
+  });
+  return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
 }
 
 export async function ensureGoInstalled(

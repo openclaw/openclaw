@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026.1.11-5
+
+### Fixes
+- CLI/Status: surface gateway provider runtime errors (Signal/iMessage/Slack) in the Providers table.
+- CLI/Status: improve Tailscale reporting in `status --all` and harden parsing of noisy `tailscale status --json` output.
+- CLI/Status: make `status --all` scan progress determinate (OSC progress + spinner).
+- Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
+
 ## 2026.1.11-4
 
 ### Fixes

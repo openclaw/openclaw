@@ -19,6 +19,7 @@ import {
 } from "../config/sessions.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import { normalizeControlUiBasePath } from "../gateway/control-ui.js";
 import { probeGateway } from "../gateway/probe.js";
 import { listAgentsForGateway } from "../gateway/session-utils.js";
 import { info } from "../globals.js";
@@ -29,12 +30,15 @@ import {
   formatUsageReportLines,
   loadProviderUsageSummary,
 } from "../infra/provider-usage.js";
+import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import { peekSystemEvents } from "../infra/system-events.js";
+import { getTailnetHostname } from "../infra/tailscale.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
   type UpdateCheckResult,
 } from "../infra/update-check.js";
+import { runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
@@ -533,13 +537,27 @@ export async function statusCommand(
   const scan = await withProgress(
     {
       label: "Scanning status…",
-      total: 7,
+      total: 9,
       enabled: opts.json !== true,
     },
     async (progress) => {
       progress.setLabel("Loading config…");
       const cfg = loadConfig();
       const osSummary = resolveOsSummary();
+      progress.tick();
+
+      progress.setLabel("Checking Tailscale…");
+      const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
+      const tailscaleDns =
+        tailscaleMode === "off"
+          ? null
+          : await getTailnetHostname((cmd, args) =>
+              runExec(cmd, args, { timeoutMs: 1200, maxBuffer: 200_000 }),
+            ).catch(() => null);
+      const tailscaleHttpsUrl =
+        tailscaleMode !== "off" && tailscaleDns
+          ? `https://${tailscaleDns}${normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath)}`
+          : null;
       progress.tick();
 
       progress.setLabel("Checking for updates…");
@@ -580,6 +598,25 @@ export async function statusCommand(
         : null;
       progress.tick();
 
+      progress.setLabel("Querying provider status…");
+      const providersStatus = gatewayReachable
+        ? await callGateway<Record<string, unknown>>({
+            method: "providers.status",
+            params: {
+              probe: false,
+              timeoutMs: Math.min(8000, opts.timeoutMs ?? 10_000),
+            },
+            timeoutMs: Math.min(
+              opts.all ? 5000 : 2500,
+              opts.timeoutMs ?? 10_000,
+            ),
+          }).catch(() => null)
+        : null;
+      const providerIssues = providersStatus
+        ? collectProvidersStatusIssues(providersStatus)
+        : [];
+      progress.tick();
+
       progress.setLabel("Summarizing providers…");
       const providers = await buildProvidersTable(cfg, {
         // Show token previews in regular status; keep `status --all` redacted.
@@ -598,6 +635,9 @@ export async function statusCommand(
       return {
         cfg,
         osSummary,
+        tailscaleMode,
+        tailscaleDns,
+        tailscaleHttpsUrl,
         update,
         gatewayConnection,
         remoteUrlMissing,
@@ -605,6 +645,7 @@ export async function statusCommand(
         gatewayProbe,
         gatewayReachable,
         gatewaySelf,
+        providerIssues,
         agentStatus,
         providers,
         summary,
@@ -615,6 +656,9 @@ export async function statusCommand(
   const {
     cfg,
     osSummary,
+    tailscaleMode,
+    tailscaleDns,
+    tailscaleHttpsUrl,
     update,
     gatewayConnection,
     remoteUrlMissing,
@@ -622,6 +666,7 @@ export async function statusCommand(
     gatewayProbe,
     gatewayReachable,
     gatewaySelf,
+    providerIssues,
     agentStatus,
     providers,
     summary,
@@ -770,6 +815,15 @@ export async function statusCommand(
     { Item: "Dashboard", Value: dashboard },
     { Item: "OS", Value: `${osSummary.label} · node ${process.versions.node}` },
     {
+      Item: "Tailscale",
+      Value:
+        tailscaleMode === "off"
+          ? muted("off")
+          : tailscaleDns && tailscaleHttpsUrl
+            ? `${tailscaleMode} · ${tailscaleDns} · ${tailscaleHttpsUrl}`
+            : warn(`${tailscaleMode} · magicdns unknown`),
+    },
+    {
       Item: "Update",
       Value: formatUpdateOneLiner(update).replace(/^Update:\s*/i, ""),
     },
@@ -801,6 +855,34 @@ export async function statusCommand(
 
   runtime.log("");
   runtime.log(theme.heading("Providers"));
+  const providerIssuesByProvider = (() => {
+    const map = new Map<string, typeof providerIssues>();
+    for (const issue of providerIssues) {
+      const key = issue.provider;
+      const list = map.get(key);
+      if (list) list.push(issue);
+      else map.set(key, [issue]);
+    }
+    return map;
+  })();
+  const providerKeyForLabel = (label: string) => {
+    switch (label) {
+      case "WhatsApp":
+        return "whatsapp";
+      case "Telegram":
+        return "telegram";
+      case "Discord":
+        return "discord";
+      case "Slack":
+        return "slack";
+      case "Signal":
+        return "signal";
+      case "iMessage":
+        return "imessage";
+      default:
+        return label.toLowerCase();
+    }
+  };
   runtime.log(
     renderTable({
       width: tableWidth,
@@ -810,19 +892,29 @@ export async function statusCommand(
         { key: "State", header: "State", minWidth: 8 },
         { key: "Detail", header: "Detail", flex: true, minWidth: 24 },
       ],
-      rows: providers.rows.map((row) => ({
-        Provider: row.provider,
-        Enabled: row.enabled ? ok("ON") : muted("OFF"),
-        State:
-          row.state === "ok"
-            ? ok("OK")
-            : row.state === "warn"
-              ? warn("WARN")
-              : row.state === "off"
-                ? muted("OFF")
-                : theme.accentDim("SETUP"),
-        Detail: row.detail,
-      })),
+      rows: providers.rows.map((row) => {
+        const providerKey = providerKeyForLabel(row.provider);
+        const issues = providerIssuesByProvider.get(providerKey) ?? [];
+        const effectiveState =
+          row.state === "off" ? "off" : issues.length > 0 ? "warn" : row.state;
+        const issueSuffix =
+          issues.length > 0
+            ? ` · ${warn(`gateway: ${shortenText(issues[0]?.message ?? "issue", 84)}`)}`
+            : "";
+        return {
+          Provider: row.provider,
+          Enabled: row.enabled ? ok("ON") : muted("OFF"),
+          State:
+            effectiveState === "ok"
+              ? ok("OK")
+              : effectiveState === "warn"
+                ? warn("WARN")
+                : effectiveState === "off"
+                  ? muted("OFF")
+                  : theme.accentDim("SETUP"),
+          Detail: `${row.detail}${issueSuffix}`,
+        };
+      }),
     }).trimEnd(),
   );
 

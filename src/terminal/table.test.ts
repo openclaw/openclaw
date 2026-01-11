@@ -32,4 +32,56 @@ describe("renderTable", () => {
     const firstLine = out.trimEnd().split("\n")[0] ?? "";
     expect(visibleWidth(firstLine)).toBe(width);
   });
+
+  it("wraps ANSI-colored cells without corrupting escape sequences", () => {
+    const out = renderTable({
+      width: 36,
+      columns: [
+        { key: "K", header: "K", minWidth: 3 },
+        { key: "V", header: "V", flex: true, minWidth: 10 },
+      ],
+      rows: [
+        {
+          K: "X",
+          V: `\x1b[33m${"a".repeat(120)}\x1b[0m`,
+        },
+      ],
+    });
+
+    const ESC = "\u001b";
+    for (let i = 0; i < out.length; i += 1) {
+      if (out[i] !== ESC) continue;
+
+      // SGR: ESC [ ... m
+      if (out[i + 1] === "[") {
+        let j = i + 2;
+        while (j < out.length) {
+          const ch = out[j];
+          if (ch === "m") break;
+          if (ch && ch >= "0" && ch <= "9") {
+            j += 1;
+            continue;
+          }
+          if (ch === ";") {
+            j += 1;
+            continue;
+          }
+          break;
+        }
+        expect(out[j]).toBe("m");
+        i = j;
+        continue;
+      }
+
+      // OSC-8: ESC ] 8 ; ; ... ST (ST = ESC \)
+      if (out[i + 1] === "]" && out.slice(i + 2, i + 5) === "8;;") {
+        const st = out.indexOf(`${ESC}\\`, i + 5);
+        expect(st).toBeGreaterThanOrEqual(0);
+        i = st + 1;
+        continue;
+      }
+
+      throw new Error(`Unexpected escape sequence at index ${i}`);
+    }
+  });
 });
