@@ -14,14 +14,24 @@ import { startGatewayServer } from "./server.js";
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
 const CLI_LIVE = process.env.CLAWDBOT_LIVE_CLI_BACKEND === "1";
 const CLI_IMAGE = process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_PROBE === "1";
+const CLI_RESUME = process.env.CLAWDBOT_LIVE_CLI_BACKEND_RESUME_PROBE === "1";
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-5";
-const DEFAULT_ARGS = [
+const DEFAULT_CLAUDE_ARGS = [
   "-p",
   "--output-format",
   "json",
   "--dangerously-skip-permissions",
+];
+const DEFAULT_CODEX_ARGS = [
+  "exec",
+  "--json",
+  "--color",
+  "never",
+  "--sandbox",
+  "read-only",
+  "--skip-git-repo-check",
 ];
 const DEFAULT_CLEAR_ENV = ["ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY_OLD"];
 
@@ -213,25 +223,44 @@ describeLive("gateway live (cli backend)", () => {
     const rawModel =
       process.env.CLAWDBOT_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
     const parsed = parseModelRef(rawModel, "claude-cli");
-    if (!parsed || parsed.provider !== "claude-cli") {
+    if (!parsed) {
       throw new Error(
-        `CLAWDBOT_LIVE_CLI_BACKEND_MODEL must resolve to a claude-cli model. Got: ${rawModel}`,
+        `CLAWDBOT_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
       );
     }
-    const modelKey = `${parsed.provider}/${parsed.model}`;
+    const providerId = parsed.provider;
+    const modelKey = `${providerId}/${parsed.model}`;
+
+    const providerDefaults =
+      providerId === "claude-cli"
+        ? { command: "claude", args: DEFAULT_CLAUDE_ARGS }
+        : providerId === "codex-cli"
+          ? { command: "codex", args: DEFAULT_CODEX_ARGS }
+          : null;
 
     const cliCommand =
-      process.env.CLAWDBOT_LIVE_CLI_BACKEND_COMMAND ?? "claude";
+      process.env.CLAWDBOT_LIVE_CLI_BACKEND_COMMAND ??
+      providerDefaults?.command;
+    if (!cliCommand) {
+      throw new Error(
+        `CLAWDBOT_LIVE_CLI_BACKEND_COMMAND is required for provider "${providerId}".`,
+      );
+    }
     const baseCliArgs =
       parseJsonStringArray(
         "CLAWDBOT_LIVE_CLI_BACKEND_ARGS",
         process.env.CLAWDBOT_LIVE_CLI_BACKEND_ARGS,
-      ) ?? DEFAULT_ARGS;
+      ) ?? providerDefaults?.args;
+    if (!baseCliArgs || baseCliArgs.length === 0) {
+      throw new Error(
+        `CLAWDBOT_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`,
+      );
+    }
     const cliClearEnv =
       parseJsonStringArray(
         "CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV",
         process.env.CLAWDBOT_LIVE_CLI_BACKEND_CLEAR_ENV,
-      ) ?? DEFAULT_CLEAR_ENV;
+      ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
     const cliImageArg =
       process.env.CLAWDBOT_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
     const cliImageMode = parseImageMode(
@@ -247,16 +276,17 @@ describeLive("gateway live (cli backend)", () => {
     const tempDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-live-cli-"),
     );
-    const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
-    await fs.writeFile(
-      mcpConfigPath,
-      `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`,
-    );
     const disableMcpConfig =
       process.env.CLAWDBOT_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
-    const cliArgs = disableMcpConfig
-      ? withMcpConfigOverrides(baseCliArgs, mcpConfigPath)
-      : baseCliArgs;
+    let cliArgs = baseCliArgs;
+    if (providerId === "claude-cli" && disableMcpConfig) {
+      const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
+      await fs.writeFile(
+        mcpConfigPath,
+        `${JSON.stringify({ mcpServers: {} }, null, 2)}\n`,
+      );
+      cliArgs = withMcpConfigOverrides(baseCliArgs, mcpConfigPath);
+    }
 
     const cfg = loadConfig();
     const existingBackends = cfg.agents?.defaults?.cliBackends ?? {};
@@ -272,10 +302,10 @@ describeLive("gateway live (cli backend)", () => {
           },
           cliBackends: {
             ...existingBackends,
-            "claude-cli": {
+            [providerId]: {
               command: cliCommand,
               args: cliArgs,
-              clearEnv: cliClearEnv,
+              clearEnv: cliClearEnv.length > 0 ? cliClearEnv : undefined,
               systemPromptWhen: "never",
               ...(cliImageArg
                 ? { imageArg: cliImageArg, imageMode: cliImageMode }
@@ -306,12 +336,16 @@ describeLive("gateway live (cli backend)", () => {
       const sessionKey = "agent:dev:live-cli-backend";
       const runId = randomUUID();
       const nonce = randomBytes(3).toString("hex").toUpperCase();
+      const message =
+        providerId === "codex-cli"
+          ? `Please include the token CLI-BACKEND-${nonce} in your reply.`
+          : `Reply with exactly: CLI backend OK ${nonce}.`;
       const payload = await client.request<Record<string, unknown>>(
         "agent",
         {
           sessionKey,
           idempotencyKey: `idem-${runId}`,
-          message: `Reply with exactly: CLI backend OK ${nonce}.`,
+          message,
           deliver: false,
         },
         { expectFinal: true },
@@ -320,7 +354,43 @@ describeLive("gateway live (cli backend)", () => {
         throw new Error(`agent status=${String(payload?.status)}`);
       }
       const text = extractPayloadText(payload?.result);
-      expect(text).toContain(`CLI backend OK ${nonce}.`);
+      if (providerId === "codex-cli") {
+        expect(text).toContain(`CLI-BACKEND-${nonce}`);
+      } else {
+        expect(text).toContain(`CLI backend OK ${nonce}.`);
+      }
+
+      if (CLI_RESUME) {
+        const runIdResume = randomUUID();
+        const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
+        const resumeMessage =
+          providerId === "codex-cli"
+            ? `Please include the token CLI-RESUME-${resumeNonce} in your reply.`
+            : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`;
+        const resumePayload = await client.request<Record<string, unknown>>(
+          "agent",
+          {
+            sessionKey,
+            idempotencyKey: `idem-${runIdResume}`,
+            message: resumeMessage,
+            deliver: false,
+          },
+          { expectFinal: true },
+        );
+        if (resumePayload?.status !== "ok") {
+          throw new Error(
+            `resume status=${String(resumePayload?.status)}`,
+          );
+        }
+        const resumeText = extractPayloadText(resumePayload?.result);
+        if (providerId === "codex-cli") {
+          expect(resumeText).toContain(`CLI-RESUME-${resumeNonce}`);
+        } else {
+          expect(resumeText).toContain(
+            `CLI backend RESUME OK ${resumeNonce}.`,
+          );
+        }
+      }
 
       if (CLI_IMAGE) {
         const imageCode = randomImageProbeCode(10);

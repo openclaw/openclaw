@@ -47,6 +47,38 @@ const DEFAULT_CLAUDE_BACKEND: CliBackendConfig = {
   serialize: true,
 };
 
+const DEFAULT_CODEX_BACKEND: CliBackendConfig = {
+  command: "codex",
+  args: [
+    "exec",
+    "--json",
+    "--color",
+    "never",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+  ],
+  resumeArgs: [
+    "exec",
+    "resume",
+    "{sessionId}",
+    "--color",
+    "never",
+    "--sandbox",
+    "read-only",
+    "--skip-git-repo-check",
+  ],
+  output: "jsonl",
+  resumeOutput: "text",
+  input: "arg",
+  modelArg: "--model",
+  sessionIdFields: ["thread_id"],
+  sessionMode: "existing",
+  imageArg: "--image",
+  imageMode: "repeat",
+  serialize: true,
+};
+
 function normalizeBackendKey(key: string): string {
   return normalizeProviderId(key);
 }
@@ -76,11 +108,16 @@ function mergeBackendConfig(
       new Set([...(base.clearEnv ?? []), ...(override.clearEnv ?? [])]),
     ),
     sessionIdFields: override.sessionIdFields ?? base.sessionIdFields,
+    sessionArgs: override.sessionArgs ?? base.sessionArgs,
+    resumeArgs: override.resumeArgs ?? base.resumeArgs,
   };
 }
 
 export function resolveCliBackendIds(cfg?: ClawdbotConfig): Set<string> {
-  const ids = new Set<string>([normalizeBackendKey("claude-cli")]);
+  const ids = new Set<string>([
+    normalizeBackendKey("claude-cli"),
+    normalizeBackendKey("codex-cli"),
+  ]);
   const configured = cfg?.agents?.defaults?.cliBackends ?? {};
   for (const key of Object.keys(configured)) {
     ids.add(normalizeBackendKey(key));
@@ -98,6 +135,12 @@ export function resolveCliBackendConfig(
 
   if (normalized === "claude-cli") {
     const merged = mergeBackendConfig(DEFAULT_CLAUDE_BACKEND, override);
+    const command = merged.command?.trim();
+    if (!command) return null;
+    return { id: normalized, config: { ...merged, command } };
+  }
+  if (normalized === "codex-cli") {
+    const merged = mergeBackendConfig(DEFAULT_CODEX_BACKEND, override);
     const command = merged.command?.trim();
     if (!command) return null;
     return { id: normalized, config: { ...merged, command } };

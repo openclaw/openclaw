@@ -1365,7 +1365,9 @@ export type CliBackendConfig = {
   /** Base args applied to every invocation. */
   args?: string[];
   /** Output parsing mode (default: json). */
-  output?: "json" | "text";
+  output?: "json" | "text" | "jsonl";
+  /** Output parsing mode when resuming a CLI session. */
+  resumeOutput?: "json" | "text" | "jsonl";
   /** Prompt input mode (default: arg). */
   input?: "arg" | "stdin";
   /** Max prompt length for arg mode (if exceeded, stdin is used). */
@@ -1380,6 +1382,10 @@ export type CliBackendConfig = {
   modelAliases?: Record<string, string>;
   /** Flag used to pass session id (e.g. --session-id). */
   sessionArg?: string;
+  /** Extra args used when resuming a session (use {sessionId} placeholder). */
+  sessionArgs?: string[];
+  /** Alternate args to use when resuming a session (use {sessionId} placeholder). */
+  resumeArgs?: string[];
   /** When to pass session ids. */
   sessionMode?: "always" | "existing" | "none";
   /** JSON fields to read session id from (in order). */
