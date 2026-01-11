@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   intro as clackIntro,
@@ -133,6 +135,53 @@ function noteOpencodeProviderOverrides(cfg: ClawdbotConfig) {
   );
 
   note(lines.join("\n"), "OpenCode Zen");
+}
+
+const MAC_APP_BUNDLE_ID = "com.clawdbot.mac";
+const MAC_ATTACH_EXISTING_ONLY_KEY = "clawdbot.gateway.attachExistingOnly";
+
+function resolveHomeDir(): string {
+  return process.env.HOME ?? os.homedir();
+}
+
+async function readMacAttachExistingOnly(): Promise<boolean | null> {
+  const result = await runCommandWithTimeout(
+    [
+      "/usr/bin/defaults",
+      "read",
+      MAC_APP_BUNDLE_ID,
+      MAC_ATTACH_EXISTING_ONLY_KEY,
+    ],
+    { timeoutMs: 2000 },
+  ).catch(() => null);
+  if (!result || result.code !== 0) return null;
+  const raw = result.stdout.trim().toLowerCase();
+  if (["1", "true", "yes"].includes(raw)) return true;
+  if (["0", "false", "no"].includes(raw)) return false;
+  return null;
+}
+
+async function noteMacLaunchAgentOverrides() {
+  if (process.platform !== "darwin") return;
+  const markerPath = path.join(
+    resolveHomeDir(),
+    ".clawdbot",
+    "disable-launchagent",
+  );
+  const hasMarker = fs.existsSync(markerPath);
+  const attachOnly = await readMacAttachExistingOnly();
+  if (!hasMarker && attachOnly !== true) return;
+
+  const lines = [
+    hasMarker ? `- LaunchAgent writes are disabled via ${markerPath}.` : null,
+    attachOnly === true
+      ? `- macOS app is set to Attach-only (${MAC_APP_BUNDLE_ID}:${MAC_ATTACH_EXISTING_ONLY_KEY}=true).`
+      : null,
+    "- To restore default behavior:",
+    `  rm ${markerPath}`,
+    `  defaults write ${MAC_APP_BUNDLE_ID} ${MAC_ATTACH_EXISTING_ONLY_KEY} -bool NO`,
+  ].filter((line): line is string => Boolean(line));
+  note(lines.join("\n"), "Gateway (macOS)");
 }
 
 async function detectClawdbotGitCheckout(
@@ -368,6 +417,7 @@ export async function doctorCommand(
     runtime,
     prompter,
   );
+  await noteMacLaunchAgentOverrides();
 
   await noteSecurityWarnings(cfg);
 

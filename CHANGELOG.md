@@ -8,6 +8,7 @@
 - CLI/Status: make `status --all` scan progress determinate (OSC progress + spinner).
 - Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
 - CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
+- macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
 
 ## 2026.1.11-4
 

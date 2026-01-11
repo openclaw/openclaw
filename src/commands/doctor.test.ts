@@ -774,7 +774,10 @@ describe("doctor", () => {
     const docker = sandbox.docker as Record<string, unknown>;
 
     expect(docker.image).toBe("clawdis-sandbox-common:bookworm-slim");
-    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    const defaultsCalls = runCommandWithTimeout.mock.calls.filter(
+      ([args]) => Array.isArray(args) && args[0] === "/usr/bin/defaults",
+    );
+    expect(defaultsCalls.length).toBe(runCommandWithTimeout.mock.calls.length);
   });
 
   it("runs legacy state migrations in non-interactive mode without prompting", async () => {

@@ -19,6 +19,7 @@ NO_SIGN=0
 SIGN=0
 AUTO_DETECT_SIGNING=1
 GATEWAY_WAIT_SECONDS="${CLAWDBOT_GATEWAY_WAIT_SECONDS:-0}"
+LAUNCHAGENT_DISABLE_MARKER="${HOME}/.clawdbot/disable-launchagent"
 
 log()  { printf '%s\n' "$*"; }
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
@@ -94,6 +95,10 @@ for arg in "$@"; do
       log "  node dist/entry.js daemon install --force --runtime node"
       log "  node dist/entry.js daemon restart"
       log ""
+      log "Reset unsigned overrides:"
+      log "  rm ~/.clawdbot/disable-launchagent"
+      log "  defaults write <bundle-id> clawdbot.gateway.attachExistingOnly -bool NO"
+      log ""
       log "Default behavior: Auto-detect signing keys, fallback to --no-sign if none found"
       exit 0
       ;;
@@ -163,7 +168,7 @@ if [ "$NO_SIGN" -eq 1 ]; then
   export ALLOW_ADHOC_SIGNING=1
   export SIGN_IDENTITY="-"
   mkdir -p "${HOME}/.clawdbot"
-  run_step "disable launchagent writes" /usr/bin/touch "${HOME}/.clawdbot/disable-launchagent"
+  run_step "disable launchagent writes" /usr/bin/touch "${LAUNCHAGENT_DISABLE_MARKER}"
 elif [ "$SIGN" -eq 1 ]; then
   if ! check_signing_keys; then
     fail "No signing identity found. Use --no-sign or install a signing key."
@@ -198,12 +203,19 @@ choose_app_bundle() {
 
 choose_app_bundle
 
+APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true)"
+
 # When unsigned, avoid the app overwriting the LaunchAgent with the relay binary.
 if [ "$NO_SIGN" -eq 1 ]; then
-  APP_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "${APP_BUNDLE}/Contents/Info.plist" 2>/dev/null || true)"
   if [[ -n "${APP_BUNDLE_ID}" ]]; then
     run_step "set attach-existing-only" \
       /usr/bin/defaults write "${APP_BUNDLE_ID}" clawdbot.gateway.attachExistingOnly -bool YES
+  fi
+elif [[ -f "${LAUNCHAGENT_DISABLE_MARKER}" ]]; then
+  run_step "clear launchagent disable marker" /bin/rm -f "${LAUNCHAGENT_DISABLE_MARKER}"
+  if [[ -n "${APP_BUNDLE_ID}" ]]; then
+    run_step "unset attach-existing-only" \
+      /usr/bin/defaults write "${APP_BUNDLE_ID}" clawdbot.gateway.attachExistingOnly -bool NO
   fi
 fi
 
