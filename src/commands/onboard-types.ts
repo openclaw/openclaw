@@ -33,6 +33,7 @@ export type OnboardOptions = {
   flow?: "quickstart" | "advanced";
   workspace?: string;
   nonInteractive?: boolean;
+  reset?: boolean;
   authChoice?: AuthChoice;
   /** Used when `authChoice=token` in non-interactive mode. */
   tokenProvider?: string;

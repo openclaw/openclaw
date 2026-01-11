@@ -194,6 +194,7 @@ Interactive wizard to set up gateway, workspace, and skills.
 
 Options:
 - `--workspace <dir>`
+- `--reset` (reset config + credentials + sessions + workspace before wizard)
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced>`

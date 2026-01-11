@@ -244,6 +244,10 @@ export function buildProgram() {
       "Interactive wizard to set up the gateway, workspace, and skills",
     )
     .option("--workspace <dir>", "Agent workspace directory (default: ~/clawd)")
+    .option(
+      "--reset",
+      "Reset config + credentials + sessions + workspace before running wizard",
+    )
     .option("--non-interactive", "Run without prompts", false)
     .option("--flow <flow>", "Wizard flow: quickstart|advanced")
     .option("--mode <mode>", "Wizard mode: local|remote")
