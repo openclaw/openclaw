@@ -48,3 +48,14 @@ index f07085c64390b211340d6a826b28ea9c2e77302f..71509b70c5aa762872eab3b5ffc7a425
                          const reasoningItem = JSON.parse(block.thinkingSignature);
                          output.push(reasoningItem);
                      }
+@@ -430,7 +431,7 @@ export const streamOpenAIResponses = (model, context, options) => {
+            const hasAssistantMessage = output.some((item) => item.type === "message");
+            const hasFunctionCall = output.some((item) => item.type === "function_call");
+-            if (!hasAssistantMessage && hasFunctionCall) {
++            // Keep reasoning for tool-only turns; OpenAI expects reasoning before function_call.
++            if (!hasAssistantMessage && !hasFunctionCall) {
+                 for (let i = output.length - 1; i >= 0; i -= 1) {
+                     if (output[i].type === "reasoning") {
+                         output.splice(i, 1);
+                     }
+                 }
