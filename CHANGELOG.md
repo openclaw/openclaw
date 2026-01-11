@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.1.11-6
+
+### Fixes
+- CLI/Status: make the “More” footer shorter and easier to scan (newlines + context-aware suggestions).
+- Docs/FAQ: make `clawdbot status` the first diagnostic step (and point to `status --all` for pasteable reports).
+
 ## 2026.1.11-5
 
 ### New Features and Changes
