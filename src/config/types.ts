@@ -1244,17 +1244,17 @@ export type ProviderCommandsConfig = {
   native?: NativeCommandsSetting;
 };
 
-export type BridgeBindMode = "auto" | "lan" | "tailnet" | "loopback";
+export type BridgeBindMode = "auto" | "lan" | "loopback" | "custom";
 
 export type BridgeConfig = {
   enabled?: boolean;
   port?: number;
   /**
    * Bind address policy for the node bridge server.
-   * - auto: prefer tailnet IP when present, else LAN (0.0.0.0)
-   * - lan:  0.0.0.0 (reachable on local network + any forwarded interfaces)
-   * - tailnet: bind to the Tailscale interface IP (100.64.0.0/10) plus loopback
-   * - loopback: 127.0.0.1
+   * - auto: Tailnet IPv4 if available, else 0.0.0.0 (fallback to all interfaces)
+   * - lan: 0.0.0.0 (all interfaces, no fallback)
+   * - loopback: 127.0.0.1 (local-only)
+   * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost on gateway)
    */
   bind?: BridgeBindMode;
 };
@@ -1369,9 +1369,15 @@ export type GatewayConfig = {
   mode?: "local" | "remote";
   /**
    * Bind address policy for the Gateway WebSocket + Control UI HTTP server.
+   * - auto: Tailnet IPv4 if available, else 0.0.0.0 (fallback to all interfaces)
+   * - lan: 0.0.0.0 (all interfaces, no fallback)
+   * - loopback: 127.0.0.1 (local-only)
+   * - custom: User-specified IP, fallback to 0.0.0.0 if unavailable (requires customBindHost)
    * Default: loopback (127.0.0.1).
    */
   bind?: BridgeBindMode;
+  /** Custom IP address for bind="custom" mode. Fallback: 0.0.0.0. */
+  customBindHost?: string;
   controlUi?: GatewayControlUiConfig;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;

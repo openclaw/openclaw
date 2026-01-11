@@ -417,6 +417,85 @@ type EmbeddedPiQueueHandle = {
 
 const log = createSubsystemLogger("agent/embedded");
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
+const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
+  "patternProperties",
+  "additionalProperties",
+  "$schema",
+  "$id",
+  "$ref",
+  "$defs",
+  "definitions",
+  "examples",
+  "minLength",
+  "maxLength",
+  "minimum",
+  "maximum",
+  "multipleOf",
+  "pattern",
+  "format",
+  "minItems",
+  "maxItems",
+  "uniqueItems",
+  "minProperties",
+  "maxProperties",
+]);
+
+function findUnsupportedSchemaKeywords(
+  schema: unknown,
+  path: string,
+): string[] {
+  if (!schema || typeof schema !== "object") return [];
+  if (Array.isArray(schema)) {
+    return schema.flatMap((item, index) =>
+      findUnsupportedSchemaKeywords(item, `${path}[${index}]`),
+    );
+  }
+  const record = schema as Record<string, unknown>;
+  const violations: string[] = [];
+  for (const [key, value] of Object.entries(record)) {
+    if (GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS.has(key)) {
+      violations.push(`${path}.${key}`);
+    }
+    if (value && typeof value === "object") {
+      violations.push(
+        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`),
+      );
+    }
+  }
+  return violations;
+}
+
+function logToolSchemasForGoogle(params: {
+  tools: AgentTool[];
+  provider: string;
+}) {
+  if (
+    params.provider !== "google-antigravity" &&
+    params.provider !== "google-gemini-cli"
+  ) {
+    return;
+  }
+  const toolNames = params.tools.map((tool, index) => `${index}:${tool.name}`);
+  log.info("google tool schema snapshot", {
+    provider: params.provider,
+    toolCount: params.tools.length,
+    tools: toolNames,
+  });
+  for (const [index, tool] of params.tools.entries()) {
+    const violations = findUnsupportedSchemaKeywords(
+      tool.parameters,
+      `${tool.name}.parameters`,
+    );
+    if (violations.length > 0) {
+      log.warn("google tool schema has unsupported keywords", {
+        index,
+        tool: tool.name,
+        violations: violations.slice(0, 12),
+        violationCount: violations.length,
+      });
+    }
+  }
+}
 
 registerUnhandledRejectionHandler((reason) => {
   const message = describeUnknownError(reason);
@@ -1178,6 +1257,7 @@ export async function compactEmbeddedPiSession(params: {
           modelAuthMode: resolveModelAuthMode(model.provider, params.config),
           // No currentChannelId/currentThreadTs for compaction - not in message context
         });
+        logToolSchemasForGoogle({ tools, provider });
         const machineName = await getMachineDisplayName();
         const runtimeProvider = normalizeMessageProvider(
           params.messageProvider,
@@ -1620,6 +1700,7 @@ export async function runEmbeddedPiAgent(params: {
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
           });
+          logToolSchemasForGoogle({ tools, provider });
           const machineName = await getMachineDisplayName();
           const runtimeInfo = {
             host: machineName,

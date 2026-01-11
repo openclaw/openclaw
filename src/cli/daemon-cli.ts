@@ -71,7 +71,8 @@ type ConfigSummary = {
 
 type GatewayStatusSummary = {
   bindMode: BridgeBindMode;
-  bindHost: string | null;
+  bindHost: string;
+  customBindHost?: string;
   port: number;
   portSource: "service args" | "env/config";
   probeUrl: string;
@@ -190,8 +191,11 @@ function parsePortFromArgs(
 function pickProbeHostForBind(
   bindMode: string,
   tailnetIPv4: string | undefined,
+  customBindHost?: string,
 ) {
-  if (bindMode === "tailnet") return tailnetIPv4 ?? "127.0.0.1";
+  if (bindMode === "custom" && customBindHost?.trim()) {
+    return customBindHost.trim();
+  }
   if (bindMode === "auto") return tailnetIPv4 ?? "127.0.0.1";
   return "127.0.0.1";
 }
@@ -429,11 +433,15 @@ async function gatherDaemonStatus(opts: {
   const bindMode = (daemonCfg.gateway?.bind ?? "loopback") as
     | "auto"
     | "lan"
-    | "tailnet"
-    | "loopback";
-  const bindHost = resolveGatewayBindHost(bindMode);
+    | "loopback"
+    | "custom";
+  const customBindHost = daemonCfg.gateway?.customBindHost;
+  const bindHost = await resolveGatewayBindHost(
+    bindMode,
+    customBindHost,
+  );
   const tailnetIPv4 = pickPrimaryTailnetIPv4();
-  const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4);
+  const probeHost = pickProbeHostForBind(bindMode, tailnetIPv4, customBindHost);
   const probeUrlOverride =
     typeof opts.rpc.url === "string" && opts.rpc.url.trim().length > 0
       ? opts.rpc.url.trim()
@@ -523,6 +531,7 @@ async function gatherDaemonStatus(opts: {
     gateway: {
       bindMode,
       bindHost,
+      customBindHost,
       port: daemonPort,
       portSource,
       probeUrl,
@@ -651,6 +660,7 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
       const links = resolveControlUiLinks({
         port: status.gateway.port,
         bind: status.gateway.bindMode,
+        customBindHost: status.gateway.customBindHost,
         basePath: status.config?.daemon?.controlUi?.basePath,
       });
       defaultRuntime.log(`${label("Dashboard:")} ${infoText(links.httpUrl)}`);
@@ -658,13 +668,6 @@ function printDaemonStatus(status: DaemonStatus, opts: { json: boolean }) {
     if (status.gateway.probeNote) {
       defaultRuntime.log(
         `${label("Probe note:")} ${infoText(status.gateway.probeNote)}`,
-      );
-    }
-    if (status.gateway.bindMode === "tailnet" && !status.gateway.bindHost) {
-      defaultRuntime.error(
-        errorText(
-          "Root cause: gateway bind=tailnet but no tailnet interface was found.",
-        ),
       );
     }
     spacer();
