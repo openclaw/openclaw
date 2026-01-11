@@ -54,7 +54,7 @@ Target formats (`--to`):
 - `poll`
   - Providers: WhatsApp/Discord/MS Teams
   - Required: `--to`, `--poll-question`, `--poll-option` (repeat)
-  - Optional: `--poll-multi`, `--poll-duration-hours`, `--message`
+  - Optional: `--poll-multi`
   - Discord only: `--poll-duration-hours`, `--message`
 
 - `react`

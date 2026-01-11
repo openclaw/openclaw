@@ -13,7 +13,7 @@ runtime on the current machine.
 
 - Required: `--message <text>`
 - Session selection:
-  - `--to <dest>` derives the session key (use delivery-style targets; group/channel targets preserve isolation), **or**
+  - `--to <dest>` derives the session key (group/channel targets preserve isolation; direct chats collapse to `main`), **or**
   - `--session-id <id>` reuses an existing session by id
 - Runs the same embedded agent runtime as normal inbound replies.
 - Thinking/verbose flags persist into the session store.
@@ -37,7 +37,7 @@ clawdbot agent --to +15555550123 --message "Summon reply" --deliver
 
 - `--local`: run locally (requires provider keys in your shell)
 - `--deliver`: send the reply to the chosen provider (requires `--to`)
-- `--provider`: `whatsapp|telegram|discord|slack|signal|imessage|msteams` (default: `whatsapp`)
+- `--provider`: `whatsapp|telegram|discord|slack|signal|imessage` (default: `whatsapp`)
 - `--thinking <off|minimal|low|medium|high>`: persist thinking level
 - `--verbose <on|off>`: persist verbose level
 - `--timeout <seconds>`: override agent timeout

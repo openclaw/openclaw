@@ -362,7 +362,7 @@ Options:
 - `--session-id <id>`
 - `--thinking <off|minimal|low|medium|high>`
 - `--verbose <on|off>`
-- `--provider <whatsapp|telegram|discord|slack|signal|imessage|msteams>`
+- `--provider <whatsapp|telegram|discord|slack|signal|imessage>`
 - `--local`
 - `--deliver`
 - `--json`
