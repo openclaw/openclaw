@@ -213,7 +213,7 @@ public final class GatewayDiscoveryModel {
 
     private func scheduleWideAreaFallback() {
         let domain = ClawdbotBonjour.wideAreaBridgeServiceDomain
-        if ProcessInfo.processInfo.isRunningTests { return }
+        if Self.isRunningTests { return }
         guard self.wideAreaFallbackTask == nil else { return }
         self.wideAreaFallbackTask = Task.detached(priority: .utility) { [weak self] in
             guard let self else { return }
@@ -260,6 +260,16 @@ public final class GatewayDiscoveryModel {
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
             }
         }
+    }
+
+    private nonisolated static var isRunningTests: Bool {
+        // Keep discovery background work from running forever during SwiftPM test runs.
+        if Bundle.allBundles.contains(where: { $0.bundleURL.pathExtension == "xctest" }) { return true }
+
+        let env = ProcessInfo.processInfo.environment
+        return env["XCTestConfigurationFilePath"] != nil
+            || env["XCTestBundlePath"] != nil
+            || env["XCTestSessionIdentifier"] != nil
     }
 
     private func updateGatewaysForAllDomains() {
