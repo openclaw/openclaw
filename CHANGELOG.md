@@ -13,6 +13,11 @@
 ### Fixes
 - CLI/Status: replace the footer with a 3-line “Next steps” recommendation (share/debug/probe), and gate probes behind gateway reachability.
 
+## 2026.1.11-8
+
+### Fixes
+- CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
+
 ## 2026.1.11-5
 
 ### New Features and Changes

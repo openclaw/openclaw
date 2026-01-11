@@ -324,9 +324,18 @@ function renderProbeSummaryLine(probe: GatewayProbeResult, rich: boolean) {
       typeof probe.connectLatencyMs === "number"
         ? `${probe.connectLatencyMs}ms`
         : "unknown";
-    return `${colorize(rich, theme.success, "Connect: ok")} (${latency})`;
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.success, "RPC: ok")}`;
   }
+
   const detail = probe.error ? ` - ${probe.error}` : "";
+  if (probe.connectLatencyMs != null) {
+    const latency =
+      typeof probe.connectLatencyMs === "number"
+        ? `${probe.connectLatencyMs}ms`
+        : "unknown";
+    return `${colorize(rich, theme.success, "Connect: ok")} (${latency}) · ${colorize(rich, theme.error, "RPC: failed")}${detail}`;
+  }
+
   return `${colorize(rich, theme.error, "Connect: failed")}${detail}`;
 }
 
