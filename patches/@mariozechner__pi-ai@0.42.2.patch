@@ -27,3 +27,28 @@ index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..a3aeb6a7ff53bc4f7f44362adb950b2c
      }));
  }
  function mapStopReason(status) {
+diff --git a/dist/providers/openai-responses.js b/dist/providers/openai-responses.js
+index b7c52e449360dcb8152b31f3659401764ce59f17..7c6cd358ee4f7c3994d59be5938554bdb5d32af3 100644
+--- a/dist/providers/openai-responses.js
++++ b/dist/providers/openai-responses.js
+@@ -396,11 +396,12 @@ export const streamOpenAIResponses = (model, context, options) => {
+         }
+         else if (msg.role === "assistant") {
+             const output = [];
+-            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`.
+-            // Tool-call-only turns (thinking + function_call) are valid assistant turns, but
+-            // their stored reasoning items must not be replayed as standalone `reasoning` input.
++            // OpenAI Responses rejects `reasoning` items that are not followed by a `message`,
++            // but tool-call-only turns still require reasoning replay before the function call.
+             const hasTextBlock = msg.content.some((b) => b.type === "text");
++            const hasToolCallBlock = msg.content.some((b) => b.type === "toolCall");
+             for (const block of msg.content) {
+                 // Do not submit thinking blocks if the completion had an error (i.e. abort)
+                 if (block.type === "thinking" && msg.stopReason !== "error") {
+                     if (block.thinkingSignature) {
+-                        if (!hasTextBlock)
++                        if (!hasTextBlock && !hasToolCallBlock)
+                             continue;
+                         const reasoningItem = JSON.parse(block.thinkingSignature);
+                         output.push(reasoningItem);
+                     }
