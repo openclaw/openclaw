@@ -35,7 +35,10 @@ import {
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { dispatchReplyWithDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
-import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
+import {
+  createReplyDispatcherWithTyping,
+  shouldSkipTextOnlyDelivery,
+} from "../auto-reply/reply/reply-dispatcher.js";
 import { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1169,6 +1172,10 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
         responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
           .responsePrefix,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+        skipTextOnlyDelivery: shouldSkipTextOnlyDelivery(
+          cfg,
+          ctxPayload.MediaType,
+        ),
         deliver: async (payload) => {
           const replyThreadTs = replyPlan.nextThreadTs();
           await deliverReplies({

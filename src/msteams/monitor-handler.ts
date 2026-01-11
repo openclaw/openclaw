@@ -544,6 +544,7 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         context,
         replyStyle,
         textLimit,
+        mediaType: ctxPayload.MediaType,
       });
 
     // Dispatch to agent

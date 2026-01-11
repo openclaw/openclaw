@@ -1,5 +1,6 @@
-import type { HumanDelayConfig } from "../../config/types.js";
+import type { ClawdbotConfig, HumanDelayConfig } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
+import { isAudio } from "../transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { normalizeReplyPayload } from "./normalize-reply.js";
 import type { TypingController } from "./typing.js";
@@ -37,6 +38,24 @@ function getHumanDelay(config: HumanDelayConfig | undefined): number {
 
 /** Sleep for a given number of milliseconds. */
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Compute whether to skip text-only delivery for voiceOnly mode.
+ * When the inbound message is audio and voiceOnly is enabled in config,
+ * text replies should be skipped (but still accumulated for voice synthesis).
+ *
+ * @param cfg - The clawdbot config containing audio.reply.voiceOnly setting
+ * @param mediaType - The MediaType of the inbound message (e.g., "audio/ogg")
+ * @returns true if text-only replies should be skipped
+ */
+export function shouldSkipTextOnlyDelivery(
+  cfg: ClawdbotConfig | undefined,
+  mediaType: string | undefined | null,
+): boolean {
+  const inboundIsAudio = isAudio(mediaType);
+  const voiceOnlyEnabled = cfg?.audio?.reply?.voiceOnly === true;
+  return inboundIsAudio && voiceOnlyEnabled;
+}
 
 export type ReplyDispatcherOptions = {
   deliver: ReplyDispatchDeliverer;

@@ -1368,9 +1368,7 @@ export async function monitorWebChannel(
               );
               if (shouldLogVerbose()) {
                 const preview =
-                  payload.text != null
-                    ? elide(payload.text, 400)
-                    : "<media>";
+                  payload.text != null ? elide(payload.text, 400) : "<media>";
                 whatsappOutboundLog.debug(
                   `Reply body: ${preview}${hasMedia ? " (media)" : ""}`,
                 );

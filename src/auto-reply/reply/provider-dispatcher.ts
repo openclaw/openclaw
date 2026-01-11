@@ -9,6 +9,7 @@ import { dispatchReplyFromConfig } from "./dispatch-from-config.js";
 import {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
+  shouldSkipTextOnlyDelivery,
   type ReplyDispatcherOptions,
   type ReplyDispatcherWithTypingOptions,
 } from "./reply-dispatcher.js";
@@ -24,12 +25,13 @@ export async function dispatchReplyWithBufferedBlockDispatcher(params: {
 }): Promise<DispatchFromConfigResult> {
   // For voiceOnly mode: skip text delivery when inbound is audio and voiceOnly is enabled.
   // Text is still accumulated for voice synthesis, just not delivered to the user.
-  const inboundIsAudio = isAudio(params.ctx.MediaType);
-  const voiceOnlyEnabled = params.cfg.audio?.reply?.voiceOnly === true;
-  const skipTextOnlyDelivery = inboundIsAudio && voiceOnlyEnabled;
+  const skipTextOnlyDelivery = shouldSkipTextOnlyDelivery(
+    params.cfg,
+    params.ctx.MediaType,
+  );
 
   logVerbose(
-    `voiceOnly check: MediaType=${params.ctx.MediaType} isAudio=${inboundIsAudio} voiceOnly=${voiceOnlyEnabled} skipText=${skipTextOnlyDelivery}`
+    `voiceOnly check: MediaType=${params.ctx.MediaType} isAudio=${isAudio(params.ctx.MediaType)} voiceOnly=${params.cfg.audio?.reply?.voiceOnly === true} skipText=${skipTextOnlyDelivery}`,
   );
 
   const { dispatcher, replyOptions, markDispatchIdle } =

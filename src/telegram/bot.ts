@@ -940,6 +940,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           : undefined,
         disableBlockStreaming,
       },
+      runtime,
     });
     draftStream?.stop();
     if (!queuedFinal) {

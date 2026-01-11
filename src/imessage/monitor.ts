@@ -16,7 +16,10 @@ import {
   buildMentionRegexes,
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
-import { createReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
+import {
+  createReplyDispatcher,
+  shouldSkipTextOnlyDelivery,
+} from "../auto-reply/reply/reply-dispatcher.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
@@ -491,6 +494,10 @@ export async function monitorIMessageProvider(
       responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
         .responsePrefix,
       humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+      skipTextOnlyDelivery: shouldSkipTextOnlyDelivery(
+        cfg,
+        ctxPayload.MediaType,
+      ),
       deliver: async (payload) => {
         await deliverReplies({
           replies: [payload],

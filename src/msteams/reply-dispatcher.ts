@@ -2,7 +2,10 @@ import {
   resolveEffectiveMessagesConfig,
   resolveHumanDelayConfig,
 } from "../agents/identity.js";
-import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
+import {
+  createReplyDispatcherWithTyping,
+  shouldSkipTextOnlyDelivery,
+} from "../auto-reply/reply/reply-dispatcher.js";
 import type { ClawdbotConfig, MSTeamsReplyStyle } from "../config/types.js";
 import { danger } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -31,6 +34,8 @@ export function createMSTeamsReplyDispatcher(params: {
   context: MSTeamsTurnContext;
   replyStyle: MSTeamsReplyStyle;
   textLimit: number;
+  /** Media type of inbound message (for voiceOnly mode). */
+  mediaType?: string;
 }) {
   const sendTypingIndicator = async () => {
     try {
@@ -44,6 +49,10 @@ export function createMSTeamsReplyDispatcher(params: {
     responsePrefix: resolveEffectiveMessagesConfig(params.cfg, params.agentId)
       .responsePrefix,
     humanDelay: resolveHumanDelayConfig(params.cfg, params.agentId),
+    skipTextOnlyDelivery: shouldSkipTextOnlyDelivery(
+      params.cfg,
+      params.mediaType,
+    ),
     deliver: async (payload) => {
       const messages = renderReplyPayloadsToMessages([payload], {
         textChunkLimit: params.textLimit,
