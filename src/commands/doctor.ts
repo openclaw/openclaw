@@ -1,10 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  intro as clackIntro,
-  outro as clackOutro,
-} from "@clack/prompts";
+import { intro as clackIntro, outro as clackOutro } from "@clack/prompts";
 import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -39,8 +36,8 @@ import { runGatewayUpdate } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { note } from "../terminal/note.js";
+import { stylePromptTitle } from "../terminal/prompt-style.js";
 import { sleep } from "../utils.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,

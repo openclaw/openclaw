@@ -639,8 +639,10 @@ describe("doctor", () => {
         ([message, title]) =>
           title === "Sandbox" &&
           typeof message === "string" &&
-          message.includes('agents.list (id "work") sandbox docker') &&
-          message.includes('scope resolves to "shared"'),
+          message
+            .replace(/\s+/g, " ")
+            .includes('agents.list (id "work") sandbox docker') &&
+          message.replace(/\s+/g, " ").includes('scope resolves to "shared"'),
       ),
     ).toBe(true);
   });

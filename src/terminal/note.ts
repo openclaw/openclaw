@@ -1,11 +1,6 @@
 import { note as clackNote } from "@clack/prompts";
+import { visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
-
-const ANSI_ESCAPE = /\u001b\[[0-9;]*m/g;
-
-function visibleLength(value: string): number {
-  return Array.from(value.replace(ANSI_ESCAPE, "")).length;
-}
 
 function splitLongWord(word: string, maxLen: number): string[] {
   if (maxLen <= 0) return [word];
@@ -25,8 +20,8 @@ function wrapLine(line: string, maxWidth: number): string[] {
   const content = match?.[3] ?? "";
   const firstPrefix = `${indent}${bullet}`;
   const nextPrefix = `${indent}${bullet ? " ".repeat(bullet.length) : ""}`;
-  const firstWidth = Math.max(10, maxWidth - visibleLength(firstPrefix));
-  const nextWidth = Math.max(10, maxWidth - visibleLength(nextPrefix));
+  const firstWidth = Math.max(10, maxWidth - visibleWidth(firstPrefix));
+  const nextWidth = Math.max(10, maxWidth - visibleWidth(nextPrefix));
 
   const words = content.split(/\s+/).filter(Boolean);
   const lines: string[] = [];
@@ -36,7 +31,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
 
   for (const word of words) {
     if (!current) {
-      if (visibleLength(word) > available) {
+      if (visibleWidth(word) > available) {
         const parts = splitLongWord(word, available);
         const first = parts.shift() ?? "";
         lines.push(prefix + first);
@@ -50,7 +45,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
     }
 
     const candidate = `${current} ${word}`;
-    if (visibleLength(candidate) <= available) {
+    if (visibleWidth(candidate) <= available) {
       current = candidate;
       continue;
     }
@@ -59,7 +54,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
     prefix = nextPrefix;
     available = nextWidth;
 
-    if (visibleLength(word) > available) {
+    if (visibleWidth(word) > available) {
       const parts = splitLongWord(word, available);
       const first = parts.shift() ?? "";
       lines.push(prefix + first);

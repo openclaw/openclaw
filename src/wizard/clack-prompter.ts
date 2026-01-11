@@ -11,13 +11,13 @@ import {
   text,
 } from "@clack/prompts";
 import { createCliProgress } from "../cli/progress.js";
+import { note as emitNote } from "../terminal/note.js";
 import {
   stylePromptHint,
   stylePromptMessage,
   stylePromptTitle,
 } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
-import { note as emitNote } from "../terminal/note.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
