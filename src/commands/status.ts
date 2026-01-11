@@ -1028,7 +1028,18 @@ export async function statusCommand(
   runtime.log("");
   runtime.log("FAQ: https://docs.clawd.bot/faq");
   runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
-  runtime.log(
-    "More: clawdbot status --all · clawdbot status --deep · clawdbot gateway status · clawdbot providers status --probe · clawdbot daemon status · clawdbot logs --follow",
-  );
+  runtime.log("");
+  runtime.log("More:");
+  runtime.log("  clawdbot status --all   # pasteable report (redacts tokens)");
+  runtime.log("  clawdbot logs --follow  # live logs");
+  if (!gatewayReachable) {
+    runtime.log(
+      "  clawdbot gateway status # check which gateway you’re targeting",
+    );
+    runtime.log(
+      "  clawdbot daemon status  # supervisor state (launchd/systemd/…)",
+    );
+  } else {
+    runtime.log("  clawdbot status --deep  # gateway health + provider probes");
+  }
 }
