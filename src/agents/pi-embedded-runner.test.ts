@@ -11,6 +11,7 @@ import {
   applyGoogleTurnOrderingFix,
   buildEmbeddedSandboxInfo,
   createSystemPromptOverride,
+  getDmHistoryLimitFromSessionKey,
   limitHistoryTurns,
   runEmbeddedPiAgent,
   splitSdkTools,
@@ -367,6 +368,68 @@ describe("limitHistoryTurns", () => {
     const limited = limitHistoryTurns(messages, 1);
     expect(limited[0].content).toEqual([{ type: "text", text: "second" }]);
     expect(limited[1].content).toEqual([{ type: "text", text: "response" }]);
+  });
+});
+
+describe("getDmHistoryLimitFromSessionKey", () => {
+  it("returns undefined when sessionKey is undefined", () => {
+    expect(getDmHistoryLimitFromSessionKey(undefined, {})).toBeUndefined();
+  });
+
+  it("returns undefined when config is undefined", () => {
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123", undefined),
+    ).toBeUndefined();
+  });
+
+  it("returns dmHistoryLimit for telegram provider", () => {
+    const config = { telegram: { dmHistoryLimit: 15 } } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("telegram:dm:123", config)).toBe(15);
+  });
+
+  it("returns dmHistoryLimit for whatsapp provider", () => {
+    const config = { whatsapp: { dmHistoryLimit: 20 } } as ClawdbotConfig;
+    expect(getDmHistoryLimitFromSessionKey("whatsapp:dm:123", config)).toBe(20);
+  });
+
+  it("returns dmHistoryLimit for agent-prefixed session keys", () => {
+    const config = { telegram: { dmHistoryLimit: 10 } } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("agent:main:telegram:dm:123", config),
+    ).toBe(10);
+  });
+
+  it("returns undefined for unknown provider", () => {
+    const config = { telegram: { dmHistoryLimit: 15 } } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("unknown:dm:123", config),
+    ).toBeUndefined();
+  });
+
+  it("returns undefined when provider config has no dmHistoryLimit", () => {
+    const config = { telegram: {} } as ClawdbotConfig;
+    expect(
+      getDmHistoryLimitFromSessionKey("telegram:dm:123", config),
+    ).toBeUndefined();
+  });
+
+  it("handles all supported providers", () => {
+    const providers = [
+      "telegram",
+      "whatsapp",
+      "discord",
+      "slack",
+      "signal",
+      "imessage",
+      "msteams",
+    ] as const;
+
+    for (const provider of providers) {
+      const config = { [provider]: { dmHistoryLimit: 5 } } as ClawdbotConfig;
+      expect(
+        getDmHistoryLimitFromSessionKey(`${provider}:dm:123`, config),
+      ).toBe(5);
+    }
   });
 });
 

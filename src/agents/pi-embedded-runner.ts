@@ -445,6 +445,49 @@ export function limitHistoryTurns(
   return messages;
 }
 
+/**
+ * Extracts the provider name from a session key and looks up dmHistoryLimit
+ * from the provider config.
+ *
+ * Session key formats:
+ * - `telegram:dm:123` → provider = telegram
+ * - `agent:main:telegram:dm:123` → provider = telegram (skip "agent:<id>:")
+ */
+export function getDmHistoryLimitFromSessionKey(
+  sessionKey: string | undefined,
+  config: ClawdbotConfig | undefined,
+): number | undefined {
+  if (!sessionKey || !config) return undefined;
+
+  const parts = sessionKey.split(":").filter(Boolean);
+  // Handle agent-prefixed keys: agent:<agentId>:<provider>:...
+  const providerParts =
+    parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
+
+  const provider = providerParts[0]?.toLowerCase();
+  if (!provider) return undefined;
+
+  // Map provider to config key
+  switch (provider) {
+    case "telegram":
+      return config.telegram?.dmHistoryLimit;
+    case "whatsapp":
+      return config.whatsapp?.dmHistoryLimit;
+    case "discord":
+      return config.discord?.dmHistoryLimit;
+    case "slack":
+      return config.slack?.dmHistoryLimit;
+    case "signal":
+      return config.signal?.dmHistoryLimit;
+    case "imessage":
+      return config.imessage?.dmHistoryLimit;
+    case "msteams":
+      return config.msteams?.dmHistoryLimit;
+    default:
+      return undefined;
+  }
+}
+
 const ACTIVE_EMBEDDED_RUNS = new Map<string, EmbeddedPiQueueHandle>();
 type EmbeddedRunWaiter = {
   resolve: (ended: boolean) => void;
@@ -1060,7 +1103,7 @@ export async function compactEmbeddedPiSession(params: {
             const validated = validateGeminiTurns(prior);
             const limited = limitHistoryTurns(
               validated,
-              params.config?.session?.dmHistoryLimit,
+              getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
             );
             if (limited.length > 0) {
               session.agent.replaceMessages(limited);
@@ -1455,7 +1498,7 @@ export async function runEmbeddedPiAgent(params: {
             const validated = validateGeminiTurns(prior);
             const limited = limitHistoryTurns(
               validated,
-              params.config?.session?.dmHistoryLimit,
+              getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
             );
             if (limited.length > 0) {
               session.agent.replaceMessages(limited);
