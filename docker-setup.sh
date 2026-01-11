@@ -30,6 +30,7 @@ export CLAWDBOT_GATEWAY_PORT="${CLAWDBOT_GATEWAY_PORT:-18789}"
 export CLAWDBOT_BRIDGE_PORT="${CLAWDBOT_BRIDGE_PORT:-18790}"
 export CLAWDBOT_GATEWAY_BIND="${CLAWDBOT_GATEWAY_BIND:-lan}"
 export CLAWDBOT_IMAGE="$IMAGE_NAME"
+export CLAWDBOT_DOCKER_APT_PACKAGES="${CLAWDBOT_DOCKER_APT_PACKAGES:-}"
 
 if [[ -z "${CLAWDBOT_GATEWAY_TOKEN:-}" ]]; then
   if command -v openssl >/dev/null 2>&1; then
@@ -161,10 +162,15 @@ upsert_env "$ENV_FILE" \
   CLAWDBOT_GATEWAY_TOKEN \
   CLAWDBOT_IMAGE \
   CLAWDBOT_EXTRA_MOUNTS \
-  CLAWDBOT_HOME_VOLUME
+  CLAWDBOT_HOME_VOLUME \
+  CLAWDBOT_DOCKER_APT_PACKAGES
 
 echo "==> Building Docker image: $IMAGE_NAME"
-docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/Dockerfile" "$ROOT_DIR"
+docker build \
+  --build-arg "CLAWDBOT_DOCKER_APT_PACKAGES=${CLAWDBOT_DOCKER_APT_PACKAGES}" \
+  -t "$IMAGE_NAME" \
+  -f "$ROOT_DIR/Dockerfile" \
+  "$ROOT_DIR"
 
 echo ""
 echo "==> Onboarding (interactive)"

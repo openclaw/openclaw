@@ -109,6 +109,25 @@ Notes:
   extra compose file.
 - The named volume persists until removed with `docker volume rm <name>`.
 
+### Install extra apt packages (optional)
+
+If you need system packages inside the image (for example, build tools or media
+libraries), set `CLAWDBOT_DOCKER_APT_PACKAGES` before running `docker-setup.sh`.
+This installs the packages during the image build, so they persist even if the
+container is deleted.
+
+Example:
+
+```bash
+export CLAWDBOT_DOCKER_APT_PACKAGES="ffmpeg build-essential"
+./docker-setup.sh
+```
+
+Notes:
+- This accepts a space-separated list of apt package names.
+- If you change `CLAWDBOT_DOCKER_APT_PACKAGES`, rerun `docker-setup.sh` to rebuild
+  the image.
+
 ### Faster rebuilds (recommended)
 
 To speed up rebuilds, order your Dockerfile so dependency layers are cached.
