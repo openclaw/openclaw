@@ -61,8 +61,22 @@ Key behaviors:
 - `wakeMode: "now"` triggers an immediate heartbeat after posting the summary.
 - If `payload.deliver: true`, output is delivered to a provider; otherwise it stays internal.
 
-Use isolated jobs for noisy, frequent, or “background chores” that shouldn’t spam
+Use isolated jobs for noisy, frequent, or "background chores" that shouldn't spam
 your main chat history.
+
+### Model and thinking overrides
+Isolated jobs (`agentTurn`) can override the model and thinking level:
+- `model`: Provider/model string (e.g., `anthropic/claude-sonnet-4-20250514`) or alias (e.g., `opus`)
+- `thinking`: Thinking level (`off`, `minimal`, `low`, `medium`, `high`)
+
+Note: You can set `model` on main-session jobs too, but it changes the shared main
+session model. We recommend model overrides only for isolated jobs to avoid
+unexpected context shifts.
+
+Resolution priority:
+1. Job payload override (highest)
+2. Hook-specific defaults (e.g., `hooks.gmail.model`)
+3. Agent config default
 
 ### Delivery (provider + target)
 Isolated jobs can deliver output to a provider. The job payload can specify:
@@ -140,6 +154,21 @@ clawdbot cron add \
   --deliver \
   --provider telegram \
   --to "-1001234567890:topic:123"
+```
+
+Isolated job with model and thinking override:
+```bash
+clawdbot cron add \
+  --name "Deep analysis" \
+  --cron "0 6 * * 1" \
+  --tz "America/Los_Angeles" \
+  --session isolated \
+  --message "Weekly deep analysis of project progress." \
+  --model "opus" \
+  --thinking high \
+  --deliver \
+  --provider whatsapp \
+  --to "+15551234567"
 ```
 
 Manual run (debug):
