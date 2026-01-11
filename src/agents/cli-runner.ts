@@ -656,7 +656,8 @@ export async function runCliAgent(params: {
       meta: {
         durationMs: Date.now() - started,
         agentMeta: {
-          sessionId: output.sessionId ?? sessionIdSent ?? params.sessionId,
+          sessionId:
+            output.sessionId ?? sessionIdSent ?? params.sessionId ?? "",
           provider: params.provider,
           model: modelId,
           usage: output.usage,
