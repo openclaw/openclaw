@@ -55,6 +55,13 @@ const AllMessageActions = [
   "role-remove",
   "channel-info",
   "channel-list",
+  "channel-create",
+  "channel-edit",
+  "channel-delete",
+  "channel-move",
+  "category-create",
+  "category-edit",
+  "category-delete",
   "voice-status",
   "event-list",
   "event-create",
@@ -130,6 +137,14 @@ const MessageToolCommonSchema = {
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: Type.Optional(Type.Number()),
+  name: Type.Optional(Type.String()),
+  type: Type.Optional(Type.Number()),
+  parentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  topic: Type.Optional(Type.String()),
+  position: Type.Optional(Type.Number()),
+  nsfw: Type.Optional(Type.Boolean()),
+  rateLimitPerUser: Type.Optional(Type.Number()),
+  categoryId: Type.Optional(Type.String()),
 };
 
 function buildMessageToolSchemaFromActions(

@@ -1,6 +1,6 @@
 ---
 name: discord
-description: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
+description: Use when you need to control Discord from Clawdbot via the discord tool: send messages, react, post or upload stickers, upload emojis, run polls, manage threads/pins/search, create/edit/delete channels and categories, fetch permissions or member/role/channel info, or handle moderation actions in Discord DMs or channels.
 ---
 
 # Discord Actions
@@ -135,6 +135,7 @@ Use `discord.actions.*` to disable action groups:
 - `emojiUploads`, `stickerUploads`
 - `memberInfo`, `roleInfo`, `channelInfo`, `voiceStatus`, `events`
 - `roles` (role add/remove, default `false`)
+- `channels` (channel/category create/edit/delete/move, default `false`)
 - `moderation` (timeout/kick/ban, default `false`)
 ### Read recent messages
 
@@ -311,6 +312,90 @@ Use `discord.actions.*` to disable action groups:
 {
   "action": "channelList",
   "guildId": "999"
+}
+```
+
+### Channel management (disabled by default)
+
+Create, edit, delete, and move channels and categories. Enable via `discord.actions.channels: true`.
+
+**Create a text channel:**
+
+```json
+{
+  "action": "channelCreate",
+  "guildId": "999",
+  "name": "general-chat",
+  "type": 0,
+  "parentId": "888",
+  "topic": "General discussion"
+}
+```
+
+- `type`: 0 = text, 2 = voice, 4 = category (use `categoryCreate` for convenience)
+- `parentId`: category ID to nest under (optional)
+- `topic`, `position`, `nsfw`: optional
+
+**Create a category:**
+
+```json
+{
+  "action": "categoryCreate",
+  "guildId": "999",
+  "name": "Projects"
+}
+```
+
+**Edit a channel:**
+
+```json
+{
+  "action": "channelEdit",
+  "channelId": "123",
+  "name": "new-name",
+  "topic": "Updated topic"
+}
+```
+
+- Supports `name`, `topic`, `position`, `parentId` (null to remove from category), `nsfw`, `rateLimitPerUser`
+
+**Move a channel:**
+
+```json
+{
+  "action": "channelMove",
+  "guildId": "999",
+  "channelId": "123",
+  "parentId": "888",
+  "position": 2
+}
+```
+
+- `parentId`: target category (null to move to top level)
+
+**Delete a channel:**
+
+```json
+{
+  "action": "channelDelete",
+  "channelId": "123"
+}
+```
+
+**Edit/delete a category:**
+
+```json
+{
+  "action": "categoryEdit",
+  "categoryId": "888",
+  "name": "Renamed Category"
+}
+```
+
+```json
+{
+  "action": "categoryDelete",
+  "categoryId": "888"
 }
 ```
 
