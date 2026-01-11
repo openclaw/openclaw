@@ -28,12 +28,16 @@ export function isUnhandledRejectionHandled(reason: unknown): boolean {
 }
 
 export function installUnhandledRejectionHandler(): void {
-  process.on("unhandledRejection", (reason, _promise) => {
-    if (isUnhandledRejectionHandled(reason)) return;
-    console.error(
-      "[clawdbot] Unhandled promise rejection:",
-      reason instanceof Error ? (reason.stack ?? reason.message) : reason,
-    );
-    process.exit(1);
-  });
+  globalThis.process.on(
+    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+    "unhandledRejection" as any,
+    (reason: unknown, _promise: Promise<unknown>) => {
+      if (isUnhandledRejectionHandled(reason)) return;
+      console.error(
+        "[clawdbot] Unhandled promise rejection:",
+        reason instanceof Error ? (reason.stack ?? reason.message) : reason,
+      );
+      process.exit(1);
+    },
+  );
 }

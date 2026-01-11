@@ -333,8 +333,10 @@ export async function runGmailService(opts: GmailRunOptions) {
     child.kill("SIGTERM");
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGINT" as any, shutdown);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGTERM" as any, shutdown);
 
   child.on("exit", () => {
     if (shuttingDown) return;

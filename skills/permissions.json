@@ -1,0 +1,28 @@
+{
+  "tags": {
+    "Family": {
+      "tagId": 21778,
+      "skills": ["*"],
+      "capabilities": ["full_access", "send_email", "control_home", "access_calendar", "access_personal", "access_twenty"]
+    },
+    "Extended Family": {
+      "tagId": 21779,
+      "skills": ["brave-search", "weather", "ppl"],
+      "capabilities": ["basic_qa", "read_ppl"]
+    },
+    "Work": {
+      "tagId": 21785,
+      "skills": ["twenty", "gog", "brave-search", "github"],
+      "capabilities": ["access_twenty", "work_calendar", "work_email"]
+    }
+  },
+  "default": {
+    "skills": [],
+    "capabilities": ["basic_qa"]
+  },
+  "owner": {
+    "phones": ["+18572646913"],
+    "skills": ["*"],
+    "capabilities": ["*"]
+  }
+}

@@ -978,7 +978,8 @@ export async function monitorWebProvider(
   const handleSigint = () => {
     sigintStop = true;
   };
-  process.once("SIGINT", handleSigint);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.once("SIGINT" as any, handleSigint);
 
   let reconnectAttempts = 0;
 
@@ -1681,7 +1682,7 @@ export async function monitorWebProvider(
   status.lastEventAt = Date.now();
   emitStatus();
 
-  process.removeListener("SIGINT", handleSigint);
+  process.off("SIGINT", handleSigint);
 }
 
 export { DEFAULT_WEB_MEDIA_BYTES };

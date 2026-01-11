@@ -101,9 +101,9 @@ async function main() {
   let restartResolver: (() => void) | null = null;
 
   const cleanupSignals = () => {
-    process.removeListener("SIGTERM", onSigterm);
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGUSR1", onSigusr1);
+    process.off("SIGTERM", onSigterm);
+    process.off("SIGINT", onSigint);
+    process.off("SIGUSR1", onSigusr1);
   };
 
   const request = (action: "stop" | "restart", signal: string) => {
@@ -162,9 +162,12 @@ async function main() {
     request("restart", "SIGUSR1");
   };
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGTERM" as any, onSigterm);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGINT" as any, onSigint);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGUSR1" as any, onSigusr1);
 
   try {
     // eslint-disable-next-line no-constant-condition

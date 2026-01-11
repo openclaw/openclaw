@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 
 import type { Command } from "commander";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
@@ -387,9 +388,12 @@ async function runGatewayLoop(params: {
   let restartResolver: (() => void) | null = null;
 
   const cleanupSignals = () => {
-    process.removeListener("SIGTERM", onSigterm);
-    process.removeListener("SIGINT", onSigint);
-    process.removeListener("SIGUSR1", onSigusr1);
+    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+    globalThis.process.off("SIGTERM" as any, onSigterm);
+    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+    globalThis.process.off("SIGINT" as any, onSigint);
+    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+    globalThis.process.off("SIGUSR1" as any, onSigusr1);
   };
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -444,9 +448,12 @@ async function runGatewayLoop(params: {
     request("restart", "SIGUSR1");
   };
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGTERM" as any, onSigterm);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGINT" as any, onSigint);
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("SIGUSR1" as any, onSigusr1);
 
   try {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).

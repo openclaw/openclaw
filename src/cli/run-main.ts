@@ -27,7 +27,8 @@ export async function runCli(argv: string[] = process.argv) {
   // These log the error and exit gracefully instead of crashing without trace.
   installUnhandledRejectionHandler();
 
-  process.on("uncaughtException", (error) => {
+  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
+  globalThis.process.on("uncaughtException" as any, (error: Error) => {
     console.error(
       "[clawdbot] Uncaught exception:",
       error.stack ?? error.message,
