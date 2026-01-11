@@ -27,7 +27,7 @@ extension OnboardingView {
             Spacer(minLength: 0)
             self.navigationBar
         }
-        .frame(width: self.pageWidth, height: 684)
+        .frame(width: self.pageWidth, height: Self.windowHeight)
         .background(Color(NSColor.windowBackgroundColor))
         .onAppear {
             self.currentPage = 0

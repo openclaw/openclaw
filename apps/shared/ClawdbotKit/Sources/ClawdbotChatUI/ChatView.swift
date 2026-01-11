@@ -52,8 +52,10 @@ public struct ClawdbotChatView: View {
 
     public var body: some View {
         ZStack {
-            ClawdbotChatTheme.background
-                .ignoresSafeArea()
+            if self.style == .standard {
+                ClawdbotChatTheme.background
+                    .ignoresSafeArea()
+            }
 
             VStack(spacing: Layout.stackSpacing) {
                 self.messageList
