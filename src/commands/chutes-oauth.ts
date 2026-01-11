@@ -41,7 +41,9 @@ async function waitForLocalCallback(params: {
 }): Promise<{ code: string; state: string }> {
   const redirectUrl = new URL(params.redirectUri);
   if (redirectUrl.protocol !== "http:") {
-    throw new Error(`Chutes OAuth redirect URI must be http:// (got ${params.redirectUri})`);
+    throw new Error(
+      `Chutes OAuth redirect URI must be http:// (got ${params.redirectUri})`,
+    );
   }
   const hostname = redirectUrl.hostname || "127.0.0.1";
   const port = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;

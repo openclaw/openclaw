@@ -110,4 +110,3 @@ describe("loginChutes", () => {
     expect(creds.email).toBe("manual-user");
   });
 });
-
