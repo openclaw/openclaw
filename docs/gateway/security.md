@@ -199,6 +199,15 @@ Also consider agent workspace access inside the sandbox:
 
 Important: `tools.elevated` is the global baseline escape hatch that runs bash on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
 
+## Browser control risks
+
+Enabling browser control gives the model the ability to drive a real browser.
+If that browser profile already contains logged-in sessions, the model can
+access those accounts and data. Treat browser profiles as **sensitive state**:
+- Prefer a dedicated profile for the agent (the default `clawd` profile).
+- Avoid pointing the agent at your personal daily-driver profile.
+- Keep host browser control disabled for sandboxed agents unless you trust them.
+
 ## Per-agent access profiles (multi-agent)
 
 With multi-agent routing, each agent can have its own sandbox + tool policy:

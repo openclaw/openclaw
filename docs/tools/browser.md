@@ -245,5 +245,6 @@ How it maps:
   - In sandboxed sessions, `target: "host"` requires `agents.defaults.sandbox.browser.allowHostControl=true`.
   - If `target` is omitted: sandboxed sessions default to `sandbox`, non-sandbox sessions default to `host`.
   - Sandbox allowlists can restrict `target: "custom"` to specific URLs/hosts/ports.
+  - Defaults: allowlists unset (no restriction), and sandbox host control is disabled.
 
 This keeps the agent deterministic and avoids brittle selectors.

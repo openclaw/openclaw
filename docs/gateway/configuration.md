@@ -1471,6 +1471,7 @@ Allowlists for remote control:
 - `allowedControlUrls`: exact control URLs permitted for `target: "custom"`.
 - `allowedControlHosts`: hostnames permitted (hostname only, no port).
 - `allowedControlPorts`: ports permitted (defaults: http=80, https=443).
+Defaults: all allowlists are unset (no restriction). `allowHostControl` defaults to false.
 
 ### `models` (custom providers + base URLs)
 
