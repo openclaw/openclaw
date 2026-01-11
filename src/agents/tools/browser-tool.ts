@@ -143,21 +143,15 @@ function resolveBrowserBaseUrl(params: {
   const normalizedDefault = params.defaultControlUrl?.trim() ?? "";
   const target =
     params.target ??
-    (normalizedControlUrl
-      ? "custom"
-      : normalizedDefault
-        ? "sandbox"
-        : "host");
+    (normalizedControlUrl ? "custom" : normalizedDefault ? "sandbox" : "host");
 
   if (target !== "custom" && params.target && normalizedControlUrl) {
-    throw new Error(
-      'controlUrl is only supported with target="custom".',
-    );
+    throw new Error('controlUrl is only supported with target="custom".');
   }
 
   if (target === "custom") {
     if (!normalizedControlUrl) {
-      throw new Error('Custom browser target requires controlUrl.');
+      throw new Error("Custom browser target requires controlUrl.");
     }
     return normalizedControlUrl.replace(/\/$/, "");
   }
