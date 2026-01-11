@@ -161,8 +161,9 @@ Target formats (`--to`):
 ### Moderation (Discord)
 
 - `timeout`: `--guild-id`, `--user-id` (+ `--duration-min` or `--until`)
-- `kick`: `--guild-id`, `--user-id`
-- `ban`: `--guild-id`, `--user-id` (+ `--delete-days`)
+- `kick`: `--guild-id`, `--user-id` (+ `--reason`)
+- `ban`: `--guild-id`, `--user-id` (+ `--delete-days`, `--reason`)
+  - `timeout` also supports `--reason`
 
 ## Examples
 
