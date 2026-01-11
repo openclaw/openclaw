@@ -9,7 +9,6 @@ import {
   CODEX_CLI_PROFILE_ID,
   ensureAuthProfileStore,
   listProfilesForProvider,
-  resolveAuthProfileOrder,
   upsertAuthProfile,
 } from "../agents/auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -21,6 +20,7 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { upsertSharedEnvVar } from "../infra/env-file.js";
+import { githubCopilotLoginCommand } from "../providers/github-copilot-auth.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
@@ -40,22 +40,17 @@ import {
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
   applyMinimaxConfig,
+  applyMinimaxHostedConfig,
+  applyMinimaxHostedProviderConfig,
   applyMinimaxProviderConfig,
-  applyMoonshotConfig,
-  applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
-  applyOpenrouterConfig,
-  applyOpenrouterProviderConfig,
   applyZaiConfig,
-  MOONSHOT_DEFAULT_MODEL_REF,
-  OPENROUTER_DEFAULT_MODEL_REF,
+  MINIMAX_HOSTED_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
-  setMoonshotApiKey,
   setOpencodeZenApiKey,
-  setOpenrouterApiKey,
   setZaiApiKey,
   writeOAuthCredentials,
   ZAI_DEFAULT_MODEL_REF,
@@ -67,55 +62,6 @@ import {
   OPENAI_CODEX_DEFAULT_MODEL,
 } from "./openai-codex-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
-
-const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
-
-function normalizeApiKeyInput(raw: string): string {
-  const trimmed = String(raw ?? "").trim();
-  if (!trimmed) return "";
-
-  // Handle shell-style assignments: export KEY="value" or KEY=value
-  const assignmentMatch = trimmed.match(
-    /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*\s*=\s*(.+)$/,
-  );
-  const valuePart = assignmentMatch ? assignmentMatch[1].trim() : trimmed;
-
-  const unquoted =
-    valuePart.length >= 2 &&
-    ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
-      (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
-      (valuePart.startsWith("`") && valuePart.endsWith("`")))
-      ? valuePart.slice(1, -1)
-      : valuePart;
-
-  const withoutSemicolon = unquoted.endsWith(";")
-    ? unquoted.slice(0, -1)
-    : unquoted;
-
-  return withoutSemicolon.trim();
-}
-
-const validateApiKeyInput = (value: unknown) =>
-  normalizeApiKeyInput(String(value ?? "")).length > 0 ? undefined : "Required";
-
-function formatApiKeyPreview(
-  raw: string,
-  opts: { head?: number; tail?: number } = {},
-): string {
-  const trimmed = raw.trim();
-  if (!trimmed) return "…";
-  const head = opts.head ?? DEFAULT_KEY_PREVIEW.head;
-  const tail = opts.tail ?? DEFAULT_KEY_PREVIEW.tail;
-  if (trimmed.length <= head + tail) {
-    const shortHead = Math.min(2, trimmed.length);
-    const shortTail = Math.min(2, trimmed.length - shortHead);
-    if (shortTail <= 0) {
-      return `${trimmed.slice(0, shortHead)}…`;
-    }
-    return `${trimmed.slice(0, shortHead)}…${trimmed.slice(-shortTail)}`;
-  }
-  return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
-}
 
 export async function warnIfModelConfigLooksOff(
   config: ClawdbotConfig,
@@ -388,7 +334,7 @@ export async function applyAuthChoice(params: {
     const envKey = resolveEnvApiKey("openai");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -409,9 +355,9 @@ export async function applyAuthChoice(params: {
 
     const key = await params.prompter.text({
       message: "Enter OpenAI API key",
-      validate: validateApiKeyInput,
+      validate: (value) => (value?.trim() ? undefined : "Required"),
     });
-    const trimmed = normalizeApiKeyInput(String(key));
+    const trimmed = String(key).trim();
     const result = upsertSharedEnvVar({
       key: "OPENAI_API_KEY",
       value: trimmed,
@@ -421,115 +367,6 @@ export async function applyAuthChoice(params: {
       `Saved OPENAI_API_KEY to ${result.path} for launchd compatibility.`,
       "OpenAI API key",
     );
-  } else if (params.authChoice === "openrouter-api-key") {
-    const store = ensureAuthProfileStore(params.agentDir, {
-      allowKeychainPrompt: false,
-    });
-    const profileOrder = resolveAuthProfileOrder({
-      cfg: nextConfig,
-      store,
-      provider: "openrouter",
-    });
-    const existingProfileId = profileOrder.find((profileId) =>
-      Boolean(store.profiles[profileId]),
-    );
-    const existingCred = existingProfileId
-      ? store.profiles[existingProfileId]
-      : undefined;
-    let profileId = "openrouter:default";
-    let mode: "api_key" | "oauth" | "token" = "api_key";
-    let hasCredential = false;
-
-    if (existingProfileId && existingCred?.type) {
-      profileId = existingProfileId;
-      mode =
-        existingCred.type === "oauth"
-          ? "oauth"
-          : existingCred.type === "token"
-            ? "token"
-            : "api_key";
-      hasCredential = true;
-    }
-
-    if (!hasCredential) {
-      const envKey = resolveEnvApiKey("openrouter");
-      if (envKey) {
-        const useExisting = await params.prompter.confirm({
-          message: `Use existing OPENROUTER_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-          initialValue: true,
-        });
-        if (useExisting) {
-          await setOpenrouterApiKey(envKey.apiKey, params.agentDir);
-          hasCredential = true;
-        }
-      }
-    }
-
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter OpenRouter API key",
-        validate: validateApiKeyInput,
-      });
-      await setOpenrouterApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
-      hasCredential = true;
-    }
-
-    if (hasCredential) {
-      nextConfig = applyAuthProfileConfig(nextConfig, {
-        profileId,
-        provider: "openrouter",
-        mode,
-      });
-    }
-    if (params.setDefaultModel) {
-      nextConfig = applyOpenrouterConfig(nextConfig);
-      await params.prompter.note(
-        `Default model set to ${OPENROUTER_DEFAULT_MODEL_REF}`,
-        "Model configured",
-      );
-    } else {
-      nextConfig = applyOpenrouterProviderConfig(nextConfig);
-      agentModelOverride = OPENROUTER_DEFAULT_MODEL_REF;
-      await noteAgentModel(OPENROUTER_DEFAULT_MODEL_REF);
-    }
-  } else if (params.authChoice === "moonshot-api-key") {
-    let hasCredential = false;
-    const envKey = resolveEnvApiKey("moonshot");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Moonshot API key",
-        validate: validateApiKeyInput,
-      });
-      await setMoonshotApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
-      profileId: "moonshot:default",
-      provider: "moonshot",
-      mode: "api_key",
-    });
-    if (params.setDefaultModel) {
-      nextConfig = applyMoonshotConfig(nextConfig);
-    } else {
-      nextConfig = applyMoonshotProviderConfig(nextConfig);
-      agentModelOverride = MOONSHOT_DEFAULT_MODEL_REF;
-      await noteAgentModel(MOONSHOT_DEFAULT_MODEL_REF);
-    }
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(
@@ -742,28 +579,11 @@ export async function applyAuthChoice(params: {
       );
     }
   } else if (params.authChoice === "gemini-api-key") {
-    let hasCredential = false;
-    const envKey = resolveEnvApiKey("google");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing GEMINI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setGeminiApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Gemini API key",
-        validate: validateApiKeyInput,
-      });
-      await setGeminiApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
-    }
+    const key = await params.prompter.text({
+      message: "Enter Gemini API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setGeminiApiKey(String(key).trim(), params.agentDir);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",
       provider: "google",
@@ -783,25 +603,11 @@ export async function applyAuthChoice(params: {
       await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
     }
   } else if (params.authChoice === "zai-api-key") {
-    let hasCredential = false;
-    const envKey = resolveEnvApiKey("zai");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing ZAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setZaiApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Z.AI API key",
-        validate: validateApiKeyInput,
-      });
-      await setZaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
-    }
+    const key = await params.prompter.text({
+      message: "Enter Z.AI API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setZaiApiKey(String(key).trim(), params.agentDir);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "zai:default",
       provider: "zai",
@@ -836,76 +642,33 @@ export async function applyAuthChoice(params: {
       await noteAgentModel(ZAI_DEFAULT_MODEL_REF);
     }
   } else if (params.authChoice === "apiKey") {
-    let hasCredential = false;
-    const envKey = process.env.ANTHROPIC_API_KEY?.trim();
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing ANTHROPIC_API_KEY (env, ${formatApiKeyPreview(envKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setAnthropicApiKey(envKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Anthropic API key",
-        validate: validateApiKeyInput,
-      });
-      await setAnthropicApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
-    }
+    const key = await params.prompter.text({
+      message: "Enter Anthropic API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setAnthropicApiKey(String(key).trim(), params.agentDir);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",
       provider: "anthropic",
       mode: "api_key",
     });
-  } else if (
-    params.authChoice === "minimax-cloud" ||
-    params.authChoice === "minimax-api" ||
-    params.authChoice === "minimax-api-lightning"
-  ) {
-    const modelId =
-      params.authChoice === "minimax-api-lightning"
-        ? "MiniMax-M2.1-lightning"
-        : "MiniMax-M2.1";
-    let hasCredential = false;
-    const envKey = resolveEnvApiKey("minimax");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing MINIMAX_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setMinimaxApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter MiniMax API key",
-        validate: validateApiKeyInput,
-      });
-      await setMinimaxApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
-    }
+  } else if (params.authChoice === "minimax-cloud") {
+    const key = await params.prompter.text({
+      message: "Enter MiniMax API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setMinimaxApiKey(String(key).trim(), params.agentDir);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "minimax:default",
       provider: "minimax",
       mode: "api_key",
     });
     if (params.setDefaultModel) {
-      nextConfig = applyMinimaxApiConfig(nextConfig, modelId);
+      nextConfig = applyMinimaxHostedConfig(nextConfig);
     } else {
-      const modelRef = `minimax/${modelId}`;
-      nextConfig = applyMinimaxApiProviderConfig(nextConfig, modelId);
-      agentModelOverride = modelRef;
-      await noteAgentModel(modelRef);
+      nextConfig = applyMinimaxHostedProviderConfig(nextConfig);
+      agentModelOverride = MINIMAX_HOSTED_MODEL_REF;
+      await noteAgentModel(MINIMAX_HOSTED_MODEL_REF);
     }
   } else if (params.authChoice === "minimax") {
     if (params.setDefaultModel) {
@@ -914,6 +677,79 @@ export async function applyAuthChoice(params: {
       nextConfig = applyMinimaxProviderConfig(nextConfig);
       agentModelOverride = "lmstudio/minimax-m2.1-gs32";
       await noteAgentModel("lmstudio/minimax-m2.1-gs32");
+    }
+  } else if (params.authChoice === "minimax-api") {
+    const key = await params.prompter.text({
+      message: "Enter MiniMax API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setMinimaxApiKey(String(key).trim(), params.agentDir);
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "minimax:default",
+      provider: "minimax",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyMinimaxApiConfig(nextConfig);
+    } else {
+      nextConfig = applyMinimaxApiProviderConfig(nextConfig);
+      agentModelOverride = "minimax/MiniMax-M2.1";
+      await noteAgentModel("minimax/MiniMax-M2.1");
+    }
+  } else if (params.authChoice === "github-copilot") {
+    await params.prompter.note(
+      [
+        "This will open a GitHub device login to authorize Copilot.",
+        "Requires an active GitHub Copilot subscription.",
+      ].join("\n"),
+      "GitHub Copilot",
+    );
+
+    if (!process.stdin.isTTY) {
+      await params.prompter.note(
+        "GitHub Copilot login requires an interactive TTY.",
+        "GitHub Copilot",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    try {
+      await githubCopilotLoginCommand({ yes: true }, params.runtime);
+    } catch (err) {
+      await params.prompter.note(
+        `GitHub Copilot login failed: ${String(err)}`,
+        "GitHub Copilot",
+      );
+      return { config: nextConfig, agentModelOverride };
+    }
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "github-copilot:github",
+      provider: "github-copilot",
+      mode: "token",
+    });
+
+    if (params.setDefaultModel) {
+      const model = "github-copilot/gpt-4o";
+      nextConfig = {
+        ...nextConfig,
+        agents: {
+          ...nextConfig.agents,
+          defaults: {
+            ...nextConfig.agents?.defaults,
+            model: {
+              ...(typeof nextConfig.agents?.defaults?.model === "object"
+                ? nextConfig.agents.defaults.model
+                : undefined),
+              primary: model,
+            },
+          },
+        },
+      };
+      await params.prompter.note(
+        `Default model set to ${model}`,
+        "Model configured",
+      );
     }
   } else if (params.authChoice === "opencode-zen") {
     await params.prompter.note(
@@ -924,28 +760,11 @@ export async function applyAuthChoice(params: {
       ].join("\n"),
       "OpenCode Zen",
     );
-    let hasCredential = false;
-    const envKey = resolveEnvApiKey("opencode");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENCODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setOpencodeZenApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter OpenCode Zen API key",
-        validate: validateApiKeyInput,
-      });
-      await setOpencodeZenApiKey(
-        normalizeApiKeyInput(String(key)),
-        params.agentDir,
-      );
-    }
+    const key = await params.prompter.text({
+      message: "Enter OpenCode Zen API key",
+      validate: (value) => (value?.trim() ? undefined : "Required"),
+    });
+    await setOpencodeZenApiKey(String(key).trim(), params.agentDir);
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "opencode:default",
       provider: "opencode",
@@ -982,24 +801,19 @@ export function resolvePreferredProviderForAuthChoice(
       return "openai-codex";
     case "openai-api-key":
       return "openai";
-    case "openrouter-api-key":
-      return "openrouter";
-    case "moonshot-api-key":
-      return "moonshot";
     case "gemini-api-key":
       return "google";
-    case "zai-api-key":
-      return "zai";
     case "antigravity":
       return "google-antigravity";
     case "minimax-cloud":
     case "minimax-api":
-    case "minimax-api-lightning":
       return "minimax";
     case "minimax":
       return "lmstudio";
     case "opencode-zen":
       return "opencode";
+    case "github-copilot":
+      return "github-copilot";
     default:
       return undefined;
   }
