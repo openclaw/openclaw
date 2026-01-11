@@ -63,10 +63,10 @@ Version injection:
 ## Launchd (Gateway as LaunchAgent)
 
 Label:
-- `com.clawdbot.gateway`
+- `com.clawdbot.gateway` (or `com.clawdbot.<profile>`)
 
 Plist location (per-user):
-- `~/Library/LaunchAgents/com.clawdbot.gateway.plist`
+- `~/Library/LaunchAgents/com.clawdbot.gateway.plist` (or `.../com.clawdbot.<profile>.plist`)
 
 Manager:
 - The macOS app owns LaunchAgent install/update for the bundled gateway.

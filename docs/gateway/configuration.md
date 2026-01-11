@@ -614,6 +614,8 @@ Controls how chat commands are enabled across connectors.
   commands: {
     native: false,          // register native commands when supported
     text: true,             // parse slash commands in chat messages
+    config: false,          // allow /config (writes to disk)
+    debug: false,           // allow /debug (runtime-only overrides)
     restart: false,         // allow /restart + gateway restart tool
     useAccessGroups: true   // enforce access-group allowlists/policies for commands
   }
@@ -625,6 +627,8 @@ Notes:
 - `commands.text: false` disables parsing chat messages for commands.
 - `commands.native: true` registers native commands on supported connectors (Discord/Slack/Telegram). Platforms without native commands still rely on text commands.
 - `commands.native: false` skips native registration; Discord/Telegram clear previously registered commands on startup. Slack commands are managed in the Slack app.
+- `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
+- `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.
 - `commands.useAccessGroups: false` allows commands to bypass access-group allowlists/policies.
 

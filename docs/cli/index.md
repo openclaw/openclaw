@@ -156,7 +156,7 @@ Chat messages support `/...` commands (text and native). See [/tools/slash-comma
 Highlights:
 - `/status` for quick diagnostics.
 - `/config` for persisted config changes.
-- `/debug` for runtime-only config overrides (memory, not disk).
+- `/debug` for runtime-only config overrides (memory, not disk; requires `commands.debug: true`).
 
 ## Setup + onboarding
 
@@ -448,7 +448,7 @@ Subcommands:
 Notes:
 - `daemon status` probes the Gateway RPC by default using the daemon’s resolved port/config (override with `--url/--token/--password`).
 - `daemon status` supports `--no-probe`, `--deep`, and `--json` for scripting.
-- `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans).
+- `daemon status` also surfaces legacy or extra gateway services when it can detect them (`--deep` adds system-level scans). Profile-named Clawdbot services are treated as first-class and aren't flagged as "extra".
 - `daemon status` prints which config path the CLI uses vs which config the daemon likely uses (service env), plus the resolved probe target URL.
 - `daemon install` defaults to Node runtime; use `--runtime bun` only when WhatsApp is disabled.
 - `daemon install` options: `--port`, `--runtime`, `--token`, `--force`.

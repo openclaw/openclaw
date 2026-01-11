@@ -257,7 +257,9 @@ async function getDaemonStatusSummary(): Promise<{
   try {
     const service = resolveGatewayService();
     const [loaded, runtime, command] = await Promise.all([
-      service.isLoaded({ env: process.env }).catch(() => false),
+      service
+        .isLoaded({ profile: process.env.CLAWDBOT_PROFILE })
+        .catch(() => false),
       service.readRuntime(process.env).catch(() => undefined),
       service.readCommand(process.env).catch(() => null),
     ]);

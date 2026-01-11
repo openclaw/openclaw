@@ -28,7 +28,10 @@ import {
   resolveModelCostConfig,
 } from "../utils/usage-format.js";
 import { VERSION } from "../version.js";
-import { listChatCommands } from "./commands-registry.js";
+import {
+  listChatCommands,
+  listChatCommandsForConfig,
+} from "./commands-registry.js";
 import type {
   ElevatedLevel,
   ReasoningLevel,
@@ -356,18 +359,29 @@ export function buildStatusMessage(args: StatusArgs): string {
     .join("\n");
 }
 
-export function buildHelpMessage(): string {
+export function buildHelpMessage(cfg?: ClawdbotConfig): string {
+  const options = [
+    "/think <level>",
+    "/verbose on|off",
+    "/reasoning on|off",
+    "/elevated on|off",
+    "/model <id>",
+    "/cost on|off",
+  ];
+  if (cfg?.commands?.config === true) options.push("/config show");
+  if (cfg?.commands?.debug === true) options.push("/debug show");
   return [
     "ℹ️ Help",
     "Shortcuts: /new reset | /compact [instructions] | /restart relink (if enabled)",
-    "Options: /think <level> | /verbose on|off | /reasoning on|off | /elevated on|off | /model <id> | /cost on|off | /config show | /debug show",
+    `Options: ${options.join(" | ")}`,
     "More: /commands for all slash commands",
   ].join("\n");
 }
 
-export function buildCommandsMessage(): string {
+export function buildCommandsMessage(cfg?: ClawdbotConfig): string {
   const lines = ["ℹ️ Slash commands"];
-  for (const command of listChatCommands()) {
+  const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
+  for (const command of commands) {
     const primary = command.nativeName
       ? `/${command.nativeName}`
       : command.textAliases[0]?.trim() || `/${command.key}`;

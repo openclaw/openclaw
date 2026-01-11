@@ -606,6 +606,8 @@ Yes, but you must isolate:
 - `gateway.port` (unique ports)
 
 There are convenience CLI flags like `--dev` and `--profile <name>` that shift state dirs and ports.
+When using profiles, service names are suffixed (`com.clawdbot.<profile>`, `clawdbot-gateway-<profile>.service`,
+`Clawdbot Gateway (<profile>)`).
 
 ## Logging and debugging
 
@@ -627,8 +629,8 @@ clawdbot logs --follow
 
 Service/supervisor logs (when the gateway runs via launchd/systemd):
 - macOS: `$CLAWDBOT_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.clawdbot/logs/...`; profiles use `~/.clawdbot-<profile>/logs/...`)
-- Linux: `journalctl --user -u clawdbot-gateway.service -n 200 --no-pager`
-- Windows: `schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST`
+- Linux: `journalctl --user -u clawdbot-gateway[-<profile>].service -n 200 --no-pager`
+- Windows: `schtasks /Query /TN "Clawdbot Gateway (<profile>)" /V /FO LIST`
 
 See [Troubleshooting](/gateway/troubleshooting#log-locations) for more.
 

@@ -1078,6 +1078,10 @@ export type CommandsConfig = {
   native?: boolean;
   /** Enable text command parsing (default: true). */
   text?: boolean;
+  /** Allow /config command (default: false). */
+  config?: boolean;
+  /** Allow /debug command (default: false). */
+  debug?: boolean;
   /** Allow restart commands/tools (default: false). */
   restart?: boolean;
   /** Enforce access-group allowlists/policies for commands (default: true). */

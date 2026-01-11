@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { withTempHome } from "../../test/helpers/temp-home.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { buildCommandsMessage, buildStatusMessage } from "./status.js";
+import {
+  buildCommandsMessage,
+  buildHelpMessage,
+  buildStatusMessage,
+} from "./status.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -317,7 +321,9 @@ describe("buildStatusMessage", () => {
 
 describe("buildCommandsMessage", () => {
   it("lists commands with aliases and text-only hints", () => {
-    const text = buildCommandsMessage();
+    const text = buildCommandsMessage({
+      commands: { config: false, debug: false },
+    } as ClawdbotConfig);
     expect(text).toContain("/commands - List all slash commands.");
     expect(text).toContain(
       "/think (aliases: /thinking, /t) - Set thinking level.",
@@ -325,5 +331,17 @@ describe("buildCommandsMessage", () => {
     expect(text).toContain(
       "/compact (text-only) - Compact the session context.",
     );
+    expect(text).not.toContain("/config");
+    expect(text).not.toContain("/debug");
+  });
+});
+
+describe("buildHelpMessage", () => {
+  it("hides config/debug when disabled", () => {
+    const text = buildHelpMessage({
+      commands: { config: false, debug: false },
+    } as ClawdbotConfig);
+    expect(text).not.toContain("/config");
+    expect(text).not.toContain("/debug");
   });
 });

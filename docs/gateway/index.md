@@ -51,6 +51,16 @@ pnpm gateway:watch
 
 Supported if you isolate state + config and use unique ports.
 
+Service names are profile-aware:
+- macOS: `com.clawdbot.<profile>`
+- Linux: `clawdbot-gateway-<profile>.service`
+- Windows: `Clawdbot Gateway (<profile>)`
+
+Install metadata is embedded in the service config:
+- `CLAWDBOT_SERVICE_MARKER=clawdbot`
+- `CLAWDBOT_SERVICE_KIND=gateway`
+- `CLAWDBOT_SERVICE_VERSION=<version>`
+
 ### Dev profile (`--dev`)
 
 Fast path: run a fully-isolated dev instance (config/state/workspace) without touching your primary setup.
@@ -160,7 +170,8 @@ See also: [Presence](/concepts/presence) for how presence is produced/deduped an
   - StandardOut/Err: file paths or `syslog`
 - On failure, launchd restarts; fatal misconfig should keep exiting so the operator notices.
 - LaunchAgents are per-user and require a logged-in session; for headless setups use a custom LaunchDaemon (not shipped).
-  - `clawdbot daemon install` writes `~/Library/LaunchAgents/com.clawdbot.gateway.plist`.
+  - `clawdbot daemon install` writes `~/Library/LaunchAgents/com.clawdbot.gateway.plist`
+    (or `com.clawdbot.<profile>.plist`).
   - `clawdbot doctor` audits the LaunchAgent config and can update it to current defaults.
 
 ## Daemon management (CLI)
@@ -184,15 +195,18 @@ Notes:
 - `daemon status` prints config path + probe target to avoid “localhost vs LAN bind” confusion and profile mismatches.
 - `daemon status` includes the last gateway error line when the service looks running but the port is closed.
 - `logs` tails the Gateway file log via RPC (no manual `tail`/`grep` needed).
-- If other gateway-like services are detected, the CLI warns. We recommend **one gateway per machine**; one gateway can host multiple agents.
+- If other gateway-like services are detected, the CLI warns unless they are Clawdbot profile services.
+  We still recommend **one gateway per machine** unless you need redundant profiles.
   - Cleanup: `clawdbot daemon uninstall` (current service) and `clawdbot doctor` (legacy migrations).
 - `daemon install` is a no-op when already installed; use `clawdbot daemon install --force` to reinstall (profile/env/path changes).
 
 Bundled mac app:
-- Clawdbot.app can bundle a Node-based gateway relay and install a per-user LaunchAgent labeled `com.clawdbot.gateway`.
+- Clawdbot.app can bundle a Node-based gateway relay and install a per-user LaunchAgent labeled
+  `com.clawdbot.gateway` (or `com.clawdbot.<profile>`).
 - To stop it cleanly, use `clawdbot daemon stop` (or `launchctl bootout gui/$UID/com.clawdbot.gateway`).
 - To restart, use `clawdbot daemon restart` (or `launchctl kickstart -k gui/$UID/com.clawdbot.gateway`).
   - `launchctl` only works if the LaunchAgent is installed; otherwise use `clawdbot daemon install` first.
+  - Replace the label with `com.clawdbot.<profile>` when running a named profile.
 
 ## Supervision (systemd user unit)
 Clawdbot installs a **systemd user service** by default on Linux/WSL2. We
@@ -203,10 +217,10 @@ required, shared supervision).
 `clawdbot daemon install` writes the user unit. `clawdbot doctor` audits the
 unit and can update it to match the current recommended defaults.
 
-Create `~/.config/systemd/user/clawdbot-gateway.service`:
+Create `~/.config/systemd/user/clawdbot-gateway[-<profile>].service`:
 ```
 [Unit]
-Description=Clawdbot Gateway
+Description=Clawdbot Gateway (profile: <profile>, v<version>)
 After=network-online.target
 Wants=network-online.target
 
@@ -227,16 +241,16 @@ sudo loginctl enable-linger youruser
 Onboarding runs this on Linux/WSL2 (may prompt for sudo; writes `/var/lib/systemd/linger`).
 Then enable the service:
 ```
-systemctl --user enable --now clawdbot-gateway.service
+systemctl --user enable --now clawdbot-gateway[-<profile>].service
 ```
 
 **Alternative (system service)** - for always-on or multi-user servers, you can
 install a systemd **system** unit instead of a user unit (no lingering needed).
-Create `/etc/systemd/system/clawdbot-gateway.service` (copy the unit above,
+Create `/etc/systemd/system/clawdbot-gateway[-<profile>].service` (copy the unit above,
 switch `WantedBy=multi-user.target`, set `User=` + `WorkingDirectory=`), then:
 ```
 sudo systemctl daemon-reload
-sudo systemctl enable --now clawdbot-gateway.service
+sudo systemctl enable --now clawdbot-gateway[-<profile>].service
 ```
 
 ## Windows (WSL2)
@@ -249,7 +263,7 @@ Windows installs should use **WSL2** and follow the Linux systemd section above.
 - Debug: subscribe to `tick` and `presence` events; ensure `status` shows linked/auth age; presence entries show Gateway host and connected clients.
 
 ## Safety guarantees
-- Only one Gateway per host; all sends/agent calls must go through it.
+- Assume one Gateway per host by default; if you run multiple profiles, isolate ports/state and target the right instance.
 - No fallback to direct Baileys connections; if the Gateway is down, sends fail fast.
 - Non-connect first frames or malformed JSON are rejected and the socket is closed.
 - Graceful shutdown: emit `shutdown` event before closing; clients must handle close + reconnect.

@@ -64,11 +64,11 @@ live in the [Gateway runbook](/gateway).
 
 Minimal setup:
 
-Create `~/.config/systemd/user/clawdbot-gateway.service`:
+Create `~/.config/systemd/user/clawdbot-gateway[-<profile>].service`:
 
 ```
 [Unit]
-Description=Clawdbot Gateway
+Description=Clawdbot Gateway (profile: <profile>, v<version>)
 After=network-online.target
 Wants=network-online.target
 
@@ -84,5 +84,5 @@ WantedBy=default.target
 Enable it:
 
 ```
-systemctl --user enable --now clawdbot-gateway.service
+systemctl --user enable --now clawdbot-gateway[-<profile>].service
 ```

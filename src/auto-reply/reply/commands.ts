@@ -602,7 +602,7 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
-    return { shouldContinue: false, reply: { text: buildHelpMessage() } };
+    return { shouldContinue: false, reply: { text: buildHelpMessage(cfg) } };
   }
 
   const commandsRequested = command.commandBodyNormalized === "/commands";
@@ -613,7 +613,7 @@ export async function handleCommands(params: {
       );
       return { shouldContinue: false };
     }
-    return { shouldContinue: false, reply: { text: buildCommandsMessage() } };
+    return { shouldContinue: false, reply: { text: buildCommandsMessage(cfg) } };
   }
 
   const statusRequested =
@@ -649,6 +649,14 @@ export async function handleCommands(params: {
         `Ignoring /config from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
+    }
+    if (cfg.commands?.config !== true) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /config is disabled. Set commands.config=true to enable.",
+        },
+      };
     }
     if (configCommand.action === "error") {
       return {
@@ -773,6 +781,14 @@ export async function handleCommands(params: {
         `Ignoring /debug from unauthorized sender: ${command.senderE164 || "<unknown>"}`,
       );
       return { shouldContinue: false };
+    }
+    if (cfg.commands?.debug !== true) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚠️ /debug is disabled. Set commands.debug=true to enable.",
+        },
+      };
     }
     if (debugCommand.action === "error") {
       return {

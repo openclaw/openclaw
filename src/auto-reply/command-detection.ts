@@ -1,13 +1,22 @@
-import { listChatCommands, normalizeCommandBody } from "./commands-registry.js";
+import type { ClawdbotConfig } from "../config/types.js";
+import {
+  listChatCommands,
+  listChatCommandsForConfig,
+  normalizeCommandBody,
+} from "./commands-registry.js";
 
-export function hasControlCommand(text?: string): boolean {
+export function hasControlCommand(
+  text?: string,
+  cfg?: ClawdbotConfig,
+): boolean {
   if (!text) return false;
   const trimmed = text.trim();
   if (!trimmed) return false;
   const normalizedBody = normalizeCommandBody(trimmed);
   if (!normalizedBody) return false;
   const lowered = normalizedBody.toLowerCase();
-  for (const command of listChatCommands()) {
+  const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
+  for (const command of commands) {
     for (const alias of command.textAliases) {
       const normalized = alias.trim().toLowerCase();
       if (!normalized) continue;

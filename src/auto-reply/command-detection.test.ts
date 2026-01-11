@@ -57,6 +57,12 @@ describe("control command parsing", () => {
     }
   });
 
+  it("respects disabled config/debug commands", () => {
+    const cfg = { commands: { config: false, debug: false } };
+    expect(hasControlCommand("/config show", cfg)).toBe(false);
+    expect(hasControlCommand("/debug show", cfg)).toBe(false);
+  });
+
   it("requires commands to be the full message", () => {
     expect(hasControlCommand("hello /status")).toBe(false);
     expect(hasControlCommand("/status please")).toBe(false);

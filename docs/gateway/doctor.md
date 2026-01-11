@@ -172,8 +172,9 @@ switch to legacy names if the current image is missing.
 ### 7) Gateway service migrations and cleanup hints
 Doctor detects legacy Clawdis gateway services (launchd/systemd/schtasks) and
 offers to remove them and install the Clawdbot service using the current gateway
-port. It can also scan for extra gateway-like services and print cleanup hints
-to ensure only one gateway runs per machine.
+port. It can also scan for extra gateway-like services and print cleanup hints.
+Profile-named Clawdbot gateway services are considered first-class and are not
+flagged as "extra."
 
 ### 8) Security warnings
 Doctor emits warnings when a provider is open to DMs without an allowlist, or

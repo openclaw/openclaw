@@ -1,4 +1,8 @@
-import { GATEWAY_LAUNCH_AGENT_LABEL } from "../daemon/constants.js";
+import {
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+  resolveGatewayWindowsTaskName,
+} from "../daemon/constants.js";
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import type { GatewayServiceRuntime } from "../daemon/service-runtime.js";
 import { getResolvedLoggerSettings } from "../logging.js";
@@ -51,8 +55,9 @@ export function buildGatewayRuntimeHints(
     }
   })();
   if (runtime.cachedLabel && platform === "darwin") {
+    const label = resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
     hints.push(
-      `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${GATEWAY_LAUNCH_AGENT_LABEL}`,
+      `LaunchAgent label cached but plist missing. Clear with: launchctl bootout gui/$UID/${label}`,
     );
     hints.push("Then reinstall: clawdbot daemon install");
   }
@@ -71,11 +76,13 @@ export function buildGatewayRuntimeHints(
       hints.push(`Launchd stdout (if installed): ${logs.stdoutPath}`);
       hints.push(`Launchd stderr (if installed): ${logs.stderrPath}`);
     } else if (platform === "linux") {
+      const unit = resolveGatewaySystemdServiceName(env.CLAWDBOT_PROFILE);
       hints.push(
-        "Logs: journalctl --user -u clawdbot-gateway.service -n 200 --no-pager",
+        `Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`,
       );
     } else if (platform === "win32") {
-      hints.push('Logs: schtasks /Query /TN "Clawdbot Gateway" /V /FO LIST');
+      const task = resolveGatewayWindowsTaskName(env.CLAWDBOT_PROFILE);
+      hints.push(`Logs: schtasks /Query /TN "${task}" /V /FO LIST`);
     }
   }
   return hints;

@@ -16,7 +16,7 @@ import {
 import { hasControlCommand } from "../auto-reply/command-detection.js";
 import {
   buildCommandText,
-  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
   shouldHandleTextCommands,
 } from "../auto-reply/commands-registry.js";
 import {
@@ -891,7 +891,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
       !wasMentioned &&
       !hasAnyMention &&
       commandAuthorized &&
-      hasControlCommand(message.text ?? "");
+      hasControlCommand(message.text ?? "", cfg);
     const effectiveWasMentioned = wasMentioned || shouldBypassMention;
     const canDetectMention = Boolean(botUserId) || mentionRegexes.length > 0;
     if (
@@ -1945,7 +1945,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   };
 
   const nativeCommands =
-    cfg.commands?.native === true ? listNativeCommandSpecs() : [];
+    cfg.commands?.native === true ? listNativeCommandSpecsForConfig(cfg) : [];
   if (nativeCommands.length > 0) {
     for (const command of nativeCommands) {
       app.command(

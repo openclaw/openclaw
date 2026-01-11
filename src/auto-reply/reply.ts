@@ -877,7 +877,7 @@ export async function getReplyFromConfig(
     allowTextCommands &&
     !commandAuthorized &&
     !baseBodyTrimmedRaw &&
-    hasControlCommand(commandSource)
+    hasControlCommand(commandSource, cfg)
   ) {
     typing.cleanup();
     return undefined;

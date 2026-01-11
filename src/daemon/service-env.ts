@@ -1,5 +1,13 @@
 import path from "node:path";
 
+import { VERSION } from "../version.js";
+import {
+  GATEWAY_SERVICE_KIND,
+  GATEWAY_SERVICE_MARKER,
+  resolveGatewayLaunchAgentLabel,
+  resolveGatewaySystemdServiceName,
+} from "./constants.js";
+
 export type MinimalServicePathOptions = {
   platform?: NodeJS.Platform;
   extraDirs?: string[];
@@ -59,13 +67,24 @@ export function buildServiceEnvironment(params: {
   launchdLabel?: string;
 }): Record<string, string | undefined> {
   const { env, port, token, launchdLabel } = params;
+  const profile = env.CLAWDBOT_PROFILE;
+  const resolvedLaunchdLabel =
+    launchdLabel ||
+    (process.platform === "darwin"
+      ? resolveGatewayLaunchAgentLabel(profile)
+      : undefined);
+  const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   return {
     PATH: buildMinimalServicePath({ env }),
-    CLAWDBOT_PROFILE: env.CLAWDBOT_PROFILE,
+    CLAWDBOT_PROFILE: profile,
     CLAWDBOT_STATE_DIR: env.CLAWDBOT_STATE_DIR,
     CLAWDBOT_CONFIG_PATH: env.CLAWDBOT_CONFIG_PATH,
     CLAWDBOT_GATEWAY_PORT: String(port),
     CLAWDBOT_GATEWAY_TOKEN: token,
-    CLAWDBOT_LAUNCHD_LABEL: launchdLabel,
+    CLAWDBOT_LAUNCHD_LABEL: resolvedLaunchdLabel,
+    CLAWDBOT_SYSTEMD_UNIT: systemdUnit,
+    CLAWDBOT_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
+    CLAWDBOT_SERVICE_KIND: GATEWAY_SERVICE_KIND,
+    CLAWDBOT_SERVICE_VERSION: VERSION,
   };
 }

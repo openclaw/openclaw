@@ -7,6 +7,8 @@ import { colorize, isRich, theme } from "../terminal/theme.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
   LEGACY_GATEWAY_LAUNCH_AGENT_LABELS,
+  formatGatewayServiceDescription,
+  resolveGatewayLaunchAgentLabel,
 } from "./constants.js";
 import { parseKeyValueOutput } from "./runtime-parse.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
@@ -34,7 +36,10 @@ function resolveLaunchAgentPlistPathForLabel(
 export function resolveLaunchAgentPlistPath(
   env: Record<string, string | undefined>,
 ): string {
-  return resolveLaunchAgentPlistPathForLabel(env, GATEWAY_LAUNCH_AGENT_LABEL);
+  const label =
+    env.CLAWDBOT_LAUNCHD_LABEL?.trim() ||
+    resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  return resolveLaunchAgentPlistPathForLabel(env, label);
 }
 
 export function resolveGatewayLogPaths(
@@ -162,6 +167,7 @@ export async function readLaunchAgentProgramArguments(
 
 export function buildLaunchAgentPlist({
   label = GATEWAY_LAUNCH_AGENT_LABEL,
+  comment,
   programArguments,
   workingDirectory,
   stdoutPath,
@@ -169,6 +175,7 @@ export function buildLaunchAgentPlist({
   environment,
 }: {
   label?: string;
+  comment?: string;
   programArguments: string[];
   workingDirectory?: string;
   stdoutPath: string;
@@ -183,6 +190,12 @@ export function buildLaunchAgentPlist({
     <key>WorkingDirectory</key>
     <string>${plistEscape(workingDirectory)}</string>`
     : "";
+  const commentXml =
+    comment && comment.trim()
+      ? `
+    <key>Comment</key>
+    <string>${plistEscape(comment.trim())}</string>`
+      : "";
   const envXml = renderEnvDict(environment);
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -190,6 +203,7 @@ export function buildLaunchAgentPlist({
   <dict>
     <key>Label</key>
     <string>${plistEscape(label)}</string>
+    ${commentXml}
     <key>RunAtLoad</key>
     <true/>
     <key>KeepAlive</key>
@@ -271,9 +285,9 @@ export function parseLaunchctlPrint(output: string): LaunchctlPrintInfo {
   return info;
 }
 
-export async function isLaunchAgentLoaded(): Promise<boolean> {
+export async function isLaunchAgentLoaded(profile?: string): Promise<boolean> {
   const domain = resolveGuiDomain();
-  const label = GATEWAY_LAUNCH_AGENT_LABEL;
+  const label = resolveGatewayLaunchAgentLabel(profile);
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   return res.code === 0;
 }
@@ -294,7 +308,9 @@ export async function readLaunchAgentRuntime(
   env: Record<string, string | undefined>,
 ): Promise<GatewayServiceRuntime> {
   const domain = resolveGuiDomain();
-  const label = GATEWAY_LAUNCH_AGENT_LABEL;
+  const label =
+    env.CLAWDBOT_LAUNCHD_LABEL?.trim() ||
+    resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
   const res = await execLaunchctl(["print", `${domain}/${label}`]);
   if (res.code !== 0) {
     return {
@@ -418,7 +434,10 @@ export async function uninstallLaunchAgent({
 
   const home = resolveHomeDir(env);
   const trashDir = path.join(home, ".Trash");
-  const dest = path.join(trashDir, `${GATEWAY_LAUNCH_AGENT_LABEL}.plist`);
+  const label =
+    env.CLAWDBOT_LAUNCHD_LABEL?.trim() ||
+    resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
+  const dest = path.join(trashDir, `${label}.plist`);
   try {
     await fs.mkdir(trashDir, { recursive: true });
     await fs.rename(plistPath, dest);
@@ -443,11 +462,13 @@ function isLaunchctlNotLoaded(res: {
 
 export async function stopLaunchAgent({
   stdout,
+  profile,
 }: {
   stdout: NodeJS.WritableStream;
+  profile?: string;
 }): Promise<void> {
   const domain = resolveGuiDomain();
-  const label = GATEWAY_LAUNCH_AGENT_LABEL;
+  const label = resolveGatewayLaunchAgentLabel(profile);
   const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
     throw new Error(
@@ -474,6 +495,9 @@ export async function installLaunchAgent({
   await fs.mkdir(logDir, { recursive: true });
 
   const domain = resolveGuiDomain();
+  const label =
+    env.CLAWDBOT_LAUNCHD_LABEL?.trim() ||
+    resolveGatewayLaunchAgentLabel(env.CLAWDBOT_PROFILE);
   for (const legacyLabel of LEGACY_GATEWAY_LAUNCH_AGENT_LABELS) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(
       env,
@@ -488,10 +512,17 @@ export async function installLaunchAgent({
     }
   }
 
-  const plistPath = resolveLaunchAgentPlistPath(env);
+  const plistPath = resolveLaunchAgentPlistPathForLabel(env, label);
   await fs.mkdir(path.dirname(plistPath), { recursive: true });
 
+  const description = formatGatewayServiceDescription({
+    profile: env.CLAWDBOT_PROFILE,
+    version:
+      environment?.CLAWDBOT_SERVICE_VERSION ?? env.CLAWDBOT_SERVICE_VERSION,
+  });
   const plist = buildLaunchAgentPlist({
+    label,
+    comment: description,
     programArguments,
     workingDirectory,
     stdoutPath,
@@ -508,12 +539,8 @@ export async function installLaunchAgent({
       `launchctl bootstrap failed: ${boot.stderr || boot.stdout}`.trim(),
     );
   }
-  await execLaunchctl(["enable", `${domain}/${GATEWAY_LAUNCH_AGENT_LABEL}`]);
-  await execLaunchctl([
-    "kickstart",
-    "-k",
-    `${domain}/${GATEWAY_LAUNCH_AGENT_LABEL}`,
-  ]);
+  await execLaunchctl(["enable", `${domain}/${label}`]);
+  await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
 
   stdout.write(`${formatLine("Installed LaunchAgent", plistPath)}\n`);
   stdout.write(`${formatLine("Logs", stdoutPath)}\n`);
@@ -522,11 +549,13 @@ export async function installLaunchAgent({
 
 export async function restartLaunchAgent({
   stdout,
+  profile,
 }: {
   stdout: NodeJS.WritableStream;
+  profile?: string;
 }): Promise<void> {
   const domain = resolveGuiDomain();
-  const label = GATEWAY_LAUNCH_AGENT_LABEL;
+  const label = resolveGatewayLaunchAgentLabel(profile);
   const res = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
   if (res.code !== 0) {
     throw new Error(

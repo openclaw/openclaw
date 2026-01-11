@@ -14,6 +14,7 @@ provider mixes reasoning into normal text.
 ## Runtime debug overrides
 
 Use `/debug` in chat to set **runtime-only** config overrides (memory, not disk).
+`/debug` is disabled by default; enable with `commands.debug: true`.
 This is handy when you need to toggle obscure settings without editing `clawdbot.json`.
 
 Examples:
