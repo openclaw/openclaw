@@ -1,5 +1,6 @@
 import { Type } from "@sinclair/typebox";
 
+import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { listEnabledDiscordAccounts } from "../../discord/accounts.js";
@@ -369,12 +370,17 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
 
       if (action === "send") {
         const to = readStringParam(params, "to", { required: true });
-        const message = readStringParam(params, "message", {
+        let message = readStringParam(params, "message", {
           required: true,
           allowEmpty: true,
         });
-        const mediaUrl = readStringParam(params, "media", { trim: false });
-        const replyTo = readStringParam(params, "replyTo");
+        const parsed = parseReplyDirectives(message);
+        message = parsed.text;
+        const mediaUrl =
+          readStringParam(params, "media", { trim: false }) ??
+          (parsed.mediaUrls?.[0] || parsed.mediaUrl);
+        const replyTo =
+          readStringParam(params, "replyTo") ?? parsed.replyToId;
         const threadId = readStringParam(params, "threadId");
         const buttons = params.buttons;
         const gifPlayback =
@@ -832,9 +838,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
             `Thread reply is only supported for Discord (provider=${provider}).`,
           );
         }
-        const content = readStringParam(params, "message", { required: true });
-        const mediaUrl = readStringParam(params, "media", { trim: false });
-        const replyTo = readStringParam(params, "replyTo");
+        let content = readStringParam(params, "message", { required: true });
+        const parsed = parseReplyDirectives(content);
+        content = parsed.text;
+        const mediaUrl =
+          readStringParam(params, "media", { trim: false }) ??
+          (parsed.mediaUrls?.[0] || parsed.mediaUrl);
+        const replyTo =
+          readStringParam(params, "replyTo") ?? parsed.replyToId;
         return await handleDiscordAction(
           {
             action: "threadReply",
