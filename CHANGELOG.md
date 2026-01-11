@@ -6,6 +6,11 @@
 - CLI/Status: make the “More” footer shorter and easier to scan (newlines + context-aware suggestions).
 - Docs/FAQ: make `clawdbot status` the first diagnostic step (and point to `status --all` for pasteable reports).
 
+## 2026.1.11-7
+
+### Fixes
+- CLI/Status: replace the footer with a 3-line “Next steps” recommendation (share/debug/probe), and gate probes behind gateway reachability.
+
 ## 2026.1.11-5
 
 ### New Features and Changes

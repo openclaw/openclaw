@@ -154,7 +154,7 @@ describe("statusCommand", () => {
     expect(logs.some((l) => l.includes("LaunchAgent"))).toBe(true);
     expect(logs.some((l) => l.includes("FAQ:"))).toBe(true);
     expect(logs.some((l) => l.includes("Troubleshooting:"))).toBe(true);
-    expect(logs.some((l) => l.includes("More:"))).toBe(true);
+    expect(logs.some((l) => l.includes("Next steps:"))).toBe(true);
     expect(logs.some((l) => l.includes("clawdbot status --all"))).toBe(true);
   });
 

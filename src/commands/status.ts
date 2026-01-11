@@ -1029,17 +1029,12 @@ export async function statusCommand(
   runtime.log("FAQ: https://docs.clawd.bot/faq");
   runtime.log("Troubleshooting: https://docs.clawd.bot/troubleshooting");
   runtime.log("");
-  runtime.log("More:");
-  runtime.log("  clawdbot status --all   # pasteable report (redacts tokens)");
-  runtime.log("  clawdbot logs --follow  # live logs");
-  if (!gatewayReachable) {
-    runtime.log(
-      "  clawdbot gateway status # check which gateway you’re targeting",
-    );
-    runtime.log(
-      "  clawdbot daemon status  # supervisor state (launchd/systemd/…)",
-    );
+  runtime.log("Next steps:");
+  runtime.log("  Need to share?      clawdbot status --all");
+  runtime.log("  Need to debug live? clawdbot logs --follow");
+  if (gatewayReachable) {
+    runtime.log("  Need to test providers? clawdbot status --deep");
   } else {
-    runtime.log("  clawdbot status --deep  # gateway health + provider probes");
+    runtime.log("  Fix reachability first: clawdbot gateway status");
   }
 }
