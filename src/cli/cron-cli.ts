@@ -296,6 +296,10 @@ export function registerCronCli(program: Command) {
         "--thinking <level>",
         "Thinking level for agent jobs (off|minimal|low|medium|high)",
       )
+      .option(
+        "--model <model>",
+        "Model override for agent jobs (provider/model or alias)",
+      )
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
@@ -391,6 +395,10 @@ export function registerCronCli(program: Command) {
             return {
               kind: "agentTurn" as const,
               message,
+              model:
+                typeof opts.model === "string" && opts.model.trim()
+                  ? opts.model.trim()
+                  : undefined,
               thinking:
                 typeof opts.thinking === "string" && opts.thinking.trim()
                   ? opts.thinking.trim()
@@ -558,6 +566,7 @@ export function registerCronCli(program: Command) {
       .option("--system-event <text>", "Set systemEvent payload")
       .option("--message <text>", "Set agentTurn payload message")
       .option("--thinking <level>", "Thinking level for agent jobs")
+      .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
       .option("--deliver", "Deliver agent output", false)
       .option(
@@ -643,6 +652,7 @@ export function registerCronCli(program: Command) {
             patch.payload = {
               kind: "agentTurn",
               message: String(opts.message),
+              model: typeof opts.model === "string" ? opts.model : undefined,
               thinking:
                 typeof opts.thinking === "string" ? opts.thinking : undefined,
               timeoutSeconds:
