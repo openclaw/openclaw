@@ -122,7 +122,7 @@ Groups:
 Some iMessage threads can have multiple participants but still arrive with `is_group=false` depending on how Messages stores the chat identifier.
 
 If you explicitly configure a `chat_id` under `imessage.groups`, Clawdbot treats that thread as a “group” for:
-- session isolation (separate `imessage:group:<chat_id>` session key)
+- session isolation (separate `agent:<agentId>:imessage:group:<chat_id>` session key)
 - group allowlisting / mention gating behavior
 
 Example:

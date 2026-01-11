@@ -332,10 +332,11 @@ Key settings (see `/gateway/configuration` for shared provider patterns):
 - `msteams.teams.<teamId>.channels.<conversationId>.requireMention`: per-channel override.
 
 ## Routing & Sessions
-- Direct messages use session key: `msteams:<userId>` (shared main session).
-- Channel/group messages use session keys based on conversation id:
-  - `msteams:channel:<conversationId>`
-  - `msteams:group:<conversationId>`
+- Session keys follow the standard agent format (see [/concepts/session](/concepts/session)):
+  - Direct messages: `agent:<agentId>:msteams:dm:<userId>` (shared main session).
+  - Channel/group messages use conversation id:
+    - `agent:<agentId>:msteams:channel:<conversationId>`
+    - `agent:<agentId>:msteams:group:<conversationId>`
 
 ## Reply Style: Threads vs Posts
 

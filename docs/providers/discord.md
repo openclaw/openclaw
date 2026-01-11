@@ -53,7 +53,7 @@ Minimal config:
 12. Reactions: the agent can trigger reactions via the `discord` tool (gated by `discord.actions.*`).
     - Reaction removal semantics: see [/tools/reactions](/tools/reactions).
     - The `discord` tool is only exposed when the current provider is Discord.
-13. Native commands use isolated session keys (`discord:slash:${userId}`) rather than the shared `main` session.
+13. Native commands use isolated session keys (`agent:<agentId>:discord:slash:<userId>`) rather than the shared `main` session.
 
 Note: Discord does not provide a simple username → id lookup without extra guild context, so prefer ids or `<@id>` mentions for DM delivery targets.
 Note: Slugs are lowercase with spaces replaced by `-`. Channel names are slugged without the leading `#`.
