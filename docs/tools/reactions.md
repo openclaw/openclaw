@@ -7,13 +7,13 @@ read_when:
 
 Shared reaction semantics across providers:
 
-- `emoji` is required for reactions.
-- `emoji=""` removes the bot's reaction(s) on the message.
-- `remove: true` removes the specified emoji when supported.
+- `emoji` is required when adding a reaction.
+- `emoji=""` (or omitting `emoji`) removes the bot's reaction(s) when supported.
+- `remove: true` removes the specified emoji when supported (requires `emoji`).
 
 Provider notes:
 
 - **Discord/Slack**: empty `emoji` removes all of the bot's reactions on the message; `remove: true` removes just that emoji.
-- **Telegram**: `remove: true` removes your own reaction (Bot API limitation).
-- **WhatsApp**: `remove: true` maps to empty emoji (remove bot reaction).
+- **Telegram**: empty `emoji` removes the bot's reactions; `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.
+- **WhatsApp**: empty `emoji` removes the bot reaction; `remove: true` maps to empty emoji (still requires `emoji`).
 - **Signal**: inbound reaction notifications emit system events when `signal.reactionNotifications` is enabled.
