@@ -195,6 +195,7 @@
     "wireit": "^0.14.12"
   },
   "pnpm": {
+    "minimumReleaseAge": 2880,
     "overrides": {
       "@sinclair/typebox": "0.34.47"
     },
