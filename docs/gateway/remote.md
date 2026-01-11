@@ -15,6 +15,20 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 - The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
 - For remote use, you forward that loopback port over SSH (or use a tailnet/VPN and tunnel less).
 
+## Command flow (what runs where)
+
+One gateway daemon owns state + providers. Nodes are peripherals.
+
+Flow example (Telegram → node):
+- Telegram message arrives at the **Gateway**.
+- Gateway runs the **agent** and decides whether to call a node tool.
+- Gateway calls the **node** over the Bridge (`node.*` RPC).
+- Node returns the result; Gateway replies back out to Telegram.
+
+Notes:
+- **Nodes do not run the gateway daemon.** Only one gateway should run per host.
+- macOS app “node mode” is just a node client over the Bridge.
+
 ## SSH tunnel (CLI + tools)
 
 Create a local tunnel to the remote Gateway WS:

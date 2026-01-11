@@ -219,6 +219,22 @@ The Gateway watches the config and supports hot‑reload:
 - `gateway.reload.mode: "hybrid"` (default): hot‑apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
 
+## Remote gateways + nodes
+
+### How do commands propagate between Telegram, the gateway, and nodes?
+
+Telegram messages are handled by the **gateway**. The gateway runs the agent and
+only then calls nodes over the **Bridge** when a node tool is needed:
+
+Telegram → Gateway → Agent → `node.*` → Node → Gateway → Telegram
+
+Nodes don’t see inbound provider traffic; they only receive bridge RPC calls.
+
+### Do nodes run a gateway daemon?
+
+No. Only **one gateway** should run per host. Nodes are peripherals that connect
+to the gateway (iOS/Android nodes, or macOS “node mode” in the menubar app).
+
 A full restart is required for `gateway`, `bridge`, `discovery`, and `canvasHost` changes.
 
 ### Is there an API / RPC way to apply config?
