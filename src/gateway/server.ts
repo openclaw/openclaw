@@ -3,6 +3,10 @@ import type { Server as HttpServer } from "node:http";
 import os from "node:os";
 import chalk from "chalk";
 import { type WebSocket, WebSocketServer } from "ws";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   loadModelCatalog,
@@ -103,6 +107,11 @@ import {
   getResolvedLoggerSettings,
   runtimeForLogger,
 } from "../logging.js";
+import { loadClawdbotPlugins } from "../plugins/loader.js";
+import {
+  type PluginServicesHandle,
+  startPluginServices,
+} from "../plugins/services.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
 import {
   listProviderPlugins,
@@ -177,7 +186,7 @@ import {
   createGatewayHttpServer,
   createHooksRequestHandler,
 } from "./server-http.js";
-import { handleGatewayRequest } from "./server-methods.js";
+import { coreGatewayHandlers, handleGatewayRequest } from "./server-methods.js";
 import { createProviderManager } from "./server-providers.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { formatError } from "./server-utils.js";
@@ -438,6 +447,34 @@ export async function startGatewayServer(
 
   const cfgAtStart = loadConfig();
   await autoMigrateLegacyState({ cfg: cfgAtStart, log });
+  const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
+  const defaultWorkspaceDir = resolveAgentWorkspaceDir(
+    cfgAtStart,
+    defaultAgentId,
+  );
+  const pluginRegistry = loadClawdbotPlugins({
+    config: cfgAtStart,
+    workspaceDir: defaultWorkspaceDir,
+    logger: {
+      info: (msg) => log.info(msg),
+      warn: (msg) => log.warn(msg),
+      error: (msg) => log.error(msg),
+      debug: (msg) => log.debug(msg),
+    },
+    coreGatewayHandlers,
+  });
+  const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
+  const gatewayMethods = Array.from(new Set([...METHODS, ...pluginMethods]));
+  if (pluginRegistry.diagnostics.length > 0) {
+    for (const diag of pluginRegistry.diagnostics) {
+      if (diag.level === "error") {
+        log.warn(`[plugins] ${diag.message}`);
+      } else {
+        log.info(`[plugins] ${diag.message}`);
+      }
+    }
+  }
+  let pluginServices: PluginServicesHandle | null = null;
   const bindMode = opts.bind ?? cfgAtStart.gateway?.bind ?? "loopback";
   const bindHost = opts.host ?? resolveGatewayBindHost(bindMode);
   if (!bindHost) {
@@ -1594,7 +1631,7 @@ export async function startGatewayServer(
               host: os.hostname(),
               connId,
             },
-            features: { methods: METHODS, events: EVENTS },
+            features: { methods: gatewayMethods, events: EVENTS },
             snapshot,
             canvasHostUrl,
             policy: {
@@ -1610,7 +1647,7 @@ export async function startGatewayServer(
 
           logWs("out", "hello-ok", {
             connId,
-            methods: METHODS.length,
+            methods: gatewayMethods.length,
             events: EVENTS.length,
             presence: snapshot.presence.length,
             stateVersion: snapshot.stateVersion.presence,
@@ -1670,6 +1707,7 @@ export async function startGatewayServer(
             respond,
             client,
             isWebchatConnect,
+            extraHandlers: pluginRegistry.gatewayHandlers,
             context: {
               deps,
               cron,
@@ -1852,6 +1890,16 @@ export async function startGatewayServer(
     }
   } else {
     logProviders.info("skipping provider start (CLAWDBOT_SKIP_PROVIDERS=1)");
+  }
+
+  try {
+    pluginServices = await startPluginServices({
+      registry: pluginRegistry,
+      config: cfgAtStart,
+      workspaceDir: defaultWorkspaceDir,
+    });
+  } catch (err) {
+    log.warn(`plugin services failed to start: ${String(err)}`);
   }
 
   const scheduleRestartSentinelWake = async () => {
@@ -2090,6 +2138,9 @@ export async function startGatewayServer(
       }
       for (const plugin of listProviderPlugins()) {
         await stopProvider(plugin.id);
+      }
+      if (pluginServices) {
+        await pluginServices.stop().catch(() => {});
       }
       await stopGmailWatcher();
       cron.stop();

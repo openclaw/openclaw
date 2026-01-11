@@ -36,6 +36,13 @@ In **multi-agent** setups, each agent has its own workspace. That means:
 If the same skill name exists in more than one place, the usual precedence
 applies: workspace wins, then managed/local, then bundled.
 
+## Plugins + skills
+
+Plugins can ship their own skills (for example, `voice-call`) and gate them via
+`metadata.clawdbot.requires.config` on the plugin’s config entry. See
+[Plugins](/plugin) for plugin discovery/config and [Tools](/tools) for the tool
+surface those skills teach.
+
 ## ClawdHub (install + sync)
 
 ClawdHub is the public skills registry for Clawdbot. Use it to discover,

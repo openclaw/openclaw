@@ -103,6 +103,9 @@ importers:
       grammy:
         specifier: ^1.39.2
         version: 1.39.2
+      jiti:
+        specifier: ^2.6.1
+        version: 2.6.1
       json5:
         specifier: ^2.2.3
         version: 2.2.3

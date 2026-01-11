@@ -47,6 +47,7 @@ const GROUP_LABELS: Record<string, string> = {
   imessage: "iMessage",
   whatsapp: "WhatsApp",
   skills: "Skills",
+  plugins: "Plugins",
   discovery: "Discovery",
   presence: "Presence",
   voicewake: "Voice Wake",
@@ -75,6 +76,7 @@ const GROUP_ORDER: Record<string, number> = {
   imessage: 180,
   whatsapp: 190,
   skills: 200,
+  plugins: 205,
   discovery: 210,
   presence: 220,
   voicewake: 230,
@@ -153,6 +155,13 @@ const FIELD_LABELS: Record<string, string> = {
   "slack.appToken": "Slack App Token",
   "signal.account": "Signal Account",
   "imessage.cliPath": "iMessage CLI Path",
+  "plugins.enabled": "Enable Plugins",
+  "plugins.allow": "Plugin Allowlist",
+  "plugins.deny": "Plugin Denylist",
+  "plugins.load.paths": "Plugin Load Paths",
+  "plugins.entries": "Plugin Entries",
+  "plugins.entries.*.enabled": "Plugin Enabled",
+  "plugins.entries.*.config": "Plugin Config",
 };
 
 const FIELD_HELP: Record<string, string> = {
@@ -187,6 +196,17 @@ const FIELD_HELP: Record<string, string> = {
     "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.models":
     "Configured model catalog (keys are full provider/model IDs).",
+  "plugins.enabled": "Enable plugin/extension loading (default: true).",
+  "plugins.allow":
+    "Optional allowlist of plugin ids; when set, only listed plugins load.",
+  "plugins.deny": "Optional denylist of plugin ids; deny wins over allowlist.",
+  "plugins.load.paths": "Additional plugin files or directories to load.",
+  "plugins.entries":
+    "Per-plugin settings keyed by plugin id (enable/disable + config payloads).",
+  "plugins.entries.*.enabled":
+    "Overrides plugin enable/disable for this entry (restart required).",
+  "plugins.entries.*.config":
+    "Plugin-defined config payload (schema is provided by the plugin).",
   "agents.defaults.model.primary": "Primary model (provider/model).",
   "agents.defaults.model.fallbacks":
     "Ordered fallback models (provider/model). Used when the primary model fails.",

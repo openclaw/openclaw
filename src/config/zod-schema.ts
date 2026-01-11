@@ -1608,6 +1608,29 @@ export const ClawdbotSchema = z
           .optional(),
       })
       .optional(),
+    plugins: z
+      .object({
+        enabled: z.boolean().optional(),
+        allow: z.array(z.string()).optional(),
+        deny: z.array(z.string()).optional(),
+        load: z
+          .object({
+            paths: z.array(z.string()).optional(),
+          })
+          .optional(),
+        entries: z
+          .record(
+            z.string(),
+            z
+              .object({
+                enabled: z.boolean().optional(),
+                config: z.record(z.string(), z.unknown()).optional(),
+              })
+              .passthrough(),
+          )
+          .optional(),
+      })
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];

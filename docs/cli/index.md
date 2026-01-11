@@ -63,6 +63,13 @@ clawdbot [--dev] [--profile <name>] <command>
     list
     info
     check
+  plugins
+    list
+    info
+    install
+    enable
+    disable
+    doctor
   message
   agent
   agents
@@ -166,6 +173,20 @@ clawdbot [--dev] [--profile <name>] <command>
     setup
   tui
 ```
+
+Note: plugins can add additional top-level commands (for example `clawdbot voicecall`).
+
+## Plugins
+
+Manage extensions and their config:
+
+- `clawdbot plugins list` — discover plugins (use `--json` for machine output).
+- `clawdbot plugins info <id>` — show details for a plugin.
+- `clawdbot plugins install <path>` — add a plugin path to `plugins.load.paths`.
+- `clawdbot plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
+- `clawdbot plugins doctor` — report plugin load errors.
+
+Most plugin changes require a gateway restart. See [/plugin](/plugin).
 
 ## Chat slash commands
 

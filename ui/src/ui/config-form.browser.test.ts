@@ -190,6 +190,45 @@ describe("config form renderer", () => {
     expect(onPatch).toHaveBeenCalledWith(["slack"], {});
   });
 
+  it("supports wildcard uiHints for map entries", () => {
+    const onPatch = vi.fn();
+    const container = document.createElement("div");
+    const schema = {
+      type: "object",
+      properties: {
+        plugins: {
+          type: "object",
+          properties: {
+            entries: {
+              type: "object",
+              additionalProperties: {
+                type: "object",
+                properties: {
+                  enabled: { type: "boolean" },
+                },
+              },
+            },
+          },
+        },
+      },
+    };
+    const analysis = analyzeConfigSchema(schema);
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {
+          "plugins.entries.*.enabled": { label: "Plugin Enabled" },
+        },
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { plugins: { entries: { "voice-call": { enabled: true } } } },
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.textContent).toContain("Plugin Enabled");
+  });
+
   it("flags unsupported unions", () => {
     const schema = {
       type: "object",

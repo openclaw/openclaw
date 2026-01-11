@@ -3,6 +3,8 @@
 ## 2026.1.11 (Unreleased)
 
 ### Changes
+- Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, config schema, and Control UI labels; ship voice-call plugin stub + skill.
+- Docs: add plugins doc + cross-links from tools/skills/gateway config.
 - Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
 - macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
 - Docs: add gog calendar event color IDs from `gog calendar colors`. (#715) — thanks @mjrussell.
@@ -10,6 +12,7 @@
 - Skills: bundle `skill-creator` to guide creating and packaging skills.
 
 ### Fixes
+- Doctor: surface plugin diagnostics in the report.
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
 - Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
 - Agents: route subagent transcripts to the target agent sessions directory and add regression coverage. (#708) — thanks @xMikeMickelson.

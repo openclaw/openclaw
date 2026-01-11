@@ -548,6 +548,10 @@
     {
       "source": "/oauth",
       "destination": "/concepts/oauth"
+    },
+    {
+      "source": "/plugins",
+      "destination": "/plugin"
     }
   ],
   "navigation": {
@@ -689,6 +693,7 @@
         "group": "Tools & Skills",
         "pages": [
           "tools",
+          "plugin",
           "tools/bash",
           "tools/elevated",
           "tools/browser",

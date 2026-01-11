@@ -1276,6 +1276,27 @@ export type SkillsConfig = {
   entries?: Record<string, SkillConfig>;
 };
 
+export type PluginEntryConfig = {
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+};
+
+export type PluginsLoadConfig = {
+  /** Additional plugin/extension paths to load. */
+  paths?: string[];
+};
+
+export type PluginsConfig = {
+  /** Enable or disable plugin loading. */
+  enabled?: boolean;
+  /** Optional plugin allowlist (plugin ids). */
+  allow?: string[];
+  /** Optional plugin denylist (plugin ids). */
+  deny?: string[];
+  load?: PluginsLoadConfig;
+  entries?: Record<string, PluginEntryConfig>;
+};
+
 export type ModelApi =
   | "openai-completions"
   | "openai-responses"
@@ -1580,6 +1601,7 @@ export type ClawdbotConfig = {
     seamColor?: string;
   };
   skills?: SkillsConfig;
+  plugins?: PluginsConfig;
   models?: ModelsConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;

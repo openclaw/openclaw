@@ -28,6 +28,7 @@ import {
 } from "../config/config.js";
 import { danger, setVerbose } from "../globals.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.js";
+import { registerPluginCliCommands } from "../plugins/cli.js";
 import { listProviderPlugins } from "../providers/plugins/index.js";
 import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
 import { defaultRuntime } from "../runtime.js";
@@ -52,6 +53,7 @@ import { registerLogsCli } from "./logs-cli.js";
 import { registerModelsCli } from "./models-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { registerPairingCli } from "./pairing-cli.js";
+import { registerPluginsCli } from "./plugins-cli.js";
 import { forceFreePort } from "./ports.js";
 import { runProviderLogin, runProviderLogout } from "./provider-auth.js";
 import { registerProvidersCli } from "./providers-cli.js";
@@ -1216,9 +1218,11 @@ ${theme.muted("Docs:")} ${formatDocsLink(
   registerDocsCli(program);
   registerHooksCli(program);
   registerPairingCli(program);
+  registerPluginsCli(program);
   registerProvidersCli(program);
   registerSkillsCli(program);
   registerUpdateCli(program);
+  registerPluginCliCommands(program, loadConfig());
 
   program
     .command("status")

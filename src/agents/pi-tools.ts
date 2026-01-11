@@ -577,6 +577,7 @@ export function createClawdbotCodingTools(options?: {
       agentProvider: resolveGatewayMessageProvider(options?.messageProvider),
       agentAccountId: options?.agentAccountId,
       agentDir: options?.agentDir,
+      workspaceDir: options?.workspaceDir,
       sandboxed: !!sandbox,
       config: options?.config,
       currentChannelId: options?.currentChannelId,

@@ -1,0 +1,269 @@
+import fs from "node:fs";
+import path from "node:path";
+
+import { CONFIG_DIR, resolveUserPath } from "../utils.js";
+import type { PluginDiagnostic, PluginOrigin } from "./types.js";
+
+const EXTENSION_EXTS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
+
+export type PluginCandidate = {
+  idHint: string;
+  source: string;
+  origin: PluginOrigin;
+  workspaceDir?: string;
+  packageName?: string;
+  packageVersion?: string;
+  packageDescription?: string;
+};
+
+export type PluginDiscoveryResult = {
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+};
+
+type PackageManifest = {
+  name?: string;
+  version?: string;
+  description?: string;
+  clawdbot?: {
+    extensions?: string[];
+  };
+};
+
+function isExtensionFile(filePath: string): boolean {
+  const ext = path.extname(filePath);
+  if (!EXTENSION_EXTS.has(ext)) return false;
+  return !filePath.endsWith(".d.ts");
+}
+
+function readPackageManifest(dir: string): PackageManifest | null {
+  const manifestPath = path.join(dir, "package.json");
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    const raw = fs.readFileSync(manifestPath, "utf-8");
+    return JSON.parse(raw) as PackageManifest;
+  } catch {
+    return null;
+  }
+}
+
+function resolvePackageExtensions(manifest: PackageManifest): string[] {
+  const raw = manifest.clawdbot?.extensions;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+}
+
+function deriveIdHint(params: {
+  filePath: string;
+  packageName?: string;
+  hasMultipleExtensions: boolean;
+}): string {
+  const base = path.basename(params.filePath, path.extname(params.filePath));
+  const packageName = params.packageName?.trim();
+  if (!packageName) return base;
+  if (!params.hasMultipleExtensions) return packageName;
+  return `${packageName}/${base}`;
+}
+
+function addCandidate(params: {
+  candidates: PluginCandidate[];
+  seen: Set<string>;
+  idHint: string;
+  source: string;
+  origin: PluginOrigin;
+  workspaceDir?: string;
+  manifest?: PackageManifest | null;
+}) {
+  const resolved = path.resolve(params.source);
+  if (params.seen.has(resolved)) return;
+  params.seen.add(resolved);
+  const manifest = params.manifest ?? null;
+  params.candidates.push({
+    idHint: params.idHint,
+    source: resolved,
+    origin: params.origin,
+    workspaceDir: params.workspaceDir,
+    packageName: manifest?.name?.trim() || undefined,
+    packageVersion: manifest?.version?.trim() || undefined,
+    packageDescription: manifest?.description?.trim() || undefined,
+  });
+}
+
+function discoverInDirectory(params: {
+  dir: string;
+  origin: PluginOrigin;
+  workspaceDir?: string;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+}) {
+  if (!fs.existsSync(params.dir)) return;
+  let entries: fs.Dirent[] = [];
+  try {
+    entries = fs.readdirSync(params.dir, { withFileTypes: true });
+  } catch (err) {
+    params.diagnostics.push({
+      level: "warn",
+      message: `failed to read extensions dir: ${params.dir} (${String(err)})`,
+      source: params.dir,
+    });
+    return;
+  }
+
+  for (const entry of entries) {
+    const fullPath = path.join(params.dir, entry.name);
+    if (entry.isFile()) {
+      if (!isExtensionFile(fullPath)) continue;
+      addCandidate({
+        candidates: params.candidates,
+        seen: params.seen,
+        idHint: path.basename(entry.name, path.extname(entry.name)),
+        source: fullPath,
+        origin: params.origin,
+        workspaceDir: params.workspaceDir,
+      });
+    }
+    if (!entry.isDirectory()) continue;
+
+    const manifest = readPackageManifest(fullPath);
+    const extensions = manifest ? resolvePackageExtensions(manifest) : [];
+
+    if (extensions.length > 0) {
+      for (const extPath of extensions) {
+        const resolved = path.resolve(fullPath, extPath);
+        addCandidate({
+          candidates: params.candidates,
+          seen: params.seen,
+          idHint: deriveIdHint({
+            filePath: resolved,
+            packageName: manifest?.name,
+            hasMultipleExtensions: extensions.length > 1,
+          }),
+          source: resolved,
+          origin: params.origin,
+          workspaceDir: params.workspaceDir,
+          manifest,
+        });
+      }
+      continue;
+    }
+
+    const indexCandidates = ["index.ts", "index.js", "index.mjs", "index.cjs"];
+    const indexFile = indexCandidates
+      .map((candidate) => path.join(fullPath, candidate))
+      .find((candidate) => fs.existsSync(candidate));
+    if (indexFile && isExtensionFile(indexFile)) {
+      addCandidate({
+        candidates: params.candidates,
+        seen: params.seen,
+        idHint: entry.name,
+        source: indexFile,
+        origin: params.origin,
+        workspaceDir: params.workspaceDir,
+      });
+    }
+  }
+}
+
+function discoverFromPath(params: {
+  rawPath: string;
+  origin: PluginOrigin;
+  workspaceDir?: string;
+  candidates: PluginCandidate[];
+  diagnostics: PluginDiagnostic[];
+  seen: Set<string>;
+}) {
+  const resolved = resolveUserPath(params.rawPath);
+  if (!fs.existsSync(resolved)) {
+    params.diagnostics.push({
+      level: "warn",
+      message: `plugin path not found: ${resolved}`,
+      source: resolved,
+    });
+    return;
+  }
+
+  const stat = fs.statSync(resolved);
+  if (stat.isFile()) {
+    if (!isExtensionFile(resolved)) {
+      params.diagnostics.push({
+        level: "warn",
+        message: `plugin path is not a supported file: ${resolved}`,
+        source: resolved,
+      });
+      return;
+    }
+    addCandidate({
+      candidates: params.candidates,
+      seen: params.seen,
+      idHint: path.basename(resolved, path.extname(resolved)),
+      source: resolved,
+      origin: params.origin,
+      workspaceDir: params.workspaceDir,
+    });
+    return;
+  }
+
+  if (stat.isDirectory()) {
+    discoverInDirectory({
+      dir: resolved,
+      origin: params.origin,
+      workspaceDir: params.workspaceDir,
+      candidates: params.candidates,
+      diagnostics: params.diagnostics,
+      seen: params.seen,
+    });
+    return;
+  }
+}
+
+export function discoverClawdbotPlugins(params: {
+  workspaceDir?: string;
+  extraPaths?: string[];
+}): PluginDiscoveryResult {
+  const candidates: PluginCandidate[] = [];
+  const diagnostics: PluginDiagnostic[] = [];
+  const seen = new Set<string>();
+
+  const globalDir = path.join(CONFIG_DIR, "extensions");
+  discoverInDirectory({
+    dir: globalDir,
+    origin: "global",
+    candidates,
+    diagnostics,
+    seen,
+  });
+
+  const workspaceDir = params.workspaceDir?.trim();
+  if (workspaceDir) {
+    const workspaceRoot = resolveUserPath(workspaceDir);
+    const workspaceExt = path.join(workspaceRoot, ".clawdbot", "extensions");
+    discoverInDirectory({
+      dir: workspaceExt,
+      origin: "workspace",
+      workspaceDir: workspaceRoot,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
+
+  const extra = params.extraPaths ?? [];
+  for (const extraPath of extra) {
+    if (typeof extraPath !== "string") continue;
+    const trimmed = extraPath.trim();
+    if (!trimmed) continue;
+    discoverFromPath({
+      rawPath: trimmed,
+      origin: "config",
+      workspaceDir: workspaceDir?.trim() || undefined,
+      candidates,
+      diagnostics,
+      seen,
+    });
+  }
+
+  return { candidates, diagnostics };
+}
