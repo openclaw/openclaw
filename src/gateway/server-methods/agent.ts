@@ -189,12 +189,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (store) {
-        store[requestedSessionKey] = nextEntry;
-        if (storePath) {
-          await saveSessionStore(storePath, store);
-        }
-      }
       resolvedSessionId = sessionId;
       const agentId = resolveAgentIdFromSessionKey(requestedSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({
@@ -202,6 +196,15 @@ export const agentHandlers: GatewayRequestHandlers = {
         agentId,
       });
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
+      // Normalize short main key alias to canonical form before store write
+      const storeKey =
+        requestedSessionKey === rawMainKey ? mainSessionKey : requestedSessionKey;
+      if (store) {
+        store[storeKey] = nextEntry;
+        if (storePath) {
+          await saveSessionStore(storePath, store);
+        }
+      }
       if (
         requestedSessionKey === mainSessionKey ||
         requestedSessionKey === rawMainKey

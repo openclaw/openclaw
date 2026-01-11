@@ -3,7 +3,15 @@ import { randomUUID } from "node:crypto";
 import { resolveThinkingDefault } from "../../agents/model-selection.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommand } from "../../commands/agent.js";
-import { mergeSessionEntry, saveSessionStore } from "../../config/sessions.js";
+import {
+  mergeSessionEntry,
+  resolveAgentMainSessionKey,
+  saveSessionStore,
+} from "../../config/sessions.js";
+import {
+  normalizeMainKey,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -306,8 +314,14 @@ export const chatHandlers: GatewayRequestHandlers = {
         clientRunId,
       });
 
+      // Normalize short main key alias to canonical form before store write
+      const agentId = resolveAgentIdFromSessionKey(p.sessionKey);
+      const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
+      const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
+      const storeKey =
+        p.sessionKey === rawMainKey ? mainSessionKey : p.sessionKey;
       if (store) {
-        store[p.sessionKey] = sessionEntry;
+        store[storeKey] = sessionEntry;
         if (storePath) {
           await saveSessionStore(storePath, store);
         }
