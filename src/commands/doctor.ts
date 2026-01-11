@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import {
   intro as clackIntro,
-  note as clackNote,
   outro as clackOutro,
 } from "@clack/prompts";
 import {
@@ -41,6 +40,7 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
+import { note } from "../terminal/note.js";
 import { sleep } from "../utils.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
@@ -97,8 +97,6 @@ const intro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) =>
   clackOutro(stylePromptTitle(message) ?? message);
-const note = (message: string, title?: string) =>
-  clackNote(message, stylePromptTitle(title));
 
 function resolveMode(cfg: ClawdbotConfig): "local" | "remote" {
   return cfg.gateway?.mode === "remote" ? "remote" : "local";

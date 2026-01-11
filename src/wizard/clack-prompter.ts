@@ -4,7 +4,6 @@ import {
   intro,
   isCancel,
   multiselect,
-  note,
   type Option,
   outro,
   select,
@@ -18,6 +17,7 @@ import {
   stylePromptTitle,
 } from "../terminal/prompt-style.js";
 import { theme } from "../terminal/theme.js";
+import { note as emitNote } from "../terminal/note.js";
 import type { WizardProgress, WizardPrompter } from "./prompts.js";
 import { WizardCancelledError } from "./prompts.js";
 
@@ -38,7 +38,7 @@ export function createClackPrompter(): WizardPrompter {
       outro(stylePromptTitle(message) ?? message);
     },
     note: async (message, title) => {
-      note(message, stylePromptTitle(title));
+      emitNote(message, title);
     },
     select: async (params) =>
       guardCancel(

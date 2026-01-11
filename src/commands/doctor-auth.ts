@@ -1,5 +1,3 @@
-import { note as clackNote } from "@clack/prompts";
-
 import {
   buildAuthHealthSummary,
   DEFAULT_OAUTH_WARN_MS,
@@ -14,11 +12,8 @@ import {
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
 import type { ClawdbotConfig } from "../config/config.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
+import { note } from "../terminal/note.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-
-const note = (message: string, title?: string) =>
-  clackNote(message, stylePromptTitle(title));
 
 export async function maybeRepairAnthropicOAuthProfileId(
   cfg: ClawdbotConfig,

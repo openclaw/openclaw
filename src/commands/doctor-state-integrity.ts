@@ -2,8 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { note as clackNote } from "@clack/prompts";
-
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
@@ -14,10 +12,7 @@ import {
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
-
-const note = (message: string, title?: string) =>
-  clackNote(message, stylePromptTitle(title));
+import { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
   confirmSkipInNonInteractive: (params: {

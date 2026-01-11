@@ -4,7 +4,6 @@ import {
   confirm as clackConfirm,
   intro as clackIntro,
   multiselect as clackMultiselect,
-  note as clackNote,
   outro as clackOutro,
   select as clackSelect,
   text as clackText,
@@ -26,6 +25,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { listChatProviders } from "../providers/registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { note } from "../terminal/note.js";
 import {
   stylePromptHint,
   stylePromptMessage,
@@ -90,8 +90,6 @@ const intro = (message: string) =>
   clackIntro(stylePromptTitle(message) ?? message);
 const outro = (message: string) =>
   clackOutro(stylePromptTitle(message) ?? message);
-const note = (message: string, title?: string) =>
-  clackNote(message, stylePromptTitle(title));
 const text = (params: Parameters<typeof clackText>[0]) =>
   clackText({
     ...params,

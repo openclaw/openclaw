@@ -1,8 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 
-import { note as clackNote } from "@clack/prompts";
-
 import {
   DEFAULT_SANDBOX_BROWSER_IMAGE,
   DEFAULT_SANDBOX_COMMON_IMAGE,
@@ -12,12 +10,9 @@ import {
 import type { ClawdbotConfig } from "../config/config.js";
 import { runCommandWithTimeout, runExec } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { stylePromptTitle } from "../terminal/prompt-style.js";
+import { note } from "../terminal/note.js";
 import { replaceModernName } from "./doctor-legacy-config.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-
-const note = (message: string, title?: string) =>
-  clackNote(message, stylePromptTitle(title));
 
 type SandboxScriptInfo = {
   scriptPath: string;
