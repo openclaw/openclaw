@@ -67,7 +67,12 @@ function formatValue(value: unknown): string | undefined {
   try {
     return JSON.stringify(value);
   } catch {
-    return String(value);
+    if (typeof value === "bigint") return value.toString();
+    if (typeof value === "number" || typeof value === "boolean") {
+      return value.toString();
+    }
+    if (typeof value === "symbol") return value.toString();
+    return Object.prototype.toString.call(value);
   }
 }
 
