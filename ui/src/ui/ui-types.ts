@@ -1,6 +1,7 @@
 export type TelegramForm = {
   token: string;
   requireMention: boolean;
+  groupsWildcardEnabled: boolean;
   allowFrom: string;
   proxy: string;
   webhookUrl: string;

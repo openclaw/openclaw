@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.1.11-9
+
+### Fixes
+- Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists.
+- Telegram/Onboarding: allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
+- Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
+
 ## 2026.1.11-6
 
 ### Fixes

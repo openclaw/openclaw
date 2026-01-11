@@ -357,9 +357,24 @@ function renderProvider(
               />
             </label>
             <label class="field">
+              <span>Apply default group rules</span>
+              <select
+                .value=${props.telegramForm.groupsWildcardEnabled ? "yes" : "no"}
+                @change=${(e: Event) =>
+                  props.onTelegramChange({
+                    groupsWildcardEnabled:
+                      (e.target as HTMLSelectElement).value === "yes",
+                  })}
+              >
+                <option value="no">No</option>
+                <option value="yes">Yes (allow all groups)</option>
+              </select>
+            </label>
+            <label class="field">
               <span>Require mention in groups</span>
               <select
                 .value=${props.telegramForm.requireMention ? "yes" : "no"}
+                ?disabled=${!props.telegramForm.groupsWildcardEnabled}
                 @change=${(e: Event) =>
                   props.onTelegramChange({
                     requireMention: (e.target as HTMLSelectElement).value === "yes",
@@ -377,7 +392,7 @@ function renderProvider(
                   props.onTelegramChange({
                     allowFrom: (e.target as HTMLInputElement).value,
                   })}
-                placeholder="123456789, @team"
+                placeholder="123456789, @team, tg:123"
               />
             </label>
             <label class="field">
@@ -426,9 +441,30 @@ function renderProvider(
             </label>
           </div>
 
+          <div class="callout" style="margin-top: 12px;">
+            Allow from supports numeric user IDs (recommended) or @usernames. DM the bot
+            to get your ID, or run /whoami.
+          </div>
+
           ${props.telegramTokenLocked
             ? html`<div class="callout" style="margin-top: 12px;">
                 TELEGRAM_BOT_TOKEN is set in the environment. Config edits will not override it.
+              </div>`
+            : nothing}
+
+          ${props.telegramForm.groupsWildcardEnabled
+            ? html`<div class="callout danger" style="margin-top: 12px;">
+                This writes telegram.groups["*"] and allows all groups. Remove it
+                if you only want specific groups.
+                <div class="row" style="margin-top: 8px;">
+                  <button
+                    class="btn"
+                    @click=${() =>
+                      props.onTelegramChange({ groupsWildcardEnabled: false })}
+                  >
+                    Remove wildcard
+                  </button>
+                </div>
               </div>`
             : nothing}
 

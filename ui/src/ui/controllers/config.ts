@@ -129,6 +129,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
     telegramGroups["*"] && typeof telegramGroups["*"] === "object"
       ? (telegramGroups["*"] as Record<string, unknown>)
       : {};
+  const telegramHasWildcard = Boolean(telegramGroups["*"]);
   const allowFrom = Array.isArray(telegram.allowFrom)
     ? toList(telegram.allowFrom)
     : typeof telegram.allowFrom === "string"
@@ -141,6 +142,7 @@ export function applyConfigSnapshot(state: ConfigState, snapshot: ConfigSnapshot
       typeof telegramDefaultGroup.requireMention === "boolean"
         ? telegramDefaultGroup.requireMention
         : true,
+    groupsWildcardEnabled: telegramHasWildcard,
     allowFrom,
     proxy: typeof telegram.proxy === "string" ? telegram.proxy : "",
     webhookUrl: typeof telegram.webhookUrl === "string" ? telegram.webhookUrl : "",

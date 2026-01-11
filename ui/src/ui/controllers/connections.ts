@@ -181,6 +181,15 @@ export async function saveTelegramConfig(state: ConnectionsState) {
   state.telegramSaving = true;
   state.telegramConfigStatus = null;
   try {
+    if (state.telegramForm.groupsWildcardEnabled) {
+      const confirmed = window.confirm(
+        'Telegram groups wildcard "*" allows all groups. Continue?',
+      );
+      if (!confirmed) {
+        state.telegramConfigStatus = "Save cancelled.";
+        return;
+      }
+    }
     const base = state.configSnapshot?.config ?? {};
     const config = { ...base } as Record<string, unknown>;
     const telegram = { ...(config.telegram ?? {}) } as Record<string, unknown>;
@@ -196,16 +205,22 @@ export async function saveTelegramConfig(state: ConnectionsState) {
             unknown
           >)
         : {};
-    const defaultGroup =
-      groups["*"] && typeof groups["*"] === "object"
-        ? ({ ...(groups["*"] as Record<string, unknown>) } as Record<
-            string,
-            unknown
-          >)
-        : {};
-    defaultGroup.requireMention = state.telegramForm.requireMention;
-    groups["*"] = defaultGroup;
-    telegram.groups = groups;
+    if (state.telegramForm.groupsWildcardEnabled) {
+      const defaultGroup =
+        groups["*"] && typeof groups["*"] === "object"
+          ? ({ ...(groups["*"] as Record<string, unknown>) } as Record<
+              string,
+              unknown
+            >)
+          : {};
+      defaultGroup.requireMention = state.telegramForm.requireMention;
+      groups["*"] = defaultGroup;
+      telegram.groups = groups;
+    } else if (groups["*"]) {
+      delete groups["*"];
+      if (Object.keys(groups).length > 0) telegram.groups = groups;
+      else delete telegram.groups;
+    }
     delete telegram.requireMention;
     const allowFrom = parseList(state.telegramForm.allowFrom);
     if (allowFrom.length > 0) telegram.allowFrom = allowFrom;

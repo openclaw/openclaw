@@ -643,6 +643,30 @@ export async function handleCommands(params: {
     return { shouldContinue: false, reply };
   }
 
+  const whoamiRequested = command.commandBodyNormalized === "/whoami";
+  if (allowTextCommands && whoamiRequested) {
+    const senderId = ctx.SenderId ?? "";
+    const senderUsername = ctx.SenderUsername ?? "";
+    const lines = ["🧭 Identity", `Provider: ${command.provider}`];
+    if (senderId) lines.push(`User id: ${senderId}`);
+    if (senderUsername) {
+      const handle = senderUsername.startsWith("@")
+        ? senderUsername
+        : `@${senderUsername}`;
+      lines.push(`Username: ${handle}`);
+    }
+    if (ctx.ChatType === "group" && ctx.From) {
+      lines.push(`Chat: ${ctx.From}`);
+    }
+    if (ctx.MessageThreadId != null) {
+      lines.push(`Thread: ${ctx.MessageThreadId}`);
+    }
+    if (senderId) {
+      lines.push(`AllowFrom: ${senderId}`);
+    }
+    return { shouldContinue: false, reply: { text: lines.join("\n") } };
+  }
+
   const configCommand = allowTextCommands
     ? parseConfigCommand(command.commandBodyNormalized)
     : null;

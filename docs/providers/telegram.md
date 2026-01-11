@@ -153,7 +153,7 @@ Send in the group:
 
 Forward any message from the group to `@userinfobot` or `@getidsbot` on Telegram to see the chat ID (negative number like `-1001234567890`).
 
-**Tip:** For your own user ID, DM `@userinfobot` with `/start`. Useful for allowlists or debugging access control.
+**Tip:** For your own user ID, DM the bot and it will reply with your user ID (pairing message), or use `/whoami` once commands are enabled.
 
 **Privacy note:** `@userinfobot` is a third-party bot. If you prefer, use gateway logs (`clawdbot logs`) or Telegram developer tools to find user/chat IDs.
 
@@ -176,6 +176,7 @@ Private topics (DM forum mode) also include `message_thread_id`. Clawdbot:
   - `clawdbot pairing list telegram`
   - `clawdbot pairing approve telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
+- `telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries.
 
 ### Group access
 

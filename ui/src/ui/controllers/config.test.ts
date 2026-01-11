@@ -20,6 +20,7 @@ import {
 const baseTelegramForm: TelegramForm = {
   token: "",
   requireMention: true,
+  groupsWildcardEnabled: false,
   allowFrom: "",
   proxy: "",
   webhookUrl: "",
