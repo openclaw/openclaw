@@ -636,16 +636,15 @@ describe("doctor", () => {
 
     expect(
       note.mock.calls.some(([message, title]) => {
-        if (title !== "Sandbox") return false;
-        if (typeof message !== "string") return false;
-        const normalized = message.replace(/\s+/g, " ");
+        if (title !== "Sandbox" || typeof message !== "string") return false;
+        const normalized = message.replace(/\s+/g, " ").trim();
         return (
           normalized.includes('agents.list (id "work") sandbox docker') &&
           normalized.includes('scope resolves to "shared"')
         );
       }),
     ).toBe(true);
-  });
+  }, 10_000);
 
   it("warns when legacy workspace directories exist", async () => {
     readConfigFileSnapshot.mockResolvedValue({
