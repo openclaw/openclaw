@@ -1,3 +1,4 @@
+import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import plugin from "../../extensions/voice-call/index.js";
@@ -42,13 +43,8 @@ function setup(config: Record<string, unknown>): Registered {
 }
 
 describe("voice-call plugin", () => {
-  beforeEach(() => {
-    vi.restoreAllMocks();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+  beforeEach(() => vi.restoreAllMocks());
+  afterEach(() => vi.restoreAllMocks());
 
   it("starts a log provider call and returns sid", async () => {
     const { methods } = setup({ provider: "log" });
@@ -121,5 +117,99 @@ describe("voice-call plugin", () => {
     const [ok, payload] = respond.mock.calls[0];
     expect(ok).toBe(true);
     expect(payload.status).toBe("in-progress");
+  });
+
+  it("fails start when Twilio returns error", async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      text: async () => "bad creds",
+    });
+    // @ts-expect-error partial global
+    global.fetch = fetch;
+    const { methods } = setup({
+      provider: "twilio",
+      twilio: { accountSid: "AC123", authToken: "tok", from: "+1444" },
+    });
+    const handler = methods.get("voicecall.start");
+    const respond = vi.fn();
+    await handler({ params: { to: "+1555" }, respond });
+    const [ok, payload] = respond.mock.calls[0];
+    expect(ok).toBe(false);
+    expect(String(payload.error)).toContain("twilio call failed");
+  });
+
+  it("requires twilio credentials in config schema", () => {
+    expect(() =>
+      setup({ provider: "twilio", twilio: { accountSid: "AC", from: "+1" } }),
+    ).toThrow(/accountSid/);
+  });
+
+  it("tool status mode without sid throws", async () => {
+    const { tools } = setup({ provider: "log" });
+    const tool = tools[0];
+    await expect(
+      // @ts-expect-error minimal shape
+      tool.execute("id", { mode: "status" }),
+    ).rejects.toThrow(/sid required/);
+  });
+
+  it("log provider status avoids fetch", async () => {
+    // @ts-expect-error ensure fetch undefined
+    delete global.fetch;
+    const { methods } = setup({ provider: "log" });
+    const handler = methods.get("voicecall.status");
+    const respond = vi.fn();
+    await handler({ params: { sid: "log-1" }, respond });
+    expect(respond).toHaveBeenCalledWith(true, {
+      sid: "log-1",
+      status: "mock",
+      provider: "log",
+    });
+  });
+
+  it("CLI start prints JSON", async () => {
+    const { register } = plugin as unknown as {
+      register: (api: Record<string, unknown>) => void | Promise<void>;
+    };
+    const program = new Command();
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    register({
+      id: "voice-call",
+      name: "Voice Call",
+      description: "test",
+      version: "0",
+      source: "test",
+      config: {},
+      pluginConfig: { provider: "log" },
+      logger: noopLogger,
+      registerGatewayMethod: () => {},
+      registerTool: () => {},
+      registerCli: (
+        fn: (ctx: {
+          program: Command;
+          config: Record<string, unknown>;
+          workspaceDir?: string;
+          logger: typeof noopLogger;
+        }) => void,
+      ) =>
+        fn({
+          program,
+          config: {},
+          workspaceDir: undefined,
+          logger: noopLogger,
+        }),
+      registerService: () => {},
+      resolvePath: (p: string) => p,
+    });
+
+    await program.parseAsync(
+      ["node", "cli", "voicecall", "start", "--to", "+1"],
+      {
+        from: "user",
+      },
+    );
+    expect(logSpy).toHaveBeenCalled();
+    logSpy.mockRestore();
   });
 });
