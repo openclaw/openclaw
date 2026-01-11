@@ -5,6 +5,7 @@
 ### Fixes
 - CLI/Status: make the “More” footer shorter and easier to scan (newlines + context-aware suggestions).
 - Docs/FAQ: make `clawdbot status` the first diagnostic step (and point to `status --all` for pasteable reports).
+- CLI/Status: format non-JSON-serializable provider issue values more predictably.
 
 ## 2026.1.11-7
 
