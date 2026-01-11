@@ -1,21 +1,19 @@
 /**
  * Config includes: $include directive for modular configs
  *
- * Supports:
- * - `{ "$include": "./path/to/file.json5" }` - single file include
- * - `{ "$include": ["./a.json5", "./b.json5"] }` - deep merge multiple files
- * - Nested includes up to MAX_INCLUDE_DEPTH levels
- * - Circular include detection
+ * @example
+ * ```json5
+ * {
+ *   "$include": "./base.json5",           // single file
+ *   "$include": ["./a.json5", "./b.json5"] // merge multiple
+ * }
+ * ```
  */
 
 import fs from "node:fs";
 import path from "node:path";
 
 import JSON5 from "json5";
-
-// ============================================================================
-// Constants
-// ============================================================================
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
@@ -25,15 +23,8 @@ export const MAX_INCLUDE_DEPTH = 10;
 // ============================================================================
 
 export type IncludeResolver = {
-  fsModule: typeof fs;
-  json5Module: typeof JSON5;
-};
-
-type IncludeContext = {
-  basePath: string;
-  visited: Set<string>;
-  depth: number;
-  resolver: IncludeResolver;
+  readFile: (path: string) => string;
+  parseJson: (raw: string) => unknown;
 };
 
 // ============================================================================
@@ -74,12 +65,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   );
 }
 
-/**
- * Deep merge two values.
- * - Arrays: concatenate
- * - Objects: recursive merge
- * - Primitives: source wins
- */
+/** Deep merge: arrays concatenate, objects merge recursively, primitives: source wins */
 export function deepMerge(target: unknown, source: unknown): unknown {
   if (Array.isArray(target) && Array.isArray(source)) {
     return [...target, ...source];
@@ -87,160 +73,176 @@ export function deepMerge(target: unknown, source: unknown): unknown {
   if (isPlainObject(target) && isPlainObject(source)) {
     const result: Record<string, unknown> = { ...target };
     for (const key of Object.keys(source)) {
-      result[key] =
-        key in result ? deepMerge(result[key], source[key]) : source[key];
+      result[key] = key in result
+        ? deepMerge(result[key], source[key])
+        : source[key];
     }
     return result;
   }
   return source;
 }
 
-function resolveIncludePath(includePath: string, basePath: string): string {
-  if (path.isAbsolute(includePath)) {
-    return includePath;
-  }
-  return path.resolve(path.dirname(basePath), includePath);
-}
-
 // ============================================================================
-// Core Logic
+// Include Resolver Class
 // ============================================================================
 
-function loadIncludeFile(includePath: string, ctx: IncludeContext): unknown {
-  const resolvedPath = resolveIncludePath(includePath, ctx.basePath);
-  const normalizedPath = path.normalize(resolvedPath);
+class IncludeProcessor {
+  private visited = new Set<string>();
+  private depth = 0;
 
-  if (ctx.visited.has(normalizedPath)) {
-    throw new CircularIncludeError([...ctx.visited, normalizedPath]);
+  constructor(
+    private basePath: string,
+    private resolver: IncludeResolver,
+  ) {
+    this.visited.add(path.normalize(basePath));
   }
 
-  if (ctx.depth >= MAX_INCLUDE_DEPTH) {
-    throw new ConfigIncludeError(
-      `Maximum include depth (${MAX_INCLUDE_DEPTH}) exceeded at: ${includePath}`,
-      includePath,
-    );
-  }
-
-  let raw: string;
-  try {
-    raw = ctx.resolver.fsModule.readFileSync(normalizedPath, "utf-8");
-  } catch (err) {
-    throw new ConfigIncludeError(
-      `Failed to read include file: ${includePath} (resolved: ${normalizedPath})`,
-      includePath,
-      err instanceof Error ? err : undefined,
-    );
-  }
-
-  let parsed: unknown;
-  try {
-    parsed = ctx.resolver.json5Module.parse(raw);
-  } catch (err) {
-    throw new ConfigIncludeError(
-      `Failed to parse include file: ${includePath} (resolved: ${normalizedPath})`,
-      includePath,
-      err instanceof Error ? err : undefined,
-    );
-  }
-
-  const newCtx: IncludeContext = {
-    ...ctx,
-    basePath: normalizedPath,
-    visited: new Set([...ctx.visited, normalizedPath]),
-    depth: ctx.depth + 1,
-  };
-
-  return resolveIncludesInternal(parsed, newCtx);
-}
-
-function resolveIncludeDirective(
-  includeValue: unknown,
-  ctx: IncludeContext,
-): unknown {
-  if (typeof includeValue === "string") {
-    return loadIncludeFile(includeValue, ctx);
-  }
-
-  if (Array.isArray(includeValue)) {
-    let result: unknown = {};
-    for (const item of includeValue) {
-      if (typeof item !== "string") {
-        throw new ConfigIncludeError(
-          `Invalid $include array item: expected string, got ${typeof item}`,
-          String(item),
-        );
-      }
-      result = deepMerge(result, loadIncludeFile(item, ctx));
-    }
-    return result;
-  }
-
-  throw new ConfigIncludeError(
-    `Invalid $include value: expected string or array of strings, got ${typeof includeValue}`,
-    String(includeValue),
-  );
-}
-
-function resolveIncludesInternal(obj: unknown, ctx: IncludeContext): unknown {
-  if (Array.isArray(obj)) {
-    return obj.map((item) => resolveIncludesInternal(item, ctx));
-  }
-
-  if (isPlainObject(obj)) {
-    if (INCLUDE_KEY in obj) {
-      const includeValue = obj[INCLUDE_KEY];
-      const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
-
-      if (otherKeys.length > 0) {
-        const included = resolveIncludeDirective(includeValue, ctx);
-        const rest: Record<string, unknown> = {};
-        for (const key of otherKeys) {
-          rest[key] = resolveIncludesInternal(obj[key], ctx);
-        }
-        return deepMerge(included, rest);
-      }
-
-      return resolveIncludeDirective(includeValue, ctx);
+  process(obj: unknown): unknown {
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.process(item));
     }
 
+    if (!isPlainObject(obj)) {
+      return obj;
+    }
+
+    if (!(INCLUDE_KEY in obj)) {
+      return this.processObject(obj);
+    }
+
+    return this.processInclude(obj);
+  }
+
+  private processObject(obj: Record<string, unknown>): Record<string, unknown> {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(obj)) {
-      result[key] = resolveIncludesInternal(value, ctx);
+      result[key] = this.process(value);
     }
     return result;
   }
 
-  return obj;
+  private processInclude(obj: Record<string, unknown>): unknown {
+    const includeValue = obj[INCLUDE_KEY];
+    const otherKeys = Object.keys(obj).filter((k) => k !== INCLUDE_KEY);
+    const included = this.resolveInclude(includeValue);
+
+    if (otherKeys.length === 0) {
+      return included;
+    }
+
+    // Merge included content with sibling keys
+    const rest: Record<string, unknown> = {};
+    for (const key of otherKeys) {
+      rest[key] = this.process(obj[key]);
+    }
+    return deepMerge(included, rest);
+  }
+
+  private resolveInclude(value: unknown): unknown {
+    if (typeof value === "string") {
+      return this.loadFile(value);
+    }
+
+    if (Array.isArray(value)) {
+      return value.reduce<unknown>((merged, item) => {
+        if (typeof item !== "string") {
+          throw new ConfigIncludeError(
+            `Invalid $include array item: expected string, got ${typeof item}`,
+            String(item),
+          );
+        }
+        return deepMerge(merged, this.loadFile(item));
+      }, {});
+    }
+
+    throw new ConfigIncludeError(
+      `Invalid $include value: expected string or array of strings, got ${typeof value}`,
+      String(value),
+    );
+  }
+
+  private loadFile(includePath: string): unknown {
+    const resolvedPath = this.resolvePath(includePath);
+    
+    this.checkCircular(resolvedPath);
+    this.checkDepth(includePath);
+
+    const raw = this.readFile(includePath, resolvedPath);
+    const parsed = this.parseFile(includePath, resolvedPath, raw);
+
+    return this.processNested(resolvedPath, parsed);
+  }
+
+  private resolvePath(includePath: string): string {
+    const resolved = path.isAbsolute(includePath)
+      ? includePath
+      : path.resolve(path.dirname(this.basePath), includePath);
+    return path.normalize(resolved);
+  }
+
+  private checkCircular(resolvedPath: string): void {
+    if (this.visited.has(resolvedPath)) {
+      throw new CircularIncludeError([...this.visited, resolvedPath]);
+    }
+  }
+
+  private checkDepth(includePath: string): void {
+    if (this.depth >= MAX_INCLUDE_DEPTH) {
+      throw new ConfigIncludeError(
+        `Maximum include depth (${MAX_INCLUDE_DEPTH}) exceeded at: ${includePath}`,
+        includePath,
+      );
+    }
+  }
+
+  private readFile(includePath: string, resolvedPath: string): string {
+    try {
+      return this.resolver.readFile(resolvedPath);
+    } catch (err) {
+      throw new ConfigIncludeError(
+        `Failed to read include file: ${includePath} (resolved: ${resolvedPath})`,
+        includePath,
+        err instanceof Error ? err : undefined,
+      );
+    }
+  }
+
+  private parseFile(includePath: string, resolvedPath: string, raw: string): unknown {
+    try {
+      return this.resolver.parseJson(raw);
+    } catch (err) {
+      throw new ConfigIncludeError(
+        `Failed to parse include file: ${includePath} (resolved: ${resolvedPath})`,
+        includePath,
+        err instanceof Error ? err : undefined,
+      );
+    }
+  }
+
+  private processNested(resolvedPath: string, parsed: unknown): unknown {
+    const nested = new IncludeProcessor(resolvedPath, this.resolver);
+    nested.visited = new Set([...this.visited, resolvedPath]);
+    nested.depth = this.depth + 1;
+    return nested.process(parsed);
+  }
 }
 
 // ============================================================================
 // Public API
 // ============================================================================
 
+const defaultResolver: IncludeResolver = {
+  readFile: (p) => fs.readFileSync(p, "utf-8"),
+  parseJson: (raw) => JSON5.parse(raw),
+};
+
 /**
  * Resolves all $include directives in a parsed config object.
- *
- * @param obj - Parsed config object (from JSON5.parse)
- * @param configPath - Path to the main config file (for relative path resolution)
- * @param resolver - Optional custom fs/json5 modules (for testing)
- * @returns Config object with all includes resolved
- *
- * @example
- * ```typescript
- * const parsed = JSON5.parse(raw);
- * const resolved = resolveConfigIncludes(parsed, "/path/to/config.json5");
- * ```
  */
 export function resolveConfigIncludes(
   obj: unknown,
   configPath: string,
-  resolver: IncludeResolver = { fsModule: fs, json5Module: JSON5 },
+  resolver: IncludeResolver = defaultResolver,
 ): unknown {
-  const ctx: IncludeContext = {
-    basePath: configPath,
-    visited: new Set([path.normalize(configPath)]),
-    depth: 0,
-    resolver,
-  };
-  return resolveIncludesInternal(obj, ctx);
+  return new IncludeProcessor(configPath, resolver).process(obj);
 }
