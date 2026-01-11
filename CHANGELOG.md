@@ -63,6 +63,7 @@
 - Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
 - Docker: allow optional apt packages during image build and document the build arg. (#697) — thanks @gabriel-trigo.
 - Gateway/Heartbeat: deliver reasoning even when the main heartbeat reply is `HEARTBEAT_OK`. (#694) — thanks @antons.
+- Agents/Pi: inject config `temperature`/`maxTokens` into streaming without replacing the session streamFn; cover with live maxTokens probe. (#732) — thanks @peschee.
 - macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
 - Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).
 - Docs: make `clawdbot status` the first diagnostic step, clarify `status --deep` behavior, and document `/whoami` + `/id`.
