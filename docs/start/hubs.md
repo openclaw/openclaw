@@ -58,6 +58,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 ## Providers + ingress
 
+- [Model providers hub](/providers)
 - [WhatsApp](/providers/whatsapp)
 - [Telegram](/providers/telegram)
 - [Telegram (grammY notes)](/providers/grammy)
