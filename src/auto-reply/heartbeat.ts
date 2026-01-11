@@ -52,30 +52,58 @@ export function stripHeartbeatToken(
   if (!trimmed) return { shouldSkip: true, text: "", didStrip: false };
 
   const mode: StripHeartbeatMode = opts.mode ?? "message";
+  const maxAckCharsRaw = opts.maxAckChars;
+  const parsedAckChars =
+    typeof maxAckCharsRaw === "string"
+      ? Number(maxAckCharsRaw)
+      : maxAckCharsRaw;
   const maxAckChars = Math.max(
     0,
-    opts.maxAckChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    Number.isFinite(parsedAckChars)
+      ? parsedAckChars
+      : DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   );
 
-  if (!trimmed.includes(HEARTBEAT_TOKEN)) {
+  // Normalize lightweight markup so HEARTBEAT_OK wrapped in HTML/Markdown
+  // (e.g., <b>HEARTBEAT_OK</b> or **HEARTBEAT_OK**) still strips.
+  const stripMarkup = (text: string) =>
+    text
+      // Drop HTML tags.
+      .replace(/<[^>]*>/g, " ")
+      // Decode common nbsp variant.
+      .replace(/&nbsp;/gi, " ")
+      // Remove markdown-ish wrappers at the edges.
+      .replace(/^[*`~_]+/, "")
+      .replace(/[*`~_]+$/, "");
+
+  const trimmedNormalized = stripMarkup(trimmed);
+  const hasToken =
+    trimmed.includes(HEARTBEAT_TOKEN) ||
+    trimmedNormalized.includes(HEARTBEAT_TOKEN);
+  if (!hasToken) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  const stripped = stripTokenAtEdges(trimmed);
-  if (!stripped.didStrip) {
+  const strippedOriginal = stripTokenAtEdges(trimmed);
+  const strippedNormalized = stripTokenAtEdges(trimmedNormalized);
+  const picked =
+    strippedOriginal.didStrip && strippedOriginal.text
+      ? strippedOriginal
+      : strippedNormalized;
+  if (!picked.didStrip) {
     return { shouldSkip: false, text: trimmed, didStrip: false };
   }
 
-  if (!stripped.text) {
+  if (!picked.text) {
     return { shouldSkip: true, text: "", didStrip: true };
   }
 
+  const rest = picked.text.trim();
   if (mode === "heartbeat") {
-    const rest = stripped.text.trim();
     if (rest.length <= maxAckChars) {
       return { shouldSkip: true, text: "", didStrip: true };
     }
   }
 
-  return { shouldSkip: false, text: stripped.text, didStrip: true };
+  return { shouldSkip: false, text: rest, didStrip: true };
 }

@@ -49,6 +49,7 @@
 - CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
 - CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
 - Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
+- Heartbeat: strip markup-wrapped `HEARTBEAT_OK` so acks don’t leak to external providers (e.g., Telegram).
 - Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
 - WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
 - Sandbox/Skills: mirror skills into sandbox workspaces for read-only mounts so SKILL.md stays accessible.
