@@ -213,8 +213,11 @@ function buildSubagentAnnouncePrompt(params: {
     params.subagentReply
       ? `Sub-agent result: ${params.subagentReply}`
       : "Sub-agent result: (not available).",
-    'Reply exactly "ANNOUNCE_SKIP" to stay silent.',
-    "Any other reply will be posted to the requester chat provider.",
+    "",
+    "**You MUST announce your result.** The requester is waiting for your response.",
+    "Provide a brief, useful summary of what you accomplished.",
+    'Only reply "ANNOUNCE_SKIP" if the task completely failed with no useful output.',
+    "Your reply will be posted to the requester chat.",
   ].filter(Boolean);
   return lines.join("\n");
 }
