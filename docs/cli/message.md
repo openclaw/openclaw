@@ -59,44 +59,45 @@ Target formats (`--to`):
 
 - `react`
   - Providers: Discord/Slack/Telegram/WhatsApp
-  - Required: `--to`, `--message-id`
+  - Required: `--message-id`, `--to` or `--channel-id`
   - Optional: `--emoji`, `--remove`, `--participant`, `--from-me`, `--channel-id`
+  - Note: `--remove` requires `--emoji` (omit `--emoji` to clear own reactions where supported; see /tools/reactions)
   - WhatsApp only: `--participant`, `--from-me`
 
 - `reactions`
   - Providers: Discord/Slack
-  - Required: `--to`, `--message-id`
+  - Required: `--message-id`, `--to` or `--channel-id`
   - Optional: `--limit`, `--channel-id`
 
 - `read`
   - Providers: Discord/Slack
-  - Required: `--to`
+  - Required: `--to` or `--channel-id`
   - Optional: `--limit`, `--before`, `--after`, `--channel-id`
   - Discord only: `--around`
 
 - `edit`
   - Providers: Discord/Slack
-  - Required: `--to`, `--message-id`, `--message`
+  - Required: `--message-id`, `--message`, `--to` or `--channel-id`
   - Optional: `--channel-id`
 
 - `delete`
   - Providers: Discord/Slack
-  - Required: `--to`, `--message-id`
+  - Required: `--message-id`, `--to` or `--channel-id`
   - Optional: `--channel-id`
 
 - `pin` / `unpin`
   - Providers: Discord/Slack
-  - Required: `--to`, `--message-id`
+  - Required: `--message-id`, `--to` or `--channel-id`
   - Optional: `--channel-id`
 
 - `pins` (list)
   - Providers: Discord/Slack
-  - Required: `--to`
+  - Required: `--to` or `--channel-id`
   - Optional: `--channel-id`
 
 - `permissions`
   - Providers: Discord
-  - Required: `--to`
+  - Required: `--to` or `--channel-id`
   - Optional: `--channel-id`
 
 - `search`
