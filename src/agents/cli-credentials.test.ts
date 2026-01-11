@@ -19,6 +19,7 @@ describe("cli credentials", () => {
     vi.useRealTimers();
     vi.resetModules();
     execSyncMock.mockReset();
+    delete process.env.CODEX_HOME;
   });
 
   it("updates the Claude Code keychain item in place", async () => {
@@ -183,5 +184,64 @@ describe("cli credentials", () => {
     expect(first).toBeTruthy();
     expect(second).toBeTruthy();
     expect(execSyncMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads Codex credentials from keychain when available", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-codex-"));
+    process.env.CODEX_HOME = tempHome;
+
+    const accountHash = "cli|";
+
+    execSyncMock.mockImplementation((command: unknown) => {
+      const cmd = String(command);
+      expect(cmd).toContain("Codex Auth");
+      expect(cmd).toContain(accountHash);
+      return JSON.stringify({
+        tokens: {
+          access_token: "keychain-access",
+          refresh_token: "keychain-refresh",
+        },
+        last_refresh: "2026-01-01T00:00:00Z",
+      });
+    });
+
+    const { readCodexCliCredentials } = await import("./cli-credentials.js");
+    const creds = readCodexCliCredentials();
+
+    expect(creds).toMatchObject({
+      access: "keychain-access",
+      refresh: "keychain-refresh",
+      provider: "openai-codex",
+    });
+  });
+
+  it("falls back to Codex auth.json when keychain is unavailable", async () => {
+    const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-codex-"));
+    process.env.CODEX_HOME = tempHome;
+    execSyncMock.mockImplementation(() => {
+      throw new Error("not found");
+    });
+
+    const authPath = path.join(tempHome, "auth.json");
+    fs.mkdirSync(tempHome, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(
+      authPath,
+      JSON.stringify({
+        tokens: {
+          access_token: "file-access",
+          refresh_token: "file-refresh",
+        },
+      }),
+      "utf8",
+    );
+
+    const { readCodexCliCredentials } = await import("./cli-credentials.js");
+    const creds = readCodexCliCredentials();
+
+    expect(creds).toMatchObject({
+      access: "file-access",
+      refresh: "file-refresh",
+      provider: "openai-codex",
+    });
   });
 });
