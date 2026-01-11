@@ -49,78 +49,74 @@ async function waitForLocalCallback(params: {
   const port = redirectUrl.port ? Number.parseInt(redirectUrl.port, 10) : 80;
   const expectedPath = redirectUrl.pathname || "/";
 
-  let server: ReturnType<typeof createServer> | null = null;
-  let timeout: NodeJS.Timeout | null = null;
-
-  try {
-    const resultPromise = new Promise<{ code: string; state: string }>(
-      (resolve, reject) => {
-        server = createServer((req, res) => {
-          try {
-            const requestUrl = new URL(req.url ?? "/", redirectUrl.origin);
-            if (requestUrl.pathname !== expectedPath) {
-              res.statusCode = 404;
-              res.setHeader("Content-Type", "text/plain; charset=utf-8");
-              res.end("Not found");
-              return;
-            }
-
-            const code = requestUrl.searchParams.get("code")?.trim();
-            const state = requestUrl.searchParams.get("state")?.trim();
-
-            if (!code) {
-              res.statusCode = 400;
-              res.setHeader("Content-Type", "text/plain; charset=utf-8");
-              res.end("Missing code");
-              return;
-            }
-            if (!state || state !== params.expectedState) {
-              res.statusCode = 400;
-              res.setHeader("Content-Type", "text/plain; charset=utf-8");
-              res.end("Invalid state");
-              return;
-            }
-
-            res.statusCode = 200;
-            res.setHeader("Content-Type", "text/html; charset=utf-8");
-            res.end(
-              [
-                "<!doctype html>",
-                "<html><head><meta charset='utf-8' /></head>",
-                "<body><h2>Chutes OAuth complete</h2>",
-                "<p>You can close this window and return to clawdbot.</p></body></html>",
-              ].join(""),
-            );
-            resolve({ code, state });
-          } catch (err) {
-            reject(err);
+  return await new Promise<{ code: string; state: string }>(
+    (resolve, reject) => {
+      let timeout: NodeJS.Timeout | null = null;
+      const server = createServer((req, res) => {
+        try {
+          const requestUrl = new URL(req.url ?? "/", redirectUrl.origin);
+          if (requestUrl.pathname !== expectedPath) {
+            res.statusCode = 404;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Not found");
+            return;
           }
-        });
 
-        server.once("error", reject);
-        server.listen(port, hostname, () => {
-          params.onProgress?.(
-            `Waiting for OAuth callback on ${redirectUrl.origin}${expectedPath}…`,
+          const code = requestUrl.searchParams.get("code")?.trim();
+          const state = requestUrl.searchParams.get("state")?.trim();
+
+          if (!code) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Missing code");
+            return;
+          }
+          if (!state || state !== params.expectedState) {
+            res.statusCode = 400;
+            res.setHeader("Content-Type", "text/plain; charset=utf-8");
+            res.end("Invalid state");
+            return;
+          }
+
+          res.statusCode = 200;
+          res.setHeader("Content-Type", "text/html; charset=utf-8");
+          res.end(
+            [
+              "<!doctype html>",
+              "<html><head><meta charset='utf-8' /></head>",
+              "<body><h2>Chutes OAuth complete</h2>",
+              "<p>You can close this window and return to clawdbot.</p></body></html>",
+            ].join(""),
           );
-        });
-      },
-    );
+          if (timeout) clearTimeout(timeout);
+          server.close();
+          resolve({ code, state });
+        } catch (err) {
+          if (timeout) clearTimeout(timeout);
+          server.close();
+          reject(err);
+        }
+      });
 
-    timeout = setTimeout(() => {
-      try {
-        server?.close();
-      } catch {}
-    }, params.timeoutMs);
-
-    return await resultPromise;
-  } finally {
-    if (timeout) clearTimeout(timeout);
-    if (server) {
-      try {
+      server.once("error", (err) => {
+        if (timeout) clearTimeout(timeout);
         server.close();
-      } catch {}
-    }
-  }
+        reject(err);
+      });
+      server.listen(port, hostname, () => {
+        params.onProgress?.(
+          `Waiting for OAuth callback on ${redirectUrl.origin}${expectedPath}…`,
+        );
+      });
+
+      timeout = setTimeout(() => {
+        try {
+          server.close();
+        } catch {}
+        reject(new Error("OAuth callback timeout"));
+      }, params.timeoutMs);
+    },
+  );
 }
 
 export async function loginChutes(params: {

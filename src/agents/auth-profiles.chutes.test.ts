@@ -3,16 +3,15 @@ import os from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-
+import {
+  type AuthProfileStore,
+  ensureAuthProfileStore,
+  resolveApiKeyForProfile,
+} from "./auth-profiles.js";
 import {
   CHUTES_TOKEN_ENDPOINT,
   type ChutesStoredOAuth,
 } from "./chutes-oauth.js";
-import {
-  ensureAuthProfileStore,
-  resolveApiKeyForProfile,
-  type AuthProfileStore,
-} from "./auth-profiles.js";
 
 describe("auth-profiles (chutes)", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
@@ -31,16 +30,23 @@ describe("auth-profiles (chutes)", () => {
     else process.env.CLAWDBOT_STATE_DIR = previousStateDir;
     if (previousAgentDir === undefined) delete process.env.CLAWDBOT_AGENT_DIR;
     else process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
-    if (previousPiAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    if (previousPiAgentDir === undefined)
+      delete process.env.PI_CODING_AGENT_DIR;
     else process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    if (previousChutesClientId === undefined) delete process.env.CHUTES_CLIENT_ID;
+    if (previousChutesClientId === undefined)
+      delete process.env.CHUTES_CLIENT_ID;
     else process.env.CHUTES_CLIENT_ID = previousChutesClientId;
   });
 
   it("refreshes expired Chutes OAuth credentials", async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-chutes-"));
     process.env.CLAWDBOT_STATE_DIR = tempDir;
-    process.env.CLAWDBOT_AGENT_DIR = path.join(tempDir, "agents", "main", "agent");
+    process.env.CLAWDBOT_AGENT_DIR = path.join(
+      tempDir,
+      "agents",
+      "main",
+      "agent",
+    );
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
     const authProfilePath = path.join(
@@ -69,7 +75,8 @@ describe("auth-profiles (chutes)", () => {
 
     const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
-      if (url !== CHUTES_TOKEN_ENDPOINT) return new Response("not found", { status: 404 });
+      if (url !== CHUTES_TOKEN_ENDPOINT)
+        return new Response("not found", { status: 404 });
       return new Response(
         JSON.stringify({
           access_token: "at_new",
@@ -89,7 +96,9 @@ describe("auth-profiles (chutes)", () => {
     expect(resolved?.apiKey).toBe("at_new");
     expect(fetchSpy).toHaveBeenCalled();
 
-    const persisted = JSON.parse(await fs.readFile(authProfilePath, "utf8")) as {
+    const persisted = JSON.parse(
+      await fs.readFile(authProfilePath, "utf8"),
+    ) as {
       profiles?: Record<string, { access?: string }>;
     };
     expect(persisted.profiles?.["chutes:default"]?.access).toBe("at_new");
