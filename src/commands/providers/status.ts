@@ -198,7 +198,7 @@ export function formatGatewayProvidersStatusLines(
     lines.push("");
   }
   lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
+    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
   );
   return lines;
 }
@@ -378,7 +378,7 @@ async function formatConfigProvidersStatusLines(
 
   lines.push("");
   lines.push(
-    `Tip: ${formatDocsLink("/cli#status", "status --deep")} runs local probes without a gateway.`,
+    `Tip: ${formatDocsLink("/cli#status", "status --deep")} adds gateway health probes to status output (requires a reachable gateway).`,
   );
   return lines;
 }

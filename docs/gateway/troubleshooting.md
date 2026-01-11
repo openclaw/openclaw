@@ -19,7 +19,7 @@ Quick triage commands (in order):
 |---|---|---|
 | `clawdbot status` | Local summary: OS + update, gateway reachability/mode, daemon, agents/sessions, provider config state | First check, quick overview |
 | `clawdbot status --all` | Full local diagnosis (read-only, pasteable, safe-ish) incl. log tail | When you need to share a debug report |
-| `clawdbot status --deep` | Runs local provider probes (WhatsApp connect + Telegram/Discord APIs) | When “configured” doesn’t mean “working” |
+| `clawdbot status --deep` | Runs gateway health checks (incl. provider probes; requires reachable gateway) | When “configured” doesn’t mean “working” |
 | `clawdbot gateway status` | Gateway discovery + reachability (local + remote targets) | When you suspect you’re probing the wrong gateway |
 | `clawdbot providers status --probe` | Asks the running gateway for provider status (and optionally probes) | When gateway is reachable but providers misbehave |
 | `clawdbot daemon status` | Supervisor state (launchd/systemd/schtasks), runtime PID/exit, last gateway error | When the daemon “looks loaded” but nothing runs |

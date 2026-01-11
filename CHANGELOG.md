@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.1.11-3
+
+### Fixes
+- CLI/Providers: fix `providers status` tip about `status --deep` requiring a reachable gateway.
+- Docs/Troubleshooting: clarify that `clawdbot status --deep` runs gateway health checks (and needs a reachable gateway).
+
 ## 2026.1.11-2
 
 ### Fixes
