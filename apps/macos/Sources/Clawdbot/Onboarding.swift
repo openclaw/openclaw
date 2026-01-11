@@ -151,8 +151,8 @@ struct OnboardingView: View {
 
     var canAdvance: Bool { !self.isWizardBlocking }
     var devLinkCommand: String {
-        let bundlePath = Bundle.main.bundlePath
-        return "ln -sf '\(bundlePath)/Contents/Resources/Relay/clawdbot' /usr/local/bin/clawdbot"
+        let version = GatewayEnvironment.expectedGatewayVersion()?.description ?? "latest"
+        return "npm install -g clawdbot@\(version)"
     }
 
     struct LocalGatewayProbe: Equatable {

@@ -12,8 +12,7 @@ This guide covers the necessary steps to build and run the Clawdbot macOS applic
 Before building the app, ensure you have the following installed:
 
 1.  **Xcode 26.2+**: Required for Swift development.
-2.  **Node.js & pnpm**: Required for the gateway and CLI components.
-3.  **Node**: Required to package the embedded gateway relay (the script can download a bundled runtime).
+2.  **Node.js 22+ & pnpm**: Required for the gateway, CLI, and packaging scripts.
 
 ## 1. Initialize Submodules
 
@@ -39,24 +38,22 @@ To build the macOS app and package it into `dist/Clawdbot.app`, run:
 ./scripts/package-mac-app.sh
 ```
 
-Use `BUNDLED_RUNTIME=node|bun` to switch the embedded gateway runtime (default: node).
-
 If you don't have an Apple Developer ID certificate, the script will automatically use **ad-hoc signing** (`-`). 
 
 > **Note**: Ad-hoc signed apps may trigger security prompts. If the app crashes immediately with "Abort trap 6", see the [Troubleshooting](#troubleshooting) section.
 
-## 4. Install the CLI Helper
+## 4. Install the CLI
 
-The macOS app requires a symlink named `clawdbot` in `/usr/local/bin` or `/opt/homebrew/bin` to manage background tasks.
+The macOS app expects a global `clawdbot` CLI install to manage background tasks.
 
-**To install it:**
+**To install it (recommended):**
 1.  Open the Clawdbot app.
 2.  Go to the **General** settings tab.
-3.  Click **"Install CLI helper"** (requires administrator privileges).
+3.  Click **"Install CLI"**.
 
-Alternatively, you can manually link it from your Admin account:
+Alternatively, install it manually:
 ```bash
-sudo ln -sf "/Users/$(whoami)/Projects/clawdbot/dist/Clawdbot.app/Contents/Resources/Relay/clawdbot" /usr/local/bin/clawdbot
+npm install -g clawdbot@<version>
 ```
 
 ## Troubleshooting

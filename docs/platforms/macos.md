@@ -18,8 +18,7 @@ node.
 - Runs or connects to the Gateway (local or remote).
 - Exposes macOS‑only tools (Canvas, Camera, Screen Recording, `system.run`).
 - Optionally hosts **PeekabooBridge** for UI automation.
-- Installs a helper CLI (`clawdbot`) into `/usr/local/bin` and
-  `/opt/homebrew/bin` on request.
+- Installs the global CLI (`clawdbot`) via npm/pnpm/bun on request.
 
 ## Local vs remote mode
 
@@ -84,14 +83,13 @@ Safety:
 1) Install and launch **Clawdbot.app**.
 2) Complete the permissions checklist (TCC prompts).
 3) Ensure **Local** mode is active and the Gateway is running.
-4) Install the CLI helper if you want terminal access.
+4) Install the CLI if you want terminal access.
 
 ## Build & dev workflow (native)
 
 - `cd apps/macos && swift build`
 - `swift run Clawdbot` (or Xcode)
-- Package app + CLI: `scripts/package-mac-app.sh`
-  - Switch bundled gateway runtime with `BUNDLED_RUNTIME=node|bun` (default: node).
+- Package app: `scripts/package-mac-app.sh`
 
 ## Debug gateway discovery (macOS CLI)
 
@@ -115,6 +113,6 @@ the Node CLI’s `dns-sd` based discovery.
 ## Related docs
 
 - [Gateway runbook](/gateway)
-- [Bundled Node Gateway](/platforms/mac/bundled-gateway)
+- [Gateway (macOS)](/platforms/mac/bundled-gateway)
 - [macOS permissions](/platforms/mac/permissions)
 - [Canvas](/platforms/mac/canvas)

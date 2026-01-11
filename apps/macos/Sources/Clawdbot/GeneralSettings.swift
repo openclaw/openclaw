@@ -354,7 +354,7 @@ struct GeneralSettings: View {
                 Button {
                     Task { await self.installCLI() }
                 } label: {
-                    let title = self.cliInstalled ? "Reinstall CLI helper" : "Install CLI helper"
+                    let title = self.cliInstalled ? "Reinstall CLI" : "Install CLI"
                     ZStack {
                         Text(title)
                             .opacity(self.isInstallingCLI ? 0 : 1)
@@ -393,7 +393,7 @@ struct GeneralSettings: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
             } else {
-                Text("Symlink \"clawdbot\" into /usr/local/bin and /opt/homebrew/bin for scripts.")
+                Text("Installs via npm/pnpm/bun; requires Node 22+.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)

@@ -16,32 +16,41 @@ enum GatewayLaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(legacyGatewayLaunchdLabel).plist")
     }
 
-    private static func gatewayExecutablePath(bundlePath: String) -> String {
-        "\(bundlePath)/Contents/Resources/Relay/clawdbot"
-    }
-
-    private static func relayDir(bundlePath: String) -> String {
-        "\(bundlePath)/Contents/Resources/Relay"
-    }
-
-    private static func gatewayProgramArguments(bundlePath: String, port: Int, bind: String) -> [String] {
+    private static func gatewayProgramArguments(port: Int, bind: String) -> Result<[String], String> {
         #if DEBUG
         let projectRoot = CommandResolver.projectRoot()
         if let localBin = CommandResolver.projectClawdbotExecutable(projectRoot: projectRoot) {
-            return [localBin, "gateway", "--port", "\(port)", "--bind", bind]
+            return .success([localBin, "gateway-daemon", "--port", "\(port)", "--bind", bind])
         }
         if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot),
            case let .success(runtime) = CommandResolver.runtimeResolution()
         {
-            return CommandResolver.makeRuntimeCommand(
+            let cmd = CommandResolver.makeRuntimeCommand(
                 runtime: runtime,
                 entrypoint: entry,
-                subcommand: "gateway",
+                subcommand: "gateway-daemon",
                 extraArgs: ["--port", "\(port)", "--bind", bind])
+            return .success(cmd)
         }
         #endif
-        let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
-        return [gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind]
+        let searchPaths = CommandResolver.preferredPaths()
+        if let gatewayBin = CommandResolver.clawdbotExecutable(searchPaths: searchPaths) {
+            return .success([gatewayBin, "gateway-daemon", "--port", "\(port)", "--bind", bind])
+        }
+
+        let projectRoot = CommandResolver.projectRoot()
+        if let entry = CommandResolver.gatewayEntrypoint(in: projectRoot),
+           case let .success(runtime) = CommandResolver.runtimeResolution(searchPaths: searchPaths)
+        {
+            let cmd = CommandResolver.makeRuntimeCommand(
+                runtime: runtime,
+                entrypoint: entry,
+                subcommand: "gateway-daemon",
+                extraArgs: ["--port", "\(port)", "--bind", bind])
+            return .success(cmd)
+        }
+
+        return .failure("clawdbot CLI not found in PATH; install the global package.")
     }
 
     static func isLoaded() async -> Bool {
@@ -51,6 +60,7 @@ enum GatewayLaunchAgentManager {
     }
 
     static func set(enabled: Bool, bundlePath: String, port: Int) async -> String? {
+        _ = bundlePath
         if enabled, self.isLaunchAgentWriteDisabled() {
             self.logger.info("launchd enable skipped (attach-only or disable marker set)")
             return nil
@@ -58,11 +68,6 @@ enum GatewayLaunchAgentManager {
         if enabled {
             _ = await Launchctl.run(["bootout", "gui/\(getuid())/\(self.legacyGatewayLaunchdLabel)"])
             try? FileManager.default.removeItem(at: self.legacyPlistURL)
-            let gatewayBin = self.gatewayExecutablePath(bundlePath: bundlePath)
-            guard FileManager.default.isExecutableFile(atPath: gatewayBin) else {
-                self.logger.error("launchd enable failed: gateway missing at \(gatewayBin)")
-                return "Embedded gateway missing in bundle; rebuild via scripts/package-mac-app.sh"
-            }
 
             let desiredBind = self.preferredGatewayBind() ?? "loopback"
             let desiredToken = self.preferredGatewayToken()
@@ -72,6 +77,14 @@ enum GatewayLaunchAgentManager {
                 bind: desiredBind,
                 token: desiredToken,
                 password: desiredPassword)
+            let programArgumentsResult = self.gatewayProgramArguments(port: port, bind: desiredBind)
+            guard case let .success(programArguments) = programArgumentsResult else {
+                if case let .failure(message) = programArgumentsResult {
+                    self.logger.error("launchd enable failed: \(message)")
+                    return message
+                }
+                return "Failed to resolve gateway command."
+            }
 
             // If launchd already loaded the job (common on login), avoid `bootout` unless we must
             // change the config. `bootout` can kill a just-started gateway and cause attach loops.
@@ -87,7 +100,7 @@ enum GatewayLaunchAgentManager {
             }
 
             self.logger.info("launchd enable requested port=\(port) bind=\(desiredBind)")
-            self.writePlist(bundlePath: bundlePath, port: port)
+            self.writePlist(programArguments: programArguments)
 
             await self.ensureEnabled()
             if loaded {
@@ -117,18 +130,13 @@ enum GatewayLaunchAgentManager {
     }
 
     private static func writePlist(bundlePath: String, port: Int) {
-        let relayDir = self.relayDir(bundlePath: bundlePath)
-        let preferredPath = ([relayDir] + CommandResolver.preferredPaths())
-            .joined(separator: ":")
-        let bind = self.preferredGatewayBind() ?? "loopback"
-        let programArguments = self.gatewayProgramArguments(bundlePath: bundlePath, port: port, bind: bind)
+    private static func writePlist(programArguments: [String]) {
+        let preferredPath = CommandResolver.preferredPaths().joined(separator: ":")
         let token = self.preferredGatewayToken()
         let password = self.preferredGatewayPassword()
         var envEntries = """
             <key>PATH</key>
             <string>\(preferredPath)</string>
-            <key>CLAWDBOT_IMAGE_BACKEND</key>
-            <string>sips</string>
         """
         if let token {
             let escapedToken = self.escapePlistValue(token)
@@ -319,14 +327,6 @@ extension GatewayLaunchAgentManager {
 
 #if DEBUG
 extension GatewayLaunchAgentManager {
-    static func _testGatewayExecutablePath(bundlePath: String) -> String {
-        self.gatewayExecutablePath(bundlePath: bundlePath)
-    }
-
-    static func _testRelayDir(bundlePath: String) -> String {
-        self.relayDir(bundlePath: bundlePath)
-    }
-
     static func _testPreferredGatewayBind() -> String? {
         self.preferredGatewayBind()
     }
