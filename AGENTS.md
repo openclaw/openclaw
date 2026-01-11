@@ -9,6 +9,7 @@
 - Docs are hosted on Mintlify (docs.clawd.bot).
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
+- When Peter asks for links, reply with full `https://docs.clawd.bot/...` URLs (not root-relative).
 - README (GitHub): keep absolute docs URLs (`https://docs.clawd.bot/...`) so links work on GitHub.
 
 ## Build, Test, and Development Commands
