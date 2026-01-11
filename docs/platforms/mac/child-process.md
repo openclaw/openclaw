@@ -44,6 +44,22 @@ Steps:
 
 The UI should show “Using existing gateway …” once connected.
 
+## Unsigned dev builds
+
+`scripts/restart-mac.sh --no-sign` is for fast local builds when you don’t have
+signing keys. To prevent launchd from pointing at an unsigned relay binary, it:
+
+- Writes `~/.clawdbot/disable-launchagent`.
+- Sets `clawdbot.gateway.attachExistingOnly=true` in the macOS app defaults.
+
+Signed runs of `scripts/restart-mac.sh` clear these overrides if the marker is
+present. To reset manually:
+
+```bash
+rm ~/.clawdbot/disable-launchagent
+defaults write com.clawdbot.mac clawdbot.gateway.attachExistingOnly -bool NO
+```
+
 ## Remote mode
 
 Remote mode never starts a local Gateway. The app uses an SSH tunnel to the
