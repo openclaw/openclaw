@@ -96,6 +96,17 @@ function sanitizeToolResult(result: unknown): unknown {
   return { ...record, content: sanitized };
 }
 
+function isToolResultError(result: unknown): boolean {
+  if (!result || typeof result !== "object") return false;
+  const record = result as { details?: unknown };
+  const details = record.details;
+  if (!details || typeof details !== "object") return false;
+  const status = (details as { status?: unknown }).status;
+  if (typeof status !== "string") return false;
+  const normalized = status.trim().toLowerCase();
+  return normalized === "error" || normalized === "timeout";
+}
+
 function stripThinkingSegments(text: string): string {
   if (!text || !THINKING_TAG_RE.test(text)) return text;
   THINKING_TAG_RE.lastIndex = 0;
@@ -613,6 +624,7 @@ export function subscribeEmbeddedPiSession(params: {
           (evt as AgentEvent & { isError: boolean }).isError,
         );
         const result = (evt as AgentEvent & { result?: unknown }).result;
+        const isToolError = isError || isToolResultError(result);
         const sanitizedResult = sanitizeToolResult(result);
         const meta = toolMetaById.get(toolCallId);
         toolMetas.push({ toolName, meta });
@@ -624,7 +636,7 @@ export function subscribeEmbeddedPiSession(params: {
         const pendingTarget = pendingMessagingTargets.get(toolCallId);
         if (pendingText) {
           pendingMessagingTexts.delete(toolCallId);
-          if (!isError) {
+          if (!isToolError) {
             messagingToolSentTexts.push(pendingText);
             messagingToolSentTextsNormalized.push(
               normalizeTextForComparison(pendingText),
@@ -637,7 +649,7 @@ export function subscribeEmbeddedPiSession(params: {
         }
         if (pendingTarget) {
           pendingMessagingTargets.delete(toolCallId);
-          if (!isError) {
+          if (!isToolError) {
             messagingToolSentTargets.push(pendingTarget);
             trimMessagingToolSent();
           }
@@ -651,7 +663,7 @@ export function subscribeEmbeddedPiSession(params: {
             name: toolName,
             toolCallId,
             meta,
-            isError,
+            isError: isToolError,
             result: sanitizedResult,
           },
         });
@@ -662,7 +674,7 @@ export function subscribeEmbeddedPiSession(params: {
             name: toolName,
             toolCallId,
             meta,
-            isError,
+            isError: isToolError,
           },
         });
       }

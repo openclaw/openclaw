@@ -313,6 +313,7 @@ export function buildAgentSystemPrompt(params: {
           "",
           "### message tool",
           "- Use `message` for proactive sends + provider actions (polls, reactions, etc.).",
+          "- For `action=send`, include `to` and `message`.",
           "- If multiple providers are configured, pass `provider` (whatsapp|telegram|discord|slack|signal|imessage|msteams).",
           telegramInlineButtonsEnabled
             ? "- Telegram: inline buttons supported. Use `action=send` with `buttons=[[{text,callback_data}]]` (callback_data routes back as a user message)."
