@@ -757,6 +757,7 @@
         "pages": [
           "testing",
           "scripts",
+          "reference/session-management-compaction",
           "reference/rpc",
           "reference/device-models",
           "reference/test",
