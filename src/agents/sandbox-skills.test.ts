@@ -87,7 +87,9 @@ describe("sandbox skill mirroring", () => {
   });
 
   const runContext = async (workspaceAccess: "none" | "ro") => {
-    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-state-"));
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-state-"),
+    );
     const bundledDir = path.join(stateDir, "bundled-skills");
     await fs.mkdir(bundledDir, { recursive: true });
 
