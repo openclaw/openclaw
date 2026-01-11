@@ -492,7 +492,11 @@ function parseTelegramAllowFromEntries(raw: string): {
     const match = part.match(/^(telegram|tg):(.+)$/i);
     const value = match ? match[2]?.trim() : part;
     if (!value) {
-      return { entries: [], hasUsernames: false, error: `Invalid entry: ${part}` };
+      return {
+        entries: [],
+        hasUsernames: false,
+        error: `Invalid entry: ${part}`,
+      };
     }
     if (/^\d+$/.test(value)) {
       entries.push(part);
