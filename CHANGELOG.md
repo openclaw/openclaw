@@ -2,6 +2,9 @@
 
 ## 2026.1.11-5
 
+### New Features and Changes
+- CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
+
 ### Fixes
 - CLI/Status: surface gateway provider runtime errors (Signal/iMessage/Slack) in the Providers table.
 - CLI/Status: improve Tailscale reporting in `status --all` and harden parsing of noisy `tailscale status --json` output.
@@ -9,7 +12,9 @@
 - Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
 - CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
 - macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
-
+- Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).
+- Agents/OpenAI: replay reasoning items for tool-call-only turns in Responses/Codex Responses history (fixes follow-up turns after tools).
+- Docs/Testing: clarify live tool+image probes and how to list your testable `provider/model` ids.
 ## 2026.1.11-4
 
 ### Fixes
