@@ -262,6 +262,11 @@ export async function runHeartbeatOnce(opts: {
     const replyPayload = resolveHeartbeatReplyPayload(replyResult);
     const includeReasoning =
       cfg.agents?.defaults?.heartbeat?.includeReasoning === true;
+    const reasoningPayloads = includeReasoning
+      ? resolveHeartbeatReasoningPayloads(replyResult).filter(
+          (payload) => payload !== replyPayload,
+        )
+      : [];
 
     if (
       !replyPayload ||
@@ -291,7 +296,8 @@ export async function runHeartbeatOnce(opts: {
       ).responsePrefix,
       ackMaxChars,
     );
-    if (normalized.shouldSkip && !normalized.hasMedia) {
+    const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia;
+    if (shouldSkipMain && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
@@ -309,18 +315,19 @@ export async function runHeartbeatOnce(opts: {
     const mediaUrls =
       replyPayload.mediaUrls ??
       (replyPayload.mediaUrl ? [replyPayload.mediaUrl] : []);
-
-    const reasoningPayloads = includeReasoning
-      ? resolveHeartbeatReasoningPayloads(replyResult).filter(
-          (payload) => payload !== replyPayload,
-        )
-      : [];
+    // Reasoning payloads are text-only; any attachments stay on the main reply.
+    const previewText = shouldSkipMain
+      ? reasoningPayloads
+          .map((payload) => payload.text)
+          .filter((text): text is string => Boolean(text?.trim()))
+          .join("\n")
+      : normalized.text;
 
     if (delivery.provider === "none" || !delivery.to) {
       emitHeartbeatEvent({
         status: "skipped",
         reason: delivery.reason ?? "no-target",
-        preview: normalized.text?.slice(0, 200),
+        preview: previewText?.slice(0, 200),
         durationMs: Date.now() - startedAt,
         hasMedia: mediaUrls.length > 0,
       });
@@ -333,7 +340,7 @@ export async function runHeartbeatOnce(opts: {
         emitHeartbeatEvent({
           status: "skipped",
           reason: readiness.reason,
-          preview: normalized.text?.slice(0, 200),
+          preview: previewText?.slice(0, 200),
           durationMs: Date.now() - startedAt,
           hasMedia: mediaUrls.length > 0,
         });
@@ -350,10 +357,14 @@ export async function runHeartbeatOnce(opts: {
       to: delivery.to,
       payloads: [
         ...reasoningPayloads,
-        {
-          text: normalized.text,
-          mediaUrls,
-        },
+        ...(shouldSkipMain
+          ? []
+          : [
+              {
+                text: normalized.text,
+                mediaUrls,
+              },
+            ]),
       ],
       deps: opts.deps,
     });
@@ -361,7 +372,7 @@ export async function runHeartbeatOnce(opts: {
     emitHeartbeatEvent({
       status: "sent",
       to: delivery.to,
-      preview: normalized.text?.slice(0, 200),
+      preview: previewText?.slice(0, 200),
       durationMs: Date.now() - startedAt,
       hasMedia: mediaUrls.length > 0,
     });

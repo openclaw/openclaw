@@ -32,6 +32,7 @@ describe("getApiKeyForModel", () => {
       );
 
       vi.resetModules();
+      const { ensureAuthProfileStore } = await import("./auth-profiles.js");
       const { getApiKeyForModel } = await import("./model-auth.js");
 
       const model = {
@@ -40,6 +41,9 @@ describe("getApiKeyForModel", () => {
         api: "openai-codex-responses",
       } as Model<Api>;
 
+      const store = ensureAuthProfileStore(process.env.CLAWDBOT_AGENT_DIR, {
+        allowKeychainPrompt: false,
+      });
       const apiKey = await getApiKeyForModel({
         model,
         cfg: {
@@ -52,6 +56,8 @@ describe("getApiKeyForModel", () => {
             },
           },
         },
+        store,
+        agentDir: process.env.CLAWDBOT_AGENT_DIR,
       });
       expect(apiKey.apiKey).toBe(oauthFixture.access);
 
