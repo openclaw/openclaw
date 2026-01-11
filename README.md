@@ -159,15 +159,16 @@ WhatsApp / Telegram / Slack / Discord / Signal / iMessage / WebChat
                │
                ▼
 ┌───────────────────────────────┐
-│            Gateway            │  ws://127.0.0.1:18789
-│       (control plane)         │  bridge: tcp://0.0.0.0:18790
+│            Gateway            │
+│       (control plane)         │
+│     ws://127.0.0.1:18789      │
 └──────────────┬────────────────┘
                │
                ├─ Pi agent (RPC)
                ├─ CLI (clawdbot …)
                ├─ WebChat UI
                ├─ macOS app
-               └─ iOS/Android nodes
+               └─ iOS / Android nodes
 ```
 
 ## Key subsystems
