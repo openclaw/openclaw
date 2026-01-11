@@ -646,15 +646,22 @@ export function registerCronCli(program: Command) {
               text: String(opts.systemEvent),
             };
           } else if (opts.message) {
+            const model =
+              typeof opts.model === "string" && opts.model.trim()
+                ? opts.model.trim()
+                : undefined;
+            const thinking =
+              typeof opts.thinking === "string" && opts.thinking.trim()
+                ? opts.thinking.trim()
+                : undefined;
             const timeoutSeconds = opts.timeoutSeconds
               ? Number.parseInt(String(opts.timeoutSeconds), 10)
               : undefined;
             patch.payload = {
               kind: "agentTurn",
               message: String(opts.message),
-              model: typeof opts.model === "string" ? opts.model : undefined,
-              thinking:
-                typeof opts.thinking === "string" ? opts.thinking : undefined,
+              model,
+              thinking,
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds)
                   ? timeoutSeconds
