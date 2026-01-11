@@ -222,7 +222,9 @@ function createStreamFnWithExtraParams(
     return undefined;
   }
 
-  log.debug(`creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`);
+  log.debug(
+    `creating streamFn wrapper with params: ${JSON.stringify(streamParams)}`,
+  );
 
   // Return a wrapper that merges our params with any passed options
   const wrappedStreamFn: StreamFn = (model, context, options) => {
@@ -248,7 +250,12 @@ function applyExtraParamsToAgent(
   modelId: string,
   thinkLevel?: string,
 ): void {
-  const extraParams = resolveExtraParams({ cfg, provider, modelId, thinkLevel });
+  const extraParams = resolveExtraParams({
+    cfg,
+    provider,
+    modelId,
+    thinkLevel,
+  });
   const wrappedStreamFn = createStreamFnWithExtraParams(extraParams);
 
   if (wrappedStreamFn) {
