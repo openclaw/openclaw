@@ -182,7 +182,7 @@ final class ControlChannel {
         {
             let reason = urlErr.failureURLString ?? urlErr.localizedDescription
             return
-                "Gateway rejected token; set CLAWDBOT_GATEWAY_TOKEN in the mac app environment " +
+                "Gateway rejected token; set gateway.auth.token (or CLAWDBOT_GATEWAY_TOKEN) " +
                 "or clear it on the gateway. " +
                 "Reason: \(reason)"
         }

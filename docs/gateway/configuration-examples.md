@@ -117,10 +117,16 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
         imessage: "collect",
         webchat: "collect"
       }
-    },
-    transcribeAudio: {
-      command: ["whisper", "--model", "base"],
-      timeoutSeconds: 120
+    }
+  },
+
+  // Tooling
+  tools: {
+    audio: {
+      transcription: {
+        args: ["--model", "base", "{{MediaPath}}"],
+        timeoutSeconds: 120
+      }
     }
   },
 

@@ -68,6 +68,7 @@ Most operations flow through the **Gateway** (`clawdbot gateway`), a single long
 
 - **One Gateway per host**: it is the only process allowed to own the WhatsApp Web session.
 - **Loopback-first**: Gateway WS defaults to `ws://127.0.0.1:18789`.
+  - The wizard now generates a gateway token by default (even for loopback).
   - For Tailnet access, run `clawdbot gateway --bind tailnet --token ...` (token is required for non-loopback binds).
 - **Bridge for nodes**: optional LAN/tailnet-facing bridge on `tcp://0.0.0.0:18790` for paired nodes (Bonjour-discoverable).
 - **Canvas host**: HTTP file server on `canvasHost.port` (default `18793`), serving `/__clawdbot__/canvas/` for node WebViews; see [Gateway configuration](/gateway/configuration) (`canvasHost`).

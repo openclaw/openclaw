@@ -35,7 +35,8 @@ pnpm gateway:watch
 - `--force` uses `lsof` to find listeners on the chosen port, sends SIGTERM, logs what it killed, then starts the gateway (fails fast if `lsof` is missing).
 - If you run under a supervisor (launchd/systemd/mac app child-process mode), a stop/restart typically sends **SIGTERM**; older builds may surface this as `pnpm` `ELIFECYCLE` exit code **143** (SIGTERM), which is a normal shutdown, not a crash.
 - **SIGUSR1** triggers an in-process restart (no external supervisor required). This is what the `gateway` agent tool uses.
-- Optional shared secret: pass `--token <value>` or set `CLAWDBOT_GATEWAY_TOKEN` to require clients to send `connect.params.auth.token`.
+- Gateway auth: set `gateway.auth.mode=token` + `gateway.auth.token` (or pass `--token <value>` / `CLAWDBOT_GATEWAY_TOKEN`) to require clients to send `connect.params.auth.token`.
+- The wizard now generates a token by default, even on loopback.
 - Port precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
 
 ## Remote access

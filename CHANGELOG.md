@@ -41,6 +41,7 @@
 ### Fixes
 - CLI/Status: expand tables to full terminal width; improve update + daemon summary lines; keep `status --all` gateway log tail pasteable.
 - WhatsApp: detect @lid mentions in groups using authDir reverse mapping + resolve self JID E.164 for mention gating. (#692) — thanks @peschee.
+- Gateway/Auth: default to token auth on loopback during onboarding, add doctor token generation flow, and tighten audio transcription config to Whisper-only.
 
 ## 2026.1.10
 

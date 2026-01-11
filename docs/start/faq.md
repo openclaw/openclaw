@@ -198,6 +198,12 @@ Notes:
 - `gateway.remote.token` is for **remote CLI calls** only; it does not enable local gateway auth.
 - The Control UI authenticates via `connect.params.auth.token` (stored in app/UI settings). Avoid putting tokens in URLs.
 
+### Why do I need a token on localhost now?
+
+The wizard generates a gateway token by default (even on loopback) so **local WS clients must authenticate**. This blocks other local processes from calling the Gateway. Paste the token into the Control UI settings (or your client config) to connect.
+
+If you **really** want open loopback, remove `gateway.auth` from your config. Doctor can generate a token for you any time: `clawdbot doctor --generate-gateway-token`.
+
 ### Do I have to restart after changing config?
 
 The Gateway watches the config and supports hot‑reload:

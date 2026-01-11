@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { parseDurationMs } from "../cli/parse-duration.js";
+import { isSafeExecutableValue } from "../infra/exec-safety.js";
 
 const ModelApiSchema = z.union([
   z.literal("openai-completions"),
@@ -179,7 +180,16 @@ const QueueSchema = z
 
 const TranscribeAudioSchema = z
   .object({
-    command: z.array(z.string()),
+    command: z.array(z.string()).superRefine((value, ctx) => {
+      const executable = value[0];
+      if (!isSafeExecutableValue(executable)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: [0],
+          message: "expected safe executable name or path",
+        });
+      }
+    }),
     timeoutSeconds: z.number().int().positive().optional(),
   })
   .optional();
@@ -187,6 +197,17 @@ const TranscribeAudioSchema = z
 const HexColorSchema = z
   .string()
   .regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
+
+const ExecutableTokenSchema = z
+  .string()
+  .refine(isSafeExecutableValue, "expected safe executable name or path");
+
+const ToolsAudioTranscriptionSchema = z
+  .object({
+    args: z.array(z.string()).optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .optional();
 
 const TelegramTopicSchema = z.object({
   requireMention: z.boolean().optional(),
@@ -422,7 +443,7 @@ const SignalAccountSchemaBase = z.object({
   httpUrl: z.string().optional(),
   httpHost: z.string().optional(),
   httpPort: z.number().int().positive().optional(),
-  cliPath: z.string().optional(),
+  cliPath: ExecutableTokenSchema.optional(),
   autoStart: z.boolean().optional(),
   receiveMode: z.union([z.literal("on-start"), z.literal("manual")]).optional(),
   ignoreAttachments: z.boolean().optional(),
@@ -470,7 +491,7 @@ const IMessageAccountSchemaBase = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
-  cliPath: z.string().optional(),
+  cliPath: ExecutableTokenSchema.optional(),
   dbPath: z.string().optional(),
   service: z
     .union([z.literal("imessage"), z.literal("sms"), z.literal("auto")])
@@ -819,6 +840,11 @@ const ToolsSchema = z
   .object({
     allow: z.array(z.string()).optional(),
     deny: z.array(z.string()).optional(),
+    audio: z
+      .object({
+        transcription: ToolsAudioTranscriptionSchema,
+      })
+      .optional(),
     agentToAgent: z
       .object({
         enabled: z.boolean().optional(),

@@ -6,38 +6,30 @@ read_when:
 # Audio / Voice Notes — 2025-12-05
 
 ## What works
-- **Optional transcription**: If `audio.transcription.command` is set in `~/.clawdbot/clawdbot.json`, Clawdbot will:
+- **Optional transcription**: If `tools.audio.transcription` is set in `~/.clawdbot/clawdbot.json`, Clawdbot will:
   1) Download inbound audio to a temp path when WhatsApp only provides a URL.
-  2) Run the configured CLI (templated with `{{MediaPath}}`), expecting transcript on stdout.
+  2) Run the configured CLI args (templated with `{{MediaPath}}`), expecting transcript on stdout.
   3) Replace `Body` with the transcript, set `{{Transcript}}`, and prepend the original media path plus a `Transcript:` section in the command prompt so models see both.
   4) Continue through the normal auto-reply pipeline (templating, sessions, Pi command).
 - **Verbose logging**: In `--verbose`, we log when transcription runs and when the transcript replaces the body.
 
-## Config example (OpenAI Whisper CLI)
-Requires `OPENAI_API_KEY` in env and `openai` CLI installed:
+## Config example (Whisper CLI)
+Requires `whisper` CLI installed:
 ```json5
 {
-  audio: {
-    transcription: {
-      command: [
-        "openai",
-        "api",
-        "audio.transcriptions.create",
-        "-m",
-        "whisper-1",
-        "-f",
-        "{{MediaPath}}",
-        "--response-format",
-        "text"
-      ],
-      timeoutSeconds: 45
+  tools: {
+    audio: {
+      transcription: {
+        args: ["--model", "base", "{{MediaPath}}"],
+        timeoutSeconds: 45
+      }
     }
   }
 }
 ```
 
 ## Notes & limits
-- We don’t ship a transcriber; you opt in with any CLI that prints text to stdout (Whisper cloud, whisper.cpp, vosk, Deepgram, etc.).
+- We don’t ship a transcriber; you opt in with the Whisper CLI on your PATH.
 - Size guard: inbound audio must be ≤5 MB (matches the temp media store and transcript pipeline).
 - Outbound caps: web send supports audio/voice up to 16 MB (sent as a voice note with `ptt: true`).
 - If transcription fails, we fall back to the original body/media note; replies still go through.

@@ -110,6 +110,31 @@ Keep config + state private on the gateway host:
 
 `clawdbot doctor` can warn and offer to tighten these permissions.
 
+### 0.5) Lock down the Gateway WebSocket (local auth)
+
+Gateway auth is **only** enforced when you set `gateway.auth`. If it’s unset,
+loopback WS clients are unauthenticated — any local process can connect and call
+`config.apply`.
+
+The onboarding wizard now generates a token by default (even for loopback) so
+local clients must authenticate. If you skip the wizard or remove auth, you’re
+back to open loopback.
+
+Set a token so **all** WS clients must authenticate:
+
+```json5
+{
+  gateway: {
+    auth: { mode: "token", token: "your-token" }
+  }
+}
+```
+
+Doctor can generate one for you: `clawdbot doctor --generate-gateway-token`.
+
+Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
+protect local WS access.
+
 ### 1) DMs: pairing by default
 
 ```json5

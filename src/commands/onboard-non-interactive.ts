@@ -384,7 +384,7 @@ export async function runNonInteractiveOnboarding(
     ? (opts.gatewayPort as number)
     : resolveGatewayPort(baseConfig);
   let bind = opts.gatewayBind ?? "loopback";
-  let authMode = opts.gatewayAuth ?? "off";
+  let authMode = opts.gatewayAuth ?? "token";
   const tailscaleMode = opts.tailscale ?? "off";
   const tailscaleResetOnExit = Boolean(opts.tailscaleResetOnExit);
 

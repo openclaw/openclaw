@@ -56,13 +56,14 @@ clawdbot gateway
 Open:
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
-### Tailnet bind + token (legacy)
+### Tailnet bind + token
 
 ```json5
 {
   gateway: {
     bind: "tailnet",
-    controlUi: { enabled: true }
+    controlUi: { enabled: true },
+    auth: { mode: "token", token: "your-token" }
   }
 }
 ```
@@ -70,7 +71,6 @@ Open:
 Then start the gateway (token required for non-loopback binds):
 
 ```bash
-export CLAWDBOT_GATEWAY_TOKEN="…your token…"
 clawdbot gateway
 ```
 
@@ -91,7 +91,8 @@ Open:
 
 ## Security notes
 
-- Binding the Gateway to a non-loopback address **requires** auth (`CLAWDBOT_GATEWAY_TOKEN` or `gateway.auth`).
+- Binding the Gateway to a non-loopback address **requires** auth (`gateway.auth` or `CLAWDBOT_GATEWAY_TOKEN`).
+- The wizard generates a gateway token by default (even on loopback).
 - The UI sends `connect.params.auth.token` or `connect.params.auth.password`.
 - Use `gateway.auth.allowTailscale: false` to require explicit credentials even in Serve mode.
 - `gateway.tailscale.mode: "funnel"` requires `gateway.auth.mode: "password"` (shared password).

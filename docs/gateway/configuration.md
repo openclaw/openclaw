@@ -1790,7 +1790,7 @@ Defaults:
     port: 18789, // WS + HTTP multiplex
     bind: "loopback",
     // controlUi: { enabled: true, basePath: "/clawdbot" }
-    // auth: { mode: "token", token: "your-token" } // token is for multi-machine CLI access
+    // auth: { mode: "token", token: "your-token" } // token gates WS + Control UI access
     // tailscale: { mode: "off" | "serve" | "funnel" }
   }
 }
@@ -1813,6 +1813,7 @@ Notes:
 - OpenAI Chat Completions endpoint: **disabled by default**; enable with `gateway.http.endpoints.chatCompletions.enabled: true`.
 - Precedence: `--port` > `CLAWDBOT_GATEWAY_PORT` > `gateway.port` > default `18789`.
 - Non-loopback binds (`lan`/`tailnet`/`auto`) require auth. Use `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
+- The onboarding wizard generates a gateway token by default (even on loopback).
 - `gateway.remote.token` is **only** for remote CLI calls; it does not enable local gateway auth. `gateway.token` is ignored.
 
 Auth and Tailscale:
@@ -2096,7 +2097,7 @@ clawdbot dns setup --apply
 
 ## Template variables
 
-Template placeholders are expanded in `audio.transcription.command` (and any future templated command fields).
+Template placeholders are expanded in `tools.audio.transcription.args` (and any future templated argument fields).
 
 | Variable | Description |
 |----------|-------------|

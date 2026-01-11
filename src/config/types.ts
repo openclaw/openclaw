@@ -915,6 +915,13 @@ export type AgentToolsConfig = {
 export type ToolsConfig = {
   allow?: string[];
   deny?: string[];
+  audio?: {
+    transcription?: {
+      /** CLI args (template-enabled). */
+      args?: string[];
+      timeoutSeconds?: number;
+    };
+  };
   agentToAgent?: {
     /** Enable agent-to-agent messaging tools. Default: false. */
     enabled?: boolean;
@@ -1023,6 +1030,7 @@ export type BroadcastConfig = {
 };
 
 export type AudioConfig = {
+  /** @deprecated Use tools.audio.transcription instead. */
   transcription?: {
     // Optional CLI to turn inbound audio into text; templated args, must output transcript to stdout.
     command: string[];

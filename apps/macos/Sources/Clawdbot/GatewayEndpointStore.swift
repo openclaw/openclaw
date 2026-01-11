@@ -26,7 +26,13 @@ actor GatewayEndpointStore {
 
         static let live = Deps(
             mode: { await MainActor.run { AppStateStore.shared.connectionMode } },
-            token: { ProcessInfo.processInfo.environment["CLAWDBOT_GATEWAY_TOKEN"] },
+            token: {
+                let root = ClawdbotConfigFile.loadDict()
+                return GatewayEndpointStore.resolveGatewayToken(
+                    isRemote: CommandResolver.connectionModeIsRemote(),
+                    root: root,
+                    env: ProcessInfo.processInfo.environment)
+            },
             password: {
                 let root = ClawdbotConfigFile.loadDict()
                 return GatewayEndpointStore.resolveGatewayPassword(
@@ -78,6 +84,40 @@ actor GatewayEndpointStore {
             let pw = password.trimmingCharacters(in: .whitespacesAndNewlines)
             if !pw.isEmpty {
                 return pw
+            }
+        }
+        return nil
+    }
+
+    private static func resolveGatewayToken(
+        isRemote: Bool,
+        root: [String: Any],
+        env: [String: String]) -> String?
+    {
+        let raw = env["CLAWDBOT_GATEWAY_TOKEN"] ?? ""
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        if isRemote {
+            if let gateway = root["gateway"] as? [String: Any],
+               let remote = gateway["remote"] as? [String: Any],
+               let token = remote["token"] as? String
+            {
+                let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !value.isEmpty {
+                    return value
+                }
+            }
+            return nil
+        }
+        if let gateway = root["gateway"] as? [String: Any],
+           let auth = gateway["auth"] as? [String: Any],
+           let token = auth["token"] as? String
+        {
+            let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                return value
             }
         }
         return nil

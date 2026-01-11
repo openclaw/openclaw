@@ -204,7 +204,20 @@ enum GatewayLaunchAgentManager {
     private static func preferredGatewayToken() -> String? {
         let raw = ProcessInfo.processInfo.environment["CLAWDBOT_GATEWAY_TOKEN"] ?? ""
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+        let root = ClawdbotConfigFile.loadDict()
+        if let gateway = root["gateway"] as? [String: Any],
+           let auth = gateway["auth"] as? [String: Any],
+           let token = auth["token"] as? String
+        {
+            let value = token.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 
     private static func preferredGatewayPassword() -> String? {

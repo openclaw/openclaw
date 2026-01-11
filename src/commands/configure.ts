@@ -159,10 +159,15 @@ async function promptGatewayConfig(
     await select({
       message: "Gateway auth",
       options: [
-        { value: "off", label: "Off (loopback only)" },
-        { value: "token", label: "Token" },
+        {
+          value: "off",
+          label: "Off (loopback only)",
+          hint: "Not recommended unless you fully trust local processes",
+        },
+        { value: "token", label: "Token", hint: "Recommended default" },
         { value: "password", label: "Password" },
       ],
+      initialValue: "token",
     }),
     runtime,
   ) as "off" | "token" | "password";

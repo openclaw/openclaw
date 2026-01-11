@@ -37,10 +37,12 @@ describe("transcribeInboundAudio", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const cfg = {
-      audio: {
-        transcription: {
-          command: ["echo", "{{MediaPath}}"],
-          timeoutSeconds: 5,
+      tools: {
+        audio: {
+          transcription: {
+            args: ["echo", "{{MediaPath}}"],
+            timeoutSeconds: 5,
+          },
         },
       },
     };

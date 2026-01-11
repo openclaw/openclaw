@@ -25,6 +25,7 @@ Auth is supplied during the WebSocket handshake via:
 - `connect.params.auth.token`
 - `connect.params.auth.password`
 The dashboard settings panel lets you store a token; passwords are not persisted.
+The onboarding wizard generates a gateway token by default, so paste it here on first connect.
 
 ## What it can do (today)
 - Chat with the model via Gateway WS (`chat.history`, `chat.send`, `chat.abort`)
@@ -65,9 +66,9 @@ Open:
 - `https://<magicdns>/` (or your configured `gateway.controlUi.basePath`)
 
 By default, the gateway trusts Tailscale identity headers in serve mode. You can still set
-`CLAWDBOT_GATEWAY_TOKEN` or `gateway.auth` if you want a shared secret instead.
+`gateway.auth` (or `CLAWDBOT_GATEWAY_TOKEN`) if you want a shared secret instead.
 
-### Bind to tailnet + token (legacy)
+### Bind to tailnet + token
 
 ```bash
 clawdbot gateway --bind tailnet --token "$(openssl rand -hex 32)"

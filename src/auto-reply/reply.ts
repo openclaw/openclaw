@@ -92,7 +92,11 @@ import {
   type VerboseLevel,
 } from "./thinking.js";
 import { SILENT_REPLY_TOKEN } from "./tokens.js";
-import { isAudio, transcribeInboundAudio } from "./transcription.js";
+import {
+  hasAudioTranscriptionConfig,
+  isAudio,
+  transcribeInboundAudio,
+} from "./transcription.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
 export {
@@ -367,7 +371,7 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   let transcribedText: string | undefined;
-  if (cfg.audio?.transcription && isAudio(ctx.MediaType)) {
+  if (hasAudioTranscriptionConfig(cfg) && isAudio(ctx.MediaType)) {
     const transcribed = await transcribeInboundAudio(cfg, ctx, defaultRuntime);
     if (transcribed?.text) {
       transcribedText = transcribed.text;

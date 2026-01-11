@@ -46,6 +46,33 @@ const mergeMissing = (
   }
 };
 
+const AUDIO_TRANSCRIPTION_CLI_ALLOWLIST = new Set(["whisper"]);
+
+const mapLegacyAudioTranscription = (
+  value: unknown,
+): Record<string, unknown> | null => {
+  const transcriber = getRecord(value);
+  const command = Array.isArray(transcriber?.command)
+    ? transcriber?.command
+    : null;
+  if (!command || command.length === 0) return null;
+  const rawExecutable = String(command[0] ?? "").trim();
+  if (!rawExecutable) return null;
+  const executableName = rawExecutable.split(/[\\/]/).pop() ?? rawExecutable;
+  if (!AUDIO_TRANSCRIPTION_CLI_ALLOWLIST.has(executableName)) return null;
+
+  const args = command.slice(1).map((part) => String(part));
+  const timeoutSeconds =
+    typeof transcriber?.timeoutSeconds === "number"
+      ? transcriber?.timeoutSeconds
+      : undefined;
+
+  const result: Record<string, unknown> = {};
+  if (args.length > 0) result.args = args;
+  if (timeoutSeconds !== undefined) result.timeoutSeconds = timeoutSeconds;
+  return result;
+};
+
 const getAgentsList = (agents: Record<string, unknown> | null) => {
   const list = agents?.list;
   return Array.isArray(list) ? list : [];
@@ -137,7 +164,7 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["routing", "transcribeAudio"],
     message:
-      "routing.transcribeAudio was moved; use audio.transcription instead (run `clawdbot doctor` to migrate).",
+      "routing.transcribeAudio was moved; use tools.audio.transcription instead (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["telegram", "requireMention"],
@@ -701,16 +728,55 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
       }
 
       if (routing.transcribeAudio !== undefined) {
-        const audio = ensureRecord(raw, "audio");
-        if (audio.transcription === undefined) {
-          audio.transcription = routing.transcribeAudio;
-          changes.push("Moved routing.transcribeAudio → audio.transcription.");
+        const mapped = mapLegacyAudioTranscription(routing.transcribeAudio);
+        if (mapped) {
+          const tools = ensureRecord(raw, "tools");
+          const toolsAudio = ensureRecord(tools, "audio");
+          if (toolsAudio.transcription === undefined) {
+            toolsAudio.transcription = mapped;
+            changes.push(
+              "Moved routing.transcribeAudio → tools.audio.transcription.",
+            );
+          } else {
+            changes.push(
+              "Removed routing.transcribeAudio (tools.audio.transcription already set).",
+            );
+          }
         } else {
           changes.push(
-            "Removed routing.transcribeAudio (audio.transcription already set).",
+            "Removed routing.transcribeAudio (unsupported transcription CLI).",
           );
         }
         delete routing.transcribeAudio;
+      }
+
+      const audio = getRecord(raw.audio);
+      if (audio?.transcription !== undefined) {
+        const mapped = mapLegacyAudioTranscription(audio.transcription);
+        if (mapped) {
+          const tools = ensureRecord(raw, "tools");
+          const toolsAudio = ensureRecord(tools, "audio");
+          if (toolsAudio.transcription === undefined) {
+            toolsAudio.transcription = mapped;
+            changes.push(
+              "Moved audio.transcription → tools.audio.transcription.",
+            );
+          } else {
+            changes.push(
+              "Removed audio.transcription (tools.audio.transcription already set).",
+            );
+          }
+          delete audio.transcription;
+          if (Object.keys(audio).length === 0) delete raw.audio;
+          else raw.audio = audio;
+        } else {
+          delete audio.transcription;
+          changes.push(
+            "Removed audio.transcription (unsupported transcription CLI).",
+          );
+          if (Object.keys(audio).length === 0) delete raw.audio;
+          else raw.audio = audio;
+        }
       }
 
       if (Object.keys(routing).length === 0) {

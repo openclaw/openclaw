@@ -438,6 +438,11 @@ export function buildProgram() {
       "Run without prompts (safe migrations only)",
       false,
     )
+    .option(
+      "--generate-gateway-token",
+      "Generate and configure a gateway token",
+      false,
+    )
     .option("--deep", "Scan system services for extra gateway installs", false)
     .action(async (opts) => {
       try {
@@ -447,6 +452,7 @@ export function buildProgram() {
           repair: Boolean(opts.repair),
           force: Boolean(opts.force),
           nonInteractive: Boolean(opts.nonInteractive),
+          generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
         });
       } catch (err) {

@@ -32,7 +32,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 - Local gateway (loopback)
 - Workspace default (or existing workspace)
 - Gateway port **18789**
-- Gateway auth **Off** (loopback only)
+- Gateway auth **Token** (auto‑generated, even on loopback)
 - Tailscale exposure **Off**
 - Telegram + WhatsApp DMs default to **allowlist** (you’ll be prompted for your phone number)
 
@@ -96,8 +96,9 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
 
 4) **Gateway**
    - Port, bind, auth mode, tailscale exposure.
-   - Auth recommendation: keep **Off** for single-machine loopback setups. Use **Token** for multi-machine access or non-loopback binds.
-   - Non‑loopback binds require auth.
+   - Auth recommendation: keep **Token** even for loopback so local WS clients must authenticate.
+   - Disable auth only if you fully trust every local process.
+   - Non‑loopback binds still require auth.
 
 5) **Providers**
    - WhatsApp: optional QR login.
@@ -135,7 +136,7 @@ Remote mode configures a local client to connect to a Gateway elsewhere.
 
 What you’ll set:
 - Remote Gateway URL (`ws://...`)
-- Optional token
+- Token if the remote Gateway requires auth (recommended)
 
 Notes:
 - No remote installs or daemon changes are performed.
