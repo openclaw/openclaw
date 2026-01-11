@@ -20,7 +20,7 @@ App bundle layout:
 - `Clawdbot.app/Contents/Resources/Relay/dist/`
   - Compiled CLI/gateway payload from `pnpm exec tsc`
 - `Clawdbot.app/Contents/Resources/Relay/node_modules/`
-  - Production dependencies staged via `pnpm deploy --prod --no-optional --legacy`
+  - Production dependencies staged via `pnpm deploy --prod --legacy` (includes optional native addons)
 - `Clawdbot.app/Contents/Resources/Relay/clawdbot`
   - Wrapper script that execs the bundled Node + dist entrypoint
 - `Clawdbot.app/Contents/Resources/Relay/package.json`
@@ -47,7 +47,7 @@ Packaging script:
 It builds:
 - TS: `pnpm exec tsc`
 - Swift app + helper: `swift build …`
-- Relay payload: `pnpm deploy --prod --no-optional --legacy` + copy `dist/`
+- Relay payload: `pnpm deploy --prod --legacy` + copy `dist/`
 - Node runtime: downloads the latest Node release (override via `NODE_VERSION`)
 
 Important knobs:
@@ -89,6 +89,10 @@ Node uses JIT. The bundled runtime is signed with:
 - `com.apple.security.cs.allow-unsigned-executable-memory`
 
 This is applied by `scripts/codesign-mac-app.sh`.
+
+Note: because the relay runs under hardened runtime, any bundled `*.node` native
+addons must be signed with the same Team ID as the relay `node` binary.
+`scripts/codesign-mac-app.sh` re-signs `Contents/Resources/Relay/**/*.node` for this.
 
 ## Image processing
 

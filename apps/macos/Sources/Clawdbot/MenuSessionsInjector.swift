@@ -456,17 +456,28 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     private func makeMessageItem(text: String, symbolName: String, width: CGFloat, maxLines: Int? = 2) -> NSMenuItem {
         let view = AnyView(
-            Label(text, systemImage: symbolName)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.leading)
-                .lineLimit(maxLines)
-                .truncationMode(.tail)
-                .fixedSize(horizontal: false, vertical: true)
-                .padding(.leading, 18)
-                .padding(.trailing, 12)
-                .padding(.vertical, 6)
-                .frame(width: max(1, width), alignment: .leading))
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: symbolName)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 14, alignment: .leading)
+                    .padding(.top, 1)
+
+                Text(text)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(maxLines)
+                    .truncationMode(.tail)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .layoutPriority(1)
+
+                Spacer(minLength: 0)
+            }
+            .padding(.leading, 18)
+            .padding(.trailing, 12)
+            .padding(.vertical, 6)
+            .frame(width: max(1, width), alignment: .leading))
 
         let item = NSMenuItem()
         item.tag = self.tag

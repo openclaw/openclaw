@@ -33,9 +33,16 @@ struct GeneralSettings: View {
                     Button {
                         DebugActions.restartOnboarding()
                     } label: {
-                        Text("Complete onboarding to finish setup")
-                            .font(.callout.weight(.semibold))
-                            .foregroundColor(.accentColor)
+                        HStack(spacing: 8) {
+                            Label("Complete onboarding to finish setup", systemImage: "arrow.counterclockwise")
+                                .font(.callout.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.tertiary)
+                        }
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 2)
