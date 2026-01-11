@@ -1,68 +1,36 @@
 # Changelog
 
-## 2026.1.11-9
+## 2026.1.11
+
+### Highlights
+- CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
+- CLI/Status: stronger `status --all` debug report (Tailscale + provider runtime errors + determinate scan progress) and ANSI-safe tables (no clipping / color loss).
+- Agents/Browser: `browser.target` (sandbox/host/custom) with host-control gating + allowlists for custom control URLs/hosts/ports.
+
+### Changes
+- CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.
+- Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).
 
 ### Fixes
-- Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists.
-- Telegram/Onboarding: allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
+- Telegram: add `/whoami` + `/id` commands to reveal sender id for allowlists; allow `@username` and prefixed ids in `allowFrom` prompts (with stability warning).
 - Control UI: stop auto-writing `telegram.groups["*"]` and warn/confirm before enabling wildcard groups.
 - WhatsApp: send ack reactions only for handled messages and ignore legacy `messages.ackReaction` (doctor copies to `whatsapp.ackReaction`). (#629) — thanks @pasogott.
-
-## 2026.1.11-6
-
-### Fixes
-- CLI/Status: make the “More” footer shorter and easier to scan (newlines + context-aware suggestions).
-- Docs/FAQ: make `clawdbot status` the first diagnostic step (and point to `status --all` for pasteable reports).
-- CLI/Status: format non-JSON-serializable provider issue values more predictably.
-- Gateway/Heartbeat: deliver reasoning even when the main heartbeat reply is `HEARTBEAT_OK`. (#694) — thanks @antons.
-
-## 2026.1.11-7
-
-### Fixes
 - CLI/Status: replace the footer with a 3-line “Next steps” recommendation (share/debug/probe), and gate probes behind gateway reachability.
-
-## 2026.1.11-8
-
-### Fixes
-- CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
-
-## 2026.1.11-5
-
-### New Features and Changes
-- CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.
-- CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.
-
-### Fixes
+- CLI/Status: format non-JSON-serializable provider issue values more predictably and show which auth was used when the gateway is reachable (`token`/`password`/`none`).
+- Docs: make `clawdbot status` the first diagnostic step and clarify `status --deep` behavior (requires a reachable gateway).
+- CLI/Providers: fix `providers status` tip about `status --deep` requiring a reachable gateway.
 - CLI/Status: surface gateway provider runtime errors (Signal/iMessage/Slack) in the Providers table.
 - CLI/Status: improve Tailscale reporting in `status --all` and harden parsing of noisy `tailscale status --json` output.
 - CLI/Status: make `status --all` scan progress determinate (OSC progress + spinner).
+- CLI/Gateway: clarify that `clawdbot gateway status` reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.
 - Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
 - Docker: allow optional apt packages during image build and document the build arg. (#697) — thanks @gabriel-trigo.
 - CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
+- Gateway/Heartbeat: deliver reasoning even when the main heartbeat reply is `HEARTBEAT_OK`. (#694) — thanks @antons.
 - macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.
 - Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).
 - Agents/OpenAI: replay reasoning items for tool-call-only turns in Responses/Codex Responses history (fixes follow-up turns after tools).
 - Docs/Testing: clarify live tool+image probes and how to list your testable `provider/model` ids.
-## 2026.1.11-4
-
-### Fixes
-- CLI/Status: when gateway is reachable, show which auth was used (`token`/`password`/`none`).
-
-## 2026.1.11-3
-
-### Fixes
-- CLI/Providers: fix `providers status` tip about `status --deep` requiring a reachable gateway.
-- Docs/Troubleshooting: clarify that `clawdbot status --deep` runs gateway health checks (and needs a reachable gateway).
-
-## 2026.1.11-2
-
-### Fixes
-- CLI/Status: add a “More:” footer with next-step commands and document status/diagnostics commands in troubleshooting.
-
-## 2026.1.11-1
-
-### New Features and Changes
-- Agents/Browser: add `browser.target` (sandbox/host/custom) with sandbox host-control gating via `agents.defaults.sandbox.browser.allowHostControl`, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).
 
 ## 2026.1.10
 
