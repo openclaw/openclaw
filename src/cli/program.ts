@@ -14,9 +14,11 @@ import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
 import { messageCommand } from "../commands/message.js";
 import { onboardCommand } from "../commands/onboard.js";
+import { resetCommand } from "../commands/reset.js";
 import { sessionsCommand } from "../commands/sessions.js";
 import { setupCommand } from "../commands/setup.js";
 import { statusCommand } from "../commands/status.js";
+import { uninstallCommand } from "../commands/uninstall.js";
 import {
   isNixMode,
   loadConfig,
@@ -461,6 +463,63 @@ export function buildProgram() {
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("reset")
+    .description("Reset local config/state (keeps the CLI installed)")
+    .option(
+      "--scope <scope>",
+      "config|config+creds+sessions|full (default: interactive prompt)",
+    )
+    .option("--yes", "Skip confirmation prompts", false)
+    .option("--non-interactive", "Disable prompts (requires --scope + --yes)", false)
+    .option("--dry-run", "Print actions without removing files", false)
+    .action(async (opts) => {
+      try {
+        await resetCommand(defaultRuntime, {
+          scope: opts.scope,
+          yes: Boolean(opts.yes),
+          nonInteractive: Boolean(opts.nonInteractive),
+          dryRun: Boolean(opts.dryRun),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("uninstall")
+    .description("Uninstall the gateway service + local data (CLI remains)")
+    .option("--service", "Remove the gateway service", false)
+    .option("--state", "Remove state + config", false)
+    .option("--workspace", "Remove workspace dirs", false)
+    .option("--app", "Remove the macOS app", false)
+    .option(
+      "--all",
+      "Remove service + state + workspace + app",
+      false,
+    )
+    .option("--yes", "Skip confirmation prompts", false)
+    .option("--non-interactive", "Disable prompts (requires --yes)", false)
+    .option("--dry-run", "Print actions without removing files", false)
+    .action(async (opts) => {
+      try {
+        await uninstallCommand(defaultRuntime, {
+          service: Boolean(opts.service),
+          state: Boolean(opts.state),
+          workspace: Boolean(opts.workspace),
+          app: Boolean(opts.app),
+          all: Boolean(opts.all),
+          yes: Boolean(opts.yes),
+          nonInteractive: Boolean(opts.nonInteractive),
+          dryRun: Boolean(opts.dryRun),
         });
       } catch (err) {
         defaultRuntime.error(String(err));

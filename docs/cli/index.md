@@ -48,6 +48,8 @@ clawdbot [--dev] [--profile <name>] <command>
   onboard
   configure (alias: config)
   doctor
+  reset
+  uninstall
   update
   providers
     list
@@ -441,6 +443,36 @@ Options:
 - `--verbose`
 - `--store <path>`
 - `--active <minutes>`
+
+## Reset / Uninstall
+
+### `reset`
+Reset local config/state (keeps the CLI installed).
+
+Options:
+- `--scope <config|config+creds+sessions|full>`
+- `--yes`
+- `--non-interactive`
+- `--dry-run`
+
+Notes:
+- `--non-interactive` requires `--scope` and `--yes`.
+
+### `uninstall`
+Uninstall the gateway service + local data (CLI remains).
+
+Options:
+- `--service`
+- `--state`
+- `--workspace`
+- `--app`
+- `--all`
+- `--yes`
+- `--non-interactive`
+- `--dry-run`
+
+Notes:
+- `--non-interactive` requires `--yes` and explicit scopes (or `--all`).
 
 ## Gateway
 
