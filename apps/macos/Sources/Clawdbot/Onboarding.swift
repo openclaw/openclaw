@@ -166,7 +166,8 @@ struct OnboardingView: View {
         state: AppState = AppStateStore.shared,
         permissionMonitor: PermissionMonitor = .shared,
         discoveryModel: GatewayDiscoveryModel = GatewayDiscoveryModel(
-            localDisplayName: InstanceIdentity.displayName))
+            localDisplayName: InstanceIdentity.displayName,
+            filterLocalGateways: false))
     {
         self.state = state
         self.permissionMonitor = permissionMonitor

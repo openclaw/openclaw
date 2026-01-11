@@ -178,17 +178,15 @@ extension OnboardingView {
         padding: CGFloat = 16,
         @ViewBuilder _ content: () -> some View) -> some View
     {
-        VStack(alignment: .leading, spacing: spacing) {
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        return VStack(alignment: .leading, spacing: spacing) {
             content()
         }
         .padding(padding)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(.ultraThinMaterial)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)))
+        .background(Color.clear)
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1))
     }
 
     func featureRow(title: String, subtitle: String, systemImage: String) -> some View {
