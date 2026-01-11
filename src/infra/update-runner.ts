@@ -307,7 +307,7 @@ export async function runGatewayUpdate(
 
     const statusCheck = await runStep(
       step(
-        "Running git status",
+        "clean check",
         ["git", "-C", gitRoot, "status", "--porcelain"],
         gitRoot,
       ),

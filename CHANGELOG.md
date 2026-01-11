@@ -7,6 +7,7 @@
 - CLI/Status: improve Tailscale reporting in `status --all` and harden parsing of noisy `tailscale status --json` output.
 - CLI/Status: make `status --all` scan progress determinate (OSC progress + spinner).
 - Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.
+- CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.
 
 ## 2026.1.11-4
 
