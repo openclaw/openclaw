@@ -232,4 +232,69 @@ describe("pw-tools-core", () => {
     expect(dismiss).toHaveBeenCalled();
     expect(accept).not.toHaveBeenCalled();
   });
+
+  it("waits for selector, url, load state, and function", async () => {
+    const waitForSelector = vi.fn(async () => {});
+    const waitForURL = vi.fn(async () => {});
+    const waitForLoadState = vi.fn(async () => {});
+    const waitForFunction = vi.fn(async () => {});
+    const waitForTimeout = vi.fn(async () => {});
+
+    currentPage = {
+      locator: vi.fn(() => ({
+        first: () => ({ waitFor: waitForSelector }),
+      })),
+      waitForURL,
+      waitForLoadState,
+      waitForFunction,
+      waitForTimeout,
+      getByText: vi.fn(() => ({ first: () => ({ waitFor: vi.fn() }) })),
+    };
+
+    const mod = await importModule();
+    await mod.waitForViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      selector: "#main",
+      url: "**/dash",
+      loadState: "networkidle",
+      fn: "window.ready===true",
+      timeoutMs: 1234,
+      timeMs: 50,
+    });
+
+    expect(waitForTimeout).toHaveBeenCalledWith(50);
+    expect(
+      currentPage.locator as ReturnType<typeof vi.fn>,
+    ).toHaveBeenCalledWith("#main");
+    expect(waitForSelector).toHaveBeenCalledWith({
+      state: "visible",
+      timeout: 1234,
+    });
+    expect(waitForURL).toHaveBeenCalledWith("**/dash", { timeout: 1234 });
+    expect(waitForLoadState).toHaveBeenCalledWith("networkidle", {
+      timeout: 1234,
+    });
+    expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
+      timeout: 1234,
+    });
+  });
+
+  it("rewrites strict mode violations into snapshot hints", async () => {
+    const click = vi.fn(async () => {
+      throw new Error(
+        'Error: strict mode violation: locator("aria-ref=1") resolved to 2 elements',
+      );
+    });
+    currentRefLocator = { click };
+    currentPage = {};
+
+    const mod = await importModule();
+    await expect(
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+      }),
+    ).rejects.toThrow(/Run a new snapshot/i);
+  });
 });
