@@ -256,6 +256,14 @@ const TelegramTopicSchema = z.object({
   systemPrompt: z.string().optional(),
 });
 
+const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
+
+const ProviderCommandsSchema = z
+  .object({
+    native: NativeCommandsSettingSchema.optional(),
+  })
+  .optional();
+
 const TelegramGroupSchema = z.object({
   requireMention: z.boolean().optional(),
   skills: z.array(z.string()).optional(),
@@ -709,17 +717,6 @@ const MessagesSchema = z
       .enum(["group-mentions", "group-all", "direct", "all"])
       .optional(),
     removeAckAfterReply: z.boolean().optional(),
-  })
-  .optional();
-
-const NativeCommandsSettingSchema = z.union([
-  z.boolean(),
-  z.literal("auto"),
-]);
-
-const ProviderCommandsSchema = z
-  .object({
-    native: NativeCommandsSettingSchema.optional(),
   })
   .optional();
 
