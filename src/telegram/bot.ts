@@ -932,8 +932,13 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     ? listNativeCommandSpecsForConfig(cfg)
     : [];
   if (nativeCommands.length > 0) {
-    if (typeof bot.api.setMyCommands === "function") {
-      bot.api
+    const api = bot.api as unknown as {
+      setMyCommands?: (
+        commands: Array<{ command: string; description: string }>,
+      ) => Promise<unknown>;
+    };
+    if (typeof api.setMyCommands === "function") {
+      api
         .setMyCommands(
           nativeCommands.map((command) => ({
             command: command.name,
@@ -946,45 +951,39 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           );
         });
     } else {
-      runtime.info?.(
-        "telegram: setMyCommands not available on api mock; skipping",
-      );
+      logVerbose("telegram: setMyCommands unavailable; skipping registration");
     }
 
-    if (typeof bot.command !== "function") {
-      runtime.info?.(
-        "telegram: bot.command not available on api mock; skipping native command handlers",
-      );
+    if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
+      logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
         bot.command(command.name, async (ctx) => {
-          const msg = ctx.message;
-          if (!msg) return;
-          if (shouldSkipUpdate(ctx)) return;
-          const chatId = msg.chat.id;
-          const isGroup =
-            msg.chat.type === "group" || msg.chat.type === "supergroup";
-          const messageThreadId = (msg as { message_thread_id?: number })
-            .message_thread_id;
-          const isForum =
-            (msg.chat as { is_forum?: boolean }).is_forum === true;
-          const storeAllowFrom = await readTelegramAllowFromStore().catch(
-            () => [],
-          );
-          const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
-            chatId,
-            messageThreadId,
-          );
-          const groupAllowOverride = firstDefined(
-            topicConfig?.allowFrom,
-            groupConfig?.allowFrom,
-          );
-          const effectiveGroupAllow = normalizeAllowFrom([
-            ...(groupAllowOverride ?? groupAllowFrom ?? []),
-            ...storeAllowFrom,
-          ]);
-          const hasGroupAllowOverride =
-            typeof groupAllowOverride !== "undefined";
+        const msg = ctx.message;
+        if (!msg) return;
+        if (shouldSkipUpdate(ctx)) return;
+        const chatId = msg.chat.id;
+        const isGroup =
+          msg.chat.type === "group" || msg.chat.type === "supergroup";
+        const messageThreadId = (msg as { message_thread_id?: number })
+          .message_thread_id;
+        const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+        const storeAllowFrom = await readTelegramAllowFromStore().catch(
+          () => [],
+        );
+        const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+          chatId,
+          messageThreadId,
+        );
+        const groupAllowOverride = firstDefined(
+          topicConfig?.allowFrom,
+          groupConfig?.allowFrom,
+        );
+        const effectiveGroupAllow = normalizeAllowFrom([
+          ...(groupAllowOverride ?? groupAllowFrom ?? []),
+          ...storeAllowFrom,
+        ]);
+        const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
 
           if (isGroup && groupConfig?.enabled === false) {
             await bot.api.sendMessage(chatId, "This group is disabled.");
@@ -1149,9 +1148,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
   } else if (nativeDisabledExplicit) {
-    bot.api.setMyCommands([]).catch((err) => {
-      runtime.error?.(danger(`telegram clear commands failed: ${String(err)}`));
-    });
+    const api = bot.api as unknown as { setMyCommands?: (commands: []) => Promise<unknown> };
+    if (typeof api.setMyCommands === "function") {
+      api.setMyCommands([]).catch((err) => {
+        runtime.error?.(
+          danger(`telegram clear commands failed: ${String(err)}`),
+        );
+      });
+    } else {
+      logVerbose("telegram: setMyCommands unavailable; skipping clear");
+    }
   }
 
   bot.on("callback_query", async (ctx) => {
