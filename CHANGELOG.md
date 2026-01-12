@@ -11,7 +11,8 @@
 ### Changes
 - CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.
 - CLI: configure section selection now loops until Continue.
-- Docs: explain MiniMax vs MiniMax Lightning (speed vs cost).
+- Docs: explain MiniMax vs MiniMax Lightning (speed vs cost) and restore LM Studio example.
+- Docs: add Cerebras GLM 4.6/4.7 config example (OpenAI-compatible endpoint).
 - Onboarding/CLI: group model/auth choice by provider and label Z.AI as GLM 4.7.
 - Auto-reply: add compact `/model` picker (models + available providers) and show provider endpoints in `/model status`.
 - Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, and config schema + Control UI labels (uiHints).

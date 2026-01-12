@@ -27,7 +27,7 @@ MiniMax highlights these improvements in M2.1:
 
 ## MiniMax M2.1 vs MiniMax M2.1 Lightning
 
-- **Speed:** MiniMax docs list ~60 tps output for M2.1 and ~100 tps for Lightning.
+- **Speed:** Lightning is the “fast” variant in MiniMax’s pricing docs.
 - **Cost:** Pricing shows the same input cost, but Lightning has higher output cost.
 
 ## Choose a setup
@@ -60,6 +60,46 @@ Configure via CLI:
             input: ["text"],
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
             contextWindow: 200000,
+            maxTokens: 8192
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+### Optional: Local via LM Studio (manual)
+
+**Best for:** local inference with LM Studio.
+We have seen strong results with MiniMax M2.1 on powerful hardware (e.g. a
+desktop/server) using LM Studio's local server.
+
+Configure manually via `clawdbot.json`:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "lmstudio/minimax-m2.1-gs32" },
+      models: { "lmstudio/minimax-m2.1-gs32": { alias: "Minimax" } }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      lmstudio: {
+        baseUrl: "http://127.0.0.1:1234/v1",
+        apiKey: "lmstudio",
+        api: "openai-responses",
+        models: [
+          {
+            id: "minimax-m2.1-gs32",
+            name: "MiniMax M2.1 GS32",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 196608,
             maxTokens: 8192
           }
         ]
