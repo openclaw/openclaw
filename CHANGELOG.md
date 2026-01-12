@@ -13,6 +13,7 @@
 ### Fixes
 - Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
 - Telegram: show typing indicator in General forum topics. (#779) — thanks @azade-c.
+- Models: keep explicit GitHub Copilot provider config and honor agent-dir auth profiles for auto-injection. (#705) — thanks @TAGOOZ.
 
 ## 2026.1.11
 

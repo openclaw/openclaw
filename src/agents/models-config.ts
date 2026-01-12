@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
-import type { ModelsConfig as ModelsConfigShape } from "../config/types.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
@@ -12,15 +11,58 @@ import {
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "./auth-profiles.js";
+import { resolveEnvApiKey } from "./model-auth.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
-
-type ModelsProviderConfig = NonNullable<ModelsConfigShape["providers"]>[string];
+type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
+const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
+const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
+const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+const MINIMAX_API_COST = {
+  input: 15,
+  output: 60,
+  cacheRead: 2,
+  cacheWrite: 10,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeGoogleModelId(id: string): string {
+  if (id === "gemini-3-pro") return "gemini-3-pro-preview";
+  if (id === "gemini-3-flash") return "gemini-3-flash-preview";
+  return id;
+}
+
+function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
+  let mutated = false;
+  const models = provider.models.map((model) => {
+    const nextId = normalizeGoogleModelId(model.id);
+    if (nextId === model.id) return model;
+    mutated = true;
+    return { ...model, id: nextId };
+  });
+  return mutated ? { ...provider, models } : provider;
+}
+
+function normalizeProviders(
+  providers: ModelsConfig["providers"],
+): ModelsConfig["providers"] {
+  if (!providers) return providers;
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    const normalized =
+      key === "google" ? normalizeGoogleProvider(provider) : provider;
+    if (normalized !== provider) mutated = true;
+    next[key] = normalized;
+  }
+  return mutated ? next : providers;
 }
 
 async function readJson(pathname: string): Promise<unknown> {
@@ -32,12 +74,45 @@ async function readJson(pathname: string): Promise<unknown> {
   }
 }
 
-async function maybeBuildCopilotProvider(params: {
+function buildMinimaxApiProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_API_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function resolveImplicitProviders(params: {
   cfg: ClawdbotConfig;
+  agentDir: string;
+}): ModelsConfig["providers"] {
+  const providers: Record<string, ProviderConfig> = {};
+  const minimaxEnv = resolveEnvApiKey("minimax");
+  const authStore = ensureAuthProfileStore(params.agentDir);
+  const hasMinimaxProfile =
+    listProfilesForProvider(authStore, "minimax").length > 0;
+  if (minimaxEnv || hasMinimaxProfile) {
+    providers.minimax = buildMinimaxApiProvider();
+  }
+  return providers;
+}
+
+async function maybeBuildCopilotProvider(params: {
+  agentDir: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<ModelsProviderConfig | null> {
+}): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;
-  const authStore = ensureAuthProfileStore();
+  const authStore = ensureAuthProfileStore(params.agentDir);
   const hasProfile =
     listProfilesForProvider(authStore, "github-copilot").length > 0;
   const envToken = env.COPILOT_GITHUB_TOKEN ?? env.GH_TOKEN ?? env.GITHUB_TOKEN;
@@ -87,7 +162,7 @@ async function maybeBuildCopilotProvider(params: {
   return {
     baseUrl,
     models: [],
-  } satisfies ModelsProviderConfig;
+  } satisfies ProviderConfig;
 }
 
 export async function ensureClawdbotModelsJson(
@@ -95,24 +170,26 @@ export async function ensureClawdbotModelsJson(
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = config ?? loadConfig();
+  const agentDir = agentDirOverride?.trim()
+    ? agentDirOverride.trim()
+    : resolveClawdbotAgentDir();
 
   const explicitProviders = cfg.models?.providers ?? {};
-  const implicitCopilot = await maybeBuildCopilotProvider({ cfg });
-  const providers = implicitCopilot
-    ? { ...explicitProviders, "github-copilot": implicitCopilot }
-    : explicitProviders;
+  const implicitProviders = resolveImplicitProviders({ cfg, agentDir });
+  const providers: Record<string, ProviderConfig> = {
+    ...implicitProviders,
+    ...explicitProviders,
+  };
+  const implicitCopilot = await maybeBuildCopilotProvider({ agentDir });
+  if (implicitCopilot && !providers["github-copilot"]) {
+    providers["github-copilot"] = implicitCopilot;
+  }
 
-  if (!providers || Object.keys(providers).length === 0) {
-    const agentDir = agentDirOverride?.trim()
-      ? agentDirOverride.trim()
-      : resolveClawdbotAgentDir();
+  if (Object.keys(providers).length === 0) {
     return { agentDir, wrote: false };
   }
 
   const mode = cfg.models?.mode ?? DEFAULT_MODE;
-  const agentDir = agentDirOverride?.trim()
-    ? agentDirOverride.trim()
-    : resolveClawdbotAgentDir();
   const targetPath = path.join(agentDir, "models.json");
 
   let mergedProviders = providers;
@@ -128,7 +205,8 @@ export async function ensureClawdbotModelsJson(
     }
   }
 
-  const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
+  const normalizedProviders = normalizeProviders(mergedProviders);
+  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
   try {
     existingRaw = await fs.readFile(targetPath, "utf8");
   } catch {
