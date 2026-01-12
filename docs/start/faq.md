@@ -132,6 +132,10 @@ Pick region-pinned endpoints. OpenRouter exposes US-hosted options for MiniMax, 
 
 Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
 
+### Telegram: what goes in `allowFrom`?
+
+`telegram.allowFrom` is **the human sender’s Telegram user ID** (numeric, recommended) or `@username`. It is not the bot username. To find your ID, DM `@userinfobot` or read the `from.id` in the gateway log for a DM. See [/providers/telegram](/providers/telegram#access-control-dms--groups).
+
 ### Can multiple people use one WhatsApp number with different Clawdbots?
 
 Yes, via **multi‑agent routing**. Bind each sender’s WhatsApp **DM** (peer `kind: "dm"`, sender E.164 like `+15551234567`) to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`whatsapp.dmPolicy` / `whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/providers/whatsapp).

@@ -174,7 +174,7 @@ Private chats can include `message_thread_id` in some edge cases. Clawdbot keeps
   - `clawdbot pairing list telegram`
   - `clawdbot pairing approve telegram <CODE>`
 - Pairing is the default token exchange used for Telegram DMs. Details: [Pairing](/start/pairing)
-- `telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries.
+- `telegram.allowFrom` accepts numeric user IDs (recommended) or `@username` entries. It is **not** the bot username; use the human sender’s ID (get it from `@userinfobot` or the `from.id` field in the gateway log).
 
 ### Group access
 
