@@ -380,16 +380,16 @@ private func runWizard(client: GatewayWizardClient, opts: WizardCliOptions) asyn
     do {
         while true {
             let status = wizardStatusString(nextResult.status) ?? (nextResult.done ? "done" : "running")
-            if status == "done" || nextResult.done {
-                print("Wizard complete.")
-                return
-            }
             if status == "cancelled" {
                 print("Wizard cancelled.")
                 return
             }
-            if status == "error" {
+            if status == "error" || (nextResult.done && nextResult.error != nil) {
                 throw WizardCliError.gatewayError(nextResult.error ?? "wizard error")
+            }
+            if status == "done" || nextResult.done {
+                print("Wizard complete.")
+                return
             }
 
             if let step = decodeWizardStep(nextResult.step) {
