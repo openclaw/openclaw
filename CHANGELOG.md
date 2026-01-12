@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.1.12
+
+### Changes
+- Deps: update pi-agent-core/pi-ai/pi-coding-agent/pi-tui and refresh the pi-ai patch.
+- Dev: bump @types/node.
+
 ## 2026.1.11
 
 ### Highlights

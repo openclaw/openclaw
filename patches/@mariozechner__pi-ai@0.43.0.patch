@@ -1,5 +1,5 @@
 diff --git a/dist/providers/google-gemini-cli.js b/dist/providers/google-gemini-cli.js
-index 93aa26c395e9bd0df64376408a13d15ee9e7cce7..41a439e5fc370038a5febef9e8f021ee279cf8aa 100644
+index 12540bb1069087a0d0a2967f792008627b9f79d9..f30b525620e6d8e45146b439ec3733e4053c9d2a 100644
 --- a/dist/providers/google-gemini-cli.js
 +++ b/dist/providers/google-gemini-cli.js
 @@ -248,6 +248,11 @@ export const streamGoogleGeminiCli = (model, context, options) => {
@@ -15,10 +15,10 @@ index 93aa26c395e9bd0df64376408a13d15ee9e7cce7..41a439e5fc370038a5febef9e8f021ee
                      if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
                          // Use server-provided delay or exponential backoff
 diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
-index a130bad0df74a2d9f1baa9713c1c62902d77aaae..94d7297ee983f54de9ef11aedb2ef410bca04e90 100644
+index ae4710b0f134ac4a48f5b7053f454d1068bee71f..b1b5bd94586f68461ccc44e4a9cdf3acb4e0d084 100644
 --- a/dist/providers/google-shared.js
 +++ b/dist/providers/google-shared.js
-@@ -41,6 +41,8 @@ export function retainThoughtSignature(existing, incoming) {
+@@ -42,6 +42,8 @@ export function retainThoughtSignature(existing, incoming) {
  export function convertMessages(model, context) {
      const contents = [];
      const transformedMessages = transformMessages(context.messages, model);
@@ -27,33 +27,31 @@ index a130bad0df74a2d9f1baa9713c1c62902d77aaae..94d7297ee983f54de9ef11aedb2ef410
      for (const msg of transformedMessages) {
          if (msg.role === "user") {
              if (typeof msg.content === "string") {
-@@ -110,8 +112,8 @@ export function convertMessages(model, context) {
+@@ -113,6 +115,9 @@ export function convertMessages(model, context) {
                              args: block.arguments,
                          },
                      };
--                    if (model.provider === "google-vertex" && part?.functionCall?.id) {
--                        delete part.functionCall.id; // Vertex AI does not support 'id' in functionCall
 +                    if (shouldStripFunctionId && part?.functionCall?.id) {
 +                        delete part.functionCall.id; // Google Gemini/Vertex do not support 'id' in functionCall
-                     }
++                    }
                      if (block.thoughtSignature) {
                          part.thoughtSignature = block.thoughtSignature;
-@@ -156,8 +158,8 @@ export function convertMessages(model, context) {
+                     }
+@@ -155,6 +160,9 @@ export function convertMessages(model, context) {
                      ...(hasImages && supportsMultimodalFunctionResponse && { parts: imageParts }),
                  },
              };
--            if (model.provider === "google-vertex" && functionResponsePart.functionResponse?.id) {
--                delete functionResponsePart.functionResponse.id; // Vertex AI does not support 'id' in functionResponse
 +            if (shouldStripFunctionId && functionResponsePart.functionResponse?.id) {
 +                delete functionResponsePart.functionResponse.id; // Google Gemini/Vertex do not support 'id' in functionResponse
-             }
++            }
              // Cloud Code Assist API requires all function responses to be in a single user turn.
              // Check if the last content is already a user turn with function responses and merge.
+             const lastContent = contents[contents.length - 1];
 diff --git a/dist/providers/openai-codex-responses.js b/dist/providers/openai-codex-responses.js
-index 188a8294f26fe1bfe3fb298a7f58e4d8eaf2a529..2f543a3ee9ea7603519562ac52ee00b6a7d0432c 100644
+index ad0a2aabbe10382cee4e463b68a02864dd235e57..8c001acfd0b4e0743181c246f1bedcf8cd2ffb02 100644
 --- a/dist/providers/openai-codex-responses.js
 +++ b/dist/providers/openai-codex-responses.js
-@@ -515,7 +515,7 @@ function convertTools(tools) {
+@@ -517,7 +517,7 @@ function convertTools(tools) {
          name: tool.name,
          description: tool.description,
          parameters: tool.parameters,

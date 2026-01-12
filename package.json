@@ -130,10 +130,10 @@
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.4",
-    "@mariozechner/pi-agent-core": "^0.42.2",
-    "@mariozechner/pi-ai": "^0.42.2",
-    "@mariozechner/pi-coding-agent": "^0.42.2",
-    "@mariozechner/pi-tui": "^0.42.2",
+    "@mariozechner/pi-agent-core": "^0.43.0",
+    "@mariozechner/pi-ai": "^0.43.0",
+    "@mariozechner/pi-coding-agent": "^0.43.0",
+    "@mariozechner/pi-tui": "^0.43.0",
     "@microsoft/agents-hosting": "^1.1.1",
     "@microsoft/agents-hosting-express": "^1.1.1",
     "@microsoft/agents-hosting-extensions-teams": "^1.1.1",
@@ -178,7 +178,7 @@
     "@types/body-parser": "^1.19.6",
     "@types/express": "^5.0.6",
     "@types/markdown-it": "^14.1.2",
-    "@types/node": "^25.0.3",
+    "@types/node": "^25.0.6",
     "@types/proper-lockfile": "^4.1.4",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
@@ -204,7 +204,7 @@
       "@sinclair/typebox": "0.34.47"
     },
     "patchedDependencies": {
-      "@mariozechner/pi-ai@0.42.2": "patches/@mariozechner__pi-ai@0.42.2.patch"
+      "@mariozechner/pi-ai@0.43.0": "patches/@mariozechner__pi-ai@0.43.0.patch"
     }
   },
   "vitest": {
