@@ -393,7 +393,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       runEmbeddedPiAgentMock
         .mockImplementationOnce(async () => {
           throw new Error(
-            "Context overflow: Summarization failed: 400 {\"message\":\"prompt is too long\"}",
+            'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
           );
         })
         .mockImplementationOnce(async () => ({

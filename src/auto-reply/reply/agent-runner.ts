@@ -8,13 +8,13 @@ import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
-  isCompactionFailureError,
-  isContextOverflowError,
-} from "../../agents/pi-embedded-helpers.js";
-import {
   queueEmbeddedPiMessage,
   runEmbeddedPiAgent,
 } from "../../agents/pi-embedded.js";
+import {
+  isCompactionFailureError,
+  isContextOverflowError,
+} from "../../agents/pi-embedded-helpers.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
@@ -237,7 +237,7 @@ export async function runReplyAgent(params: {
   } = params;
 
   let activeSessionEntry = sessionEntry;
-  let activeSessionStore = sessionStore;
+  const activeSessionStore = sessionStore;
   let activeIsNewSession = isNewSession;
 
   const isHeartbeat = opts?.isHeartbeat === true;
@@ -429,7 +429,10 @@ export async function runReplyAgent(params: {
                   startedAt,
                 },
               });
-              const cliSessionId = getCliSessionId(activeSessionEntry, provider);
+              const cliSessionId = getCliSessionId(
+                activeSessionEntry,
+                provider,
+              );
               return runCliAgent({
                 sessionId: followupRun.run.sessionId,
                 sessionKey,
@@ -709,7 +712,12 @@ export async function runReplyAgent(params: {
         }
 
         // Auto-recover from Gemini session corruption by resetting the session
-        if (isSessionCorruption && sessionKey && activeSessionStore && storePath) {
+        if (
+          isSessionCorruption &&
+          sessionKey &&
+          activeSessionStore &&
+          storePath
+        ) {
           const corruptedSessionId = activeSessionEntry?.sessionId;
           defaultRuntime.error(
             `Session history corrupted (Gemini function call ordering). Resetting session: ${sessionKey}`,
