@@ -102,3 +102,22 @@ Local mode:
 - Set `agents.defaults.memorySearch.provider = "local"`.
 - Provide `agents.defaults.memorySearch.local.modelPath` (GGUF or `hf:` URI).
 - Optional: set `agents.defaults.memorySearch.fallback = "none"` to avoid remote fallback.
+
+### How the memory tools work
+
+- `memory_search` semantically searches Markdown chunks (~400 token target, 80-token overlap) from `MEMORY.md` + `memory/**/*.md`. It returns snippet text (capped ~700 chars), file path, line range, score, provider/model, and whether we fell back from local → remote embeddings. No full file payload is returned.
+- `memory_get` reads a specific memory Markdown file (workspace-relative), optionally from a starting line and for N lines. Paths outside `MEMORY.md` / `memory/` are rejected.
+- Both tools are enabled only when `memorySearch.enabled` resolves true for the agent.
+
+### What gets indexed (and when)
+
+- File type: Markdown only (`MEMORY.md`, `memory/**/*.md`).
+- Index storage: per-agent SQLite at `~/.clawdbot/state/memory/<agentId>.sqlite` (configurable via `agents.defaults.memorySearch.store.path`, supports `{agentId}` token).
+- Freshness: watcher on `MEMORY.md` + `memory/` marks the index dirty (debounce 1.5s). Sync runs on session start, on first search when dirty, and optionally on an interval. Reindex triggers when embedding model/provider or chunk sizes change.
+
+### Local embedding auto-download
+
+- Default local embedding model: `hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf` (~0.6 GB).
+- When `memorySearch.provider = "local"`, `node-llama-cpp` resolves `modelPath`; if the GGUF is missing it **auto-downloads** to the cache (or `local.modelCacheDir` if set), then loads it. Downloads resume on retry.
+- Native build requirement: run `pnpm approve-builds`, pick `node-llama-cpp`, then `pnpm rebuild node-llama-cpp`.
+- Fallback: if local setup fails and `memorySearch.fallback = "openai"`, we automatically switch to remote embeddings (`openai/text-embedding-3-small` unless overridden) and record the reason.
