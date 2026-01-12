@@ -148,6 +148,29 @@ function stripSenderPrefix(value?: string) {
   return trimmed.replace(SENDER_PREFIX_RE, "");
 }
 
+const INLINE_SIMPLE_COMMAND_ALIASES = new Map<string, string>([
+  ["/help", "/help"],
+  ["/commands", "/commands"],
+  ["/whoami", "/whoami"],
+  ["/id", "/whoami"],
+]);
+const INLINE_SIMPLE_COMMAND_RE =
+  /(?:^|\s)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+
+function extractInlineSimpleCommand(body?: string): {
+  command: string;
+  cleaned: string;
+} | null {
+  if (!body) return null;
+  const match = body.match(INLINE_SIMPLE_COMMAND_RE);
+  if (!match || match.index === undefined) return null;
+  const alias = `/${match[1].toLowerCase()}`;
+  const command = INLINE_SIMPLE_COMMAND_ALIASES.get(alias);
+  if (!command) return null;
+  const cleaned = body.replace(match[0], " ").replace(/\s+/g, " ").trim();
+  return { command, cleaned };
+}
+
 function resolveElevatedAllowList(
   allowFrom: AgentElevatedAllowFromConfig | undefined,
   provider: string,
@@ -489,7 +512,7 @@ export async function getReplyFromConfig(
       }
     }
   }
-  const directives = commandAuthorized
+  let directives = commandAuthorized
     ? parsedDirectives
     : {
         ...parsedDirectives,
@@ -502,7 +525,7 @@ export async function getReplyFromConfig(
         queueReset: false,
       };
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
-  const cleanedBody = (() => {
+  let cleanedBody = (() => {
     if (!existingBody) return parsedDirectives.cleaned;
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
@@ -660,6 +683,19 @@ export async function getReplyFromConfig(
     surface: command.surface,
     commandSource: ctx.CommandSource,
   });
+  if (!command.isAuthorizedSender) {
+    directives = {
+      ...directives,
+      hasThinkDirective: false,
+      hasVerboseDirective: false,
+      hasReasoningDirective: false,
+      hasElevatedDirective: false,
+      hasStatusDirective: false,
+      hasModelDirective: false,
+      hasQueueDirective: false,
+      queueReset: false,
+    };
+  }
 
   if (
     isDirectiveOnly({
@@ -671,6 +707,10 @@ export async function getReplyFromConfig(
       isGroup,
     })
   ) {
+    if (!command.isAuthorizedSender) {
+      typing.cleanup();
+      return undefined;
+    }
     const resolvedDefaultThinkLevel =
       (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
       (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
@@ -711,7 +751,11 @@ export async function getReplyFromConfig(
       currentElevatedLevel,
     });
     let statusReply: ReplyPayload | undefined;
-    if (directives.hasStatusDirective && allowTextCommands) {
+    if (
+      directives.hasStatusDirective &&
+      allowTextCommands &&
+      command.isAuthorizedSender
+    ) {
       statusReply = await buildStatusReply({
         cfg,
         command,
@@ -775,6 +819,94 @@ export async function getReplyFromConfig(
           dropPolicy: directives.dropPolicy,
         }
       : undefined;
+
+  const sendInlineReply = async (reply?: ReplyPayload) => {
+    if (!reply) return;
+    if (!opts?.onBlockReply) return;
+    await opts.onBlockReply(reply);
+  };
+
+  const inlineCommand =
+    allowTextCommands && command.isAuthorizedSender
+      ? extractInlineSimpleCommand(cleanedBody)
+      : null;
+  if (inlineCommand) {
+    cleanedBody = inlineCommand.cleaned;
+    sessionCtx.Body = cleanedBody;
+    sessionCtx.BodyStripped = cleanedBody;
+  }
+
+  const handleInlineStatus =
+    !isDirectiveOnly({
+      directives,
+      cleanedBody: directives.cleaned,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+    }) &&
+    directives.hasStatusDirective &&
+    allowTextCommands &&
+    command.isAuthorizedSender;
+  if (handleInlineStatus) {
+    const inlineStatusReply = await buildStatusReply({
+      cfg,
+      command,
+      sessionEntry,
+      sessionKey,
+      sessionScope,
+      provider,
+      model,
+      contextTokens,
+      resolvedThinkLevel,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+      isGroup,
+      defaultGroupActivation: () => defaultActivation,
+    });
+    await sendInlineReply(inlineStatusReply);
+    directives = { ...directives, hasStatusDirective: false };
+  }
+
+  if (inlineCommand) {
+    const inlineCommandContext = {
+      ...command,
+      rawBodyNormalized: inlineCommand.command,
+      commandBodyNormalized: inlineCommand.command,
+    };
+    const inlineResult = await handleCommands({
+      ctx,
+      cfg,
+      command: inlineCommandContext,
+      agentId,
+      directives,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      sessionScope,
+      workspaceDir,
+      defaultGroupActivation: () => defaultActivation,
+      resolvedThinkLevel,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+      provider,
+      model,
+      contextTokens,
+      isGroup,
+    });
+    if (inlineResult.reply) {
+      if (!inlineCommand.cleaned) {
+        typing.cleanup();
+        return inlineResult.reply;
+      }
+      await sendInlineReply(inlineResult.reply);
+    }
+  }
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
   const skipWhenConfigEmpty = command.providerId
@@ -876,7 +1008,7 @@ export async function getReplyFromConfig(
   const baseBodyTrimmedRaw = baseBody.trim();
   if (
     allowTextCommands &&
-    !commandAuthorized &&
+    (!commandAuthorized || !command.isAuthorizedSender) &&
     !baseBodyTrimmedRaw &&
     hasControlCommand(commandSource, cfg)
   ) {

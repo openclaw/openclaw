@@ -73,6 +73,7 @@
 - Providers: skip DM history limit handling for non-DM sessions. (#728) — thanks @pkrmf.
 - Sandbox: fix non-main mode incorrectly sandboxing the main DM session and align `/status` runtime reporting with effective sandbox state.
 - Sandbox/Gateway: treat `agent:<id>:main` as a main-session alias when `session.mainKey` is customized (backwards compatible).
+- Auto-reply: fast-path allowlisted slash commands (inline `/help`/`/commands`/`/status`/`/whoami` stripped before model).
 
 ## 2026.1.10
 

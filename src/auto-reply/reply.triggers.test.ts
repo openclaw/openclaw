@@ -520,7 +520,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("ignores inline /status and runs the agent", async () => {
+  it("handles inline /status and still runs the agent", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
@@ -529,18 +529,129 @@ describe("trigger handling", () => {
           agentMeta: { sessionId: "s", provider: "p", model: "m" },
         },
       });
+      const blockReplies: Array<{ text?: string }> = [];
       const res = await getReplyFromConfig(
         {
           Body: "please /status now",
           From: "+1002",
           To: "+2000",
         },
-        {},
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
         makeCfg(home),
       );
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).not.toContain("Status");
+      expect(blockReplies.length).toBe(1);
+      expect(blockReplies[0]?.text).toBeTruthy();
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
+    });
+  });
+
+  it("handles inline /help and strips it before the agent", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /help now",
+          From: "+1002",
+          To: "+2000",
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(blockReplies.length).toBe(1);
+      expect(blockReplies[0]?.text).toContain("Help");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).not.toContain("/help");
+      expect(text).toBe("ok");
+    });
+  });
+
+  it("drops /status for unauthorized senders", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+2001",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+2001",
+        },
+        {},
+        cfg,
+      );
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps inline /help for unauthorized senders", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /help now",
+          From: "+2001",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+2001",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("ok");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain("/help");
     });
   });
 

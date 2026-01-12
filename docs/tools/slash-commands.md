@@ -68,6 +68,9 @@ Notes:
 - `/restart` is disabled by default; set `commands.restart: true` to enable it.
 - `/verbose` is meant for debugging and extra visibility; keep it **off** in normal use.
 - `/reasoning` (and `/verbose`) are risky in group settings: they may reveal internal reasoning or tool output you did not intend to expose. Prefer leaving them off, especially in group chats.
+- **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
+- **Inline shortcuts:** `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`) are also parsed when embedded in text. They run immediately, are stripped before the model sees the message, and the remaining text continues through the normal flow.
+- Unauthorized command-only messages are silently ignored.
 
 ## Debug overrides
 
