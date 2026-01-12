@@ -283,6 +283,18 @@ The Gateway watches the config and supports hot‑reload:
 - `gateway.reload.mode: "hybrid"` (default): hot‑apply safe changes, restart for critical ones
 - `hot`, `restart`, `off` are also supported
 
+### How do I run a central Gateway with specialized workers across devices?
+
+Yes. The common pattern is **one Gateway** (e.g. Raspberry Pi) plus **nodes** and **agents**:
+
+- **Gateway (central):** owns providers (Signal/WhatsApp), routing, and sessions.
+- **Nodes (devices):** Macs/iOS/Android connect as peripherals and expose local tools (`system.run`, `canvas`, `camera`).
+- **Agents (workers):** separate brains/workspaces for special roles (e.g. “Hetzner ops”, “Personal data”).
+- **Sub‑agents:** spawn background work from a main agent when you want parallelism.
+- **TUI:** connect to the Gateway and switch agents/sessions.
+
+Docs: [Nodes](/nodes), [Remote access](/gateway/remote), [Multi-Agent Routing](/concepts/multi-agent), [Sub-agents](/tools/subagents), [TUI](/tui).
+
 ## Remote gateways + nodes
 
 ### How do commands propagate between Telegram, the gateway, and nodes?
