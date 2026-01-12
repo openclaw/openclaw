@@ -1156,9 +1156,6 @@ export async function getReplyFromConfig(
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
   const authProfileId = sessionEntry?.authProfileOverride;
-  // DEBUG: Check provider for reasoning tag
-  const shouldEnforce = isReasoningTagProvider(provider);
-  // defaultRuntime.log(`[DEBUG] reply.ts: provider='${provider}', isReasoningTagProvider=${shouldEnforce}`);
 
   const followupRun = {
     prompt: queuedBody,
@@ -1198,15 +1195,7 @@ export async function getReplyFromConfig(
       ownerNumbers:
         command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
-      ...(isReasoningTagProvider(provider)
-        ? (() => {
-            logVerbose(`[reply] Enforcing final tag for provider: ${provider}`);
-            return { enforceFinalTag: true };
-          })()
-        : (() => {
-            logVerbose(`[reply] NOT enforcing final tag for provider: ${provider}`);
-            return {};
-          })()),
+      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
     },
   };
 
