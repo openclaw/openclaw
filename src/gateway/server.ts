@@ -1588,8 +1588,10 @@ export async function startGatewayServer(
           const authMethod = authResult.method ?? "none";
 
           const shouldTrackPresence = !isGatewayCliClient(connectParams.client);
+          const clientId = connectParams.client.id;
+          const instanceId = connectParams.client.instanceId;
           const presenceKey = shouldTrackPresence
-            ? connectParams.client.instanceId || connId
+            ? (instanceId ?? connId)
             : undefined;
 
           logWs("in", "connect", {
@@ -1598,7 +1600,7 @@ export async function startGatewayServer(
             clientDisplayName: connectParams.client.displayName,
             version: connectParams.client.version,
             mode: connectParams.client.mode,
-            instanceId: connectParams.client.instanceId,
+            clientId,
             platform: connectParams.client.platform,
             auth: authMethod,
           });
@@ -1621,7 +1623,7 @@ export async function startGatewayServer(
               deviceFamily: connectParams.client.deviceFamily,
               modelIdentifier: connectParams.client.modelIdentifier,
               mode: connectParams.client.mode,
-              instanceId: connectParams.client.instanceId,
+              instanceId,
               reason: "connect",
             });
             presenceVersion += 1;
