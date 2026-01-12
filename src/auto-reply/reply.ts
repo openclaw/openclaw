@@ -489,6 +489,7 @@ export async function getReplyFromConfig(
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
   let parsedDirectives = parseInlineDirectives(commandSource, {
     modelAliases: configuredAliases,
+    allowStatusDirective: allowTextCommands && command.isAuthorizedSender,
   });
   if (
     isGroup &&
@@ -519,6 +520,7 @@ export async function getReplyFromConfig(
     if (noMentions.trim().length > 0) {
       const directiveOnlyCheck = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
+        allowStatusDirective: allowTextCommands && command.isAuthorizedSender,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
         const allowInlineStatus =
@@ -552,6 +554,7 @@ export async function getReplyFromConfig(
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
+        allowStatusDirective: allowTextCommands && command.isAuthorizedSender,
       }).cleaned;
     }
 
@@ -559,6 +562,7 @@ export async function getReplyFromConfig(
     if (markerIndex < 0) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
+        allowStatusDirective: allowTextCommands && command.isAuthorizedSender,
       }).cleaned;
     }
 
@@ -571,6 +575,7 @@ export async function getReplyFromConfig(
     );
     const cleanedTail = parseInlineDirectives(tail, {
       modelAliases: configuredAliases,
+      allowStatusDirective: allowTextCommands && command.isAuthorizedSender,
     }).cleaned;
     return `${head}${cleanedTail}`;
   })();
