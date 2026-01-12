@@ -464,7 +464,7 @@ describe("Agent-specific sandbox config", () => {
 
     expect(context).toBeDefined();
     expect(context?.tools).toEqual({
-      allow: ["read", "write"],
+      allow: ["read", "write", "image"],
       deny: ["edit"],
     });
   });
@@ -491,6 +491,32 @@ describe("Agent-specific sandbox config", () => {
     const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
 
     const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+          },
+        },
+      },
+    };
+
+    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+    expect(sandbox.tools.allow).toContain("image");
+  });
+
+  it("injects image into explicit sandbox allowlists", async () => {
+    const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      tools: {
+        sandbox: {
+          tools: {
+            allow: ["bash", "read"],
+            deny: [],
+          },
+        },
+      },
       agents: {
         defaults: {
           sandbox: {

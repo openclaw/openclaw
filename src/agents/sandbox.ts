@@ -475,17 +475,26 @@ export function resolveSandboxToolPolicyForAgent(
           key: "tools.sandbox.tools.deny",
         } satisfies SandboxToolPolicySource);
 
+  const deny = Array.isArray(agentDeny)
+    ? agentDeny
+    : Array.isArray(globalDeny)
+      ? globalDeny
+      : DEFAULT_TOOL_DENY;
+  let allow = Array.isArray(agentAllow)
+    ? agentAllow
+    : Array.isArray(globalAllow)
+      ? globalAllow
+      : DEFAULT_TOOL_ALLOW;
+
+  // `image` is essential for multimodal workflows; always include it in sandboxed
+  // sessions unless explicitly denied.
+  if (!deny.includes("image") && !allow.includes("image")) {
+    allow = [...allow, "image"];
+  }
+
   return {
-    allow: Array.isArray(agentAllow)
-      ? agentAllow
-      : Array.isArray(globalAllow)
-        ? globalAllow
-        : DEFAULT_TOOL_ALLOW,
-    deny: Array.isArray(agentDeny)
-      ? agentDeny
-      : Array.isArray(globalDeny)
-        ? globalDeny
-        : DEFAULT_TOOL_DENY,
+    allow,
+    deny,
     sources: {
       allow: allowSource,
       deny: denySource,
