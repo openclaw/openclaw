@@ -21,6 +21,10 @@ The design goal is to keep all network discovery/advertising in the **Node Gatew
 - **Bridge (direct transport)**: a LAN/tailnet-facing endpoint owned by the gateway that allows authenticated clients/nodes to call a scoped subset of gateway methods. The bridge exists so the gateway can remain loopback-only.
 - **SSH transport (fallback)**: remote control by forwarding `127.0.0.1:18789` over SSH.
 
+Protocol details:
+- [Gateway protocol](/gateway/protocol)
+- [Bridge protocol](/gateway/bridge-protocol)
+
 ## Why we keep both “direct” and SSH
 
 - **Direct bridge** is the best UX on the same network and within a tailnet:

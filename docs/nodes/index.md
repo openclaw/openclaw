@@ -8,7 +8,7 @@ read_when:
 
 # Nodes
 
-A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`.
+A **node** is a companion device (iOS/Android today) that connects to the Gateway over the **Bridge** and exposes a command surface (e.g. `canvas.*`, `camera.*`, `system.*`) via `node.invoke`. Bridge protocol details: [Bridge protocol](/gateway/bridge-protocol).
 
 macOS can also run in **node mode**: the menubar app connects to the Gateway’s bridge and exposes its local canvas/camera commands as a node (so `clawdbot nodes …` works against this Mac).
 

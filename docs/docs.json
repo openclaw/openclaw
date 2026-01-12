@@ -635,6 +635,8 @@
         "group": "Gateway & Ops",
         "pages": [
           "gateway",
+          "gateway/protocol",
+          "gateway/bridge-protocol",
           "gateway/pairing",
           "gateway/gateway-lock",
           "environment",

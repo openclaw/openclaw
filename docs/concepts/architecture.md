@@ -11,9 +11,11 @@ Last updated: 2026-01-05
 
 - A single long‑lived **Gateway** owns all messaging surfaces (WhatsApp via
   Baileys, Telegram via grammY, Slack, Discord, Signal, iMessage, WebChat).
-- All clients (macOS app, CLI, web UI, automations) connect to the Gateway over
-  **one transport: WebSocket** on the configured bind host (default
+- Control-plane clients (macOS app, CLI, web UI, automations) connect to the
+  Gateway over **WebSocket** on the configured bind host (default
   `127.0.0.1:18789`).
+- **Nodes** (macOS/iOS/Android) use the **Bridge** protocol (TCP JSONL) instead
+  of the WebSocket control plane.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
 - A **bridge** (default `18790`) is used for nodes (macOS/iOS/Android).
 - A **canvas host** (default `18793`) serves agent‑editable HTML and A2UI.
@@ -35,6 +37,10 @@ Last updated: 2026-01-05
 - Connect to the **bridge** (TCP JSONL) rather than the WS server.
 - Pair with the Gateway to receive a token.
 - Expose commands like `canvas.*`, `camera.*`, `screen.record`, `location.get`.
+
+Protocol details:
+- [Gateway protocol](/gateway/protocol)
+- [Bridge protocol](/gateway/bridge-protocol)
 
 ### WebChat
 - Static UI that uses the Gateway WS API for chat history and sends.

@@ -13,6 +13,7 @@ read_when:
 - Gateway required: yes (run it on macOS, Linux, or Windows via WSL2).
 - Install: [Getting Started](/start/getting-started) + [Pairing](/gateway/pairing).
 - Gateway: [Runbook](/gateway) + [Configuration](/gateway/configuration).
+  - Protocols: [Bridge protocol](/gateway/bridge-protocol) (nodes) and [Gateway protocol](/gateway/protocol) (control plane).
 
 ## System control
 System control (launchd/systemd) lives on the Gateway host. See [Gateway](/gateway).
