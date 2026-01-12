@@ -296,7 +296,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           raw,
           parsed: parsedRes.parsed,
           valid: false,
-          config: {},
+          config: resolved as ClawdbotConfig,
           issues: validated.issues,
           legacyIssues,
         };
