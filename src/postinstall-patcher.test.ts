@@ -16,13 +16,13 @@ describe("postinstall patcher", () => {
     fs.mkdirSync(target);
 
     const filePath = path.join(target, "main.js");
-    const original = [
+    const original = `${[
       "var QRCode = require('./../vendor/QRCode'),",
       "    QRErrorCorrectLevel = require('./../vendor/QRCode/QRErrorCorrectLevel'),",
       '    black = "\\033[40m  \\033[0m",',
       '    white = "\\033[47m  \\033[0m",',
       "    toCell = function (isBlack) {",
-    ].join("\n") + "\n";
+    ].join("\n")}\n`;
     fs.writeFileSync(filePath, original, "utf-8");
 
     const patchText = `diff --git a/lib/main.js b/lib/main.js
@@ -43,13 +43,13 @@ index 0000000..1111111 100644
 
     const updated = fs.readFileSync(filePath, "utf-8");
     expect(updated).toBe(
-      [
+      `${[
         "var QRCode = require('./../vendor/QRCode/index.js'),",
         "    QRErrorCorrectLevel = require('./../vendor/QRCode/QRErrorCorrectLevel.js'),",
         '    black = "\\033[40m  \\033[0m",',
         '    white = "\\033[47m  \\033[0m",',
         "    toCell = function (isBlack) {",
-      ].join("\n") + "\n",
+      ].join("\n")}\n`,
     );
 
     fs.rmSync(dir, { recursive: true, force: true });
@@ -60,7 +60,7 @@ index 0000000..1111111 100644
     const filePath = path.join(dir, "file.txt");
     fs.writeFileSync(
       filePath,
-      ["alpha", "beta", "gamma", "delta", "epsilon"].join("\n") + "\n",
+      `${["alpha", "beta", "gamma", "delta", "epsilon"].join("\n")}\n`,
       "utf-8",
     );
 

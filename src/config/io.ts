@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import JSON5 from "json5";
+
 import {
   loadShellEnvFallback,
   resolveShellEnvFallbackTimeoutMs,
@@ -21,6 +22,7 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
+import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -31,6 +33,12 @@ import type {
 } from "./types.js";
 import { validateConfigObject } from "./validation.js";
 import { ClawdbotSchema } from "./zod-schema.js";
+
+// Re-export for backwards compatibility
+export {
+  CircularIncludeError,
+  ConfigIncludeError,
+} from "./includes.js";
 
 const SHELL_ENV_EXPECTED_KEYS = [
   "OPENAI_API_KEY",
@@ -148,9 +156,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       const raw = deps.fs.readFileSync(configPath, "utf-8");
       const parsed = deps.json5.parse(raw);
-      warnOnConfigMiskeys(parsed, deps.logger);
-      if (typeof parsed !== "object" || parsed === null) return {};
-      const validated = ClawdbotSchema.safeParse(parsed);
+
+      // Resolve $include directives before validation
+      const resolved = resolveConfigIncludes(parsed, configPath, {
+        readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+        parseJson: (raw) => deps.json5.parse(raw),
+      });
+
+      warnOnConfigMiskeys(resolved, deps.logger);
+      if (typeof resolved !== "object" || resolved === null) return {};
+      const validated = ClawdbotSchema.safeParse(resolved);
       if (!validated.success) {
         deps.logger.error("Invalid config:");
         for (const iss of validated.error.issues) {
@@ -245,9 +260,33 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         };
       }
 
-      const legacyIssues = findLegacyConfigIssues(parsedRes.parsed);
+      // Resolve $include directives
+      let resolved: unknown;
+      try {
+        resolved = resolveConfigIncludes(parsedRes.parsed, configPath, {
+          readFile: (p) => deps.fs.readFileSync(p, "utf-8"),
+          parseJson: (raw) => deps.json5.parse(raw),
+        });
+      } catch (err) {
+        const message =
+          err instanceof ConfigIncludeError
+            ? err.message
+            : `Include resolution failed: ${String(err)}`;
+        return {
+          path: configPath,
+          exists: true,
+          raw,
+          parsed: parsedRes.parsed,
+          valid: false,
+          config: {},
+          issues: [{ path: "", message }],
+          legacyIssues: [],
+        };
+      }
 
-      const validated = validateConfigObject(parsedRes.parsed);
+      const legacyIssues = findLegacyConfigIssues(resolved);
+
+      const validated = validateConfigObject(resolved);
       if (!validated.ok) {
         return {
           path: configPath,
