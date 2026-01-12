@@ -198,6 +198,8 @@ export function subscribeEmbeddedPiSession(params: {
     mediaUrls?: string[];
     audioAsVoice?: boolean;
   }) => void | Promise<void>;
+  /** Flush pending block replies (e.g., before tool execution to preserve message boundaries). */
+  onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: {
@@ -444,6 +446,19 @@ export function subscribeEmbeddedPiSession(params: {
     });
   };
 
+  const flushBlockReplyBuffer = () => {
+    if (!params.onBlockReply) return;
+    if (blockChunker?.hasBuffered()) {
+      blockChunker.drain({ force: true, emit: emitBlockChunk });
+      blockChunker.reset();
+      return;
+    }
+    if (blockBuffer.length > 0) {
+      emitBlockChunk(blockBuffer);
+      blockBuffer = "";
+    }
+  };
+
   const emitReasoningStream = (text: string) => {
     if (!streamReasoning || !params.onReasoningStream) return;
     const formatted = formatReasoningMessage(text);
@@ -483,6 +498,12 @@ export function subscribeEmbeddedPiSession(params: {
       }
 
       if (evt.type === "tool_execution_start") {
+        // Flush pending block replies to preserve message boundaries before tool execution.
+        flushBlockReplyBuffer();
+        if (params.onBlockReplyFlush) {
+          void params.onBlockReplyFlush();
+        }
+
         const toolName = String(
           (evt as AgentEvent & { toolName: string }).toolName,
         );
