@@ -1997,6 +1997,109 @@ describe("directive behavior", () => {
     });
   });
 
+  it("picks the best fuzzy match within a provider", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model minimax/m2.1", From: "+1222", To: "+1222" },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "minimax/MiniMax-M2.1" },
+              workspace: path.join(home, "clawd"),
+              models: {
+                "minimax/MiniMax-M2.1": {},
+                "minimax/MiniMax-M2.1-lightning": {},
+              },
+            },
+          },
+          models: {
+            mode: "merge",
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimax.io/anthropic",
+                apiKey: "sk-test",
+                api: "anthropic-messages",
+                models: [
+                  { id: "MiniMax-M2.1", name: "MiniMax M2.1" },
+                  {
+                    id: "MiniMax-M2.1-lightning",
+                    name: "MiniMax M2.1 Lightning",
+                  },
+                ],
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to minimax/MiniMax-M2.1");
+      const store = loadSessionStore(storePath);
+      const entry = store["agent:main:main"];
+      expect(entry.modelOverride).toBe("MiniMax-M2.1");
+      expect(entry.providerOverride).toBe("minimax");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("prefers alias matches when fuzzy selection is ambiguous", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model ki", From: "+1222", To: "+1222" },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "anthropic/claude-opus-4-5" },
+              workspace: path.join(home, "clawd"),
+              models: {
+                "anthropic/claude-opus-4-5": {},
+                "moonshot/kimi-k2-0905-preview": { alias: "Kimi" },
+                "lmstudio/kimi-k2-0905-preview": {},
+              },
+            },
+          },
+          models: {
+            mode: "merge",
+            providers: {
+              moonshot: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                apiKey: "sk-test",
+                api: "openai-completions",
+                models: [{ id: "kimi-k2-0905-preview", name: "Kimi K2" }],
+              },
+              lmstudio: {
+                baseUrl: "http://127.0.0.1:1234/v1",
+                apiKey: "lmstudio",
+                api: "openai-responses",
+                models: [
+                  { id: "kimi-k2-0905-preview", name: "Kimi K2 (Local)" },
+                ],
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview");
+      const store = loadSessionStore(storePath);
+      const entry = store["agent:main:main"];
+      expect(entry.modelOverride).toBe("kimi-k2-0905-preview");
+      expect(entry.providerOverride).toBe("moonshot");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("stores auth profile overrides on /model directive", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
