@@ -40,6 +40,7 @@ import {
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
+import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import {
@@ -1155,6 +1156,10 @@ export async function getReplyFromConfig(
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
   const authProfileId = sessionEntry?.authProfileOverride;
+  // DEBUG: Check provider for reasoning tag
+  const shouldEnforce = isReasoningTagProvider(provider);
+  // defaultRuntime.log(`[DEBUG] reply.ts: provider='${provider}', isReasoningTagProvider=${shouldEnforce}`);
+
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSid,
@@ -1193,7 +1198,15 @@ export async function getReplyFromConfig(
       ownerNumbers:
         command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
-      ...(provider === "ollama" ? { enforceFinalTag: true } : {}),
+      ...(isReasoningTagProvider(provider)
+        ? (() => {
+            logVerbose(`[reply] Enforcing final tag for provider: ${provider}`);
+            return { enforceFinalTag: true };
+          })()
+        : (() => {
+            logVerbose(`[reply] NOT enforcing final tag for provider: ${provider}`);
+            return {};
+          })()),
     },
   };
 

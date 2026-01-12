@@ -41,6 +41,7 @@ const THINKING_OPEN_RE = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const THINKING_CLOSE_RE = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const THINKING_TAG_SCAN_RE =
   /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
+const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
 const TOOL_RESULT_MAX_CHARS = 8000;
 const log = createSubsystemLogger("agent/embedded");
 const RAW_STREAM_ENABLED = process.env.CLAWDBOT_RAW_STREAM === "1";
@@ -109,37 +110,6 @@ function isToolResultError(result: unknown): boolean {
   if (typeof status !== "string") return false;
   const normalized = status.trim().toLowerCase();
   return normalized === "error" || normalized === "timeout";
-}
-
-function stripThinkingSegments(text: string): string {
-  if (!text || !THINKING_TAG_RE.test(text)) return text;
-  THINKING_TAG_RE.lastIndex = 0;
-  let result = "";
-  let lastIndex = 0;
-  let inThinking = false;
-  for (const match of text.matchAll(THINKING_TAG_RE)) {
-    const idx = match.index ?? 0;
-    if (!inThinking) {
-      result += text.slice(lastIndex, idx);
-    }
-    const tag = match[0].toLowerCase();
-    inThinking = !tag.includes("/");
-    lastIndex = idx + match[0].length;
-  }
-  if (!inThinking) {
-    result += text.slice(lastIndex);
-  }
-  return result;
-}
-
-function stripUnpairedThinkingTags(text: string): string {
-  if (!text) return text;
-  const hasOpen = THINKING_OPEN_RE.test(text);
-  const hasClose = THINKING_CLOSE_RE.test(text);
-  if (hasOpen && hasClose) return text;
-  if (!hasOpen) return text.replace(THINKING_CLOSE_RE, "");
-  if (!hasClose) return text.replace(THINKING_OPEN_RE, "");
-  return text;
 }
 
 function extractMessagingToolSend(
@@ -212,6 +182,11 @@ export function subscribeEmbeddedPiSession(params: {
   }) => void;
   enforceFinalTag?: boolean;
 }) {
+  if (params.enforceFinalTag) {
+    log.debug("subscribeEmbeddedPiSession: enforceFinalTag is ENABLED");
+  } else {
+    log.debug("subscribeEmbeddedPiSession: enforceFinalTag is DISABLED");
+  }
   const assistantTexts: string[] = [];
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
@@ -226,7 +201,8 @@ export function subscribeEmbeddedPiSession(params: {
   let deltaBuffer = "";
   let blockBuffer = "";
   // Track if a streamed chunk opened a <think> block (stateful across chunks).
-  let blockThinkingActive = false;
+  const blockState = { thinking: false, final: false };
+  const streamState = { thinking: false, final: false };
   let lastStreamedAssistant: string | undefined;
   let lastStreamedReasoning: string | undefined;
   let lastBlockReplyText: string | undefined;
@@ -242,7 +218,10 @@ export function subscribeEmbeddedPiSession(params: {
     deltaBuffer = "";
     blockBuffer = "";
     blockChunker?.reset();
-    blockThinkingActive = false;
+    blockState.thinking = false;
+    blockState.final = false;
+    streamState.thinking = false;
+    streamState.final = false;
     lastStreamedAssistant = undefined;
     lastBlockReplyText = undefined;
     lastStreamedReasoning = undefined;
@@ -337,27 +316,6 @@ export function subscribeEmbeddedPiSession(params: {
       compactionRetryPromise = null;
     }
   };
-  const FINAL_START_RE = /<\s*final\s*>/i;
-  const FINAL_END_RE = /<\s*\/\s*final\s*>/i;
-  // Local providers sometimes emit malformed tags; normalize before filtering.
-  const sanitizeFinalText = (text: string): string => {
-    if (!text) return text;
-    const hasStart = FINAL_START_RE.test(text);
-    const hasEnd = FINAL_END_RE.test(text);
-    if (hasStart && !hasEnd) return text.replace(FINAL_START_RE, "");
-    if (!hasStart && hasEnd) return text.replace(FINAL_END_RE, "");
-    return text;
-  };
-  const extractFinalText = (text: string): string | undefined => {
-    const cleaned = sanitizeFinalText(text);
-    const startMatch = FINAL_START_RE.exec(cleaned);
-    if (!startMatch) return undefined;
-    const startIndex = startMatch.index + startMatch[0].length;
-    const afterStart = cleaned.slice(startIndex);
-    const endMatch = FINAL_END_RE.exec(afterStart);
-    const endIndex = endMatch ? endMatch.index : afterStart.length;
-    return afterStart.slice(0, endIndex);
-  };
 
   const blockChunking = params.blockReplyChunking;
   const blockChunker = blockChunking
@@ -385,34 +343,91 @@ export function subscribeEmbeddedPiSession(params: {
     }
   };
 
-  const stripBlockThinkingSegments = (text: string): string => {
+  const stripBlockTags = (
+    text: string,
+    state: { thinking: boolean; final: boolean },
+  ): string => {
     if (!text) return text;
-    if (!blockThinkingActive && !THINKING_TAG_SCAN_RE.test(text)) return text;
+
+    // 1. Handle <think> blocks (stateful, strip content inside)
+    let processed = "";
     THINKING_TAG_SCAN_RE.lastIndex = 0;
-    let result = "";
     let lastIndex = 0;
-    let inThinking = blockThinkingActive;
+    let inThinking = state.thinking;
     for (const match of text.matchAll(THINKING_TAG_SCAN_RE)) {
       const idx = match.index ?? 0;
       if (!inThinking) {
-        result += text.slice(lastIndex, idx);
+        processed += text.slice(lastIndex, idx);
       }
       const isClose = match[1] === "/";
       inThinking = !isClose;
       lastIndex = idx + match[0].length;
     }
     if (!inThinking) {
-      result += text.slice(lastIndex);
+      processed += text.slice(lastIndex);
     }
-    blockThinkingActive = inThinking;
+    state.thinking = inThinking;
+
+    // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
+    // If enforcement is disabled, just return processed text as-is.
+    if (!params.enforceFinalTag) return processed;
+
+    // If enforcement is enabled, only return text that appeared inside a <final> block.
+    let result = "";
+    FINAL_TAG_SCAN_RE.lastIndex = 0;
+    let lastFinalIndex = 0;
+    let inFinal = state.final;
+    let everInFinal = state.final;
+
+    for (const match of processed.matchAll(FINAL_TAG_SCAN_RE)) {
+      const idx = match.index ?? 0;
+      const isClose = match[1] === "/";
+
+      if (!inFinal && !isClose) {
+        // Found <final> start tag.
+        inFinal = true;
+        everInFinal = true;
+        lastFinalIndex = idx + match[0].length;
+      } else if (inFinal && isClose) {
+        // Found </final> end tag.
+        result += processed.slice(lastFinalIndex, idx);
+        inFinal = false;
+        lastFinalIndex = idx + match[0].length;
+      }
+    }
+
+    if (inFinal) {
+      result += processed.slice(lastFinalIndex);
+    }
+    state.final = inFinal;
+
+    // Log the result of the stripping for debugging purposes
+    if (params.enforceFinalTag && (everInFinal || processed.length > 0)) {
+        log.debug(JSON.stringify({
+            raw: processed.slice(0, 100),
+            stripped: result.slice(0, 100),
+            inFinal,
+            everInFinal,
+            rawLen: processed.length,
+            strippedLen: result.length,
+            tag: "DEBUG_STRIP"
+        }));
+    }
+
+    // Fallback: if we are at the end of the process and never saw a final tag,
+    // but we have processed text, use the processed text.
+    // NOTE: This fallback only triggers if we explicitly pass a state that we can check.
+    if (!everInFinal && processed.trim().length > 0) {
+      return processed;
+    }
+
     return result;
   };
 
   const emitBlockChunk = (text: string) => {
     if (suppressBlockChunks) return;
-    // Strip <think> blocks across chunk boundaries to avoid leaking reasoning.
-    const strippedText = stripBlockThinkingSegments(text);
-    const chunk = strippedText.trimEnd();
+    // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
+    const chunk = stripBlockTags(text, blockState).trimEnd();
     if (!chunk) return;
     if (chunk === lastBlockReplyText) return;
 
@@ -754,12 +769,10 @@ export function subscribeEmbeddedPiSession(params: {
               emitReasoningStream(extractThinkingFromTaggedStream(deltaBuffer));
             }
 
-            const cleaned = params.enforceFinalTag
-              ? stripThinkingSegments(stripUnpairedThinkingTags(deltaBuffer))
-              : stripThinkingSegments(deltaBuffer);
-            const next = params.enforceFinalTag
-              ? (extractFinalText(cleaned)?.trim() ?? cleaned.trim())
-              : cleaned.trim();
+            const next = stripBlockTags(deltaBuffer, {
+              thinking: false,
+              final: false,
+            }).trim();
             if (next && next !== lastStreamedAssistant) {
               lastStreamedAssistant = next;
               const { text: cleanedText, mediaUrls } =
@@ -822,13 +835,10 @@ export function subscribeEmbeddedPiSession(params: {
             rawText,
             rawThinking: extractAssistantThinking(assistantMessage),
           });
-          const cleaned = params.enforceFinalTag
-            ? stripThinkingSegments(stripUnpairedThinkingTags(rawText))
-            : stripThinkingSegments(rawText);
-          const baseText =
-            params.enforceFinalTag && cleaned
-              ? (extractFinalText(cleaned)?.trim() ?? cleaned)
-              : cleaned;
+          const text = stripBlockTags(rawText, {
+            thinking: false,
+            final: false,
+          });
           const rawThinking =
             includeReasoning || streamReasoning
               ? extractAssistantThinking(assistantMessage) ||
@@ -837,7 +847,6 @@ export function subscribeEmbeddedPiSession(params: {
           const formattedReasoning = rawThinking
             ? formatReasoningMessage(rawThinking)
             : "";
-          const text = baseText;
 
           const addedDuringMessage =
             assistantTexts.length > assistantTextBaseline;
@@ -919,7 +928,10 @@ export function subscribeEmbeddedPiSession(params: {
           deltaBuffer = "";
           blockBuffer = "";
           blockChunker?.reset();
-          blockThinkingActive = false;
+          blockState.thinking = false;
+          blockState.final = false;
+          streamState.thinking = false;
+          streamState.final = false;
           lastStreamedAssistant = undefined;
         }
       }
@@ -1001,7 +1013,10 @@ export function subscribeEmbeddedPiSession(params: {
             blockBuffer = "";
           }
         }
-        blockThinkingActive = false;
+        blockState.thinking = false;
+        blockState.final = false;
+        streamState.thinking = false;
+        streamState.final = false;
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {
