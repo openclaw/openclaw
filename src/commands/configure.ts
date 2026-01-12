@@ -155,41 +155,33 @@ async function promptConfigureSections(
   runtime: RuntimeEnv,
 ): Promise<WizardSection[]> {
   const selected: WizardSection[] = [];
-  let remaining = CONFIGURE_SECTION_OPTIONS.slice();
-  let addMore = true;
+  const continueValue = "__continue";
 
-  while (addMore && remaining.length > 0) {
+  while (true) {
     const choice = guardCancel(
-      await select<WizardSection>({
-        message:
-          selected.length === 0
-            ? "Select a section to configure"
-            : "Select another section to configure",
-        options: remaining,
-        initialValue: remaining[0]?.value,
+      await select<string>({
+        message: "Select sections to configure",
+        options: [
+          ...CONFIGURE_SECTION_OPTIONS,
+          {
+            value: continueValue,
+            label: "Continue",
+            hint: selected.length === 0 ? "Skip for now" : "Run selected",
+          },
+        ],
+        initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
       }),
       runtime,
-    ) as WizardSection;
-
-    if (!selected.includes(choice)) {
-      selected.push(choice);
-    }
-
-    remaining = CONFIGURE_SECTION_OPTIONS.filter(
-      (option) => !selected.includes(option.value),
     );
 
-    if (remaining.length === 0) {
+    if (choice === continueValue) {
       break;
     }
 
-    addMore = guardCancel(
-      await confirm({
-        message: "Configure another section?",
-        initialValue: false,
-      }),
-      runtime,
-    );
+    const section = choice as WizardSection;
+    if (!selected.includes(section)) {
+      selected.push(section);
+    }
   }
 
   return selected;
