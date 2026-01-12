@@ -97,7 +97,7 @@
     "test:force": "tsx scripts/test-force.ts",
     "test:coverage": "vitest run --coverage",
     "test:e2e": "vitest run --config vitest.e2e.config.ts",
-    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:live": "CLAWDBOT_LIVE_TEST=1 vitest run --config vitest.live.config.ts",
     "test:docker:onboard": "bash scripts/e2e/onboard-docker.sh",
     "test:docker:gateway-network": "bash scripts/e2e/gateway-network-docker.sh",
     "test:docker:live-models": "bash scripts/test-live-models-docker.sh",

@@ -76,7 +76,7 @@ Clawdbot ships with the pi‑ai catalog. These providers require **no**
 
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
-- Example model: `google/gemini-3-pro`
+- Example model: `google/gemini-3-pro-preview`
 - CLI: `clawdbot onboard --auth-choice gemini-api-key`
 
 ### Google Vertex / Antigravity / Gemini CLI

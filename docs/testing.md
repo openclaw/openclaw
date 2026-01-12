@@ -25,9 +25,8 @@ When you touch tests or want extra confidence:
 - Coverage gate: `pnpm test:coverage`
 - E2E suite: `pnpm test:e2e`
 
-When debugging real providers/models (requires real creds; skipped by default):
-- Live suite (models only): `CLAWDBOT_LIVE_TEST=1 pnpm test:live`
-- Live suite (models + providers): `LIVE=1 pnpm test:live`
+When debugging real providers/models (requires real creds):
+- Live suite (models + gateway tool/image probes): `pnpm test:live`
 
 Tip: when you only need one failing case, prefer narrowing live tests via the allowlist env vars described below.
 
@@ -67,7 +66,7 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
 - Command: `pnpm test:live`
 - Config: `vitest.live.config.ts`
 - Files: `src/**/*.live.test.ts`
-- Default: **skipped** unless `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
+- Default: **enabled** by `pnpm test:live` (sets `CLAWDBOT_LIVE_TEST=1`)
 - Scope:
   - “Does this provider/model actually work *today* with real creds?”
   - Catch provider format changes, tool-calling quirks, auth issues, and rate limit behavior
@@ -75,6 +74,8 @@ Think of the suites as “increasing realism” (and increasing flakiness/cost):
   - Not CI-stable by design (real networks, real provider policies, quotas, outages)
   - Costs money / uses rate limits
   - Prefer running narrowed subsets instead of “everything”
+  - Live runs will source `~/.profile` to pick up missing API keys
+  - Anthropic key rotation: set `CLAWDBOT_LIVE_ANTHROPIC_KEYS="sk-...,sk-..."` (or `CLAWDBOT_LIVE_ANTHROPIC_KEY=sk-...`) or multiple `ANTHROPIC_API_KEY*` vars; tests will retry on rate limits
 
 ## Which suite should I run?
 
@@ -97,10 +98,11 @@ Live tests are split into two layers so we can isolate failures:
   - Use `getApiKeyForModel` to select models you have creds for
   - Run a small completion per model (and targeted regressions where needed)
 - How to enable:
-  - `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
-  - `CLAWDBOT_LIVE_ALL_MODELS=1` (required for this test to run)
+  - `pnpm test:live` (or `CLAWDBOT_LIVE_TEST=1` if invoking Vitest directly)
+- Set `CLAWDBOT_LIVE_MODELS=modern` (or `all`, alias for modern) to actually run this suite; otherwise it skips to keep `pnpm test:live` focused on gateway smoke
 - How to select models:
-  - `CLAWDBOT_LIVE_MODELS=all` to run everything with keys
+  - `CLAWDBOT_LIVE_MODELS=modern` to run the modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
+  - `CLAWDBOT_LIVE_MODELS=all` is an alias for the modern allowlist
   - or `CLAWDBOT_LIVE_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,..."` (comma allowlist)
 - How to select providers:
   - `CLAWDBOT_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
@@ -128,18 +130,16 @@ Live tests are split into two layers so we can isolate failures:
   - image probe: the test attaches a generated PNG (cat + randomized code) and expects the model to return `cat <CODE>`.
   - Implementation reference: `src/gateway/gateway-models.profiles.live.test.ts` and `src/gateway/live-image-probe.ts`.
 - How to enable:
-  - `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
-  - `CLAWDBOT_LIVE_GATEWAY=1` (required for this test to run)
+  - `pnpm test:live` (or `CLAWDBOT_LIVE_TEST=1` if invoking Vitest directly)
 - How to select models:
-  - `CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1` to scan all discovered models with keys
-  - or set `CLAWDBOT_LIVE_GATEWAY_MODELS="provider/model,provider/model,..."` to narrow quickly
+  - Default: modern allowlist (Opus/Sonnet/Haiku 4.5, GPT-5.x + Codex, Gemini 3, GLM 4.7, MiniMax M2.1, Grok 4)
+  - `CLAWDBOT_LIVE_GATEWAY_MODELS=all` is an alias for the modern allowlist
+  - Or set `CLAWDBOT_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
 - How to select providers (avoid “OpenRouter everything”):
   - `CLAWDBOT_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
-- Optional tool-calling stress:
-  - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “exec writes file → read reads it back → echo nonce” check.
-  - This is specifically meant to catch tool-calling compatibility issues across providers (formatting, history replay, tool_result pairing, etc.).
-- Optional image send smoke:
-  - `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` sends a real image attachment through the gateway agent pipeline (multimodal message) and asserts the model can read back a per-run code from the image.
+- Tool + image probes are always on in this live test:
+  - `read` probe + `exec+read` probe (tool stress)
+  - image probe runs when the model advertises image input support
   - Flow (high level):
     - Test generates a tiny PNG with “CAT” + random code (`src/gateway/live-image-probe.ts`)
     - Sends it via `agent` `attachments: [{ mimeType: "image/png", content: "<base64>" }]`
@@ -159,7 +159,7 @@ pnpm clawdbot models list --json
 - Test: `src/agents/anthropic.setup-token.live.test.ts`
 - Goal: verify Claude CLI setup-token (or a pasted setup-token profile) can complete an Anthropic prompt.
 - Enable:
-  - `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
+  - `pnpm test:live` (or `CLAWDBOT_LIVE_TEST=1` if invoking Vitest directly)
   - `CLAWDBOT_LIVE_SETUP_TOKEN=1`
 - Token sources (pick one):
   - Profile: `CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test`
@@ -171,7 +171,7 @@ Setup example:
 
 ```bash
 clawdbot models auth paste-token --provider anthropic --profile-id anthropic:setup-token-test
-CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
+CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFILE=anthropic:setup-token-test pnpm test:live src/agents/anthropic.setup-token.live.test.ts
 ```
 
 ## Live: CLI backend smoke (Claude CLI or other local CLIs)
@@ -179,7 +179,7 @@ CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFI
 - Test: `src/gateway/gateway-cli-backend.live.test.ts`
 - Goal: validate the Gateway + agent pipeline using a local CLI backend, without touching your default config.
 - Enable:
-  - `CLAWDBOT_LIVE_TEST=1` or `LIVE=1`
+  - `pnpm test:live` (or `CLAWDBOT_LIVE_TEST=1` if invoking Vitest directly)
   - `CLAWDBOT_LIVE_CLI_BACKEND=1`
 - Defaults:
   - Model: `claude-cli/claude-sonnet-4-5`
@@ -200,7 +200,7 @@ CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_SETUP_TOKEN=1 CLAWDBOT_LIVE_SETUP_TOKEN_PROFI
 Example:
 
 ```bash
-CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_CLI_BACKEND=1 \
+CLAWDBOT_LIVE_CLI_BACKEND=1 \
   CLAWDBOT_LIVE_CLI_BACKEND_MODEL="claude-cli/claude-sonnet-4-5" \
   pnpm test:live src/gateway/gateway-cli-backend.live.test.ts
 ```
@@ -210,17 +210,17 @@ CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_CLI_BACKEND=1 \
 Narrow, explicit allowlists are fastest and least flaky:
 
 - Single model, direct (no gateway):
-  - `CLAWDBOT_LIVE_TEST=1 CLAWDBOT_LIVE_ALL_MODELS=1 CLAWDBOT_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
+  - `CLAWDBOT_LIVE_MODELS="openai/gpt-5.2" pnpm test:live src/agents/models.profiles.live.test.ts`
 
 - Single model, gateway smoke:
-  - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - `CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
-- Tool calling across several providers (exec + read probe):
-  - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+- Tool calling across several providers:
+  - `CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-flash-preview,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
-  - Gemini (API key): `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="google/gemini-3-flash" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
-  - Antigravity (OAuth): `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - Gemini (API key): `CLAWDBOT_LIVE_GATEWAY_MODELS="google/gemini-3-flash-preview" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+  - Antigravity (OAuth): `CLAWDBOT_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 Notes:
 - `google/...` uses the Gemini API (API key).
@@ -240,20 +240,20 @@ This is the “common models” run we expect to keep working:
 - OpenAI (non-Codex): `openai/gpt-5.2` (optional: `openai/gpt-5.1`)
 - OpenAI Codex: `openai-codex/gpt-5.2` (optional: `openai-codex/gpt-5.2-codex`)
 - Anthropic: `anthropic/claude-opus-4-5` (or `anthropic/claude-sonnet-4-5`)
-- Google (Gemini API): `google/gemini-3-pro` and `google/gemini-3-flash` (avoid older Gemini 2.x models)
+- Google (Gemini API): `google/gemini-3-pro-preview` and `google/gemini-3-flash-preview` (avoid older Gemini 2.x models)
 - Google (Antigravity): `google-antigravity/claude-opus-4-5-thinking` and `google-antigravity/gemini-3-flash`
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.1`
 
 Run gateway smoke with tools + image:
-`LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-pro,google/gemini-3-flash,google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
+`CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-pro-preview,google/gemini-3-flash-preview,google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 ### Baseline: tool calling (Read + optional Exec)
 
 Pick at least one per provider family:
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)
 - Anthropic: `anthropic/claude-opus-4-5` (or `anthropic/claude-sonnet-4-5`)
-- Google: `google/gemini-3-flash` (or `google/gemini-3-pro`)
+- Google: `google/gemini-3-flash-preview` (or `google/gemini-3-pro-preview`)
 - Z.AI (GLM): `zai/glm-4.7`
 - MiniMax: `minimax/minimax-m2.1`
 
@@ -265,7 +265,7 @@ Optional additional coverage (nice to have):
 
 ### Vision: image send (attachment → multimodal message)
 
-Run with `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` and include at least one image-capable model in `CLAWDBOT_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, etc.).
+Include at least one image-capable model in `CLAWDBOT_LIVE_GATEWAY_MODELS` (Claude/Gemini/OpenAI vision-capable variants, etc.) to exercise the image probe.
 
 ### Aggregators / alternate gateways
 

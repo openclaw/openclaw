@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -11,6 +12,37 @@ function restoreEnv(entries: RestoreEntry[]): void {
   }
 }
 
+function loadProfileEnv(): void {
+  const profilePath = path.join(os.homedir(), ".profile");
+  if (!fs.existsSync(profilePath)) return;
+  try {
+    const output = execFileSync(
+      "/bin/bash",
+      [
+        "-lc",
+        `set -a; source \"${profilePath}\" >/dev/null 2>&1; env -0`,
+      ],
+      { encoding: "utf8" },
+    );
+    const entries = output.split("\0");
+    let applied = 0;
+    for (const entry of entries) {
+      if (!entry) continue;
+      const idx = entry.indexOf("=");
+      if (idx <= 0) continue;
+      const key = entry.slice(0, idx);
+      if (!key || (process.env[key] ?? "") !== "") continue;
+      process.env[key] = entry.slice(idx + 1);
+      applied += 1;
+    }
+    if (applied > 0) {
+      console.log(`[live] loaded ${applied} env vars from ~/.profile`);
+    }
+  } catch {
+    // ignore profile load failures
+  }
+}
+
 export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   const live =
     process.env.LIVE === "1" ||
@@ -20,6 +52,7 @@ export function installTestEnv(): { cleanup: () => void; tempHome: string } {
   // Live tests must use the real user environment (keys, profiles, config).
   // The default test env isolates HOME to avoid touching real state.
   if (live) {
+    loadProfileEnv();
     return { cleanup: () => {}, tempHome: process.env.HOME ?? "" };
   }
 
