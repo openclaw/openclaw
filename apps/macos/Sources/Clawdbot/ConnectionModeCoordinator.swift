@@ -27,8 +27,7 @@ final class ConnectionModeCoordinator {
                 GatewayProcessManager.shared.setActive(true)
                 if GatewayAutostartPolicy.shouldEnsureLaunchAgent(
                     mode: .local,
-                    paused: paused,
-                    attachExistingOnly: AppStateStore.attachExistingGatewayOnly)
+                    paused: paused)
                 {
                     Task { await GatewayProcessManager.shared.ensureLaunchAgentEnabledIfNeeded() }
                 }

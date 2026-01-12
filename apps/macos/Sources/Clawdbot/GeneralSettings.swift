@@ -204,11 +204,6 @@ struct GeneralSettings: View {
                 if !self.isNixMode {
                     self.gatewayInstallerCard
                 }
-                SettingsToggleRow(
-                    title: "Attach only",
-                    subtitle: "Use this when the gateway runs externally; the mac app will only attach " +
-                        "to an already-running gateway and won't start one locally.",
-                    binding: self.$state.attachExistingGatewayOnly)
                 TailscaleIntegrationSection(
                     connectionMode: self.state.connectionMode,
                     isPaused: self.state.isPaused)

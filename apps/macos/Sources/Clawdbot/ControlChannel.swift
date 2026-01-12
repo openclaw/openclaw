@@ -212,12 +212,6 @@ final class ControlChannel {
                 return "Gateway connection was closed; start the gateway (localhost:\(port)) and retry."
             case .cannotFindHost, .cannotConnectToHost:
                 let isRemote = CommandResolver.connectionModeIsRemote()
-                if AppStateStore.attachExistingGatewayOnly, !isRemote {
-                    return """
-                    Cannot reach gateway at localhost:\(port) and “Attach existing gateway only” is enabled.
-                    Disable it in Debug Settings or start a gateway on that port.
-                    """
-                }
                 if isRemote {
                     return """
                     Cannot reach gateway at localhost:\(port).

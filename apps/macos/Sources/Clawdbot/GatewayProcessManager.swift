@@ -69,7 +69,6 @@ final class GatewayProcessManager {
 
     func ensureLaunchAgentEnabledIfNeeded() async {
         guard !CommandResolver.connectionModeIsRemote() else { return }
-        guard !AppStateStore.attachExistingGatewayOnly else { return }
         let enabled = await GatewayLaunchAgentManager.isLoaded()
         guard !enabled else { return }
         let bundlePath = Bundle.main.bundleURL.path
@@ -95,15 +94,6 @@ final class GatewayProcessManager {
         Task { [weak self] in
             guard let self else { return }
             if await self.attachExistingGatewayIfAvailable() {
-                return
-            }
-            // Respect debug toggle: only attach, never spawn, when enabled.
-            if AppStateStore.attachExistingGatewayOnly {
-                await MainActor.run {
-                    self.status = .failed("Attach-only enabled; no gateway to attach")
-                    self.appendLog("[gateway] attach-only enabled; not spawning local gateway\n")
-                    self.logger.warning("gateway attach-only enabled; not spawning")
-                }
                 return
             }
             await self.enableLaunchdGateway()
