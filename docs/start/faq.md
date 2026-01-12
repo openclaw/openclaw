@@ -293,7 +293,7 @@ The Gateway watches the config and supports hot‑reload:
 
 ### How do I run a central Gateway with specialized workers across devices?
 
-Yes. The common pattern is **one Gateway** (e.g. Raspberry Pi) plus **nodes** and **agents**:
+The common pattern is **one Gateway** (e.g. Raspberry Pi) plus **nodes** and **agents**:
 
 - **Gateway (central):** owns providers (Signal/WhatsApp), routing, and sessions.
 - **Nodes (devices):** Macs/iOS/Android connect as peripherals and expose local tools (`system.run`, `canvas`, `camera`).
