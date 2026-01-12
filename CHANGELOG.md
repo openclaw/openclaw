@@ -25,6 +25,7 @@
 - Tests: add Docker plugin loader + tgz-install smoke test.
 - Tests: extend Docker plugin E2E to cover installing from local folders (`plugins.load.paths`) and `file:` npm specs.
 - Tests: add coverage for pre-compaction memory flush settings.
+- Tests: modernize live model smoke selection for current releases and enforce tools/images/thinking-high coverage. (#769) — thanks @steipete.
 - Agents/Tools: add `apply_patch` tool for multi-file edits (experimental; gated by tools.exec.applyPatch; OpenAI-only).
 - Agents/Tools: rename the bash tool to exec (config alias maintained). (#748) — thanks @myfunc.
 - Agents: add pre-compaction memory flush config (`agents.defaults.compaction.*`) with a soft threshold + system prompt.
@@ -62,6 +63,8 @@
 - Config: expand `~` in `CLAWDBOT_CONFIG_PATH` and common path-like config fields (including `plugins.load.paths`); guard invalid `$include` paths. (#731) — thanks @pasogott.
 - Agents: stop pre-creating session transcripts so first user messages persist in JSONL history.
 - Agents: skip pre-compaction memory flush when the session workspace is read-only.
+- Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.
+- CLI: fix guardCancel typing for configure prompts. (#769) — thanks @steipete.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.
 - Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.
