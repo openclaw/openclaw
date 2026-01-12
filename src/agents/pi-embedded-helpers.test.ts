@@ -13,6 +13,8 @@ import {
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
   sanitizeToolCallId,
+  stripThoughtSignatures,
+  validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -478,5 +480,178 @@ describe("sanitizeSessionMessagesImages", () => {
       "thinking",
       "text",
     ]);
+  });
+});
+
+describe("normalizeTextForComparison", () => {
+  it("lowercases text", () => {
+    expect(normalizeTextForComparison("Hello World")).toBe("hello world");
+  });
+
+  it("trims whitespace", () => {
+    expect(normalizeTextForComparison("  hello  ")).toBe("hello");
+  });
+
+  it("collapses multiple spaces", () => {
+    expect(normalizeTextForComparison("hello    world")).toBe("hello world");
+  });
+
+  it("strips emoji", () => {
+    expect(normalizeTextForComparison("Hello 👋 World 🌍")).toBe("hello world");
+  });
+
+  it("handles mixed normalization", () => {
+    expect(normalizeTextForComparison("  Hello 👋   WORLD  🌍  ")).toBe(
+      "hello world",
+    );
+  });
+});
+
+describe("stripThoughtSignatures", () => {
+  it("returns non-array content unchanged", () => {
+    expect(stripThoughtSignatures("hello")).toBe("hello");
+    expect(stripThoughtSignatures(null)).toBe(null);
+    expect(stripThoughtSignatures(undefined)).toBe(undefined);
+    expect(stripThoughtSignatures(123)).toBe(123);
+  });
+
+  it("removes msg_-prefixed thought_signature from content blocks", () => {
+    const input = [
+      { type: "text", text: "hello", thought_signature: "msg_abc123" },
+      { type: "thinking", thinking: "test", thought_signature: "AQID" },
+    ];
+    const result = stripThoughtSignatures(input);
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ type: "text", text: "hello" });
+    expect(result[1]).toEqual({
+      type: "thinking",
+      thinking: "test",
+      thought_signature: "AQID",
+    });
+    expect("thought_signature" in result[0]).toBe(false);
+    expect("thought_signature" in result[1]).toBe(true);
+  });
+
+  it("preserves blocks without thought_signature", () => {
+    const input = [
+      { type: "text", text: "hello" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+    ];
+    const result = stripThoughtSignatures(input);
+
+    expect(result).toEqual(input);
+  });
+
+  it("handles mixed blocks with and without thought_signature", () => {
+    const input = [
+      { type: "text", text: "hello", thought_signature: "msg_abc" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      { type: "thinking", thinking: "hmm", thought_signature: "msg_xyz" },
+    ];
+    const result = stripThoughtSignatures(input);
+
+    expect(result).toEqual([
+      { type: "text", text: "hello" },
+      { type: "toolCall", id: "call_1", name: "read", arguments: {} },
+      { type: "thinking", thinking: "hmm" },
+    ]);
+  });
+
+  it("handles empty array", () => {
+    expect(stripThoughtSignatures([])).toEqual([]);
+  });
+
+  it("handles null/undefined blocks in array", () => {
+    const input = [null, undefined, { type: "text", text: "hello" }];
+    const result = stripThoughtSignatures(input);
+    expect(result).toEqual([null, undefined, { type: "text", text: "hello" }]);
+  });
+});
+
+describe("sanitizeSessionMessagesImages - thought_signature stripping", () => {
+  it("strips msg_-prefixed thought_signature from assistant message content blocks", async () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hello", thought_signature: "msg_abc123" },
+          {
+            type: "thinking",
+            thinking: "reasoning",
+            thought_signature: "AQID",
+          },
+        ],
+      },
+    ] satisfies AgentMessage[];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out).toHaveLength(1);
+    const content = (out[0] as { content?: unknown[] }).content;
+    expect(content).toHaveLength(2);
+    expect("thought_signature" in ((content?.[0] ?? {}) as object)).toBe(false);
+    expect((content?.[1] as { thought_signature?: unknown })?.thought_signature).toBe(
+      "AQID",
+    );
+  });
+});
+
+describe("isMessagingToolDuplicate", () => {
+  it("returns false for empty sentTexts", () => {
+    expect(isMessagingToolDuplicate("hello world", [])).toBe(false);
+  });
+
+  it("returns false for short texts", () => {
+    expect(isMessagingToolDuplicate("short", ["short"])).toBe(false);
+  });
+
+  it("detects exact duplicates", () => {
+    expect(
+      isMessagingToolDuplicate("Hello, this is a test message!", [
+        "Hello, this is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects duplicates with different casing", () => {
+    expect(
+      isMessagingToolDuplicate("HELLO, THIS IS A TEST MESSAGE!", [
+        "hello, this is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects duplicates with emoji variations", () => {
+    expect(
+      isMessagingToolDuplicate("Hello! 👋 This is a test message!", [
+        "Hello! This is a test message!",
+      ]),
+    ).toBe(true);
+  });
+
+  it("detects substring duplicates (LLM elaboration)", () => {
+    expect(
+      isMessagingToolDuplicate(
+        'I sent the message: "Hello, this is a test message!"',
+        ["Hello, this is a test message!"],
+      ),
+    ).toBe(true);
+  });
+
+  it("detects when sent text contains block reply (reverse substring)", () => {
+    expect(
+      isMessagingToolDuplicate("Hello, this is a test message!", [
+        'I sent the message: "Hello, this is a test message!"',
+      ]),
+    ).toBe(true);
+  });
+
+  it("returns false for non-matching texts", () => {
+    expect(
+      isMessagingToolDuplicate("This is completely different content.", [
+        "Hello, this is a test message!",
+      ]),
+    ).toBe(false);
   });
 });
