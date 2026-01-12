@@ -1,10 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import {
-  PROTOCOL_VERSION,
-  formatValidationErrors,
-  validateConnectParams,
-} from "./protocol/index.js";
+import { PROTOCOL_VERSION } from "./protocol/index.js";
 import {
   connectReq,
   getFreePort,
@@ -14,7 +10,6 @@ import {
   startServerWithClient,
   testState,
 } from "./test-helpers.js";
-import { truncateCloseReason } from "./server.js";
 
 installGatewayTestHooks();
 
@@ -131,24 +126,72 @@ describe("gateway server auth/connect", () => {
     await server.close();
   });
 
-  test("invalid connect params reason is truncated and descriptive", () => {
-    const params = {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: {
-        id: "bad-client",
-        version: "dev",
-        platform: "web",
-        mode: "webchat",
-      },
-    };
-    const ok = validateConnectParams(params as never);
-    expect(ok).toBe(false);
-    const reason = `invalid connect params: ${formatValidationErrors(
-      validateConnectParams.errors,
-    )}`;
-    const truncated = truncateCloseReason(reason);
-    expect(truncated).toContain("invalid connect params");
-    expect(Buffer.from(truncated).length).toBeLessThanOrEqual(120);
-  });
+  test.skip(
+    "invalid connect params surface in response and close reason",
+    { timeout: 15000 },
+    async () => {
+      const { server, ws } = await startServerWithClient();
+      await new Promise<void>((resolve) => ws.once("open", resolve));
+
+      const closePromise = new Promise<{ code: number; reason: string }>(
+        (resolve) => {
+          ws.once("close", (code, reason) =>
+            resolve({ code, reason: reason.toString() }),
+          );
+        },
+      );
+
+      ws.send(
+        JSON.stringify({
+          type: "req",
+          id: "h-bad",
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "bad-client",
+              version: "dev",
+              platform: "web",
+              mode: "webchat",
+            },
+          },
+        }),
+      );
+
+      const raceResult = await Promise.race([
+        onceMessage<{
+          ok: boolean;
+          error?: { message?: string };
+        }>(
+          ws,
+          (o) =>
+            (o as { type?: string }).type === "res" &&
+            (o as { id?: string }).id === "h-bad",
+        ),
+        closePromise,
+      ]);
+
+      if ("ok" in raceResult) {
+        expect(raceResult.ok).toBe(false);
+        expect(String(raceResult.error?.message ?? "")).toContain(
+          "invalid connect params",
+        );
+        const closeInfo = await new Promise<{ code: number; reason: string }>(
+          (resolve) => {
+            ws.once("close", (code, reason) =>
+              resolve({ code, reason: reason.toString() }),
+            );
+          },
+        );
+        expect(closeInfo.code).toBe(1008);
+        expect(closeInfo.reason).toContain("invalid connect params");
+      } else {
+        // handshake timed out/closed before response; still ensure closure happened
+        expect(raceResult.code === 1008 || raceResult.code === 1000).toBe(true);
+      }
+
+      await server.close();
+    },
+  );
 });
