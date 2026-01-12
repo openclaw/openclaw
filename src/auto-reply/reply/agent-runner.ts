@@ -643,6 +643,12 @@ export async function runReplyAgent(params: {
                       blockReplyPipeline?.enqueue(blockPayload);
                     }
                   : undefined,
+              onBlockReplyFlush:
+                blockStreamingEnabled && blockReplyPipeline
+                  ? async () => {
+                      await blockReplyPipeline.flush({ force: true });
+                    }
+                  : undefined,
               shouldEmitToolResult,
               onToolResult: opts?.onToolResult
                 ? (payload) => {
