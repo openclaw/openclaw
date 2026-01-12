@@ -350,6 +350,7 @@ const DiscordGuildChannelSchema = z.object({
   enabled: z.boolean().optional(),
   users: z.array(z.union([z.string(), z.number()])).optional(),
   systemPrompt: z.string().optional(),
+  autoThread: z.boolean().optional(),
 });
 
 const DiscordGuildSchema = z.object({
