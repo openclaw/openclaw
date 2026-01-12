@@ -12,6 +12,72 @@ export type AuthChoiceOption = {
   hint?: string;
 };
 
+export type AuthChoiceGroupId =
+  | "openai"
+  | "anthropic"
+  | "google"
+  | "openrouter"
+  | "zai"
+  | "opencode-zen"
+  | "minimax";
+
+export type AuthChoiceGroup = {
+  value: AuthChoiceGroupId;
+  label: string;
+  hint?: string;
+  options: AuthChoiceOption[];
+};
+
+const AUTH_CHOICE_GROUP_DEFS: {
+  value: AuthChoiceGroupId;
+  label: string;
+  hint?: string;
+  choices: AuthChoice[];
+}[] = [
+  {
+    value: "openai",
+    label: "OpenAI",
+    hint: "Codex OAuth + API key",
+    choices: ["codex-cli", "openai-codex", "openai-api-key"],
+  },
+  {
+    value: "anthropic",
+    label: "Anthropic",
+    hint: "Claude CLI + API key",
+    choices: ["claude-cli", "setup-token", "token", "apiKey"],
+  },
+  {
+    value: "google",
+    label: "Google",
+    hint: "Antigravity + Gemini API key",
+    choices: ["antigravity", "gemini-api-key"],
+  },
+  {
+    value: "openrouter",
+    label: "OpenRouter",
+    hint: "API key",
+    choices: ["openrouter-api-key"],
+  },
+  {
+    value: "zai",
+    label: "Z.AI (GLM 4.7)",
+    hint: "API key",
+    choices: ["zai-api-key"],
+  },
+  {
+    value: "opencode-zen",
+    label: "OpenCode Zen",
+    hint: "API key",
+    choices: ["opencode-zen"],
+  },
+  {
+    value: "minimax",
+    label: "MiniMax",
+    hint: "Hosted + LM Studio + API",
+    choices: ["minimax-cloud", "minimax", "minimax-api"],
+  },
+];
+
 function formatOAuthHint(
   expires?: number,
   opts?: { allowStale?: boolean },
@@ -98,7 +164,7 @@ export function buildAuthChoiceOptions(params: {
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",
   });
   options.push({ value: "gemini-api-key", label: "Google Gemini API key" });
-  options.push({ value: "zai-api-key", label: "Z.AI (GLM) API key" });
+  options.push({ value: "zai-api-key", label: "Z.AI (GLM 4.7) API key" });
   options.push({ value: "apiKey", label: "Anthropic API key" });
   // Token flow is currently Anthropic-only; use CLI for advanced providers.
   options.push({
@@ -117,4 +183,35 @@ export function buildAuthChoiceOptions(params: {
   }
 
   return options;
+}
+
+export function buildAuthChoiceGroups(params: {
+  store: AuthProfileStore;
+  includeSkip: boolean;
+  includeClaudeCliIfMissing?: boolean;
+  platform?: NodeJS.Platform;
+}): {
+  groups: AuthChoiceGroup[];
+  skipOption?: AuthChoiceOption;
+} {
+  const options = buildAuthChoiceOptions({
+    ...params,
+    includeSkip: false,
+  });
+  const optionByValue = new Map<AuthChoice, AuthChoiceOption>(
+    options.map((opt) => [opt.value, opt]),
+  );
+
+  const groups = AUTH_CHOICE_GROUP_DEFS.map((group) => ({
+    ...group,
+    options: group.choices
+      .map((choice) => optionByValue.get(choice))
+      .filter((opt): opt is AuthChoiceOption => Boolean(opt)),
+  }));
+
+  const skipOption = params.includeSkip
+    ? ({ value: "skip", label: "Skip for now" } satisfies AuthChoiceOption)
+    : undefined;
+
+  return { groups, skipOption };
 }

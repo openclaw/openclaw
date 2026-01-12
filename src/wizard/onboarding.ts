@@ -7,7 +7,7 @@ import {
   resolvePreferredProviderForAuthChoice,
   warnIfModelConfigLooksOff,
 } from "../commands/auth-choice.js";
-import { buildAuthChoiceOptions } from "../commands/auth-choice-options.js";
+import { promptAuthChoiceGrouped } from "../commands/auth-choice-prompt.js";
 import {
   DEFAULT_GATEWAY_DAEMON_RUNTIME,
   GATEWAY_DAEMON_RUNTIME_OPTIONS,
@@ -37,7 +37,6 @@ import { setupProviders } from "../commands/onboard-providers.js";
 import { promptRemoteGatewayConfig } from "../commands/onboard-remote.js";
 import { setupSkills } from "../commands/onboard-skills.js";
 import type {
-  AuthChoice,
   GatewayAuthChoice,
   OnboardMode,
   OnboardOptions,
@@ -333,14 +332,12 @@ export async function runOnboardingWizard(
   const authChoiceFromPrompt = opts.authChoice === undefined;
   const authChoice =
     opts.authChoice ??
-    ((await prompter.select({
-      message: "Model/auth choice",
-      options: buildAuthChoiceOptions({
-        store: authStore,
-        includeSkip: true,
-        includeClaudeCliIfMissing: true,
-      }),
-    })) as AuthChoice);
+    (await promptAuthChoiceGrouped({
+      prompter,
+      store: authStore,
+      includeSkip: true,
+      includeClaudeCliIfMissing: true,
+    }));
 
   const authResult = await applyAuthChoice({
     authChoice,

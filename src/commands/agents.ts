@@ -35,10 +35,10 @@ import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { applyAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
-import { buildAuthChoiceOptions } from "./auth-choice-options.js";
+import { promptAuthChoiceGrouped } from "./auth-choice-prompt.js";
 import { ensureWorkspaceAndSessions, moveToTrash } from "./onboard-helpers.js";
 import { setupProviders } from "./onboard-providers.js";
-import type { AuthChoice, ProviderChoice } from "./onboard-types.js";
+import type { ProviderChoice } from "./onboard-types.js";
 
 type AgentsListOptions = {
   json?: boolean;
@@ -920,14 +920,12 @@ export async function agentsAddCommand(
       const authStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const authChoice = (await prompter.select({
-        message: "Model/auth choice",
-        options: buildAuthChoiceOptions({
-          store: authStore,
-          includeSkip: true,
-          includeClaudeCliIfMissing: true,
-        }),
-      })) as AuthChoice;
+      const authChoice = await promptAuthChoiceGrouped({
+        prompter,
+        store: authStore,
+        includeSkip: true,
+        includeClaudeCliIfMissing: true,
+      });
 
       const authResult = await applyAuthChoice({
         authChoice,
