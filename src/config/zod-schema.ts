@@ -886,6 +886,13 @@ const MemorySearchSchema = z
   .object({
     enabled: z.boolean().optional(),
     provider: z.union([z.literal("openai"), z.literal("local")]).optional(),
+    remote: z
+      .object({
+        baseUrl: z.string().optional(),
+        apiKey: z.string().optional(),
+        headers: z.record(z.string(), z.string()).optional(),
+      })
+      .optional(),
     fallback: z.union([z.literal("openai"), z.literal("none")]).optional(),
     model: z.string().optional(),
     local: z

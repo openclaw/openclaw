@@ -9,6 +9,11 @@ import { resolveAgentConfig } from "./agent-scope.js";
 export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   provider: "openai" | "local";
+  remote?: {
+    baseUrl?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  };
   fallback: "openai" | "none";
   model: string;
   local: {
@@ -60,6 +65,7 @@ function mergeConfig(
 ): ResolvedMemorySearchConfig {
   const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
   const provider = overrides?.provider ?? defaults?.provider ?? "openai";
+  const remote = overrides?.remote ?? defaults?.remote;
   const fallback = overrides?.fallback ?? defaults?.fallback ?? "openai";
   const model = overrides?.model ?? defaults?.model ?? DEFAULT_MODEL;
   const local = {
@@ -112,6 +118,7 @@ function mergeConfig(
   return {
     enabled,
     provider,
+    remote,
     fallback,
     model,
     local,

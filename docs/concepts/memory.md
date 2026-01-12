@@ -81,8 +81,28 @@ Defaults:
 
 Remote embeddings **require** an OpenAI API key (`OPENAI_API_KEY` or
 `models.providers.openai.apiKey`). Codex OAuth only covers chat/completions and
-does **not** satisfy embeddings for memory search. If you don't want to set an
-API key, use `memorySearch.provider = "local"` or set
+does **not** satisfy embeddings for memory search.
+
+If you want to use a **custom OpenAI-compatible endpoint** (like Gemini, OpenRouter, or a proxy),
+you can use the `remote` configuration:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      remote: {
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai/",
+        apiKey: "YOUR_GEMINI_API_KEY",
+        headers: { "X-Custom-Header": "value" }
+      }
+    }
+  }
+}
+```
+
+If you don't want to set an API key, use `memorySearch.provider = "local"` or set
 `memorySearch.fallback = "none"`.
 
 Config example:

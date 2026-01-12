@@ -1011,6 +1011,11 @@ export type MemorySearchConfig = {
   enabled?: boolean;
   /** Embedding provider mode. */
   provider?: "openai" | "local";
+  remote?: {
+    baseUrl?: string;
+    apiKey?: string;
+    headers?: Record<string, string>;
+  };
   /** Fallback behavior when local embeddings fail. */
   fallback?: "openai" | "none";
   /** Embedding model id (remote) or alias (local). */
