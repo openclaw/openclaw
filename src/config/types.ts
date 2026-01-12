@@ -140,7 +140,7 @@ export type WhatsAppConfig = {
   groupAllowFrom?: string[];
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "open": groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
@@ -380,7 +380,7 @@ export type TelegramAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "open": groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
@@ -515,7 +515,7 @@ export type DiscordAccountConfig = {
   token?: string;
   /**
    * Controls how guild channel messages are handled:
-   * - "open" (default): guild channels bypass allowlists; mention-gating applies
+   * - "open": guild channels bypass allowlists; mention-gating applies
    * - "disabled": block all guild channel messages
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
@@ -627,7 +627,7 @@ export type SlackAccountConfig = {
   allowBots?: boolean;
   /**
    * Controls how channel messages are handled:
-   * - "open" (default): channels bypass allowlists; mention-gating applies
+   * - "open": channels bypass allowlists; mention-gating applies
    * - "disabled": block all channel messages
    * - "allowlist": only allow channels present in slack.channels
    */
@@ -690,7 +690,7 @@ export type SignalAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, no extra gating
+   * - "open": groups bypass allowFrom, no extra gating
    * - "disabled": block all group messages
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
@@ -809,7 +809,7 @@ export type IMessageAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom; mention-gating applies
+   * - "open": groups bypass allowFrom; mention-gating applies
    * - "disabled": block all group messages entirely
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */

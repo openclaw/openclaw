@@ -166,7 +166,7 @@ export async function monitorIMessageProvider(
         ? imessageCfg.allowFrom
         : []),
   );
-  const groupPolicy = imessageCfg.groupPolicy ?? "open";
+  const groupPolicy = imessageCfg.groupPolicy ?? "allowlist";
   const dmPolicy = imessageCfg.dmPolicy ?? "pairing";
   const includeAttachments =
     opts.includeAttachments ?? imessageCfg.includeAttachments ?? false;

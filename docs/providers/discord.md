@@ -193,7 +193,14 @@ Outbound Discord API calls retry on rate limits (429) using Discord `retry_after
   discord: {
     enabled: true,
     token: "abc.123",
-    groupPolicy: "open",
+    groupPolicy: "allowlist",
+    guilds: {
+      "*": {
+        channels: {
+          general: { allow: true }
+        }
+      }
+    },
     mediaMaxMb: 8,
     actions: {
       reactions: true,

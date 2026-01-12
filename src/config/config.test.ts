@@ -1281,6 +1281,16 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("defaults telegram.groupPolicy to allowlist when telegram section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ telegram: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.telegram?.groupPolicy).toBe("allowlist");
+    }
+  });
+
   it("defaults telegram.streamMode to partial when telegram section exists", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
@@ -1325,6 +1335,16 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("defaults whatsapp.groupPolicy to allowlist when whatsapp section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ whatsapp: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.whatsapp?.groupPolicy).toBe("allowlist");
+    }
+  });
+
   it('rejects signal.dmPolicy="open" without allowFrom "*"', async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");
@@ -1356,6 +1376,16 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.signal?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it("defaults signal.groupPolicy to allowlist when signal section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ signal: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.signal?.groupPolicy).toBe("allowlist");
     }
   });
 
@@ -1418,6 +1448,36 @@ describe("legacy config detection", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.config.imessage?.dmPolicy).toBe("pairing");
+    }
+  });
+
+  it("defaults imessage.groupPolicy to allowlist when imessage section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ imessage: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.imessage?.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("defaults discord.groupPolicy to allowlist when discord section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ discord: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.discord?.groupPolicy).toBe("allowlist");
+    }
+  });
+
+  it("defaults slack.groupPolicy to allowlist when slack section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ slack: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.slack?.groupPolicy).toBe("allowlist");
     }
   });
 

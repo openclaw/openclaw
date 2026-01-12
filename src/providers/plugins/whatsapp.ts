@@ -148,6 +148,20 @@ export const whatsappPlugin: ProviderPlugin<ResolvedWhatsAppAccount> = {
         normalizeEntry: (raw) => normalizeE164(raw),
       };
     },
+    collectWarnings: ({ account }) => {
+      const groupPolicy = account.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      const groupAllowlistConfigured =
+        Boolean(account.groups) && Object.keys(account.groups ?? {}).length > 0;
+      if (groupAllowlistConfigured) {
+        return [
+          `- WhatsApp groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set whatsapp.groupPolicy="allowlist" + whatsapp.groupAllowFrom to restrict senders.`,
+        ];
+      }
+      return [
+        `- WhatsApp groups: groupPolicy="open" with no whatsapp.groups allowlist; any group can add + ping (mention-gated). Set whatsapp.groupPolicy="allowlist" + whatsapp.groupAllowFrom or configure whatsapp.groups.`,
+      ];
+    },
   },
   setup: {
     resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),

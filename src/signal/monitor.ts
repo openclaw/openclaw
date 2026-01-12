@@ -355,7 +355,7 @@ export async function monitorSignalProvider(
         ? accountInfo.config.allowFrom
         : []),
   );
-  const groupPolicy = accountInfo.config.groupPolicy ?? "open";
+  const groupPolicy = accountInfo.config.groupPolicy ?? "allowlist";
   const reactionMode = accountInfo.config.reactionNotifications ?? "own";
   const reactionAllowlist = normalizeAllowList(
     accountInfo.config.reactionAllowlist,

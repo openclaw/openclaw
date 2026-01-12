@@ -158,7 +158,7 @@ The wizard uses it to set your **allowlist/owner** so your own DMs are permitted
 
 ## Groups
 - Groups map to `agent:<agentId>:whatsapp:group:<jid>` sessions.
-- Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `open`).
+- Group policy: `whatsapp.groupPolicy = open|disabled|allowlist` (default `allowlist`).
 - Activation modes:
   - `mention` (default): requires @mention or regex match.
   - `always`: always triggers.

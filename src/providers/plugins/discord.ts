@@ -117,6 +117,21 @@ export const discordPlugin: ProviderPlugin<ResolvedDiscordAccount> = {
           raw.replace(/^(discord|user):/i, "").replace(/^<@!?(\d+)>$/, "$1"),
       };
     },
+    collectWarnings: ({ account }) => {
+      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      const channelAllowlistConfigured =
+        Boolean(account.config.guilds) &&
+        Object.keys(account.config.guilds ?? {}).length > 0;
+      if (channelAllowlistConfigured) {
+        return [
+          `- Discord guilds: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set discord.groupPolicy="allowlist" and configure discord.guilds.<id>.channels.`,
+        ];
+      }
+      return [
+        `- Discord guilds: groupPolicy="open" with no guild/channel allowlist; any channel can trigger (mention-gated). Set discord.groupPolicy="allowlist" and configure discord.guilds.<id>.channels.`,
+      ];
+    },
   },
   groups: {
     resolveRequireMention: resolveDiscordGroupRequireMention,

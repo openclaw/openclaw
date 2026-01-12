@@ -107,7 +107,7 @@ Provider options:
 - `signal.sendReadReceipts`: forward read receipts.
 - `signal.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `signal.allowFrom`: DM allowlist (E.164 or `uuid:<id>`). `open` requires `"*"`.
-- `signal.groupPolicy`: `open | allowlist | disabled` (default: open).
+- `signal.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `signal.groupAllowFrom`: group sender allowlist.
 - `signal.historyLimit`: max group messages to include as context (0 disables).
 - `signal.textChunkLimit`: outbound chunk size (chars).

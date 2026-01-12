@@ -123,12 +123,17 @@ export const telegramPlugin: ProviderPlugin<ResolvedTelegramAccount> = {
       };
     },
     collectWarnings: ({ account }) => {
-      const groupPolicy = account.config.groupPolicy ?? "open";
+      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
       const groupAllowlistConfigured =
         account.config.groups && Object.keys(account.config.groups).length > 0;
-      if (groupPolicy !== "open" || groupAllowlistConfigured) return [];
+      if (groupAllowlistConfigured) {
+        return [
+          `- Telegram groups: groupPolicy="open" allows any member in allowed groups to trigger (mention-gated). Set telegram.groupPolicy="allowlist" + telegram.groupAllowFrom to restrict senders.`,
+        ];
+      }
       return [
-        `- Telegram groups: open (groupPolicy="open") with no telegram.groups allowlist; mention-gating applies but any group can add + ping.`,
+        `- Telegram groups: groupPolicy="open" with no telegram.groups allowlist; any group can add + ping (mention-gated). Set telegram.groupPolicy="allowlist" + telegram.groupAllowFrom or configure telegram.groups.`,
       ];
     },
   },

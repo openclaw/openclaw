@@ -113,6 +113,21 @@ export const slackPlugin: ProviderPlugin<ResolvedSlackAccount> = {
         normalizeEntry: (raw) => raw.replace(/^(slack|user):/i, ""),
       };
     },
+    collectWarnings: ({ account }) => {
+      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      const channelAllowlistConfigured =
+        Boolean(account.config.channels) &&
+        Object.keys(account.config.channels ?? {}).length > 0;
+      if (channelAllowlistConfigured) {
+        return [
+          `- Slack channels: groupPolicy="open" allows any channel not explicitly denied to trigger (mention-gated). Set slack.groupPolicy="allowlist" and configure slack.channels.`,
+        ];
+      }
+      return [
+        `- Slack channels: groupPolicy="open" with no channel allowlist; any channel can trigger (mention-gated). Set slack.groupPolicy="allowlist" and configure slack.channels.`,
+      ];
+    },
   },
   groups: {
     resolveRequireMention: resolveSlackGroupRequireMention,

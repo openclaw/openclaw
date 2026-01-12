@@ -95,9 +95,9 @@ const ReplyToModeSchema = z.union([
 ]);
 
 // GroupPolicySchema: controls how group messages are handled
-// Used with .default("open").optional() pattern:
+// Used with .default("allowlist").optional() pattern:
 //   - .optional() allows field omission in input config
-//   - .default("open") ensures runtime always resolves to "open" if not provided
+//   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
@@ -275,7 +275,7 @@ const TelegramAccountSchemaBase = z.object({
   groups: z.record(z.string(), TelegramGroupSchema.optional()).optional(),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("open"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -366,7 +366,7 @@ const DiscordAccountSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   token: z.string().optional(),
-  groupPolicy: GroupPolicySchema.optional().default("open"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -440,7 +440,7 @@ const SlackAccountSchema = z.object({
   botToken: z.string().optional(),
   appToken: z.string().optional(),
   allowBots: z.boolean().optional(),
-  groupPolicy: GroupPolicySchema.optional().default("open"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -496,7 +496,7 @@ const SignalAccountSchemaBase = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("open"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -546,7 +546,7 @@ const IMessageAccountSchemaBase = z.object({
   dmPolicy: DmPolicySchema.optional().default("pairing"),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),
   groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
-  groupPolicy: GroupPolicySchema.optional().default("open"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),
   dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -1394,7 +1394,7 @@ export const ClawdbotSchema = z
                 selfChatMode: z.boolean().optional(),
                 allowFrom: z.array(z.string()).optional(),
                 groupAllowFrom: z.array(z.string()).optional(),
-                groupPolicy: GroupPolicySchema.optional().default("open"),
+                groupPolicy: GroupPolicySchema.optional().default("allowlist"),
                 historyLimit: z.number().int().min(0).optional(),
                 dmHistoryLimit: z.number().int().min(0).optional(),
                 dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
@@ -1445,7 +1445,7 @@ export const ClawdbotSchema = z
         selfChatMode: z.boolean().optional(),
         allowFrom: z.array(z.string()).optional(),
         groupAllowFrom: z.array(z.string()).optional(),
-        groupPolicy: GroupPolicySchema.optional().default("open"),
+        groupPolicy: GroupPolicySchema.optional().default("allowlist"),
         historyLimit: z.number().int().min(0).optional(),
         dmHistoryLimit: z.number().int().min(0).optional(),
         dms: z.record(z.string(), DmConfigSchema.optional()).optional(),

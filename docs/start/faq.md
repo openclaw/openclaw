@@ -448,7 +448,7 @@ Notes:
 ### Do I need to add a “bot account” to a WhatsApp group?
 
 No. Clawdbot runs on **your own account**, so if you’re in the group, Clawdbot can see it.
-By default, anyone in that group can **mention** the bot to trigger a reply.
+By default, group replies are blocked until you allow senders (`groupPolicy: "allowlist"`).
 
 If you want only **you** to be able to trigger group replies:
 

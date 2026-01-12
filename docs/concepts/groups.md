@@ -12,7 +12,7 @@ Clawdbot “lives” on your own messaging accounts. There is no separate WhatsA
 If **you** are in a group, Clawdbot can see that group and respond there.
 
 Default behavior:
-- Groups are allowed (`groupPolicy: "open"`).
+- Groups are restricted (`groupPolicy: "allowlist"`).
 - Replies require a mention unless you explicitly disable mention gating.
 
 Translation: anyone in the group can trigger Clawdbot by mentioning it.
@@ -86,7 +86,7 @@ Control how group/room messages are handled per provider:
 
 | Policy | Behavior |
 |--------|----------|
-| `"open"` | Default. Groups bypass allowlists; mention-gating still applies. |
+| `"open"` | Groups bypass allowlists; mention-gating still applies. |
 | `"disabled"` | Block all group messages entirely. |
 | `"allowlist"` | Only allow groups/rooms that match the configured allowlist. |
 
@@ -97,6 +97,7 @@ Notes:
 - Slack: allowlist uses `slack.channels`.
 - Group DMs are controlled separately (`discord.dm.*`, `slack.dm.*`).
 - Telegram allowlist can match user IDs (`"123456789"`, `"telegram:123456789"`, `"tg:123456789"`) or usernames (`"@alice"` or `"alice"`); prefixes are case-insensitive.
+- Default is `groupPolicy: "allowlist"`; if your group allowlist is empty, group messages are blocked.
 
 Quick mental model (evaluation order for group messages):
 1) `groupPolicy` (open/disabled/allowlist)

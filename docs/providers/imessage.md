@@ -170,7 +170,7 @@ Provider options:
 - `imessage.region`: SMS region.
 - `imessage.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `imessage.allowFrom`: DM allowlist (handles or `chat_id:*`). `open` requires `"*"`.
-- `imessage.groupPolicy`: `open | allowlist | disabled` (default: open).
+- `imessage.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `imessage.groupAllowFrom`: group sender allowlist.
 - `imessage.historyLimit` / `imessage.accounts.*.historyLimit`: max group messages to include as context (0 disables).
 - `imessage.groups`: per-group defaults + allowlist (use `"*"` for global defaults).

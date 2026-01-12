@@ -545,12 +545,13 @@ Use `*.groupPolicy` to control whether group/room messages are accepted at all:
 ```
 
 Notes:
-- `"open"` (default): groups bypass allowlists; mention-gating still applies.
+- `"open"`: groups bypass allowlists; mention-gating still applies.
 - `"disabled"`: block all group/room messages.
 - `"allowlist"`: only allow groups/rooms that match the configured allowlist.
 - WhatsApp/Telegram/Signal/iMessage use `groupAllowFrom` (fallback: explicit `allowFrom`).
 - Discord/Slack use channel allowlists (`discord.guilds.*.channels`, `slack.channels`).
 - Group DMs (Discord/Slack) are still controlled by `dm.groupEnabled` + `dm.groupChannels`.
+- Default is `groupPolicy: "allowlist"`; if no allowlist is configured, group messages are blocked.
 
 ### Multi-agent routing (`agents.list` + `bindings`)
 

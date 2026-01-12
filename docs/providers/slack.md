@@ -185,7 +185,7 @@ Slack uses Socket Mode only (no HTTP webhook server). Provide both tokens:
     "enabled": true,
     "botToken": "xoxb-...",
     "appToken": "xapp-...",
-    "groupPolicy": "open",
+    "groupPolicy": "allowlist",
     "dm": {
       "enabled": true,
       "policy": "pairing",

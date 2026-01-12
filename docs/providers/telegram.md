@@ -186,11 +186,12 @@ Two independent controls:
 - Example: `"groups": { "-1001234567890": {}, "*": {} }` allows all groups
 
 **2. Which senders are allowed** (sender filtering via `telegram.groupPolicy`):
-- `"open"` (default) = all senders in allowed groups can message
+- `"open"` = all senders in allowed groups can message
 - `"allowlist"` = only senders in `telegram.groupAllowFrom` can message
 - `"disabled"` = no group messages accepted at all
+Default is `groupPolicy: "allowlist"` (blocked unless you add `groupAllowFrom`).
 
-Most users want: `groupPolicy: "open"` + specific groups listed in `telegram.groups`
+Most users want: `groupPolicy: "allowlist"` + `groupAllowFrom` + specific groups listed in `telegram.groups`
 
 ## Long-polling vs webhook
 - Default: long-polling (no public URL required).
@@ -289,7 +290,7 @@ Provider options:
 - `telegram.tokenFile`: read token from file path.
 - `telegram.dmPolicy`: `pairing | allowlist | open | disabled` (default: pairing).
 - `telegram.allowFrom`: DM allowlist (ids/usernames). `open` requires `"*"`.
-- `telegram.groupPolicy`: `open | allowlist | disabled` (default: open).
+- `telegram.groupPolicy`: `open | allowlist | disabled` (default: allowlist).
 - `telegram.groupAllowFrom`: group sender allowlist (ids/usernames).
 - `telegram.groups`: per-group defaults + allowlist (use `"*"` for global defaults).
   - `telegram.groups.<id>.requireMention`: mention gating default.

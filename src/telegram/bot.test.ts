@@ -1244,7 +1244,7 @@ describe("createTelegramBot", () => {
     expect(replySpy).toHaveBeenCalledTimes(1);
   });
 
-  it("allows all group messages when groupPolicy is 'open' (default)", async () => {
+  it("allows all group messages when groupPolicy is 'open'", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<
       typeof vi.fn
@@ -1252,7 +1252,7 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       telegram: {
-        // groupPolicy not set, should default to "open"
+        groupPolicy: "open",
         groups: { "*": { requireMention: false } },
       },
     });

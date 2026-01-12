@@ -99,6 +99,13 @@ export const imessagePlugin: ProviderPlugin<ResolvedIMessageAccount> = {
         approveHint: formatPairingApproveHint("imessage"),
       };
     },
+    collectWarnings: ({ account }) => {
+      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      return [
+        `- iMessage groups: groupPolicy="open" allows any member to trigger the bot. Set imessage.groupPolicy="allowlist" + imessage.groupAllowFrom to restrict senders.`,
+      ];
+    },
   },
   groups: {
     resolveRequireMention: resolveIMessageGroupRequireMention,

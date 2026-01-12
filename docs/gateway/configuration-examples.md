@@ -150,7 +150,8 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
   whatsapp: {
     dmPolicy: "pairing",
     allowFrom: ["+15555550123"],
-    groupPolicy: "open",
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["+15555550123"],
     groups: { "*": { requireMention: true } }
   },
 
@@ -158,7 +159,8 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
     enabled: true,
     botToken: "YOUR_TELEGRAM_BOT_TOKEN",
     allowFrom: ["123456789"],
-    groupPolicy: "open",
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["123456789"],
     groups: { "*": { requireMention: true } }
   },
 

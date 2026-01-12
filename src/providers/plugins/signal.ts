@@ -117,6 +117,13 @@ export const signalPlugin: ProviderPlugin<ResolvedSignalAccount> = {
           normalizeE164(raw.replace(/^signal:/i, "").trim()),
       };
     },
+    collectWarnings: ({ account }) => {
+      const groupPolicy = account.config.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      return [
+        `- Signal groups: groupPolicy="open" allows any member to trigger the bot. Set signal.groupPolicy="allowlist" + signal.groupAllowFrom to restrict senders.`,
+      ];
+    },
   },
   messaging: {
     normalizeTarget: normalizeSignalMessagingTarget,
