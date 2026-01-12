@@ -120,11 +120,11 @@ Live tests are split into two layers so we can isolate failures:
   - Iterate models-with-keys and assert:
     - “meaningful” response (no tools)
     - a real tool invocation works (read probe)
-    - optional extra tool probes (bash+read probe)
+    - optional extra tool probes (exec+read probe)
     - OpenAI regression paths (tool-call-only → follow-up) keep working
 - Probe details (so you can explain failures quickly):
   - `read` probe: the test writes a nonce file in the workspace and asks the agent to `read` it and echo the nonce back.
-  - `bash+read` probe: the test asks the agent to `bash`-write a nonce into a temp file, then `read` it back.
+  - `exec+read` probe: the test asks the agent to `exec`-write a nonce into a temp file, then `read` it back.
   - image probe: the test attaches a generated PNG (cat + randomized code) and expects the model to return `cat <CODE>`.
   - Implementation reference: `src/gateway/gateway-models.profiles.live.test.ts` and `src/gateway/live-image-probe.ts`.
 - How to enable:
@@ -136,7 +136,7 @@ Live tests are split into two layers so we can isolate failures:
 - How to select providers (avoid “OpenRouter everything”):
   - `CLAWDBOT_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Optional tool-calling stress:
-  - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “bash writes file → read reads it back → echo nonce” check.
+  - `CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1` enables an extra “exec writes file → read reads it back → echo nonce” check.
   - This is specifically meant to catch tool-calling compatibility issues across providers (formatting, history replay, tool_result pairing, etc.).
 - Optional image send smoke:
   - `CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1` sends a real image attachment through the gateway agent pipeline (multimodal message) and asserts the model can read back a per-run code from the image.
@@ -215,7 +215,7 @@ Narrow, explicit allowlists are fastest and least flaky:
 - Single model, gateway smoke:
   - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
-- Tool calling across several providers (bash + read probe):
+- Tool calling across several providers (exec + read probe):
   - `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_ALL_MODELS=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google focus (Gemini API key + Antigravity):
@@ -248,7 +248,7 @@ This is the “common models” run we expect to keep working:
 Run gateway smoke with tools + image:
 `LIVE=1 CLAWDBOT_LIVE_GATEWAY=1 CLAWDBOT_LIVE_GATEWAY_TOOL_PROBE=1 CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1 CLAWDBOT_LIVE_GATEWAY_MODELS="openai/gpt-5.2,openai-codex/gpt-5.2,anthropic/claude-opus-4-5,google/gemini-3-pro,google/gemini-3-flash,google-antigravity/claude-opus-4-5-thinking,google-antigravity/gemini-3-flash,zai/glm-4.7,minimax/minimax-m2.1" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
-### Baseline: tool calling (Read + optional Bash)
+### Baseline: tool calling (Read + optional Exec)
 
 Pick at least one per provider family:
 - OpenAI: `openai/gpt-5.2` (or `openai/gpt-5-mini`)

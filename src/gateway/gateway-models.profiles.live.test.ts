@@ -419,14 +419,14 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 `write-${runIdTool}.txt`,
               );
 
-              const bashReadProbe = await client.request<AgentFinalPayload>(
+              const execReadProbe = await client.request<AgentFinalPayload>(
                 "agent",
                 {
                   sessionKey,
-                  idempotencyKey: `idem-${runIdTool}-bash-read`,
+                  idempotencyKey: `idem-${runIdTool}-exec-read`,
                   message:
                     "Clawdbot live tool probe (local, safe): " +
-                    "use the tool named `bash` (or `Bash`) to run this command: " +
+                    "use the tool named `exec` (or `Exec`) to run this command: " +
                     `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
                     `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
                     "Finally reply including the nonce text you read back.",
@@ -434,15 +434,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 },
                 { expectFinal: true },
               );
-              if (bashReadProbe?.status !== "ok") {
+              if (execReadProbe?.status !== "ok") {
                 throw new Error(
-                  `bash+read probe failed: status=${String(bashReadProbe?.status)}`,
+                  `exec+read probe failed: status=${String(execReadProbe?.status)}`,
                 );
               }
-              const bashReadText = extractPayloadText(bashReadProbe?.result);
-              if (!bashReadText.includes(nonceC)) {
+              const execReadText = extractPayloadText(execReadProbe?.result);
+              if (!execReadText.includes(nonceC)) {
                 throw new Error(
-                  `bash+read probe missing nonce: ${bashReadText}`,
+                  `exec+read probe missing nonce: ${execReadText}`,
                 );
               }
 

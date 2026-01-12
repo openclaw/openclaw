@@ -53,8 +53,8 @@ export function buildAgentSystemPrompt(params: {
     grep: "Search file contents for patterns",
     find: "Find files by glob pattern",
     ls: "List directory contents",
-    bash: "Run shell commands",
-    process: "Manage background bash sessions",
+    exec: "Run shell commands",
+    process: "Manage background exec sessions",
     // Provider docking: add provider login tools here when a provider needs interactive linking.
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
@@ -80,7 +80,7 @@ export function buildAgentSystemPrompt(params: {
     "grep",
     "find",
     "ls",
-    "bash",
+    "exec",
     "process",
     "browser",
     "canvas",
@@ -133,7 +133,7 @@ export function buildAgentSystemPrompt(params: {
 
   const hasGateway = availableTools.has("gateway");
   const readToolName = resolveToolName("read");
-  const bashToolName = resolveToolName("bash");
+  const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
   const ownerNumbers = (params.ownerNumbers ?? [])
@@ -195,8 +195,8 @@ export function buildAgentSystemPrompt(params: {
           "- grep: search file contents for patterns",
           "- find: find files by glob pattern",
           "- ls: list directory contents",
-          `- ${bashToolName}: run shell commands (supports background via yieldMs/background)`,
-          `- ${processToolName}: manage background bash sessions`,
+          `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
+          `- ${processToolName}: manage background exec sessions`,
           "- browser: control clawd's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
@@ -277,7 +277,7 @@ export function buildAgentSystemPrompt(params: {
               )}`
             : "",
           params.sandboxInfo.elevated?.allowed
-            ? "Elevated bash is available for this session."
+            ? "Elevated exec is available for this session."
             : "",
           params.sandboxInfo.elevated?.allowed
             ? "User can toggle with /elevated on|off."
@@ -288,7 +288,7 @@ export function buildAgentSystemPrompt(params: {
           params.sandboxInfo.elevated?.allowed
             ? `Current elevated level: ${
                 params.sandboxInfo.elevated.defaultLevel
-              } (on runs bash on host; off runs in sandbox).`
+              } (on runs exec on host; off runs in sandbox).`
             : "",
         ]
           .filter(Boolean)
@@ -315,7 +315,7 @@ export function buildAgentSystemPrompt(params: {
     "## Messaging",
     "- Reply in current session → automatically routes to the source provider (Signal, Telegram, etc.)",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
-    "- Never use bash/curl for provider messaging; Clawdbot handles all routing internally.",
+    "- Never use exec/curl for provider messaging; Clawdbot handles all routing internally.",
     availableTools.has("message")
       ? [
           "",

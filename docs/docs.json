@@ -103,7 +103,11 @@
     },
     {
       "source": "/bash",
-      "destination": "/tools/bash"
+      "destination": "/tools/exec"
+    },
+    {
+      "source": "/tools/bash",
+      "destination": "/tools/exec"
     },
     {
       "source": "/bonjour",
@@ -696,7 +700,7 @@
         "pages": [
           "tools",
           "plugin",
-          "tools/bash",
+          "tools/exec",
           "tools/elevated",
           "tools/browser",
           "tools/browser-linux-troubleshooting",

@@ -1100,7 +1100,7 @@ describe("legacy config detection", () => {
     expect(res.changes).toContain("Moved agent.tools.allow → tools.allow.");
     expect(res.changes).toContain("Moved agent.tools.deny → tools.deny.");
     expect(res.changes).toContain("Moved agent.elevated → tools.elevated.");
-    expect(res.changes).toContain("Moved agent.bash → tools.bash.");
+    expect(res.changes).toContain("Moved agent.bash → tools.exec.");
     expect(res.changes).toContain(
       "Moved agent.sandbox.tools → tools.sandbox.tools.",
     );
@@ -1118,7 +1118,7 @@ describe("legacy config detection", () => {
       enabled: true,
       allowFrom: { discord: ["user:1"] },
     });
-    expect(res.config?.tools?.bash).toEqual({ timeoutSec: 12 });
+    expect(res.config?.tools?.exec).toEqual({ timeoutSec: 12 });
     expect(res.config?.tools?.sandbox?.tools).toEqual({
       allow: ["browser.open"],
     });

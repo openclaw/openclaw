@@ -31,7 +31,7 @@ alongside tools (for example, the voice-call plugin).
 
 ## Tool inventory
 
-### `bash`
+### `exec`
 Run shell commands in the workspace.
 
 Core parameters:
@@ -45,12 +45,12 @@ Core parameters:
 Notes:
 - Returns `status: "running"` with a `sessionId` when backgrounded.
 - Use `process` to poll/log/write/kill/clear background sessions.
-- If `process` is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
+- If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 - `elevated` is gated by `tools.elevated` plus any `agents.list[].tools.elevated` override (both must allow) and runs on the host.
 - `elevated` only changes behavior when the agent is sandboxed (otherwise it’s a no-op).
 
 ### `process`
-Manage background bash sessions.
+Manage background exec sessions.
 
 Core actions:
 - `list`, `poll`, `log`, `write`, `kill`, `clear`, `remove`

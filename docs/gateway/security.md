@@ -184,7 +184,7 @@ Consider running your AI on a separate phone number from your personal one:
 
 You can already build a read-only profile by combining:
 - `agents.defaults.sandbox.workspaceAccess: "ro"` (or `"none"` for no workspace access)
-- tool allow/deny lists that block `write`, `edit`, `bash`, `process`, etc.
+- tool allow/deny lists that block `write`, `edit`, `exec`, `process`, etc.
 
 We may add a single `readOnlyMode` flag later to simplify this configuration.
 
@@ -206,7 +206,7 @@ Also consider agent workspace access inside the sandbox:
 - `agents.defaults.sandbox.workspaceAccess: "ro"` mounts the agent workspace read-only at `/agent` (disables `write`/`edit`)
 - `agents.defaults.sandbox.workspaceAccess: "rw"` mounts the agent workspace read/write at `/workspace`
 
-Important: `tools.elevated` is the global baseline escape hatch that runs bash on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
+Important: `tools.elevated` is the global baseline escape hatch that runs exec on the host. Keep `tools.elevated.allowFrom` tight and don’t enable it for strangers. You can further restrict elevated per agent via `agents.list[].tools.elevated`. See [Elevated Mode](/tools/elevated).
 
 ## Browser control risks
 
@@ -261,7 +261,7 @@ Common use cases:
         },
         tools: {
           allow: ["read"],
-          deny: ["write", "edit", "bash", "process", "browser"]
+          deny: ["write", "edit", "exec", "process", "browser"]
         }
       }
     ]
@@ -285,7 +285,7 @@ Common use cases:
         },
         tools: {
           allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status", "whatsapp", "telegram", "slack", "discord", "gateway"],
-          deny: ["read", "write", "edit", "bash", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
+          deny: ["read", "write", "edit", "exec", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
         }
       }
     ]

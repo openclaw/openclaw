@@ -44,7 +44,7 @@ describe("buildEmbeddedSandboxInfo", () => {
         env: { LANG: "C.UTF-8" },
       },
       tools: {
-        allow: ["bash"],
+        allow: ["exec"],
         deny: ["browser"],
       },
       browserAllowHostControl: true,
@@ -87,7 +87,7 @@ describe("buildEmbeddedSandboxInfo", () => {
         env: { LANG: "C.UTF-8" },
       },
       tools: {
-        allow: ["bash"],
+        allow: ["exec"],
         deny: ["browser"],
       },
       browserAllowHostControl: false,
@@ -171,7 +171,7 @@ function createStubTool(name: string): AgentTool {
 describe("splitSdkTools", () => {
   const tools = [
     createStubTool("read"),
-    createStubTool("bash"),
+    createStubTool("exec"),
     createStubTool("edit"),
     createStubTool("write"),
     createStubTool("browser"),
@@ -185,7 +185,7 @@ describe("splitSdkTools", () => {
     expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
       "read",
-      "bash",
+      "exec",
       "edit",
       "write",
       "browser",
@@ -200,7 +200,7 @@ describe("splitSdkTools", () => {
     expect(builtInTools).toEqual([]);
     expect(customTools.map((tool) => tool.name)).toEqual([
       "read",
-      "bash",
+      "exec",
       "edit",
       "write",
       "browser",
@@ -226,7 +226,7 @@ describe("applyGoogleTurnOrderingFix", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call_1", name: "bash", arguments: {} },
+          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
         ],
       },
     ] satisfies AgentMessage[];
@@ -360,7 +360,7 @@ describe("limitHistoryTurns", () => {
       { role: "user", content: [{ type: "text", text: "first" }] },
       {
         role: "assistant",
-        content: [{ type: "toolCall", id: "1", name: "bash", arguments: {} }],
+        content: [{ type: "toolCall", id: "1", name: "exec", arguments: {} }],
       },
       { role: "user", content: [{ type: "text", text: "second" }] },
       { role: "assistant", content: [{ type: "text", text: "response" }] },

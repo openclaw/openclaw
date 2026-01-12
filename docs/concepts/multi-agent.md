@@ -217,7 +217,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
         },
         tools: {
           allow: ["read"],                    // Only read tool
-          deny: ["bash", "write", "edit"],    // Deny others
+          deny: ["exec", "write", "edit"],    // Deny others
         },
       },
     ],
@@ -231,7 +231,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
 - **Flexible policies**: Different permissions per agent
 
 Note: `tools.elevated` is **global** and sender-based; it is not configurable per agent.
-If you need per-agent boundaries, use `agents.list[].tools` to deny `bash`.
+If you need per-agent boundaries, use `agents.list[].tools` to deny `exec`.
 For group targeting, use `agents.list[].groupChat.mentionPatterns` so @mentions map cleanly to the intended agent.
 
 See [Multi-Agent Sandbox & Tools](/multi-agent-sandbox-tools) for detailed examples.

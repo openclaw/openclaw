@@ -9,14 +9,14 @@ describe("sanitizeToolUseResultPairing", () => {
         role: "assistant",
         content: [
           { type: "toolCall", id: "call_1", name: "read", arguments: {} },
-          { type: "toolCall", id: "call_2", name: "bash", arguments: {} },
+          { type: "toolCall", id: "call_2", name: "exec", arguments: {} },
         ],
       },
       { role: "user", content: "user message that should come after tool use" },
       {
         role: "toolResult",
         toolCallId: "call_2",
-        toolName: "bash",
+        toolName: "exec",
         content: [{ type: "text", text: "ok" }],
         isError: false,
       },

@@ -25,9 +25,9 @@
     ]
   },
   "tools": {
-    "bash": {
+    "exec": {
       "emoji": "🛠️",
-      "title": "Bash",
+      "title": "Exec",
       "detailKeys": ["command"]
     },
     "process": {

@@ -638,7 +638,7 @@ Read-only tools + read-only workspace:
         },
         tools: {
           allow: ["read", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
-          deny: ["write", "edit", "bash", "process", "browser"]
+          deny: ["write", "edit", "exec", "process", "browser"]
         }
       }
     ]
@@ -661,7 +661,7 @@ No filesystem access (messaging/session tools enabled):
         },
         tools: {
           allow: ["sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status", "whatsapp", "telegram", "slack", "discord", "gateway"],
-          deny: ["read", "write", "edit", "bash", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
+          deny: ["read", "write", "edit", "exec", "process", "browser", "canvas", "nodes", "cron", "gateway", "image"]
         }
       }
     ]
@@ -1274,7 +1274,7 @@ Example:
         maxConcurrent: 1,
         archiveAfterMinutes: 60
       },
-      bash: {
+      exec: {
         backgroundMs: 10000,
         timeoutSec: 1800,
         cleanupMs: 1800000
@@ -1427,10 +1427,11 @@ Z.AI models are available as `zai/<model>` (e.g. `zai/glm-4.7`) and require
 Heartbeats run full agent turns. Shorter intervals burn more tokens; be mindful
 of `every`, keep `HEARTBEAT.md` tiny, and/or choose a cheaper `model`.
 
-`tools.bash` configures background bash defaults:
+`tools.exec` configures background exec defaults:
 - `backgroundMs`: time before auto-background (ms, default 10000)
 - `timeoutSec`: auto-kill after this runtime (seconds, default 1800)
 - `cleanupMs`: how long to keep finished sessions in memory (ms, default 1800000)
+Legacy: `tools.bash` is still accepted as an alias.
 
 `agents.defaults.subagents` configures sub-agent defaults:
 - `maxConcurrent`: max concurrent sub-agent runs (default 1)
@@ -1447,7 +1448,7 @@ Example (disable browser/canvas everywhere):
 }
 ```
 
-`tools.elevated` controls elevated (host) bash access:
+`tools.elevated` controls elevated (host) exec access:
 - `enabled`: allow elevated mode (default true)
 - `allowFrom`: per-provider allowlists (empty = disabled)
   - `whatsapp`: E.164 numbers
@@ -1491,8 +1492,8 @@ Per-agent override (further restrict):
 Notes:
 - `tools.elevated` is the global baseline. `agents.list[].tools.elevated` can only further restrict (both must allow).
 - `/elevated on|off` stores state per session key; inline directives apply to a single message.
-- Elevated `bash` runs on the host and bypasses sandboxing.
-- Tool policy still applies; if `bash` is denied, elevated cannot be used.
+- Elevated `exec` runs on the host and bypasses sandboxing.
+- Tool policy still applies; if `exec` is denied, elevated cannot be used.
 
 `agents.defaults.maxConcurrent` sets the maximum number of embedded agent runs that can
 execute in parallel across sessions. Each session is still serialized (one run
@@ -1513,7 +1514,7 @@ Defaults (if enabled):
   - `"ro"`: keep the sandbox workspace at `/workspace`, and mount the agent workspace read-only at `/agent` (disables `write`/`edit`)
   - `"rw"`: mount the agent workspace read/write at `/workspace`
 - auto-prune: idle > 24h OR age > 7d
-- tool policy: allow only `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` (deny wins)
+- tool policy: allow only `exec`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status` (deny wins)
   - configure via `tools.sandbox.tools`, override per-agent via `agents.list[].tools.sandbox.tools`
 - optional sandboxed browser (Chromium + CDP, noVNC observer)
 - hardening knobs: `network`, `user`, `pidsLimit`, `memory`, `cpus`, `ulimits`, `seccompProfile`, `apparmorProfile`
@@ -1584,7 +1585,7 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
   tools: {
     sandbox: {
       tools: {
-        allow: ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
+        allow: ["exec", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
         deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
       }
     }

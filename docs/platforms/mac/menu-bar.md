@@ -25,7 +25,7 @@ read_when:
 - `overridden(ActivityKind)` (debug override)
 
 ### ActivityKind → glyph
-- `bash` → 💻
+- `exec` → 💻
 - `read` → 📄
 - `write` → ✍️
 - `edit` → 📝
@@ -40,7 +40,7 @@ read_when:
 
 ## Status row text (menu)
 - While work is active: `<Session role> · <activity label>`
-  - Examples: `Main · bash: pnpm test`, `Other · read: apps/macos/Sources/Clawdbot/AppState.swift`.
+  - Examples: `Main · exec: pnpm test`, `Other · read: apps/macos/Sources/Clawdbot/AppState.swift`.
 - When idle: falls back to the health summary.
 
 ## Event ingestion
@@ -49,7 +49,7 @@ read_when:
   - `stream: "job"` with `data.state` for start/stop.
   - `stream: "tool"` with `data.phase`, `name`, optional `meta`/`args`.
 - Labels:
-  - `bash`: first line of `args.command`.
+  - `exec`: first line of `args.command`.
   - `read`/`write`: shortened path.
   - `edit`: path plus inferred change kind from `meta`/diff counts.
   - fallback: tool name.

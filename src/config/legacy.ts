@@ -179,7 +179,7 @@ const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
   {
     path: ["agent"],
     message:
-      "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/bash settings) instead (run `clawdbot doctor` to migrate).",
+      "agent.* was moved; use agents.defaults (and tools.* for tool/elevated/exec settings) instead (run `clawdbot doctor` to migrate).",
   },
   {
     path: ["agent", "model"],
@@ -819,9 +819,11 @@ const LEGACY_CONFIG_MIGRATIONS: LegacyConfigMigration[] = [
 
       const bash = getRecord(agent.bash);
       if (bash) {
-        if (tools.bash === undefined) {
-          tools.bash = bash;
-          changes.push("Moved agent.bash → tools.bash.");
+        if (tools.exec === undefined && tools.bash === undefined) {
+          tools.exec = bash;
+          changes.push("Moved agent.bash → tools.exec.");
+        } else if (tools.exec !== undefined) {
+          changes.push("Removed agent.bash (tools.exec already set).");
         } else {
           changes.push("Removed agent.bash (tools.bash already set).");
         }

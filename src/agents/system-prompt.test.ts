@@ -37,7 +37,7 @@ describe("buildAgentSystemPrompt", () => {
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
-      toolNames: ["bash", "sessions_list", "sessions_history", "sessions_send"],
+      toolNames: ["exec", "sessions_list", "sessions_history", "sessions_send"],
     });
 
     expect(prompt).toContain("Tool availability (filtered by policy):");
@@ -49,13 +49,13 @@ describe("buildAgentSystemPrompt", () => {
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
-      toolNames: ["Read", "Bash", "process"],
+      toolNames: ["Read", "Exec", "process"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
 
     expect(prompt).toContain("- Read: Read file contents");
-    expect(prompt).toContain("- Bash: Run shell commands");
+    expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
       "Use `Read` to load the SKILL.md at the location listed for that skill.",
     );
@@ -90,7 +90,7 @@ describe("buildAgentSystemPrompt", () => {
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/clawd",
-      toolNames: ["gateway", "bash"],
+      toolNames: ["gateway", "exec"],
     });
 
     expect(prompt).toContain("## Clawdbot Self-Update");

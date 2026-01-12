@@ -122,7 +122,7 @@ async function main() {
 
   console.log("== Run 1: create tool history (primary only)");
   const toolPrompt =
-    "Use the bash tool to create a file named zai-fallback-tool.txt with the content tool-ok. " +
+    "Use the exec tool to create a file named zai-fallback-tool.txt with the content tool-ok. " +
     "Then use the read tool to display the file contents. Reply with just the file contents.";
   const run1 = await runCommand(
     "run1",

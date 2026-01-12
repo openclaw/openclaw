@@ -50,7 +50,7 @@ You can tune console verbosity independently via:
 
 ## Tool summary redaction
 
-Verbose tool summaries (e.g. `🛠️ bash: ...`) can mask sensitive tokens before they hit the
+Verbose tool summaries (e.g. `🛠️ exec: ...`) can mask sensitive tokens before they hit the
 console stream. This is **tools-only** and does not alter file logs.
 
 - `logging.redactSensitive`: `off` | `tools` (default: `tools`)

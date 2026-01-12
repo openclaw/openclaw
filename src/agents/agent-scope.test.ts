@@ -84,7 +84,7 @@ describe("resolveAgentConfig", () => {
             workspace: "~/clawd-restricted",
             tools: {
               allow: ["read"],
-              deny: ["bash", "write", "edit"],
+              deny: ["exec", "write", "edit"],
               elevated: {
                 enabled: false,
                 allowFrom: { whatsapp: ["+15555550123"] },
@@ -97,7 +97,7 @@ describe("resolveAgentConfig", () => {
     const result = resolveAgentConfig(cfg, "restricted");
     expect(result?.tools).toEqual({
       allow: ["read"],
-      deny: ["bash", "write", "edit"],
+      deny: ["exec", "write", "edit"],
       elevated: {
         enabled: false,
         allowFrom: { whatsapp: ["+15555550123"] },
@@ -118,7 +118,7 @@ describe("resolveAgentConfig", () => {
             },
             tools: {
               allow: ["read"],
-              deny: ["bash"],
+              deny: ["exec"],
             },
           },
         ],

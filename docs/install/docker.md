@@ -250,7 +250,7 @@ precedence, and troubleshooting.
   - `"rw"` mounts the agent workspace read/write at `/workspace`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
-- Default allow: `bash`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
+- Default allow: `exec`, `process`, `read`, `write`, `edit`, `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - Default deny: `browser`, `canvas`, `nodes`, `cron`, `discord`, `gateway`
 
 ### Enable sandboxing
@@ -297,7 +297,7 @@ precedence, and troubleshooting.
   tools: {
     sandbox: {
       tools: {
-        allow: ["bash", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
+        allow: ["exec", "process", "read", "write", "edit", "sessions_list", "sessions_history", "sessions_send", "sessions_spawn", "session_status"],
         deny: ["browser", "canvas", "nodes", "cron", "discord", "gateway"]
       }
     }
@@ -424,7 +424,7 @@ Example:
 
 ### Security notes
 
-- Hard wall only applies to **tools** (bash/read/write/edit).  
+- Hard wall only applies to **tools** (exec/read/write/edit).  
 - Host-only tools like browser/camera/canvas are blocked by default.  
 - Allowing `browser` in sandbox **breaks isolation** (browser runs on host).
 

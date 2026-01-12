@@ -265,7 +265,7 @@ function walk(node, parent) {
     if (name) seen.add(name);
   }
   if (typeof obj.name === "string" && typeof obj.input === "object" && obj.input) {
-    // Many tool-use blocks look like { type: "...", name: "bash", input: {...} }
+    // Many tool-use blocks look like { type: "...", name: "exec", input: {...} }
     // but some transcripts omit/rename type.
     seen.add(obj.name);
   }
@@ -405,7 +405,7 @@ run_profile() {
   TURN4_JSON="/tmp/agent-${profile}-4.json"
 
   run_agent_turn "$profile" "$SESSION_ID" \
-    "Use the read tool (not bash) to read proof.txt. Reply with the exact contents only (no extra whitespace)." \
+    "Use the read tool (not exec) to read proof.txt. Reply with the exact contents only (no extra whitespace)." \
     "$TURN1_JSON"
   assert_agent_json_has_text "$TURN1_JSON"
   assert_agent_json_ok "$TURN1_JSON" "$agent_model_provider"
@@ -417,7 +417,7 @@ run_profile() {
   fi
 
   local prompt2
-  prompt2=$'Use the write tool (not bash) to write exactly this string into copy.txt:\n'"${reply1}"$'\nThen use the read tool (not bash) to read copy.txt and reply with the exact contents only (no extra whitespace).'
+  prompt2=$'Use the write tool (not exec) to write exactly this string into copy.txt:\n'"${reply1}"$'\nThen use the read tool (not exec) to read copy.txt and reply with the exact contents only (no extra whitespace).'
   run_agent_turn "$profile" "$SESSION_ID" "$prompt2" "$TURN2_JSON"
   assert_agent_json_has_text "$TURN2_JSON"
   assert_agent_json_ok "$TURN2_JSON" "$agent_model_provider"
@@ -435,7 +435,7 @@ run_profile() {
   fi
 
   local prompt3
-  prompt3=$'Use the bash tool to run: cat /etc/hostname\nThen use the write tool to write the exact stdout (trim trailing newline) into hostname.txt. Reply with the hostname only.'
+  prompt3=$'Use the exec tool to run: cat /etc/hostname\nThen use the write tool to write the exact stdout (trim trailing newline) into hostname.txt. Reply with the hostname only.'
   run_agent_turn "$profile" "$SESSION_ID" "$prompt3" "$TURN3_JSON"
   assert_agent_json_has_text "$TURN3_JSON"
   assert_agent_json_ok "$TURN3_JSON" "$agent_model_provider"
@@ -468,7 +468,7 @@ run_profile() {
     ls -la "/root/.clawdbot-${profile}/agents/main/sessions" >&2 || true
     exit 1
   fi
-  assert_session_used_tools "$SESSION_JSONL" read write bash image
+  assert_session_used_tools "$SESSION_JSONL" read write exec image
 
   cleanup_profile
   trap - EXIT

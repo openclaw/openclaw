@@ -450,7 +450,7 @@ describe("Agent-specific sandbox config", () => {
         sandbox: {
           tools: {
             allow: ["read"],
-            deny: ["bash"],
+            deny: ["exec"],
           },
         },
       },
