@@ -297,4 +297,42 @@ describe("pw-tools-core", () => {
       }),
     ).rejects.toThrow(/Run a new snapshot/i);
   });
+
+  it("rewrites not-visible timeouts into snapshot hints", async () => {
+    const click = vi.fn(async () => {
+      throw new Error(
+        'Timeout 5000ms exceeded. waiting for locator("aria-ref=1") to be visible',
+      );
+    });
+    currentRefLocator = { click };
+    currentPage = {};
+
+    const mod = await importModule();
+    await expect(
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+      }),
+    ).rejects.toThrow(/not found or not visible/i);
+  });
+
+  it("rewrites covered/hidden errors into interactable hints", async () => {
+    const click = vi.fn(async () => {
+      throw new Error(
+        "Element is not receiving pointer events because another element intercepts pointer events",
+      );
+    });
+    currentRefLocator = { click };
+    currentPage = {};
+
+    const mod = await importModule();
+    await expect(
+      mod.clickViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        ref: "1",
+      }),
+    ).rejects.toThrow(/not interactable/i);
+  });
 });

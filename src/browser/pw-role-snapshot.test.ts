@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildRoleSnapshotFromAriaSnapshot,
   getRoleSnapshotStats,
+  parseRoleRef,
 } from "./pw-role-snapshot.js";
 
 describe("pw-role-snapshot", () => {
@@ -54,5 +55,20 @@ describe("pw-role-snapshot", () => {
     expect(stats.interactive).toBe(2);
     expect(stats.lines).toBeGreaterThan(0);
     expect(stats.chars).toBeGreaterThan(0);
+  });
+
+  it("returns a helpful message when no interactive elements exist", () => {
+    const aria = ['- heading "Hello"', "- paragraph: world"].join("\n");
+    const res = buildRoleSnapshotFromAriaSnapshot(aria, { interactive: true });
+    expect(res.snapshot).toBe("(no interactive elements)");
+    expect(Object.keys(res.refs)).toEqual([]);
+  });
+
+  it("parses role refs", () => {
+    expect(parseRoleRef("e12")).toBe("e12");
+    expect(parseRoleRef("@e12")).toBe("e12");
+    expect(parseRoleRef("ref=e12")).toBe("e12");
+    expect(parseRoleRef("12")).toBeNull();
+    expect(parseRoleRef("")).toBeNull();
   });
 });
