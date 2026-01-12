@@ -37,6 +37,12 @@ export type BrowserActRequest =
   | { kind: "press"; key: string; targetId?: string; delayMs?: number }
   | { kind: "hover"; ref: string; targetId?: string; timeoutMs?: number }
   | {
+      kind: "scrollIntoView";
+      ref: string;
+      targetId?: string;
+      timeoutMs?: number;
+    }
+  | {
       kind: "drag";
       startRef: string;
       endRef: string;

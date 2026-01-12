@@ -273,6 +273,50 @@ export function registerBrowserActionInputCommands(
     });
 
   browser
+    .command("scrollintoview")
+    .description("Scroll an element into view by ref from snapshot")
+    .argument("<ref>", "Ref id from snapshot")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for scroll (default: 20000)",
+      (v: string) => Number(v),
+    )
+    .action(async (ref: string | undefined, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      const refValue = typeof ref === "string" ? ref.trim() : "";
+      if (!refValue) {
+        defaultRuntime.error(danger("ref is required"));
+        defaultRuntime.exit(1);
+        return;
+      }
+      try {
+        const result = await browserAct(
+          baseUrl,
+          {
+            kind: "scrollIntoView",
+            ref: refValue,
+            targetId: opts.targetId?.trim() || undefined,
+            timeoutMs: Number.isFinite(opts.timeoutMs)
+              ? opts.timeoutMs
+              : undefined,
+          },
+          { profile },
+        );
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log(`scrolled into view: ${refValue}`);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
     .command("drag")
     .description("Drag from one ref to another")
     .argument("<startRef>", "Start ref id")

@@ -29,6 +29,7 @@ type ActKind =
   | "evaluate"
   | "fill"
   | "hover"
+  | "scrollIntoView"
   | "press"
   | "resize"
   | "select"
@@ -154,6 +155,7 @@ export function registerBrowserAgentRoutes(
       kind !== "evaluate" &&
       kind !== "fill" &&
       kind !== "hover" &&
+      kind !== "scrollIntoView" &&
       kind !== "press" &&
       kind !== "resize" &&
       kind !== "select" &&
@@ -255,6 +257,21 @@ export function registerBrowserAgentRoutes(
             ref,
             timeoutMs: timeoutMs ?? undefined,
           });
+          return res.json({ ok: true, targetId: tab.targetId });
+        }
+        case "scrollIntoView": {
+          const ref = toStringOrEmpty(body.ref);
+          if (!ref) return jsonError(res, 400, "ref is required");
+          const timeoutMs = toNumber(body.timeoutMs);
+          const scrollRequest: Parameters<
+            typeof pw.scrollIntoViewViaPlaywright
+          >[0] = {
+            cdpUrl,
+            targetId: tab.targetId,
+            ref,
+          };
+          if (timeoutMs) scrollRequest.timeoutMs = timeoutMs;
+          await pw.scrollIntoViewViaPlaywright(scrollRequest);
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "drag": {

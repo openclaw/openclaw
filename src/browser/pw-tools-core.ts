@@ -1160,6 +1160,25 @@ export async function responseBodyViaPlaywright(opts: {
   };
 }
 
+export async function scrollIntoViewViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ref: string;
+  timeoutMs?: number;
+}): Promise<void> {
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
+
+  const ref = requireRef(opts.ref);
+  const locator = refLocator(page, ref);
+  try {
+    await locator.scrollIntoViewIfNeeded({ timeout });
+  } catch (err) {
+    throw toAIFriendlyError(err, ref);
+  }
+}
+
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

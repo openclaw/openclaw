@@ -30,6 +30,7 @@ export {
   pressKeyViaPlaywright,
   resizeViewportViaPlaywright,
   responseBodyViaPlaywright,
+  scrollIntoViewViaPlaywright,
   selectOptionViaPlaywright,
   setDeviceViaPlaywright,
   setExtraHTTPHeadersViaPlaywright,
