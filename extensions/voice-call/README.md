@@ -2,8 +2,10 @@
 
 Official Voice Call plugin for **Clawdbot**.
 
-- Provider: **Twilio** (real outbound calls)
-- Dev fallback: `log` (no network)
+Providers:
+- **Twilio** (Programmable Voice + Media Streams)
+- **Telnyx** (Call Control v2)
+- **Mock** (dev/no network)
 
 Docs: `https://docs.clawd.bot/plugins/voice-call`
 Plugin system: `https://docs.clawd.bot/plugin`
@@ -26,83 +28,80 @@ cp -R extensions/voice-call ~/.clawdbot/extensions/voice-call
 cd ~/.clawdbot/extensions/voice-call && pnpm install
 ```
 
-### Option C: add via config (custom path)
-
-```json5
-{
-  plugins: {
-    load: { paths: ["/absolute/path/to/voice-call/index.ts"] },
-    entries: { "voice-call": { enabled: true, config: { provider: "log" } } }
-  }
-}
-```
-
-Restart the Gateway after changes.
-
 ## Config
 
 Put under `plugins.entries.voice-call.config`:
 
 ```json5
 {
-  provider: "twilio",
+  provider: "twilio", // or "telnyx" | "mock"
+  fromNumber: "+15550001234",
+  toNumber: "+15550005678",
+
   twilio: {
     accountSid: "ACxxxxxxxx",
-    authToken: "your_token",
-    from: "+15551234567",
-    statusCallbackUrl: "https://example.com/twilio-status", // optional
-    twimlUrl: "https://example.com/twiml" // optional, else auto-generates <Say>
+    authToken: "your_token"
+  },
+
+  // Webhook server
+  serve: {
+    port: 3334,
+    path: "/voice/webhook"
+  },
+
+  // Public exposure (pick one):
+  // publicUrl: "https://example.ngrok.app/voice/webhook",
+  // tunnel: { provider: "ngrok" },
+  // tailscale: { mode: "funnel", path: "/voice/webhook" }
+
+  outbound: {
+    defaultMode: "notify" // or "conversation"
+  },
+
+  streaming: {
+    enabled: true,
+    streamPath: "/voice/stream"
   }
 }
 ```
 
-Dev fallback (no network):
-
-```json5
-{ provider: "log" }
-```
-
-## Twilio credentials (quick notes)
-
-You’ll need a Twilio account, your **Account SID**, your **Auth Token**, and a Twilio **Voice-capable** phone number to use as `from`.
-
-- Signup: `https://www.twilio.com/`
-- Console: `https://console.twilio.com/`
-
-Full setup guide: `https://docs.clawd.bot/plugins/voice-call`
+Notes:
+- Twilio/Telnyx require a **publicly reachable** webhook URL.
+- `mock` is a local dev provider (no network calls).
 
 ## CLI
 
 ```bash
-clawdbot voicecall start --to "+15555550123" --message "Hello from Clawdbot"
-clawdbot voicecall status --sid CAxxxxxxxx
+clawdbot voicecall call --to "+15555550123" --message "Hello from Clawdbot"
+clawdbot voicecall continue --call-id <id> --message "Any questions?"
+clawdbot voicecall speak --call-id <id> --message "One moment"
+clawdbot voicecall end --call-id <id>
+clawdbot voicecall status --call-id <id>
+clawdbot voicecall tail
+clawdbot voicecall expose --mode funnel
 ```
 
 ## Tool
 
 Tool name: `voice_call`
 
-Parameters:
-- `mode`: `"call" | "status"` (default: `call`)
-- `to`: target string (required for call)
-- `sid`: call SID (required for status)
-- `message`: optional intro text
+Actions:
+- `initiate_call` (message, to?, mode?)
+- `continue_call` (callId, message)
+- `speak_to_user` (callId, message)
+- `end_call` (callId)
+- `get_status` (callId)
 
 ## Gateway RPC
 
-- `voicecall.start` (to, message?)
-- `voicecall.status` (sid)
-
-## Skill
-
-The repo includes `skills/voice-call/SKILL.md` for agent guidance. Enable it by
-setting:
-
-```json5
-{ plugins: { entries: { "voice-call": { enabled: true } } } }
-```
+- `voicecall.initiate` (to?, message, mode?)
+- `voicecall.continue` (callId, message)
+- `voicecall.speak` (callId, message)
+- `voicecall.end` (callId)
+- `voicecall.status` (callId)
 
 ## Notes
 
-- Uses Twilio REST API via fetch (no SDK). Provide valid SID/token/from.
-- Use `voicecall.*` for RPC names and `voice_call` for tool naming consistency.
+- Uses webhook signature verification for Twilio/Telnyx.
+- `responseModel` / `responseSystemPrompt` control AI auto-responses.
+- Media streaming requires `ws` and OpenAI Realtime API key.

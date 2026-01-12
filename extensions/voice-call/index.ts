@@ -1,325 +1,474 @@
 import { Type } from "@sinclair/typebox";
 
-type VoiceCallConfig =
-  | {
-      provider: "twilio";
-      twilio: {
-        accountSid: string;
-        authToken: string;
-        from: string;
-        statusCallbackUrl?: string;
-        twimlUrl?: string;
-      };
-    }
-  | {
-      provider?: "log";
-    };
-
-type VoiceCallStartParams = {
-  to: string;
-  message?: string;
-};
-
-type VoiceCallStatus = {
-  sid: string;
-  status: string;
-  provider: string;
-  to?: string;
-  from?: string;
-};
+import type { CoreConfig } from "./src/core-bridge.js";
+import {
+  VoiceCallConfigSchema,
+  validateProviderConfig,
+  type VoiceCallConfig,
+} from "./src/config.js";
+import { registerVoiceCallCli } from "./src/cli.js";
+import { createVoiceCallRuntime, type VoiceCallRuntime } from "./src/runtime.js";
 
 const voiceCallConfigSchema = {
   parse(value: unknown): VoiceCallConfig {
-    if (!value || typeof value !== "object" || Array.isArray(value)) {
-      return { provider: "log" };
-    }
-    const cfg = value as Record<string, unknown>;
-    const provider =
-      cfg.provider === "twilio" || cfg.provider === "log"
-        ? cfg.provider
-        : "log";
-    if (provider === "twilio") {
-      const twilio = cfg.twilio as Record<string, unknown> | undefined;
-      if (
-        !twilio ||
-        typeof twilio.accountSid !== "string" ||
-        typeof twilio.authToken !== "string" ||
-        typeof twilio.from !== "string"
-      ) {
-        throw new Error(
-          "twilio provider requires twilio.accountSid, twilio.authToken, twilio.from",
-        );
-      }
-      return {
-        provider: "twilio",
-        twilio: {
-          accountSid: twilio.accountSid,
-          authToken: twilio.authToken,
-          from: twilio.from,
-          statusCallbackUrl:
-            typeof twilio.statusCallbackUrl === "string"
-              ? twilio.statusCallbackUrl
-              : undefined,
-          twimlUrl:
-            typeof twilio.twimlUrl === "string" ? twilio.twimlUrl : undefined,
-        },
-      };
-    }
-    return { provider: "log" };
+    const raw =
+      value && typeof value === "object" && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : {};
+
+    const twilio = raw.twilio as Record<string, unknown> | undefined;
+    const legacyFrom = typeof twilio?.from === "string" ? twilio.from : undefined;
+
+    const enabled = typeof raw.enabled === "boolean" ? raw.enabled : true;
+    const providerRaw = raw.provider === "log" ? "mock" : raw.provider;
+    const provider = providerRaw ?? (enabled ? "mock" : undefined);
+
+    return VoiceCallConfigSchema.parse({
+      ...raw,
+      enabled,
+      provider,
+      fromNumber: raw.fromNumber ?? legacyFrom,
+    });
   },
   uiHints: {
     provider: {
       label: "Provider",
-      help: 'Use "twilio" for real calls or "log" for dev/no-network.',
+      help: "Use twilio, telnyx, or mock for dev/no-network.",
     },
-    "twilio.accountSid": {
-      label: "Twilio Account SID",
-      placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    fromNumber: { label: "From Number", placeholder: "+15550001234" },
+    toNumber: { label: "Default To Number", placeholder: "+15550001234" },
+    inboundPolicy: { label: "Inbound Policy" },
+    allowFrom: { label: "Inbound Allowlist" },
+    inboundGreeting: { label: "Inbound Greeting", advanced: true },
+    "telnyx.apiKey": { label: "Telnyx API Key", sensitive: true },
+    "telnyx.connectionId": { label: "Telnyx Connection ID" },
+    "telnyx.publicKey": { label: "Telnyx Public Key", sensitive: true },
+    "twilio.accountSid": { label: "Twilio Account SID" },
+    "twilio.authToken": { label: "Twilio Auth Token", sensitive: true },
+    "outbound.defaultMode": { label: "Default Call Mode" },
+    "outbound.notifyHangupDelaySec": {
+      label: "Notify Hangup Delay (sec)",
+      advanced: true,
     },
-    "twilio.authToken": {
-      label: "Twilio Auth Token",
+    "serve.port": { label: "Webhook Port" },
+    "serve.bind": { label: "Webhook Bind" },
+    "serve.path": { label: "Webhook Path" },
+    "tailscale.mode": { label: "Tailscale Mode", advanced: true },
+    "tailscale.path": { label: "Tailscale Path", advanced: true },
+    "tunnel.provider": { label: "Tunnel Provider", advanced: true },
+    "tunnel.ngrokAuthToken": {
+      label: "ngrok Auth Token",
       sensitive: true,
-      placeholder: "••••••••••••••••",
-    },
-    "twilio.from": {
-      label: "Twilio From (E.164)",
-      placeholder: "+15551234567",
-    },
-    "twilio.statusCallbackUrl": {
-      label: "Status Callback URL",
-      placeholder: "https://example.com/twilio-status",
       advanced: true,
     },
-    "twilio.twimlUrl": {
-      label: "TwiML URL",
-      placeholder: "https://example.com/twiml",
+    "tunnel.ngrokDomain": { label: "ngrok Domain", advanced: true },
+    "tunnel.allowNgrokFreeTier": {
+      label: "Allow ngrok Free Tier",
       advanced: true,
     },
+    "streaming.enabled": { label: "Enable Streaming", advanced: true },
+    "streaming.openaiApiKey": {
+      label: "OpenAI Realtime API Key",
+      sensitive: true,
+      advanced: true,
+    },
+    "streaming.sttModel": { label: "Realtime STT Model", advanced: true },
+    "streaming.streamPath": { label: "Media Stream Path", advanced: true },
+    "tts.model": { label: "TTS Model", advanced: true },
+    "tts.voice": { label: "TTS Voice", advanced: true },
+    "tts.instructions": { label: "TTS Instructions", advanced: true },
+    publicUrl: { label: "Public Webhook URL", advanced: true },
+    skipSignatureVerification: {
+      label: "Skip Signature Verification",
+      advanced: true,
+    },
+    store: { label: "Call Log Store Path", advanced: true },
+    responseModel: { label: "Response Model", advanced: true },
+    responseSystemPrompt: { label: "Response System Prompt", advanced: true },
+    responseTimeoutMs: { label: "Response Timeout (ms)", advanced: true },
   },
 };
 
-const escapeXml = (input: string): string =>
-  input
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&apos;");
-
-async function startTwilioCall(
-  cfg: Exclude<VoiceCallConfig, { provider?: "log" }>["twilio"],
-  params: VoiceCallStartParams,
-): Promise<VoiceCallStatus> {
-  const body = new URLSearchParams();
-  body.set("To", params.to);
-  body.set("From", cfg.from);
-
-  if (cfg.twimlUrl) {
-    body.set("Url", cfg.twimlUrl);
-  } else {
-    const say = escapeXml(params.message ?? "Hello from Clawdbot.");
-    body.set("Twiml", `<Response><Say>${say}</Say></Response>`);
-  }
-  if (cfg.statusCallbackUrl) {
-    body.set("StatusCallback", cfg.statusCallbackUrl);
-  }
-
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${cfg.accountSid}/Calls.json`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${cfg.accountSid}:${cfg.authToken}`).toString("base64")}`,
-        "Content-Type": "application/x-www-form-urlencoded",
-      },
-      body,
-    },
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`twilio call failed: ${res.status} ${text}`);
-  }
-  const payload = (await res.json()) as Record<string, unknown>;
-  return {
-    sid: String(payload.sid ?? ""),
-    status: String(payload.status ?? "unknown"),
-    provider: "twilio",
-    to: String(payload.to ?? params.to),
-    from: String(payload.from ?? cfg.from),
-  };
-}
-
-async function getTwilioStatus(
-  cfg: Exclude<VoiceCallConfig, { provider?: "log" }>["twilio"],
-  sid: string,
-): Promise<VoiceCallStatus> {
-  const res = await fetch(
-    `https://api.twilio.com/2010-04-01/Accounts/${cfg.accountSid}/Calls/${sid}.json`,
-    {
-      method: "GET",
-      headers: {
-        Authorization: `Basic ${Buffer.from(`${cfg.accountSid}:${cfg.authToken}`).toString("base64")}`,
-      },
-    },
-  );
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`twilio status failed: ${res.status} ${text}`);
-  }
-  const payload = (await res.json()) as Record<string, unknown>;
-  return {
-    sid,
-    status: String(payload.status ?? "unknown"),
-    provider: "twilio",
-    to: String(payload.to ?? ""),
-    from: String(payload.from ?? cfg.from),
-  };
-}
-
-async function startCall(
-  cfg: VoiceCallConfig,
-  params: VoiceCallStartParams,
-): Promise<VoiceCallStatus> {
-  if (cfg.provider === "twilio") {
-    return startTwilioCall(cfg.twilio, params);
-  }
-  return {
-    sid: `log-${Date.now()}`,
-    status: "queued",
-    provider: "log",
-    to: params.to,
-  };
-}
-
-async function getStatus(
-  cfg: VoiceCallConfig,
-  sid: string,
-): Promise<VoiceCallStatus> {
-  if (cfg.provider === "twilio") {
-    return getTwilioStatus(cfg.twilio, sid);
-  }
-  return { sid, status: "mock", provider: "log" };
-}
+const VoiceCallToolSchema = Type.Union([
+  Type.Object({
+    action: Type.Literal("initiate_call"),
+    to: Type.Optional(Type.String({ description: "Call target" })),
+    message: Type.String({ description: "Intro message" }),
+    mode: Type.Optional(Type.Union([Type.Literal("notify"), Type.Literal("conversation")])),
+  }),
+  Type.Object({
+    action: Type.Literal("continue_call"),
+    callId: Type.String({ description: "Call ID" }),
+    message: Type.String({ description: "Follow-up message" }),
+  }),
+  Type.Object({
+    action: Type.Literal("speak_to_user"),
+    callId: Type.String({ description: "Call ID" }),
+    message: Type.String({ description: "Message to speak" }),
+  }),
+  Type.Object({
+    action: Type.Literal("end_call"),
+    callId: Type.String({ description: "Call ID" }),
+  }),
+  Type.Object({
+    action: Type.Literal("get_status"),
+    callId: Type.String({ description: "Call ID" }),
+  }),
+  Type.Object({
+    mode: Type.Optional(Type.Union([Type.Literal("call"), Type.Literal("status")])),
+    to: Type.Optional(Type.String({ description: "Call target" })),
+    sid: Type.Optional(Type.String({ description: "Call SID" })),
+    message: Type.Optional(Type.String({ description: "Optional intro message" })),
+  }),
+]);
 
 const voiceCallPlugin = {
   id: "voice-call",
   name: "Voice Call",
-  description: "Voice-call plugin with Twilio/log providers",
+  description: "Voice-call plugin with Telnyx/Twilio providers",
   configSchema: voiceCallConfigSchema,
   register(api) {
     const cfg = voiceCallConfigSchema.parse(api.pluginConfig);
+    const validation = validateProviderConfig(cfg);
 
-    api.registerGatewayMethod("voicecall.start", async ({ params, respond }) => {
-      const to = typeof params?.to === "string" ? params.to.trim() : "";
-      const message =
-        typeof params?.message === "string" ? params.message.trim() : undefined;
-      if (!to) {
-        respond(false, { error: "to required" });
-        return;
+    if (api.pluginConfig && typeof api.pluginConfig === "object") {
+      const raw = api.pluginConfig as Record<string, unknown>;
+      const twilio = raw.twilio as Record<string, unknown> | undefined;
+      if (raw.provider === "log") {
+        api.logger.warn(
+          "[voice-call] provider \"log\" is deprecated; use \"mock\" instead",
+        );
       }
+      if (typeof twilio?.from === "string") {
+        api.logger.warn(
+          "[voice-call] twilio.from is deprecated; use fromNumber instead",
+        );
+      }
+    }
+
+    let runtimePromise: Promise<VoiceCallRuntime> | null = null;
+    let runtime: VoiceCallRuntime | null = null;
+
+    const ensureRuntime = async () => {
+      if (!cfg.enabled) {
+        throw new Error("Voice call disabled in plugin config");
+      }
+      if (!validation.valid) {
+        throw new Error(validation.errors.join("; "));
+      }
+      if (runtime) return runtime;
+      if (!runtimePromise) {
+        runtimePromise = createVoiceCallRuntime({
+          config: cfg,
+          coreConfig: api.config as CoreConfig,
+          logger: api.logger,
+        });
+      }
+      runtime = await runtimePromise;
+      return runtime;
+    };
+
+    const sendError = (respond: (ok: boolean, payload?: unknown) => void, err: unknown) => {
+      respond(false, { error: err instanceof Error ? err.message : String(err) });
+    };
+
+    api.registerGatewayMethod("voicecall.initiate", async ({ params, respond }) => {
       try {
-        const result = await startCall(cfg, { to, message });
-        respond(true, result);
+        const message =
+          typeof params?.message === "string" ? params.message.trim() : "";
+        if (!message) {
+          respond(false, { error: "message required" });
+          return;
+        }
+        const rt = await ensureRuntime();
+        const to =
+          typeof params?.to === "string" && params.to.trim()
+            ? params.to.trim()
+            : rt.config.toNumber;
+        if (!to) {
+          respond(false, { error: "to required" });
+          return;
+        }
+        const mode =
+          params?.mode === "notify" || params?.mode === "conversation"
+            ? params.mode
+            : undefined;
+        const result = await rt.manager.initiateCall(to, undefined, {
+          message,
+          mode,
+        });
+        if (!result.success) {
+          respond(false, { error: result.error || "initiate failed" });
+          return;
+        }
+        respond(true, { callId: result.callId, initiated: true });
       } catch (err) {
-        respond(false, { error: String(err) });
+        sendError(respond, err);
       }
     });
 
-    api.registerGatewayMethod(
-      "voicecall.status",
-      async ({ params, respond }) => {
-        const sid = typeof params?.sid === "string" ? params.sid.trim() : "";
-        if (!sid) {
-          respond(false, { error: "sid required" });
+    api.registerGatewayMethod("voicecall.continue", async ({ params, respond }) => {
+      try {
+        const callId =
+          typeof params?.callId === "string" ? params.callId.trim() : "";
+        const message =
+          typeof params?.message === "string" ? params.message.trim() : "";
+        if (!callId || !message) {
+          respond(false, { error: "callId and message required" });
           return;
         }
-        try {
-          const result = await getStatus(cfg, sid);
-          respond(true, result);
-        } catch (err) {
-          respond(false, { error: String(err) });
+        const rt = await ensureRuntime();
+        const result = await rt.manager.continueCall(callId, message);
+        if (!result.success) {
+          respond(false, { error: result.error || "continue failed" });
+          return;
         }
-      },
-    );
+        respond(true, { success: true, transcript: result.transcript });
+      } catch (err) {
+        sendError(respond, err);
+      }
+    });
 
-    api.registerTool(
-      {
-        name: "voice_call",
-        label: "Voice Call",
-        description: "Start or inspect a voice call via the voice-call plugin",
-        parameters: Type.Object({
-          mode: Type.Optional(
-            Type.Union([Type.Literal("call"), Type.Literal("status")]),
-          ),
-          to: Type.Optional(Type.String({ description: "Call target" })),
-          sid: Type.Optional(Type.String({ description: "Call SID" })),
-          message: Type.Optional(
-            Type.String({ description: "Optional intro message" }),
-          ),
-        }),
-        async execute(_toolCallId, params) {
-          const mode = params.mode ?? "call";
-          if (mode === "status") {
-            if (typeof params.sid !== "string") {
-              throw new Error("sid required for status");
+    api.registerGatewayMethod("voicecall.speak", async ({ params, respond }) => {
+      try {
+        const callId =
+          typeof params?.callId === "string" ? params.callId.trim() : "";
+        const message =
+          typeof params?.message === "string" ? params.message.trim() : "";
+        if (!callId || !message) {
+          respond(false, { error: "callId and message required" });
+          return;
+        }
+        const rt = await ensureRuntime();
+        const result = await rt.manager.speak(callId, message);
+        if (!result.success) {
+          respond(false, { error: result.error || "speak failed" });
+          return;
+        }
+        respond(true, { success: true });
+      } catch (err) {
+        sendError(respond, err);
+      }
+    });
+
+    api.registerGatewayMethod("voicecall.end", async ({ params, respond }) => {
+      try {
+        const callId =
+          typeof params?.callId === "string" ? params.callId.trim() : "";
+        if (!callId) {
+          respond(false, { error: "callId required" });
+          return;
+        }
+        const rt = await ensureRuntime();
+        const result = await rt.manager.endCall(callId);
+        if (!result.success) {
+          respond(false, { error: result.error || "end failed" });
+          return;
+        }
+        respond(true, { success: true });
+      } catch (err) {
+        sendError(respond, err);
+      }
+    });
+
+    api.registerGatewayMethod("voicecall.status", async ({ params, respond }) => {
+      try {
+        const raw =
+          typeof params?.callId === "string"
+            ? params.callId.trim()
+            : typeof params?.sid === "string"
+              ? params.sid.trim()
+              : "";
+        if (!raw) {
+          respond(false, { error: "callId required" });
+          return;
+        }
+        const rt = await ensureRuntime();
+        const call =
+          rt.manager.getCall(raw) || rt.manager.getCallByProviderCallId(raw);
+        if (!call) {
+          respond(true, { found: false });
+          return;
+        }
+        respond(true, { found: true, call });
+      } catch (err) {
+        sendError(respond, err);
+      }
+    });
+
+    api.registerGatewayMethod("voicecall.start", async ({ params, respond }) => {
+      try {
+        const to = typeof params?.to === "string" ? params.to.trim() : "";
+        const message =
+          typeof params?.message === "string" ? params.message.trim() : "";
+        if (!to) {
+          respond(false, { error: "to required" });
+          return;
+        }
+        const rt = await ensureRuntime();
+        const result = await rt.manager.initiateCall(to, undefined, {
+          message: message || undefined,
+        });
+        if (!result.success) {
+          respond(false, { error: result.error || "initiate failed" });
+          return;
+        }
+        respond(true, { callId: result.callId, initiated: true });
+      } catch (err) {
+        sendError(respond, err);
+      }
+    });
+
+    api.registerTool({
+      name: "voice_call",
+      label: "Voice Call",
+      description:
+        "Make phone calls and have voice conversations via the voice-call plugin.",
+      parameters: VoiceCallToolSchema,
+      async execute(_toolCallId, params) {
+        const json = (payload: unknown) => ({
+          content: [
+            { type: "text", text: JSON.stringify(payload, null, 2) },
+          ],
+          details: payload,
+        });
+
+        try {
+          const rt = await ensureRuntime();
+
+          if (typeof params?.action === "string") {
+            switch (params.action) {
+              case "initiate_call": {
+                const message = String(params.message || "").trim();
+                if (!message) throw new Error("message required");
+                const to =
+                  typeof params.to === "string" && params.to.trim()
+                    ? params.to.trim()
+                    : rt.config.toNumber;
+                if (!to) throw new Error("to required");
+                const result = await rt.manager.initiateCall(to, undefined, {
+                  message,
+                  mode:
+                    params.mode === "notify" || params.mode === "conversation"
+                      ? params.mode
+                      : undefined,
+                });
+                if (!result.success) {
+                  throw new Error(result.error || "initiate failed");
+                }
+                return json({ callId: result.callId, initiated: true });
+              }
+              case "continue_call": {
+                const callId = String(params.callId || "").trim();
+                const message = String(params.message || "").trim();
+                if (!callId || !message) {
+                  throw new Error("callId and message required");
+                }
+                const result = await rt.manager.continueCall(callId, message);
+                if (!result.success) {
+                  throw new Error(result.error || "continue failed");
+                }
+                return json({ success: true, transcript: result.transcript });
+              }
+              case "speak_to_user": {
+                const callId = String(params.callId || "").trim();
+                const message = String(params.message || "").trim();
+                if (!callId || !message) {
+                  throw new Error("callId and message required");
+                }
+                const result = await rt.manager.speak(callId, message);
+                if (!result.success) {
+                  throw new Error(result.error || "speak failed");
+                }
+                return json({ success: true });
+              }
+              case "end_call": {
+                const callId = String(params.callId || "").trim();
+                if (!callId) throw new Error("callId required");
+                const result = await rt.manager.endCall(callId);
+                if (!result.success) {
+                  throw new Error(result.error || "end failed");
+                }
+                return json({ success: true });
+              }
+              case "get_status": {
+                const callId = String(params.callId || "").trim();
+                if (!callId) throw new Error("callId required");
+                const call =
+                  rt.manager.getCall(callId) ||
+                  rt.manager.getCallByProviderCallId(callId);
+                return json(call ? { found: true, call } : { found: false });
+              }
             }
-            const status = await getStatus(cfg, params.sid.trim());
-            return {
-              content: [{ type: "text", text: JSON.stringify(status, null, 2) }],
-              details: status,
-            };
           }
+
+          const mode = params?.mode ?? "call";
+          if (mode === "status") {
+            const sid =
+              typeof params.sid === "string" ? params.sid.trim() : "";
+            if (!sid) throw new Error("sid required for status");
+            const call =
+              rt.manager.getCall(sid) || rt.manager.getCallByProviderCallId(sid);
+            return json(call ? { found: true, call } : { found: false });
+          }
+
           const to =
             typeof params.to === "string" && params.to.trim()
               ? params.to.trim()
-              : null;
+              : rt.config.toNumber;
           if (!to) throw new Error("to required for call");
-          const result = await startCall(cfg, { to, message: params.message });
-          return {
-            content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-            details: result,
-          };
-        },
-      },
-      { name: "voice_call" },
-    );
-
-    api.registerCli(({ program }) => {
-      const voicecall = program
-        .command("voicecall")
-        .description("Voice call plugin commands");
-
-      voicecall
-        .command("start")
-        .description("Start a voice call")
-        .requiredOption("--to <target>", "Target to call")
-        .option("--message <text>", "Optional intro message")
-        .action(async (opts) => {
-          const result = await startCall(cfg, {
-            to: opts.to,
-            message: opts.message,
+          const result = await rt.manager.initiateCall(to, undefined, {
+            message:
+              typeof params.message === "string" && params.message.trim()
+                ? params.message.trim()
+                : undefined,
           });
-          console.log(JSON.stringify(result, null, 2));
-        });
+          if (!result.success) {
+            throw new Error(result.error || "initiate failed");
+          }
+          return json({ callId: result.callId, initiated: true });
+        } catch (err) {
+          return json({
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
+    });
 
-      voicecall
-        .command("status")
-        .description("Show voice-call status")
-        .requiredOption("--sid <sid>", "Call SID")
-        .action(async (opts) => {
-          const result = await getStatus(cfg, opts.sid);
-          console.log(JSON.stringify(result, null, 2));
-        });
-    }, { commands: ["voicecall"] });
+    api.registerCli(
+      ({ program }) =>
+        registerVoiceCallCli({
+          program,
+          config: cfg,
+          ensureRuntime,
+          logger: api.logger,
+        }),
+      { commands: ["voicecall"] },
+    );
 
     api.registerService({
       id: "voicecall",
-      start: () => {
-        api.logger.info(`voice-call provider: ${cfg.provider}`);
+      start: async () => {
+        if (!cfg.enabled) return;
+        try {
+          await ensureRuntime();
+        } catch (err) {
+          api.logger.error(
+            `[voice-call] Failed to start runtime: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+        }
       },
-      stop: () => {
-        api.logger.info("voice-call service stopped");
+      stop: async () => {
+        if (!runtimePromise) return;
+        try {
+          const rt = await runtimePromise;
+          await rt.stop();
+        } finally {
+          runtimePromise = null;
+          runtime = null;
+        }
       },
     });
   },
