@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026.1.12-3
+
+### Changes
+- Sandbox: drop legacy `memory` tool-policy shorthand; require explicit `group:memory`.
+
+### Fixes
+- Telegram: tolerate mocked bots missing native-command APIs (`setMyCommands`, `command`) during tests.
+- Auto-reply: fix streaming block reply media handling (no redeclared/use-before-declare vars).
+
 ## 2026.1.12-2
 
 ### Changes
