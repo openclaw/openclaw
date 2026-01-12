@@ -59,6 +59,45 @@ if (diagErrors.length > 0) {
 
 console.log("ok");
 NODE
+
+  echo "Testing tgz install flow..."
+  pack_dir="$(mktemp -d "/tmp/clawdbot-plugin-pack.XXXXXX")"
+  mkdir -p "$pack_dir/package"
+  cat > "$pack_dir/package/package.json" <<'"'"'JSON'"'"'
+{
+  "name": "@clawdbot/demo-plugin-tgz",
+  "version": "0.0.1",
+  "clawdbot": { "extensions": ["./index.js"] }
+}
+JSON
+  cat > "$pack_dir/package/index.js" <<'"'"'JS'"'"'
+module.exports = {
+  id: "demo-plugin-tgz",
+  name: "Demo Plugin TGZ",
+  register(api) {
+    api.registerGatewayMethod("demo.tgz", async () => ({ ok: true }));
+  },
+};
+JS
+  tar -czf /tmp/demo-plugin-tgz.tgz -C "$pack_dir" package
+
+  node dist/index.js plugins install /tmp/demo-plugin-tgz.tgz
+  node dist/index.js plugins list --json > /tmp/plugins2.json
+
+  node - <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+
+const data = JSON.parse(fs.readFileSync("/tmp/plugins2.json", "utf8"));
+const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-tgz");
+if (!plugin) throw new Error("tgz plugin not found");
+if (plugin.status !== "loaded") {
+  throw new Error(`unexpected status: ${plugin.status}`);
+}
+if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("demo.tgz")) {
+  throw new Error("expected gateway method demo.tgz");
+}
+console.log("ok");
+NODE
 '
 
 echo "OK"
