@@ -584,6 +584,75 @@ describe("trigger handling", () => {
     });
   });
 
+  it("handles inline /commands and strips it before the agent", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /commands now",
+          From: "+1002",
+          To: "+2000",
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(blockReplies.length).toBe(1);
+      expect(blockReplies[0]?.text).toContain("Slash commands");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).not.toContain("/commands");
+      expect(text).toBe("ok");
+    });
+  });
+
+  it("handles inline /whoami and strips it before the agent", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /whoami now",
+          From: "+1002",
+          To: "+2000",
+          SenderId: "12345",
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(blockReplies.length).toBe(1);
+      expect(blockReplies[0]?.text).toContain("Identity");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).not.toContain("/whoami");
+      expect(text).toBe("ok");
+    });
+  });
+
   it("drops /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       const cfg = {
@@ -611,6 +680,77 @@ describe("trigger handling", () => {
       );
       expect(res).toBeUndefined();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("drops /whoami for unauthorized senders", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+      const res = await getReplyFromConfig(
+        {
+          Body: "/whoami",
+          From: "+2001",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+2001",
+        },
+        {},
+        cfg,
+      );
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("keeps inline /status for unauthorized senders", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const cfg = {
+        agents: {
+          defaults: {
+            model: "anthropic/claude-opus-4-5",
+            workspace: join(home, "clawd"),
+          },
+        },
+        whatsapp: {
+          allowFrom: ["+1000"],
+        },
+        session: { store: join(home, "sessions.json") },
+      };
+      const res = await getReplyFromConfig(
+        {
+          Body: "please /status now",
+          From: "+2001",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+2001",
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("ok");
+      expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain("/status");
     });
   });
 
