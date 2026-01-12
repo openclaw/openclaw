@@ -1944,6 +1944,57 @@ describe("directive behavior", () => {
     });
   });
 
+  it("picks the best fuzzy match when multiple models match", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockReset();
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        { Body: "/model minimax", From: "+1222", To: "+1222" },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "minimax/MiniMax-M2.1" },
+              workspace: path.join(home, "clawd"),
+              models: {
+                "minimax/MiniMax-M2.1": {},
+                "minimax/MiniMax-M2.1-lightning": {},
+                "lmstudio/minimax-m2.1-gs32": {},
+              },
+            },
+          },
+          models: {
+            mode: "merge",
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimax.io/anthropic",
+                apiKey: "sk-test",
+                api: "anthropic-messages",
+                models: [{ id: "MiniMax-M2.1", name: "MiniMax M2.1" }],
+              },
+              lmstudio: {
+                baseUrl: "http://127.0.0.1:1234/v1",
+                apiKey: "lmstudio",
+                api: "openai-responses",
+                models: [{ id: "minimax-m2.1-gs32", name: "MiniMax M2.1 GS32" }],
+              },
+            },
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model set to minimax/MiniMax-M2.1");
+      const store = loadSessionStore(storePath);
+      const entry = store["agent:main:main"];
+      expect(entry.modelOverride).toBe("MiniMax-M2.1");
+      expect(entry.providerOverride).toBe("minimax");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+
   it("stores auth profile overrides on /model directive", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
