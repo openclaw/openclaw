@@ -38,6 +38,55 @@ describe("sandbox config merges", () => {
     });
   });
 
+  it("merges sandbox docker binds (global + agent combined)", async () => {
+    const { resolveSandboxDockerConfig } = await import("./sandbox.js");
+
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        binds: ["/var/run/docker.sock:/var/run/docker.sock"],
+      },
+      agentDocker: {
+        binds: ["/home/user/source:/source:rw"],
+      },
+    });
+
+    expect(resolved.binds).toEqual([
+      "/var/run/docker.sock:/var/run/docker.sock",
+      "/home/user/source:/source:rw",
+    ]);
+  });
+
+  it("returns undefined binds when neither global nor agent has binds", async () => {
+    const { resolveSandboxDockerConfig } = await import("./sandbox.js");
+
+    const resolved = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {},
+      agentDocker: {},
+    });
+
+    expect(resolved.binds).toBeUndefined();
+  });
+
+  it("ignores agent binds under shared scope", async () => {
+    const { resolveSandboxDockerConfig } = await import("./sandbox.js");
+
+    const resolved = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: {
+        binds: ["/var/run/docker.sock:/var/run/docker.sock"],
+      },
+      agentDocker: {
+        binds: ["/home/user/source:/source:rw"],
+      },
+    });
+
+    expect(resolved.binds).toEqual([
+      "/var/run/docker.sock:/var/run/docker.sock",
+    ]);
+  });
+
   it("ignores agent docker overrides under shared scope", async () => {
     const { resolveSandboxDockerConfig } = await import("./sandbox.js");
 

@@ -1606,7 +1606,8 @@ Legacy: `perSession` is still supported (`true` → `scope: "session"`,
           seccompProfile: "/path/to/seccomp.json",
           apparmorProfile: "clawdbot-sandbox",
           dns: ["1.1.1.1", "8.8.8.8"],
-          extraHosts: ["internal.service:10.0.0.5"]
+          extraHosts: ["internal.service:10.0.0.5"],
+          binds: ["/var/run/docker.sock:/var/run/docker.sock", "/home/user/source:/source:rw"]
         },
         browser: {
           enabled: false,
@@ -1651,6 +1652,8 @@ Note: sandbox containers default to `network: "none"`; set `agents.defaults.sand
 to `"bridge"` (or your custom network) if the agent needs outbound access.
 
 Note: inbound attachments are staged into the active workspace at `media/inbound/*`. With `workspaceAccess: "rw"`, that means files are written into the agent workspace.
+
+Note: `docker.binds` mounts additional host directories; global and per-agent binds are merged.
 
 Build the optional browser image with:
 ```bash
