@@ -1,4 +1,11 @@
 // @ts-nocheck
+/**
+ * Telegram uses message_thread_id=1 internally for the General topic in forum supergroups.
+ * User-created topics have IDs based on message_id (typically millions+), so no collision risk.
+ * See: https://core.telegram.org/bots/api#sendchataction
+ */
+const TELEGRAM_GENERAL_TOPIC_ID = 1;
+
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
@@ -426,10 +433,16 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
     const sendTyping = async () => {
       try {
+        // In forums, the General topic has no message_thread_id in updates,
+        // but sendChatAction requires one to show typing.
+        const typingThreadId =
+          isForum && messageThreadId == null
+            ? TELEGRAM_GENERAL_TOPIC_ID
+            : messageThreadId;
         await bot.api.sendChatAction(
           chatId,
           "typing",
-          buildTelegramThreadParams(messageThreadId),
+          buildTelegramThreadParams(typingThreadId),
         );
       } catch (err) {
         logVerbose(
