@@ -573,17 +573,55 @@ export function registerBrowserAgentRoutes(
       maxCharsRaw > 0
         ? Math.floor(maxCharsRaw)
         : undefined;
+    const interactive = toBoolean(req.query.interactive);
+    const compact = toBoolean(req.query.compact);
+    const depth = toNumber(req.query.depth);
+    const selector = toStringOrEmpty(req.query.selector);
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       if (format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");
         if (!pw) return;
-        const snap = await pw.snapshotAiViaPlaywright({
-          cdpUrl: profileCtx.profile.cdpUrl,
-          targetId: tab.targetId,
-          ...(maxChars ? { maxChars } : {}),
-        });
+        const wantsRoleSnapshot =
+          interactive === true ||
+          compact === true ||
+          depth !== undefined ||
+          Boolean(selector.trim());
+
+        const snap = wantsRoleSnapshot
+          ? await pw.snapshotRoleViaPlaywright({
+              cdpUrl: profileCtx.profile.cdpUrl,
+              targetId: tab.targetId,
+              selector: selector.trim() || undefined,
+              options: {
+                interactive: interactive ?? undefined,
+                compact: compact ?? undefined,
+                maxDepth: depth ?? undefined,
+              },
+            })
+          : await pw
+              .snapshotAiViaPlaywright({
+                cdpUrl: profileCtx.profile.cdpUrl,
+                targetId: tab.targetId,
+                ...(maxChars ? { maxChars } : {}),
+              })
+              .catch(async (err) => {
+                // Public-API fallback when Playwright's private _snapshotForAI is missing.
+                if (String(err).toLowerCase().includes("_snapshotforai")) {
+                  return await pw.snapshotRoleViaPlaywright({
+                    cdpUrl: profileCtx.profile.cdpUrl,
+                    targetId: tab.targetId,
+                    selector: selector.trim() || undefined,
+                    options: {
+                      interactive: interactive ?? undefined,
+                      compact: compact ?? undefined,
+                      maxDepth: depth ?? undefined,
+                    },
+                  });
+                }
+                throw err;
+              });
         return res.json({
           ok: true,
           format,

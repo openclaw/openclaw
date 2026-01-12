@@ -1,0 +1,45 @@
+import { describe, expect, it } from "vitest";
+
+import { buildRoleSnapshotFromAriaSnapshot } from "./pw-role-snapshot.js";
+
+describe("pw-role-snapshot", () => {
+  it("adds refs for interactive elements", () => {
+    const aria = [
+      '- heading "Example" [level=1]',
+      "- paragraph: hello",
+      '- button "Submit"',
+      "  - generic",
+      '- link "Learn more"',
+    ].join("\n");
+
+    const res = buildRoleSnapshotFromAriaSnapshot(aria, { interactive: true });
+    expect(res.snapshot).toContain("[ref=e1]");
+    expect(res.snapshot).toContain("[ref=e2]");
+    expect(res.snapshot).toContain('- button "Submit" [ref=e1]');
+    expect(res.snapshot).toContain('- link "Learn more" [ref=e2]');
+    expect(Object.keys(res.refs)).toEqual(["e1", "e2"]);
+    expect(res.refs.e1).toMatchObject({ role: "button", name: "Submit" });
+    expect(res.refs.e2).toMatchObject({ role: "link", name: "Learn more" });
+  });
+
+  it("uses nth only when duplicates exist", () => {
+    const aria = ['- button "OK"', '- button "OK"', '- button "Cancel"'].join(
+      "\n",
+    );
+    const res = buildRoleSnapshotFromAriaSnapshot(aria);
+    expect(res.snapshot).toContain("[ref=e1]");
+    expect(res.snapshot).toContain("[ref=e2] [nth=1]");
+    expect(res.refs.e1?.nth).toBe(0);
+    expect(res.refs.e2?.nth).toBe(1);
+    expect(res.refs.e3?.nth).toBeUndefined();
+  });
+  it("respects maxDepth", () => {
+    const aria = ['- region "Main"', "  - group", '    - button "Deep"'].join(
+      "\n",
+    );
+    const res = buildRoleSnapshotFromAriaSnapshot(aria, { maxDepth: 1 });
+    expect(res.snapshot).toContain('- region "Main"');
+    expect(res.snapshot).toContain("  - group");
+    expect(res.snapshot).not.toContain("button");
+  });
+});

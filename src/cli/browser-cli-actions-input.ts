@@ -122,7 +122,7 @@ export function registerBrowserActionInputCommands(
   browser
     .command("click")
     .description("Click an element by ref from snapshot")
-    .argument("<ref>", "Ref id from ai snapshot")
+    .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .option("--double", "Double click", false)
     .option("--button <left|right|middle>", "Mouse button to use")
@@ -171,7 +171,7 @@ export function registerBrowserActionInputCommands(
   browser
     .command("type")
     .description("Type into an element by ref from snapshot")
-    .argument("<ref>", "Ref id from ai snapshot")
+    .argument("<ref>", "Ref id from snapshot")
     .argument("<text>", "Text to type")
     .option("--submit", "Press Enter after typing", false)
     .option("--slowly", "Type slowly (human-like)", false)
@@ -243,7 +243,7 @@ export function registerBrowserActionInputCommands(
   browser
     .command("hover")
     .description("Hover an element by ai ref")
-    .argument("<ref>", "Ref id from ai snapshot")
+    .argument("<ref>", "Ref id from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -305,7 +305,7 @@ export function registerBrowserActionInputCommands(
   browser
     .command("select")
     .description("Select option(s) in a select element")
-    .argument("<ref>", "Ref id from ai snapshot")
+    .argument("<ref>", "Ref id from snapshot")
     .argument("<values...>", "Option values to select")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (ref: string, values: string[], opts, cmd) => {
@@ -338,7 +338,7 @@ export function registerBrowserActionInputCommands(
     .command("upload")
     .description("Arm file upload for the next file chooser")
     .argument("<paths...>", "File paths to upload")
-    .option("--ref <ref>", "Ref id from ai snapshot to click after arming")
+    .option("--ref <ref>", "Ref id from snapshot to click after arming")
     .option("--input-ref <ref>", "Ref id for <input type=file> to set directly")
     .option("--element <selector>", "CSS selector for <input type=file>")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
@@ -490,7 +490,7 @@ export function registerBrowserActionInputCommands(
     .command("evaluate")
     .description("Evaluate a function against the page or a ref")
     .option("--fn <code>", "Function source, e.g. (el) => el.textContent")
-    .option("--ref <id>", "ARIA ref from ai snapshot")
+    .option("--ref <id>", "Ref from snapshot")
     .option("--target-id <id>", "CDP target id (or unique prefix)")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);

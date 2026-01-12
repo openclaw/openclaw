@@ -39,6 +39,11 @@ type PageState = {
   console: BrowserConsoleMessage[];
   armIdUpload: number;
   armIdDialog: number;
+  /**
+   * Role-based refs from the last role snapshot (e.g. e1/e2).
+   * These refs are NOT Playwright's `aria-ref` values.
+   */
+  roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
 };
 
 const pageStates = new WeakMap<Page, PageState>();
@@ -189,7 +194,27 @@ export async function getPageForTargetId(opts: {
 }
 
 export function refLocator(page: Page, ref: string) {
-  return page.locator(`aria-ref=${ref}`);
+  const normalized = ref.startsWith("@")
+    ? ref.slice(1)
+    : ref.startsWith("ref=")
+      ? ref.slice(4)
+      : ref;
+
+  if (/^e\d+$/.test(normalized)) {
+    const state = pageStates.get(page);
+    const info = state?.roleRefs?.[normalized];
+    if (!info) {
+      throw new Error(
+        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
+      );
+    }
+    const locator = info.name
+      ? page.getByRole(info.role as never, { name: info.name, exact: true })
+      : page.getByRole(info.role as never);
+    return info.nth !== undefined ? locator.nth(info.nth) : locator;
+  }
+
+  return page.locator(`aria-ref=${normalized}`);
 }
 
 export async function closePlaywrightBrowserConnection(): Promise<void> {

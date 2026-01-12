@@ -121,6 +121,10 @@ const BrowserToolSchema = Type.Object({
   limit: Type.Optional(Type.Number()),
   maxChars: Type.Optional(Type.Number()),
   format: Type.Optional(Type.Union([Type.Literal("aria"), Type.Literal("ai")])),
+  interactive: Type.Optional(Type.Boolean()),
+  compact: Type.Optional(Type.Boolean()),
+  depth: Type.Optional(Type.Number()),
+  selector: Type.Optional(Type.String()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
   element: Type.Optional(Type.String()),
@@ -336,11 +340,30 @@ export function createBrowserTool(opts?: {
             format === "ai"
               ? (maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS)
               : undefined;
+          const interactive =
+            typeof params.interactive === "boolean"
+              ? params.interactive
+              : undefined;
+          const compact =
+            typeof params.compact === "boolean" ? params.compact : undefined;
+          const depth =
+            typeof params.depth === "number" && Number.isFinite(params.depth)
+              ? params.depth
+              : undefined;
+          const selector =
+            typeof params.selector === "string"
+              ? params.selector.trim()
+              : undefined;
           const snapshot = await browserSnapshot(baseUrl, {
             format,
             targetId,
             limit,
             ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
+            ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
+            interactive,
+            compact,
+            depth,
+            selector,
             profile,
           });
           if (snapshot.format === "ai") {

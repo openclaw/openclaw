@@ -24,6 +24,7 @@ export {
   selectOptionViaPlaywright,
   setInputFilesViaPlaywright,
   snapshotAiViaPlaywright,
+  snapshotRoleViaPlaywright,
   takeScreenshotViaPlaywright,
   typeViaPlaywright,
   waitForViaPlaywright,
