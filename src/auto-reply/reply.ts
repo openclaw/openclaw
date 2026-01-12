@@ -673,7 +673,8 @@ export async function getReplyFromConfig(
   ) {
     const currentThinkLevel =
       (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+      (await modelState.resolveDefaultThinkingLevel());
     const currentVerboseLevel =
       (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
       (agentCfg?.verboseDefault as VerboseLevel | undefined);
