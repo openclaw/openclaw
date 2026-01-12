@@ -27,4 +27,50 @@ describe("resolveCommandAuthorization", () => {
     expect(auth.senderId).toBe("+123");
     expect(auth.isAuthorizedSender).toBe(true);
   });
+
+  it("falls back from whitespace SenderId to SenderE164", () => {
+    const cfg = {
+      whatsapp: { allowFrom: ["+123"] },
+    } as ClawdbotConfig;
+
+    const ctx = {
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "whatsapp:+999",
+      SenderId: "   ",
+      SenderE164: "+123",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderId).toBe("+123");
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
+  it("falls back to From when SenderId and SenderE164 are whitespace", () => {
+    const cfg = {
+      whatsapp: { allowFrom: ["+999"] },
+    } as ClawdbotConfig;
+
+    const ctx = {
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      From: "whatsapp:+999",
+      SenderId: "   ",
+      SenderE164: "   ",
+    } as MsgContext;
+
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(auth.senderId).toBe("+999");
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
 });

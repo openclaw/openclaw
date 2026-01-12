@@ -1291,7 +1291,7 @@ export async function monitorWebProvider(
             msg.senderE164,
           ),
           SenderName: msg.senderName,
-          SenderId: msg.senderJid ?? msg.senderE164,
+          SenderId: msg.senderJid?.trim() || msg.senderE164,
           SenderE164: msg.senderE164,
           WasMentioned: msg.wasMentioned,
           ...(msg.location ? toLocationContext(msg.location) : {}),

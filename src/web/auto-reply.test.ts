@@ -153,6 +153,53 @@ describe("partial reply gating", () => {
     expect(reply).toHaveBeenCalledWith("final reply");
   });
 
+  it("falls back from empty senderJid to senderE164 for SenderId", async () => {
+    const reply = vi.fn().mockResolvedValue(undefined);
+    const sendComposing = vi.fn().mockResolvedValue(undefined);
+    const sendMedia = vi.fn().mockResolvedValue(undefined);
+
+    const replyResolver = vi.fn().mockResolvedValue({ text: "final reply" });
+
+    const mockConfig: ClawdbotConfig = {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
+    };
+
+    setLoadConfigMock(mockConfig);
+
+    await monitorWebProvider(
+      false,
+      async ({ onMessage }) => {
+        await onMessage({
+          id: "m1",
+          from: "+1000",
+          conversationId: "+1000",
+          to: "+2000",
+          body: "hello",
+          timestamp: Date.now(),
+          chatType: "direct",
+          chatId: "direct:+1000",
+          senderJid: "",
+          senderE164: "+1000",
+          sendComposing,
+          reply,
+          sendMedia,
+        });
+        return { close: vi.fn().mockResolvedValue(undefined) };
+      },
+      false,
+      replyResolver,
+    );
+
+    resetLoadConfigMock();
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    const ctx = replyResolver.mock.calls[0]?.[0] ?? {};
+    expect(ctx.SenderE164).toBe("+1000");
+    expect(ctx.SenderId).toBe("+1000");
+  });
+
   it("updates last-route for direct chats without senderE164", async () => {
     const now = Date.now();
     const mainSessionKey = "agent:main:main";
