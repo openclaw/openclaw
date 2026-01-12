@@ -18,8 +18,9 @@ describeLive("pi embedded extra params (live)", () => {
         defaults: {
           models: {
             "openai/gpt-5.2": {
+              // OpenAI Responses enforces a minimum max_output_tokens of 16.
               params: {
-                maxTokens: 8,
+                maxTokens: 16,
               },
             },
           },
@@ -57,7 +58,7 @@ describeLive("pi embedded extra params (live)", () => {
 
     expect(stopReason).toBeDefined();
     expect(outputTokens).toBeDefined();
-    // Should respect maxTokens from config (8) — allow a small buffer for provider rounding.
-    expect(outputTokens ?? 0).toBeLessThanOrEqual(12);
+    // Should respect maxTokens from config (16) — allow a small buffer for provider rounding.
+    expect(outputTokens ?? 0).toBeLessThanOrEqual(20);
   }, 30_000);
 });
