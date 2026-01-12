@@ -11,7 +11,7 @@
 - Heartbeat: raise default `ackMaxChars` to 300 so any `HEARTBEAT_OK` replies with short padding stay internal (fewer noisy heartbeat posts on providers).
 - Onboarding: normalize API key inputs (strip `export KEY=...` wrappers) so shell-style entries paste cleanly.
 
-## 2026.1.12
+## 2026.1.12 (Unreleased)
 
 ### Highlights
 - Memory: add vector search for agent memories (Markdown-only scope) with SQLite index, chunking, lazy sync + file watch, and per-agent enablement/fallback.
