@@ -1649,7 +1649,9 @@ export async function runEmbeddedPiAgent(params: {
           });
           // Pre-warm session file to bring it into OS page cache
           await prewarmSessionFile(params.sessionFile);
-          const sessionManager = SessionManager.open(params.sessionFile);
+          const sessionManager = guardSessionManager(
+            SessionManager.open(params.sessionFile),
+          );
           trackSessionManagerAccess(params.sessionFile);
           const settingsManager = SettingsManager.create(
             effectiveWorkspace,
@@ -1668,8 +1670,6 @@ export async function runEmbeddedPiAgent(params: {
             modelId,
             model,
           });
-
-          const toolResultGuard = guardSessionManager(sessionManager);
 
           const { builtInTools, customTools } = splitSdkTools({
             tools,
@@ -1723,7 +1723,7 @@ export async function runEmbeddedPiAgent(params: {
               session.agent.replaceMessages(limited);
             }
           } catch (err) {
-            toolResultGuard.flushPendingToolResults?.();
+            sessionManager.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             throw err;
@@ -1755,7 +1755,7 @@ export async function runEmbeddedPiAgent(params: {
               enforceFinalTag: params.enforceFinalTag,
             });
           } catch (err) {
-            toolResultGuard.flushPendingToolResults?.();
+            sessionManager.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             throw err;
@@ -1853,7 +1853,7 @@ export async function runEmbeddedPiAgent(params: {
               ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
               notifyEmbeddedRunEnded(params.sessionId);
             }
-            toolResultGuard.flushPendingToolResults?.();
+            sessionManager.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             params.abortSignal?.removeEventListener?.("abort", onAbort);
