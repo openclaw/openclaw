@@ -32,6 +32,113 @@ type ModelSelectionState = {
   needsModelCatalog: boolean;
 };
 
+const FUZZY_VARIANT_TOKENS = [
+  "lightning",
+  "preview",
+  "mini",
+  "fast",
+  "turbo",
+  "lite",
+  "beta",
+  "small",
+  "nano",
+];
+
+function scoreFuzzyMatch(params: {
+  provider: string;
+  model: string;
+  fragment: string;
+  aliasIndex: ModelAliasIndex;
+  defaultProvider: string;
+  defaultModel: string;
+}): {
+  score: number;
+  isDefault: boolean;
+  variantCount: number;
+  variantMatchCount: number;
+  modelLength: number;
+  key: string;
+} {
+  const provider = normalizeProviderId(params.provider);
+  const model = params.model;
+  const fragment = params.fragment.trim().toLowerCase();
+  const providerLower = provider.toLowerCase();
+  const modelLower = model.toLowerCase();
+  const haystack = `${providerLower}/${modelLower}`;
+  const key = modelKey(provider, model);
+
+  const scoreFragment = (
+    value: string,
+    weights: { exact: number; starts: number; includes: number },
+  ) => {
+    if (!fragment) return 0;
+    let score = 0;
+    if (value === fragment) score = Math.max(score, weights.exact);
+    if (value.startsWith(fragment))
+      score = Math.max(score, weights.starts);
+    if (value.includes(fragment))
+      score = Math.max(score, weights.includes);
+    return score;
+  };
+
+  let score = 0;
+  score += scoreFragment(haystack, { exact: 220, starts: 140, includes: 110 });
+  score += scoreFragment(providerLower, {
+    exact: 180,
+    starts: 120,
+    includes: 90,
+  });
+  score += scoreFragment(modelLower, {
+    exact: 160,
+    starts: 110,
+    includes: 80,
+  });
+
+  const aliases = params.aliasIndex.byKey.get(key) ?? [];
+  for (const alias of aliases) {
+    score += scoreFragment(alias.toLowerCase(), {
+      exact: 140,
+      starts: 90,
+      includes: 60,
+    });
+  }
+
+  if (modelLower.startsWith(providerLower)) {
+    score += 30;
+  }
+
+  const fragmentVariants = FUZZY_VARIANT_TOKENS.filter((token) =>
+    fragment.includes(token),
+  );
+  const modelVariants = FUZZY_VARIANT_TOKENS.filter((token) =>
+    modelLower.includes(token),
+  );
+  const variantMatchCount = fragmentVariants.filter((token) =>
+    modelLower.includes(token),
+  ).length;
+  const variantCount = modelVariants.length;
+  if (fragmentVariants.length === 0 && variantCount > 0) {
+    score -= variantCount * 30;
+  } else if (fragmentVariants.length > 0) {
+    if (variantMatchCount > 0) score += variantMatchCount * 40;
+    if (variantMatchCount === 0) score -= 20;
+  }
+
+  const defaultProvider = normalizeProviderId(params.defaultProvider);
+  const isDefault =
+    provider === defaultProvider && model === params.defaultModel;
+  if (isDefault) score += 20;
+
+  return {
+    score,
+    isDefault,
+    variantCount,
+    variantMatchCount,
+    modelLength: modelLower.length,
+    key,
+  };
+}
+
 export async function createModelSelectionState(params: {
   cfg: ClawdbotConfig;
   agentCfg:
@@ -250,18 +357,35 @@ export function resolveModelDirectiveSelection(params: {
       if (!match) return {};
       return { selection: buildSelection(match.provider, match.model) };
     }
-    if (candidates.length > 1) {
-      const shown = candidates
-        .slice(0, 5)
-        .map((c) => `${c.provider}/${c.model}`)
-        .join(", ");
-      const more =
-        candidates.length > 5 ? ` (+${candidates.length - 5} more)` : "";
-      return {
-        error: `Ambiguous model "${rawTrimmed}". Matches: ${shown}${more}. Use /model to list or specify provider/model.`,
-      };
-    }
-    return {};
+    if (candidates.length === 0) return {};
+
+    const scored = candidates
+      .map((candidate) => {
+        const details = scoreFuzzyMatch({
+          provider: candidate.provider,
+          model: candidate.model,
+          fragment,
+          aliasIndex,
+          defaultProvider,
+          defaultModel,
+        });
+        return { candidate, ...details };
+      })
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        if (a.isDefault !== b.isDefault) return a.isDefault ? -1 : 1;
+        if (a.variantMatchCount !== b.variantMatchCount)
+          return b.variantMatchCount - a.variantMatchCount;
+        if (a.variantCount !== b.variantCount)
+          return a.variantCount - b.variantCount;
+        if (a.modelLength !== b.modelLength)
+          return a.modelLength - b.modelLength;
+        return a.key.localeCompare(b.key);
+      });
+
+    const best = scored[0]?.candidate;
+    if (!best) return {};
+    return { selection: buildSelection(best.provider, best.model) };
   };
 
   const resolved = resolveModelRefFromString({
