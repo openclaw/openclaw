@@ -7,6 +7,7 @@ read_when:
 
 ## What it does
 - Elevated mode allows the exec tool to run with elevated privileges when the feature is available and the sender is approved.
+- The bash chat command (`!`; `/bash` alias) uses the same `tools.elevated` allowlists because it always runs on the host.
 - **Optional for sandboxed agents**: elevated only changes behavior when the agent is running in a sandbox. If the agent already runs unsandboxed, elevated is effectively a no-op.
 - Directive forms: `/elevated on`, `/elevated off`, `/elev on`, `/elev off`.
 - Only `on|off` are accepted; anything else returns a hint and does not change state.
