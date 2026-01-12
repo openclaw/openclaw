@@ -7,7 +7,7 @@ read_when:
 # Memory
 
 Clawdbot memory is **plain Markdown in the agent workspace**. The files are the
-source of truth; the model only “remembers” what gets written to disk.
+source of truth; the model only "remembers" what gets written to disk.
 
 ## Memory files (Markdown)
 
@@ -27,14 +27,14 @@ These files live under the workspace (`agents.defaults.workspace`, default
 
 - Decisions, preferences, and durable facts go to `MEMORY.md`.
 - Day-to-day notes and running context go to `memory/YYYY-MM-DD.md`.
-- If someone says “remember this,” write it down (don’t keep it in RAM).
+- If someone says "remember this," write it down (do not keep it in RAM).
 
 ## Automatic memory flush (pre-compaction ping)
 
 When a session is **close to auto-compaction**, Clawdbot triggers a **silent
 agentic turn** that reminds the model to write durable memory **before** the
 context is compacted. The default prompt encourages the model to respond with
-`NO_REPLY` when there’s nothing to store, so the user never sees this turn.
+`NO_REPLY` when there's nothing to store, so the user never sees this turn.
 
 This is controlled by `agents.defaults.compaction.memoryFlush`:
 
@@ -61,6 +61,8 @@ Details:
   `contextWindow - reserveTokensFloor - softThresholdTokens`.
 - **Silent** by default: prompts include `NO_REPLY` so nothing is delivered.
 - **One flush per compaction cycle** (tracked in `sessions.json`).
+- **Workspace must be writable**: if the session runs sandboxed with
+  `workspaceAccess: "ro"` or `"none"`, the flush is skipped.
 
 For the full compaction lifecycle, see
 [Session management + compaction](/reference/session-management-compaction).

@@ -510,6 +510,56 @@ describe("config pruning defaults", () => {
   });
 });
 
+describe("config compaction settings", () => {
+  it("preserves memory flush config values", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".clawdbot");
+      await fs.mkdir(configDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "clawdbot.json"),
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                compaction: {
+                  reserveTokensFloor: 12_345,
+                  memoryFlush: {
+                    enabled: false,
+                    softThresholdTokens: 1234,
+                    prompt: "Write notes.",
+                    systemPrompt: "Flush memory now.",
+                  },
+                },
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+
+      vi.resetModules();
+      const { loadConfig } = await import("./config.js");
+      const cfg = loadConfig();
+
+      expect(cfg.agents?.defaults?.compaction?.reserveTokensFloor).toBe(12_345);
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.enabled).toBe(
+        false,
+      );
+      expect(
+        cfg.agents?.defaults?.compaction?.memoryFlush?.softThresholdTokens,
+      ).toBe(1234);
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.prompt).toBe(
+        "Write notes.",
+      );
+      expect(cfg.agents?.defaults?.compaction?.memoryFlush?.systemPrompt).toBe(
+        "Flush memory now.",
+      );
+    });
+  });
+});
+
 describe("config discord", () => {
   let previousHome: string | undefined;
 

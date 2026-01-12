@@ -251,6 +251,7 @@ Notes:
 - The default prompt/system prompt include a `NO_REPLY` hint to suppress delivery.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
 - The flush runs only for embedded Pi sessions (CLI backends skip it).
+- The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
 Pi also exposes a `session_before_compact` hook in the extension API, but Clawdbot’s

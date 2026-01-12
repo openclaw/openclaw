@@ -15,6 +15,10 @@ import {
   isCompactionFailureError,
   isContextOverflowError,
 } from "../../agents/pi-embedded-helpers.js";
+import {
+  resolveSandboxConfigForAgent,
+  resolveSandboxRuntimeStatus,
+} from "../../agents/sandbox.js";
 import { hasNonzeroUsage, type NormalizedUsage } from "../../agents/usage.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
@@ -343,8 +347,16 @@ export async function runReplyAgent(params: {
   }
 
   const memoryFlushSettings = resolveMemoryFlushSettings(cfg);
+  const memoryFlushWritable = (() => {
+    if (!sessionKey) return true;
+    const runtime = resolveSandboxRuntimeStatus({ cfg, sessionKey });
+    if (!runtime.sandboxed) return true;
+    const sandboxCfg = resolveSandboxConfigForAgent(cfg, runtime.agentId);
+    return sandboxCfg.workspaceAccess === "rw";
+  })();
   const shouldFlushMemory =
     memoryFlushSettings &&
+    memoryFlushWritable &&
     !isHeartbeat &&
     !isCliProvider(followupRun.run.provider, cfg) &&
     shouldRunMemoryFlush({

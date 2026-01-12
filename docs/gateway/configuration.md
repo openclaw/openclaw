@@ -1382,6 +1382,8 @@ Defaults:
 - `memoryFlush.enabled`: `true`
 - `memoryFlush.softThresholdTokens`: `4000`
 - `memoryFlush.prompt` / `memoryFlush.systemPrompt`: built-in defaults with `NO_REPLY`
+- Note: memory flush is skipped when the session workspace is read-only
+  (`agents.defaults.sandbox.workspaceAccess: "ro"` or `"none"`).
 
 Example (tuned):
 ```json5
