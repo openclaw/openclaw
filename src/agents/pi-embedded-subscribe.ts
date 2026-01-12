@@ -369,8 +369,12 @@ export function subscribeEmbeddedPiSession(params: {
     state.thinking = inThinking;
 
     // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
-    // If enforcement is disabled, just return processed text as-is.
-    if (!params.enforceFinalTag) return processed;
+    // If enforcement is disabled, we still strip the tags themselves to prevent
+    // hallucinations (e.g. Minimax copying the style) from leaking, but we
+    // do not enforce buffering/extraction logic.
+    if (!params.enforceFinalTag) {
+      return processed.replace(FINAL_TAG_SCAN_RE, "");
+    }
 
     // If enforcement is enabled, only return text that appeared inside a <final> block.
     let result = "";
@@ -414,14 +418,16 @@ export function subscribeEmbeddedPiSession(params: {
         }));
     }
 
-    // Fallback: if we are at the end of the process and never saw a final tag,
-    // but we have processed text, use the processed text.
-    // NOTE: This fallback only triggers if we explicitly pass a state that we can check.
-    if (!everInFinal && processed.trim().length > 0) {
-      return processed;
+    // Strict Mode: If enforcing final tags, we MUST NOT return content unless
+    // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
+    // (e.g. "**Locating Manulife**...") that the model emitted without <think> tags.
+    if (!everInFinal) {
+      return "";
     }
 
-    return result;
+    // Hardened Cleanup: Remove any remaining <final> tags that might have been
+    // missed (e.g. nested tags or hallucinations) to prevent leakage.
+    return result.replace(FINAL_TAG_SCAN_RE, "");
   };
 
   const emitBlockChunk = (text: string) => {

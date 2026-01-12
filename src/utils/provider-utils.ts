@@ -24,6 +24,11 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
   if (normalized.includes("google-antigravity")) {
     return true;
   }
+
+  // Handle Minimax (M2.1 is chatty/reasoning-like)
+  if (normalized.includes("minimax")) {
+    return true;
+  }
   
   return false;
 }
