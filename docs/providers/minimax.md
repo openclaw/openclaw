@@ -31,11 +31,10 @@ MiniMax highlights these improvements in M2.1:
 
 **Best for:** hosted MiniMax with OpenAI-compatible API.
 
-```bash
-clawdbot onboard --auth-choice minimax-cloud
-# or non-interactive
-clawdbot onboard --auth-choice minimax-cloud --minimax-api-key "$MINIMAX_API_KEY"
-```
+Configure via CLI:
+- Run `clawdbot configure`
+- Select **Model/auth**
+- Choose **MiniMax M2.1 (minimax.io)**
 
 ```json5
 {
@@ -69,11 +68,10 @@ clawdbot onboard --auth-choice minimax-cloud --minimax-api-key "$MINIMAX_API_KEY
 
 **Best for:** MiniMax's Anthropic-compatible API (platform.minimax.io).
 
-```bash
-clawdbot onboard --auth-choice minimax-api
-# or non-interactive
-clawdbot onboard --auth-choice minimax-api --minimax-api-key "$MINIMAX_API_KEY"
-```
+Configure via CLI:
+- Run `clawdbot configure`
+- Select **Model/auth**
+- Choose **MiniMax API (platform.minimax.io)**
 
 ```json5
 {
@@ -127,9 +125,10 @@ clawdbot onboard --auth-choice minimax-api --minimax-api-key "$MINIMAX_API_KEY"
 We have seen strong results with MiniMax M2.1 on powerful hardware (e.g. a
 beefy Mac Studio) using LM Studio's local server.
 
-```bash
-clawdbot onboard --auth-choice minimax
-```
+Configure via CLI:
+- Run `clawdbot configure`
+- Select **Model/auth**
+- Choose **MiniMax M2.1 (LM Studio)**
 
 ```json5
 {
