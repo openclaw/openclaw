@@ -1,17 +1,53 @@
+import Foundation
 import Testing
 @testable import Clawdbot
 @testable import ClawdbotIPC
 
+private final class FakeWebSocketTask: WebSocketTasking, @unchecked Sendable {
+    var state: URLSessionTask.State = .running
+
+    func resume() {}
+
+    func cancel(with _: URLSessionWebSocketTask.CloseCode, reason _: Data?) {
+        self.state = .canceling
+    }
+
+    func send(_: URLSessionWebSocketTask.Message) async throws {}
+
+    func receive() async throws -> URLSessionWebSocketTask.Message {
+        throw URLError(.cannotConnectToHost)
+    }
+
+    func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void) {
+        completionHandler(.failure(URLError(.cannotConnectToHost)))
+    }
+}
+
+private final class FakeWebSocketSession: WebSocketSessioning, @unchecked Sendable {
+    func makeWebSocketTask(url _: URL) -> WebSocketTaskBox {
+        WebSocketTaskBox(task: FakeWebSocketTask())
+    }
+}
+
+private func makeTestGatewayConnection() -> GatewayConnection {
+    GatewayConnection(
+        configProvider: {
+            (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
+        },
+        sessionBox: WebSocketSessionBox(session: FakeWebSocketSession()))
+}
+
 @Suite(.serialized) struct GatewayConnectionControlTests {
     @Test func statusFailsWhenProcessMissing() async {
-        let result = await GatewayConnection.shared.status()
-        // We don't assert ok because the worker may not be available in CI.
-        // Instead, ensure the call returns without throwing and provides a message.
-        #expect(result.ok == true || result.error != nil)
+        let connection = makeTestGatewayConnection()
+        let result = await connection.status()
+        #expect(result.ok == false)
+        #expect(result.error != nil)
     }
 
     @Test func rejectEmptyMessage() async {
-        let result = await GatewayConnection.shared.sendAgent(
+        let connection = makeTestGatewayConnection()
+        let result = await connection.sendAgent(
             message: "",
             thinking: nil,
             sessionKey: "main",
