@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { getMemorySearchManager } from "./index.js";
+import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -29,6 +29,7 @@ vi.mock("./embeddings.js", () => {
 describe("memory index", () => {
   let workspaceDir: string;
   let indexPath: string;
+  let manager: MemoryIndexManager | null = null;
 
   beforeEach(async () => {
     workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-mem-"));
@@ -45,6 +46,10 @@ describe("memory index", () => {
   });
 
   afterEach(async () => {
+    if (manager) {
+      await manager.close();
+      manager = null;
+    }
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
@@ -67,6 +72,7 @@ describe("memory index", () => {
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
     if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
     await result.manager.sync({ force: true });
     const results = await result.manager.search("alpha");
     expect(results.length).toBeGreaterThan(0);
@@ -91,6 +97,7 @@ describe("memory index", () => {
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();
     if (!result.manager) throw new Error("manager missing");
+    manager = result.manager;
     await expect(
       result.manager.readFile({ relPath: "NOTES.md" }),
     ).rejects.toThrow("path required");

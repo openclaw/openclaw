@@ -56,6 +56,7 @@ const SNIPPET_MAX_CHARS = 700;
 const INDEX_CACHE = new Map<string, MemoryIndexManager>();
 
 export class MemoryIndexManager {
+  private readonly cacheKey: string;
   private readonly cfg: ClawdbotConfig;
   private readonly agentId: string;
   private readonly workspaceDir: string;
@@ -67,6 +68,7 @@ export class MemoryIndexManager {
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private intervalTimer: NodeJS.Timeout | null = null;
+  private closed = false;
   private dirty = false;
   private sessionWarm = new Set<string>();
   private syncing: Promise<void> | null = null;
@@ -91,6 +93,7 @@ export class MemoryIndexManager {
       local: settings.local,
     });
     const manager = new MemoryIndexManager({
+      cacheKey: key,
       cfg,
       agentId,
       workspaceDir,
@@ -102,12 +105,14 @@ export class MemoryIndexManager {
   }
 
   private constructor(params: {
+    cacheKey: string;
     cfg: ClawdbotConfig;
     agentId: string;
     workspaceDir: string;
     settings: ResolvedMemorySearchConfig;
     providerResult: EmbeddingProviderResult;
   }) {
+    this.cacheKey = params.cacheKey;
     this.cfg = params.cfg;
     this.agentId = params.agentId;
     this.workspaceDir = params.workspaceDir;
@@ -232,6 +237,25 @@ export class MemoryIndexManager {
         ? { from: "local", reason: this.fallbackReason }
         : undefined,
     };
+  }
+
+  async close(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    if (this.watchTimer) {
+      clearTimeout(this.watchTimer);
+      this.watchTimer = null;
+    }
+    if (this.intervalTimer) {
+      clearInterval(this.intervalTimer);
+      this.intervalTimer = null;
+    }
+    if (this.watcher) {
+      await this.watcher.close();
+      this.watcher = null;
+    }
+    this.db.close();
+    INDEX_CACHE.delete(this.cacheKey);
   }
 
   private openDatabase(): DatabaseSync {

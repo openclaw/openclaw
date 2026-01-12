@@ -1158,16 +1158,16 @@ export async function handleDirectiveOnly(params: {
       await saveSessionStore(storePath, sessionStore);
     }
     if (elevatedChanged) {
-      const nextElevated =
-        (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+      const nextElevated = (sessionEntry.elevatedLevel ??
+        "off") as ElevatedLevel;
       enqueueSystemEvent(formatElevatedEvent(nextElevated), {
         sessionKey,
         contextKey: "mode:elevated",
       });
     }
     if (reasoningChanged) {
-      const nextReasoning =
-        (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+      const nextReasoning = (sessionEntry.reasoningLevel ??
+        "off") as ReasoningLevel;
       enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
         sessionKey,
         contextKey: "mode:reasoning",
@@ -1414,16 +1414,16 @@ export async function persistInlineDirectives(params: {
         await saveSessionStore(storePath, sessionStore);
       }
       if (elevatedChanged) {
-        const nextElevated =
-          (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+        const nextElevated = (sessionEntry.elevatedLevel ??
+          "off") as ElevatedLevel;
         enqueueSystemEvent(formatElevatedEvent(nextElevated), {
           sessionKey,
           contextKey: "mode:elevated",
         });
       }
       if (reasoningChanged) {
-        const nextReasoning =
-          (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+        const nextReasoning = (sessionEntry.reasoningLevel ??
+          "off") as ReasoningLevel;
         enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
           sessionKey,
           contextKey: "mode:reasoning",
