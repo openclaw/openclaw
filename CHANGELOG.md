@@ -66,7 +66,8 @@
 - Config: expand `~` in `CLAWDBOT_CONFIG_PATH` and common path-like config fields (including `plugins.load.paths`); guard invalid `$include` paths. (#731) — thanks @pasogott.
 - Agents: stop pre-creating session transcripts so first user messages persist in JSONL history.
 - Agents: skip pre-compaction memory flush when the session workspace is read-only.
-- Auto-reply: ignore inline `/status` directives unless the message is directive-only.
+- Auto-reply: allow inline `/status` for allowlisted senders (stripped before the model); unauthorized senders see it as plain text.
+- Auto-reply: include config-only allowlisted models in `/model` even when the catalog is partial.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.
 - Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.

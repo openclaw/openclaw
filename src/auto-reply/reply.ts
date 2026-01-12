@@ -64,7 +64,6 @@ import {
   persistInlineDirectives,
   resolveDefaultModel,
 } from "./reply/directive-handling.js";
-import { extractStatusDirective } from "./reply/directives.js";
 import {
   buildGroupIntro,
   defaultGroupActivation,
@@ -491,15 +490,6 @@ export async function getReplyFromConfig(
   let parsedDirectives = parseInlineDirectives(commandSource, {
     modelAliases: configuredAliases,
   });
-  const hasInlineStatus =
-    parsedDirectives.hasStatusDirective &&
-    parsedDirectives.cleaned.trim().length > 0;
-  if (hasInlineStatus) {
-    parsedDirectives = {
-      ...parsedDirectives,
-      hasStatusDirective: false,
-    };
-  }
   if (
     isGroup &&
     ctx.WasMentioned !== true &&
@@ -702,7 +692,8 @@ export async function getReplyFromConfig(
     : directives.rawModelDirective;
 
   if (!command.isAuthorizedSender) {
-    cleanedBody = extractStatusDirective(existingBody).cleaned;
+    // Treat slash tokens as plain text for unauthorized senders.
+    cleanedBody = existingBody;
     sessionCtx.Body = cleanedBody;
     sessionCtx.BodyStripped = cleanedBody;
     directives = {
