@@ -47,7 +47,9 @@ vi.mock("./queue.js", async () => {
 import { runReplyAgent } from "./agent-runner.js";
 
 type EmbeddedPiAgentParams = {
-  onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
+  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
 };
 
 function createMinimalRun(params?: {
@@ -58,6 +60,7 @@ function createMinimalRun(params?: {
   sessionKey?: string;
   storePath?: string;
   typingMode?: TypingMode;
+  blockStreamingEnabled?: boolean;
 }) {
   const typing = createMockTypingController();
   const opts = params?.opts;
@@ -117,7 +120,7 @@ function createMinimalRun(params?: {
         defaultModel: "anthropic/claude-opus-4-5",
         resolvedVerboseLevel: params?.resolvedVerboseLevel ?? "off",
         isNewSession: false,
-        blockStreamingEnabled: false,
+        blockStreamingEnabled: params?.blockStreamingEnabled ?? false,
         resolvedBlockStreamingBreak: "message_end",
         shouldInjectGroupIntro: false,
         typingMode: params?.typingMode ?? "instant",
@@ -255,6 +258,67 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("signals typing on block replies", async () => {
+    const onBlockReply = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: EmbeddedPiAgentParams) => {
+        await params.onBlockReply?.({ text: "chunk", mediaUrls: [] });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "message",
+      blockStreamingEnabled: true,
+      opts: { onBlockReply },
+    });
+    await run();
+
+    expect(typing.startTypingOnText).toHaveBeenCalledWith("chunk");
+    expect(onBlockReply).toHaveBeenCalledWith({ text: "chunk", mediaUrls: [] });
+  });
+
+  it("signals typing on tool results", async () => {
+    const onToolResult = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: EmbeddedPiAgentParams) => {
+        await params.onToolResult?.({ text: "tooling", mediaUrls: [] });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(typing.startTypingOnText).toHaveBeenCalledWith("tooling");
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "tooling",
+      mediaUrls: [],
+    });
+  });
+
+  it("skips typing for silent tool results", async () => {
+    const onToolResult = vi.fn();
+    runEmbeddedPiAgentMock.mockImplementationOnce(
+      async (params: EmbeddedPiAgentParams) => {
+        await params.onToolResult?.({ text: "NO_REPLY", mediaUrls: [] });
+        return { payloads: [{ text: "final" }], meta: {} };
+      },
+    );
+
+    const { run, typing } = createMinimalRun({
+      typingMode: "message",
+      opts: { onToolResult },
+    });
+    await run();
+
+    expect(typing.startTypingOnText).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
   });
 
   it("announces auto-compaction in verbose mode and tracks count", async () => {
