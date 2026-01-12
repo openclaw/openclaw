@@ -151,6 +151,10 @@ HTTP API:
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
 - Debugging: `GET /console`, `POST /pdf`
+- Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
+- State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
+- Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
 
 All endpoints accept `?profile=<name>`.
 
@@ -181,6 +185,10 @@ Basics:
 - `clawdbot browser start`
 - `clawdbot browser stop`
 - `clawdbot browser tabs`
+- `clawdbot browser tab`
+- `clawdbot browser tab new`
+- `clawdbot browser tab select 2`
+- `clawdbot browser tab close 2`
 - `clawdbot browser open https://example.com`
 - `clawdbot browser focus abcd1234`
 - `clawdbot browser close abcd1234`
@@ -194,7 +202,10 @@ Inspection:
 - `clawdbot browser snapshot --format aria --limit 200`
 - `clawdbot browser snapshot --interactive --compact --depth 6`
 - `clawdbot browser snapshot --selector "#main" --interactive`
+- `clawdbot browser snapshot --frame "iframe#main" --interactive`
 - `clawdbot browser console --level error`
+- `clawdbot browser errors --clear`
+- `clawdbot browser requests --filter api --clear`
 - `clawdbot browser pdf`
 
 Actions:
@@ -211,7 +222,29 @@ Actions:
 - `clawdbot browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
 - `clawdbot browser dialog --accept`
 - `clawdbot browser wait --text "Done"`
+- `clawdbot browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"`
 - `clawdbot browser evaluate --fn '(el) => el.textContent' --ref 7`
+- `clawdbot browser highlight e12`
+- `clawdbot browser trace start`
+- `clawdbot browser trace stop`
+
+State:
+- `clawdbot browser cookies`
+- `clawdbot browser cookies set session abc123 --url "https://example.com"`
+- `clawdbot browser cookies clear`
+- `clawdbot browser storage local get`
+- `clawdbot browser storage local set theme dark`
+- `clawdbot browser storage session clear`
+- `clawdbot browser set offline on`
+- `clawdbot browser set headers --json '{"X-Debug":"1"}'`
+- `clawdbot browser set credentials user pass`
+- `clawdbot browser set credentials --clear`
+- `clawdbot browser set geo 37.7749 -122.4194 --origin "https://example.com"`
+- `clawdbot browser set geo --clear`
+- `clawdbot browser set media dark`
+- `clawdbot browser set timezone America/New_York`
+- `clawdbot browser set locale en-US`
+- `clawdbot browser set device "iPhone 14"`
 
 Notes:
 - `upload` and `dialog` are **arming** calls; run them before the click/press
@@ -221,6 +254,7 @@ Notes:
   - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
   - `--format aria`: returns the accessibility tree (no refs; inspection only).
   - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
+  - `--frame "<iframe selector>"` scopes role snapshots to an iframe (pairs with role refs like `e12`).
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
