@@ -108,6 +108,10 @@ The wizard can run `claude setup-token` on the gateway host (or you run it yours
 
 Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also supports **setup-token**. If you have a Claude subscription, we recommend **setup-token** on the gateway host for the most reliable long‑running setup (requires Claude Pro/Max + the `claude` CLI). OAuth reuse is supported, but avoid logging in separately via Clawdbot and Claude Code to prevent token conflicts. See [Anthropic](/providers/anthropic) and [OAuth](/concepts/oauth).
 
+### Is AWS Bedrock supported?
+
+Not currently. Clawdbot doesn’t ship a Bedrock provider today. If you must use Bedrock, the common workaround is an OpenAI‑compatible proxy in front of Bedrock, then point Clawdbot at that endpoint. See [Model providers](/providers/models) and [Model providers (full list)](/concepts/model-providers).
+
 ### How does Codex auth work?
 
 Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI login (`~/.codex/auth.json`). The wizard can import the CLI login or run the OAuth flow and will set the default model to `openai-codex/gpt-5.2` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
