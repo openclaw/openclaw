@@ -93,6 +93,7 @@
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
 - Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
 - Agents: preserve reasoning items on tool-only turns.
+- Agents: enforce `<final>` gating for reasoning-tag providers to prevent tag/reasoning leaks. (#754) — thanks @mcinteerj.
 - Agents/Subagents: wait for completion before announcing, align wait timeout with run timeout, and make announce prompts more emphatic.
 - Agents: route subagent transcripts to the target agent sessions directory and add regression coverage. (#708) — thanks @xMikeMickelson.
 - Agents/Tools: preserve action enums when flattening tool schemas. (#708) — thanks @xMikeMickelson.
