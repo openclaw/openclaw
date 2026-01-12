@@ -35,6 +35,17 @@ const SessionsSpawnToolSchema = Type.Object({
   ),
 });
 
+function normalizeModelSelection(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed || undefined;
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const primary = (value as { primary?: unknown }).primary;
+  if (typeof primary === "string" && primary.trim()) return primary.trim();
+  return undefined;
+}
+
 export function createSessionsSpawnTool(opts?: {
   agentSessionKey?: string;
   agentProvider?: GatewayMessageProvider;
@@ -51,7 +62,7 @@ export function createSessionsSpawnTool(opts?: {
       const task = readStringParam(params, "task", { required: true });
       const label = typeof params.label === "string" ? params.label.trim() : "";
       const requestedAgentId = readStringParam(params, "agentId");
-      const model = readStringParam(params, "model");
+      const modelOverride = readStringParam(params, "model");
       const cleanup =
         params.cleanup === "keep" || params.cleanup === "delete"
           ? (params.cleanup as "keep" | "delete")
@@ -129,11 +140,16 @@ export function createSessionsSpawnTool(opts?: {
       }
       const childSessionKey = `agent:${targetAgentId}:subagent:${crypto.randomUUID()}`;
       const shouldPatchSpawnedBy = opts?.sandboxed === true;
-      if (model) {
+      const targetAgentConfig = resolveAgentConfig(cfg, targetAgentId);
+      const resolvedModel =
+        normalizeModelSelection(modelOverride) ??
+        normalizeModelSelection(targetAgentConfig?.subagents?.model) ??
+        normalizeModelSelection(cfg.agents?.defaults?.subagents?.model);
+      if (resolvedModel) {
         try {
           await callGateway({
             method: "sessions.patch",
-            params: { key: childSessionKey, model },
+            params: { key: childSessionKey, model: resolvedModel },
             timeoutMs: 10_000,
           });
           modelApplied = true;
@@ -218,7 +234,7 @@ export function createSessionsSpawnTool(opts?: {
         status: "accepted",
         childSessionKey,
         runId: childRunId,
-        modelApplied: model ? modelApplied : undefined,
+        modelApplied: resolvedModel ? modelApplied : undefined,
         warning: modelWarning,
       });
     },

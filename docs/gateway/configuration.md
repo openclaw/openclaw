@@ -1276,6 +1276,7 @@ Example:
       },
       maxConcurrent: 3,
       subagents: {
+        model: "minimax/MiniMax-M2.1",
         maxConcurrent: 1,
         archiveAfterMinutes: 60
       },
@@ -1478,6 +1479,7 @@ Note: `applyPatch` is only under `tools.exec` (no `tools.bash` alias).
 Legacy: `tools.bash` is still accepted as an alias.
 
 `agents.defaults.subagents` configures sub-agent defaults:
+- `model`: default model for spawned sub-agents (string or `{ primary, fallbacks }`). If omitted, sub-agents inherit the caller’s model unless overridden per agent or per call.
 - `maxConcurrent`: max concurrent sub-agent runs (default 1)
 - `archiveAfterMinutes`: auto-archive sub-agent sessions after N minutes (default 60; set `0` to disable)
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny` (deny wins)

@@ -924,6 +924,15 @@ const AgentEntrySchema = z.object({
   subagents: z
     .object({
       allowAgents: z.array(z.string()).optional(),
+      model: z
+        .union([
+          z.string(),
+          z.object({
+            primary: z.string().optional(),
+            fallbacks: z.array(z.string()).optional(),
+          }),
+        ])
+        .optional(),
     })
     .optional(),
   sandbox: AgentSandboxSchema,
@@ -1227,6 +1236,15 @@ const AgentDefaultsSchema = z
       .object({
         maxConcurrent: z.number().int().positive().optional(),
         archiveAfterMinutes: z.number().int().positive().optional(),
+        model: z
+          .union([
+            z.string(),
+            z.object({
+              primary: z.string().optional(),
+              fallbacks: z.array(z.string()).optional(),
+            }),
+          ])
+          .optional(),
       })
       .optional(),
     sandbox: z
