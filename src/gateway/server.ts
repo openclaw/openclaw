@@ -1480,6 +1480,13 @@ export async function startGatewayServer(
                 ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
                 : "invalid handshake: first request must be connect"
               : "invalid request frame";
+            handshakeState = "failed";
+            setCloseCause("invalid-handshake", {
+              frameType,
+              frameMethod,
+              frameId,
+              handshakeError,
+            });
             if (isRequestFrame) {
               const req = parsed as RequestFrame;
               send({
@@ -1493,13 +1500,6 @@ export async function startGatewayServer(
                 `invalid handshake conn=${connId} remote=${remoteAddr ?? "?"}`,
               );
             }
-            handshakeState = "failed";
-            setCloseCause("invalid-handshake", {
-              frameType,
-              frameMethod,
-              frameId,
-              handshakeError,
-            });
             const closeReason = truncateCloseReason(
               handshakeError || "invalid handshake",
             );

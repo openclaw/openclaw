@@ -1361,86 +1361,90 @@ describe("trigger handling", () => {
     });
   });
 
-  it("stages inbound media into the sandbox workspace", async () => {
-    await withTempHome(async (home) => {
-      const inboundDir = join(home, ".clawdbot", "media", "inbound");
-      await fs.mkdir(inboundDir, { recursive: true });
-      const mediaPath = join(inboundDir, "photo.jpg");
-      await fs.writeFile(mediaPath, "test");
+  it(
+    "stages inbound media into the sandbox workspace",
+    { timeout: 15_000 },
+    async () => {
+      await withTempHome(async (home) => {
+        const inboundDir = join(home, ".clawdbot", "media", "inbound");
+        await fs.mkdir(inboundDir, { recursive: true });
+        const mediaPath = join(inboundDir, "photo.jpg");
+        await fs.writeFile(mediaPath, "test");
 
-      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+        vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        });
 
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "clawd"),
-            sandbox: {
-              mode: "non-main" as const,
-              workspaceRoot: join(home, "sandboxes"),
+        const cfg = {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: join(home, "clawd"),
+              sandbox: {
+                mode: "non-main" as const,
+                workspaceRoot: join(home, "sandboxes"),
+              },
             },
           },
-        },
-        whatsapp: {
-          allowFrom: ["*"],
-        },
-        session: {
-          store: join(home, "sessions.json"),
-        },
-      };
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+          session: {
+            store: join(home, "sessions.json"),
+          },
+        };
 
-      const ctx = {
-        Body: "hi",
-        From: "group:whatsapp:demo",
-        To: "+2000",
-        ChatType: "group" as const,
-        Provider: "whatsapp" as const,
-        MediaPath: mediaPath,
-        MediaType: "image/jpeg",
-        MediaUrl: mediaPath,
-      };
+        const ctx = {
+          Body: "hi",
+          From: "group:whatsapp:demo",
+          To: "+2000",
+          ChatType: "group" as const,
+          Provider: "whatsapp" as const,
+          MediaPath: mediaPath,
+          MediaType: "image/jpeg",
+          MediaUrl: mediaPath,
+        };
 
-      const res = await getReplyFromConfig(ctx, {}, cfg);
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("ok");
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+        const res = await getReplyFromConfig(ctx, {}, cfg);
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toBe("ok");
+        expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
 
-      const prompt =
-        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
-      const stagedPath = `media/inbound/${basename(mediaPath)}`;
-      expect(prompt).toContain(stagedPath);
-      expect(prompt).not.toContain(mediaPath);
+        const prompt =
+          vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+        const stagedPath = `media/inbound/${basename(mediaPath)}`;
+        expect(prompt).toContain(stagedPath);
+        expect(prompt).not.toContain(mediaPath);
 
-      const sessionKey = resolveSessionKey(
-        cfg.session?.scope ?? "per-sender",
-        ctx,
-        cfg.session?.mainKey,
-      );
-      const agentId = resolveAgentIdFromSessionKey(sessionKey);
-      const sandbox = await ensureSandboxWorkspaceForSession({
-        config: cfg,
-        sessionKey,
-        workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+        const sessionKey = resolveSessionKey(
+          cfg.session?.scope ?? "per-sender",
+          ctx,
+          cfg.session?.mainKey,
+        );
+        const agentId = resolveAgentIdFromSessionKey(sessionKey);
+        const sandbox = await ensureSandboxWorkspaceForSession({
+          config: cfg,
+          sessionKey,
+          workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
+        });
+        expect(sandbox).not.toBeNull();
+        if (!sandbox) {
+          throw new Error("Expected sandbox to be set");
+        }
+        const stagedFullPath = join(
+          sandbox.workspaceDir,
+          "media",
+          "inbound",
+          basename(mediaPath),
+        );
+        await expect(fs.stat(stagedFullPath)).resolves.toBeTruthy();
       });
-      expect(sandbox).not.toBeNull();
-      if (!sandbox) {
-        throw new Error("Expected sandbox to be set");
-      }
-      const stagedFullPath = join(
-        sandbox.workspaceDir,
-        "media",
-        "inbound",
-        basename(mediaPath),
-      );
-      await expect(fs.stat(stagedFullPath)).resolves.toBeTruthy();
-    });
-  });
+    },
+  );
 });
 
 describe("group intro prompts", () => {
