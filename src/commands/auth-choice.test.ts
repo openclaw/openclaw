@@ -111,7 +111,7 @@ describe("applyAuthChoice", () => {
     expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
   });
 
-  it("configures MiniMax (minimax-cloud) via the Anthropic-compatible endpoint", async () => {
+  it("configures MiniMax M2.1 via the Anthropic-compatible endpoint", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
@@ -141,7 +141,7 @@ describe("applyAuthChoice", () => {
     };
 
     const result = await applyAuthChoice({
-      authChoice: "minimax-cloud",
+      authChoice: "minimax-api",
       config: {},
       prompter,
       runtime,
@@ -172,7 +172,6 @@ describe("applyAuthChoice", () => {
     };
     expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
   });
-
   it("does not override the default model when selecting opencode-zen without setDefaultModel", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;

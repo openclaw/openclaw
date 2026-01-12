@@ -73,8 +73,8 @@ const AUTH_CHOICE_GROUP_DEFS: {
   {
     value: "minimax",
     label: "MiniMax",
-    hint: "Hosted + LM Studio + API",
-    choices: ["minimax-cloud", "minimax", "minimax-api"],
+    hint: "M2.1 (recommended)",
+    choices: ["minimax-api"],
   },
 ];
 
@@ -172,11 +172,7 @@ export function buildAuthChoiceOptions(params: {
     label: "OpenCode Zen (multi-model proxy)",
     hint: "Claude, GPT, Gemini via opencode.ai/zen",
   });
-  options.push({
-    value: "minimax-cloud",
-    label: "MiniMax M2.1 (minimax.io) — Anthropic-compatible",
-  });
-  options.push({ value: "minimax", label: "Minimax M2.1 (LM Studio)" });
+  options.push({ value: "minimax-api", label: "MiniMax M2.1" });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
   }

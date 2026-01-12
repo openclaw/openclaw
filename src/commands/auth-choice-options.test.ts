@@ -68,4 +68,16 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(options.some((opt) => opt.value === "zai-api-key")).toBe(true);
   });
+
+  it("includes MiniMax auth choice", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const options = buildAuthChoiceOptions({
+      store,
+      includeSkip: false,
+      includeClaudeCliIfMissing: true,
+      platform: "darwin",
+    });
+
+    expect(options.some((opt) => opt.value === "minimax-api")).toBe(true);
+  });
 });

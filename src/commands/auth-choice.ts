@@ -728,6 +728,7 @@ export async function applyAuthChoice(params: {
     params.authChoice === "minimax-cloud" ||
     params.authChoice === "minimax-api"
   ) {
+    const modelId = "MiniMax-M2.1";
     const key = await params.prompter.text({
       message: "Enter MiniMax API key",
       validate: (value) => (value?.trim() ? undefined : "Required"),
@@ -739,11 +740,12 @@ export async function applyAuthChoice(params: {
       mode: "api_key",
     });
     if (params.setDefaultModel) {
-      nextConfig = applyMinimaxApiConfig(nextConfig);
+      nextConfig = applyMinimaxApiConfig(nextConfig, modelId);
     } else {
-      nextConfig = applyMinimaxApiProviderConfig(nextConfig);
-      agentModelOverride = "minimax/MiniMax-M2.1";
-      await noteAgentModel("minimax/MiniMax-M2.1");
+      const modelRef = `minimax/${modelId}`;
+      nextConfig = applyMinimaxApiProviderConfig(nextConfig, modelId);
+      agentModelOverride = modelRef;
+      await noteAgentModel(modelRef);
     }
   } else if (params.authChoice === "minimax") {
     if (params.setDefaultModel) {
