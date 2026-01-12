@@ -18,12 +18,12 @@ provide quick operator visibility.
 
 Presence entries are structured objects with fields like:
 
-- `instanceId` (optional but strongly recommended): stable client identity
+- `instanceId` (optional but strongly recommended): stable client identity (usually `connect.client.instanceId`)
 - `host`: human‑friendly host name
 - `ip`: best‑effort IP address
 - `version`: client version string
 - `deviceFamily` / `modelIdentifier`: hardware hints
-- `mode`: `gateway`, `app`, `webchat`, `cli`, `node`, ...
+- `mode`: `ui`, `webchat`, `cli`, `backend`, `probe`, `test`, `node`, ...
 - `lastInputSeconds`: “seconds since last user input” (if known)
 - `reason`: `self`, `connect`, `node-connected`, `periodic`, ...
 - `ts`: last update timestamp (ms since epoch)
@@ -62,7 +62,7 @@ for that node and refreshes it periodically so it doesn’t expire.
 Presence entries are stored in a single in‑memory map:
 
 - Entries are keyed by a **presence key**.
-- The best key is a stable `instanceId` that survives restarts.
+- The best key is a stable `instanceId` (from `connect.client.instanceId`) that survives restarts.
 - Keys are case‑insensitive.
 
 If a client reconnects without a stable `instanceId`, it may show up as a
@@ -94,6 +94,6 @@ indicator (Active/Idle/Stale) based on the age of the last update.
 
 - To see the raw list, call `system-presence` against the Gateway.
 - If you see duplicates:
-  - confirm clients send a stable `instanceId` in the handshake
+  - confirm clients send a stable `client.instanceId` in the handshake
   - confirm periodic beacons use the same `instanceId`
   - check whether the connection‑derived entry is missing `instanceId` (duplicates are expected)

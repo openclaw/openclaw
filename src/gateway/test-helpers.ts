@@ -543,6 +543,8 @@ export async function connectReq(
       version: string;
       platform: string;
       mode: string;
+      deviceFamily?: string;
+      modelIdentifier?: string;
       instanceId?: string;
     };
   },
