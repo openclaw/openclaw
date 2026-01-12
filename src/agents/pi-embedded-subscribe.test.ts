@@ -1754,4 +1754,96 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
   });
+
+  it("calls onBlockReplyFlush before tool_execution_start to preserve message boundaries", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReplyFlush = vi.fn();
+    const onBlockReply = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-flush-test",
+      onBlockReply,
+      onBlockReplyFlush,
+      blockReplyBreak: "text_end",
+    });
+
+    // Simulate text arriving before tool
+    handler?.({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "First message before tool.",
+      },
+    });
+
+    expect(onBlockReplyFlush).not.toHaveBeenCalled();
+
+    // Tool execution starts - should trigger flush
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "tool-flush-1",
+      args: { command: "echo hello" },
+    });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+
+    // Another tool - should flush again
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "read",
+      toolCallId: "tool-flush-2",
+      args: { path: "/tmp/test.txt" },
+    });
+
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not call onBlockReplyFlush when callback is not provided", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+
+    // No onBlockReplyFlush provided
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-no-flush",
+      onBlockReply,
+      blockReplyBreak: "text_end",
+    });
+
+    // This should not throw even without onBlockReplyFlush
+    expect(() => {
+      handler?.({
+        type: "tool_execution_start",
+        toolName: "bash",
+        toolCallId: "tool-no-flush",
+        args: { command: "echo test" },
+      });
+    }).not.toThrow();
+  });
 });
