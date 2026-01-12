@@ -14,6 +14,27 @@ function makeTempDir() {
   return dir;
 }
 
+function packToArchive({ pkgDir, outDir, outName }: { pkgDir: string; outDir: string; outName: string }) {
+  const res = spawnSync("npm", ["pack", "--silent", "--pack-destination", outDir, pkgDir], {
+    encoding: "utf-8",
+  });
+  expect(res.status).toBe(0);
+  if (res.status !== 0) {
+    throw new Error(`npm pack failed: ${res.stderr || res.stdout || "<no output>"}`);
+  }
+
+  const packed = (res.stdout || "").trim().split(/\r?\n/).filter(Boolean).at(-1);
+  if (!packed) {
+    throw new Error(`npm pack did not output a filename: ${res.stdout || "<no stdout>"}`);
+  }
+
+  const src = path.join(outDir, packed);
+  const dest = path.join(outDir, outName);
+  fs.rmSync(dest, { force: true });
+  fs.renameSync(src, dest);
+  return dest;
+}
+
 async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
   const prev = process.env.CLAWDBOT_STATE_DIR;
   process.env.CLAWDBOT_STATE_DIR = stateDir;
@@ -61,15 +82,7 @@ describe("installPluginFromArchive", () => {
       "utf-8",
     );
 
-    const archivePath = path.join(workDir, "plugin.tgz");
-    const tar = spawnSync(
-      "tar",
-      ["-czf", archivePath, "-C", workDir, "package"],
-      {
-        encoding: "utf-8",
-      },
-    );
-    expect(tar.status).toBe(0);
+    const archivePath = packToArchive({ pkgDir, outDir: workDir, outName: "plugin.tgz" });
 
     const result = await withStateDir(stateDir, async () => {
       const { installPluginFromArchive } = await import("./install.js");
@@ -109,13 +122,7 @@ describe("installPluginFromArchive", () => {
       "utf-8",
     );
 
-    const archivePath = path.join(workDir, "plugin.tgz");
-    const tar = spawnSync(
-      "tar",
-      ["-czf", archivePath, "-C", workDir, "package"],
-      { encoding: "utf-8" },
-    );
-    expect(tar.status).toBe(0);
+    const archivePath = packToArchive({ pkgDir, outDir: workDir, outName: "plugin.tgz" });
 
     const { first, second } = await withStateDir(stateDir, async () => {
       const { installPluginFromArchive } = await import("./install.js");
@@ -141,15 +148,7 @@ describe("installPluginFromArchive", () => {
       "utf-8",
     );
 
-    const archivePath = path.join(workDir, "bad.tgz");
-    const tar = spawnSync(
-      "tar",
-      ["-czf", archivePath, "-C", workDir, "package"],
-      {
-        encoding: "utf-8",
-      },
-    );
-    expect(tar.status).toBe(0);
+    const archivePath = packToArchive({ pkgDir, outDir: workDir, outName: "bad.tgz" });
 
     const result = await withStateDir(stateDir, async () => {
       const { installPluginFromArchive } = await import("./install.js");
