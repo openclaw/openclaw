@@ -83,6 +83,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **MiniMax M2.1 (minimax.io)**: config is auto‑written for the OpenAI-compatible `/v1` endpoint.
    - **MiniMax API (platform.minimax.io)**: config is auto‑written for the Anthropic-compatible `/anthropic` endpoint.
    - **MiniMax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
+   - More detail: [MiniMax](/providers/minimax)
    - **Skip**: no auth configured yet.
    - Pick a default model from detected options (or enter provider/model manually).
    - Wizard runs a model check and warns if the configured model is unknown or missing auth.

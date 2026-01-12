@@ -116,6 +116,8 @@ MiniMax is configured via `models.providers` because it uses custom endpoints:
 - MiniMax API (Anthropic‑compatible): `--auth-choice minimax-api`
 - Auth: `MINIMAX_API_KEY`
 
+See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.
+
 ### Local proxies (LM Studio, vLLM, LiteLLM, etc.)
 
 Example (OpenAI‑compatible):
