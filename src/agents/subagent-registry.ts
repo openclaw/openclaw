@@ -2,6 +2,7 @@ import { loadConfig } from "../config/config.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 export type SubagentRunRecord = {
   runId: string;
@@ -23,11 +24,18 @@ const subagentRuns = new Map<string, SubagentRunRecord>();
 let sweeper: NodeJS.Timeout | null = null;
 let listenerStarted = false;
 
-function resolveArchiveAfterMs() {
-  const cfg = loadConfig();
-  const minutes = cfg.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
+function resolveArchiveAfterMs(cfg?: ReturnType<typeof loadConfig>) {
+  const config = cfg ?? loadConfig();
+  const minutes = config.agents?.defaults?.subagents?.archiveAfterMinutes ?? 60;
   if (!Number.isFinite(minutes) || minutes <= 0) return undefined;
   return Math.max(1, Math.floor(minutes)) * 60_000;
+}
+
+function resolveSubagentWaitTimeoutMs(
+  cfg: ReturnType<typeof loadConfig>,
+  runTimeoutSeconds?: number,
+) {
+  return resolveAgentTimeoutMs({ cfg, overrideSeconds: runTimeoutSeconds });
 }
 
 function startSweeper() {
@@ -130,10 +138,16 @@ export function registerSubagentRun(params: {
   task: string;
   cleanup: "delete" | "keep";
   label?: string;
+  runTimeoutSeconds?: number;
 }) {
   const now = Date.now();
-  const archiveAfterMs = resolveArchiveAfterMs();
+  const cfg = loadConfig();
+  const archiveAfterMs = resolveArchiveAfterMs(cfg);
   const archiveAtMs = archiveAfterMs ? now + archiveAfterMs : undefined;
+  const waitTimeoutMs = resolveSubagentWaitTimeoutMs(
+    cfg,
+    params.runTimeoutSeconds,
+  );
   subagentRuns.set(params.runId, {
     runId: params.runId,
     childSessionKey: params.childSessionKey,
@@ -152,21 +166,19 @@ export function registerSubagentRun(params: {
   if (archiveAfterMs) startSweeper();
   // Wait for subagent completion via gateway RPC (cross-process).
   // The in-process lifecycle listener is a fallback for embedded runs.
-  void waitForSubagentCompletion(params.runId);
+  void waitForSubagentCompletion(params.runId, waitTimeoutMs);
 }
 
-// Default wait timeout: 10 minutes. This covers most subagent runs.
-const DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
-
-async function waitForSubagentCompletion(runId: string) {
+async function waitForSubagentCompletion(runId: string, waitTimeoutMs: number) {
   try {
+    const timeoutMs = Math.max(1, Math.floor(waitTimeoutMs));
     const wait = (await callGateway({
       method: "agent.wait",
       params: {
         runId,
-        timeoutMs: DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS,
+        timeoutMs,
       },
-      timeoutMs: DEFAULT_SUBAGENT_WAIT_TIMEOUT_MS + 10_000,
+      timeoutMs: timeoutMs + 10_000,
     })) as { status?: string; startedAt?: number; endedAt?: number };
     if (wait?.status !== "ok" && wait?.status !== "error") return;
     const entry = subagentRuns.get(runId);

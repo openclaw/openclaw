@@ -211,6 +211,7 @@ export function createSessionsSpawnTool(opts?: {
         task,
         cleanup,
         label: label || undefined,
+        runTimeoutSeconds,
       });
 
       return jsonResult({
