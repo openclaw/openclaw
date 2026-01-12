@@ -103,6 +103,7 @@ describe("discord guild/channel resolution", () => {
           enabled: false,
           users: ["123"],
           systemPrompt: "Use short answers.",
+          autoThread: true,
         },
       },
     };
@@ -127,6 +128,7 @@ describe("discord guild/channel resolution", () => {
     expect(help?.enabled).toBe(false);
     expect(help?.users).toEqual(["123"]);
     expect(help?.systemPrompt).toBe("Use short answers.");
+    expect(help?.autoThread).toBe(true);
   });
 
   it("denies channel when config present but no match", () => {
