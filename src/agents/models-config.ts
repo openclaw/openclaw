@@ -3,11 +3,24 @@ import path from "node:path";
 
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
+import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import { resolveEnvApiKey } from "./model-auth.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
 type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
+const MINIMAX_API_BASE_URL = "https://api.minimax.io/anthropic";
+const MINIMAX_DEFAULT_MODEL_ID = "MiniMax-M2.1";
+const MINIMAX_DEFAULT_CONTEXT_WINDOW = 200000;
+const MINIMAX_DEFAULT_MAX_TOKENS = 8192;
+// Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
+const MINIMAX_API_COST = {
+  input: 15,
+  output: 60,
+  cacheRead: 2,
+  cacheWrite: 10,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -54,23 +67,55 @@ async function readJson(pathname: string): Promise<unknown> {
   }
 }
 
+function buildMinimaxApiProvider(): ProviderConfig {
+  return {
+    baseUrl: MINIMAX_API_BASE_URL,
+    api: "anthropic-messages",
+    models: [
+      {
+        id: MINIMAX_DEFAULT_MODEL_ID,
+        name: "MiniMax M2.1",
+        reasoning: false,
+        input: ["text"],
+        cost: MINIMAX_API_COST,
+        contextWindow: MINIMAX_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: MINIMAX_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
+function resolveImplicitProviders(params: {
+  cfg: ClawdbotConfig;
+  agentDir: string;
+}): ModelsConfig["providers"] {
+  const providers: Record<string, ProviderConfig> = {};
+  const minimaxEnv = resolveEnvApiKey("minimax");
+  const authStore = ensureAuthProfileStore(params.agentDir);
+  const hasMinimaxProfile =
+    listProfilesForProvider(authStore, "minimax").length > 0;
+  if (minimaxEnv || hasMinimaxProfile) {
+    providers.minimax = buildMinimaxApiProvider();
+  }
+  return providers;
+}
+
 export async function ensureClawdbotModelsJson(
   config?: ClawdbotConfig,
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
   const cfg = config ?? loadConfig();
-  const providers = cfg.models?.providers;
-  if (!providers || Object.keys(providers).length === 0) {
-    const agentDir = agentDirOverride?.trim()
-      ? agentDirOverride.trim()
-      : resolveClawdbotAgentDir();
+  const agentDir = agentDirOverride?.trim()
+    ? agentDirOverride.trim()
+    : resolveClawdbotAgentDir();
+  const configuredProviders = cfg.models?.providers ?? {};
+  const implicitProviders = resolveImplicitProviders({ cfg, agentDir });
+  const providers = { ...implicitProviders, ...configuredProviders };
+  if (Object.keys(providers).length === 0) {
     return { agentDir, wrote: false };
   }
 
   const mode = cfg.models?.mode ?? DEFAULT_MODE;
-  const agentDir = agentDirOverride?.trim()
-    ? agentDirOverride.trim()
-    : resolveClawdbotAgentDir();
   const targetPath = path.join(agentDir, "models.json");
 
   let mergedProviders = providers;
