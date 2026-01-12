@@ -487,9 +487,14 @@ describe("models config", () => {
         const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
-          providers: Record<string, { apiKey?: string }>;
+          providers: Record<
+            string,
+            { apiKey?: string; models?: Array<{ id: string }> }
+          >;
         };
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
+        const ids = parsed.providers.minimax?.models?.map((model) => model.id);
+        expect(ids).toContain("MiniMax-VL-01");
       } finally {
         if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = prevKey;

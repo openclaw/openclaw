@@ -25,6 +25,57 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
+function mergeProviderModels(
+  implicit: ProviderConfig,
+  explicit: ProviderConfig,
+): ProviderConfig {
+  const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
+  const explicitModels = Array.isArray(explicit.models) ? explicit.models : [];
+  if (implicitModels.length === 0) return { ...implicit, ...explicit };
+
+  const getId = (model: unknown): string => {
+    if (!model || typeof model !== "object") return "";
+    const id = (model as { id?: unknown }).id;
+    return typeof id === "string" ? id.trim() : "";
+  };
+  const seen = new Set(explicitModels.map(getId).filter(Boolean));
+
+  const mergedModels = [
+    ...explicitModels,
+    ...implicitModels.filter((model) => {
+      const id = getId(model);
+      if (!id) return false;
+      if (seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    }),
+  ];
+
+  return {
+    ...implicit,
+    ...explicit,
+    models: mergedModels,
+  };
+}
+
+function mergeProviders(params: {
+  implicit?: Record<string, ProviderConfig> | null;
+  explicit?: Record<string, ProviderConfig> | null;
+}): Record<string, ProviderConfig> {
+  const out: Record<string, ProviderConfig> = params.implicit
+    ? { ...params.implicit }
+    : {};
+  for (const [key, explicit] of Object.entries(params.explicit ?? {})) {
+    const providerKey = key.trim();
+    if (!providerKey) continue;
+    const implicit = out[providerKey];
+    out[providerKey] = implicit
+      ? mergeProviderModels(implicit, explicit)
+      : explicit;
+  }
+  return out;
+}
+
 async function readJson(pathname: string): Promise<unknown> {
   try {
     const raw = await fs.readFile(pathname, "utf8");
@@ -101,12 +152,15 @@ export async function ensureClawdbotModelsJson(
     ? agentDirOverride.trim()
     : resolveClawdbotAgentDir();
 
-  const explicitProviders = cfg.models?.providers ?? {};
+  const explicitProviders = (cfg.models?.providers ?? {}) as Record<
+    string,
+    ProviderConfig
+  >;
   const implicitProviders = resolveImplicitProviders({ agentDir });
-  const providers: Record<string, ProviderConfig> = {
-    ...implicitProviders,
-    ...explicitProviders,
-  };
+  const providers: Record<string, ProviderConfig> = mergeProviders({
+    implicit: implicitProviders,
+    explicit: explicitProviders,
+  });
   const implicitCopilot = await maybeBuildCopilotProvider({ agentDir });
   if (implicitCopilot && !providers["github-copilot"]) {
     providers["github-copilot"] = implicitCopilot;
