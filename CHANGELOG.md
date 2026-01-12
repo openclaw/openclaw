@@ -1,40 +1,19 @@
 # Changelog
 
-## 2026.1.12-1
+## 2026.1.12
+
+### Highlights
+- Memory: add vector search for agent memories (Markdown-only scope) with SQLite index, chunking, lazy sync + file watch, and per-agent enablement/fallback.
 
 ### Changes
-- Heartbeat: raise default `ackMaxChars` to 300 so any `HEARTBEAT_OK` replies with short padding stay internal (fewer noisy heartbeat posts on providers).
-- Onboarding: normalize API key inputs (strip `export KEY=...` wrappers) so shell-style entries paste cleanly.
+- Memory: embedding providers support OpenAI or local `node-llama-cpp`; config adds defaults + per-agent overrides, provider/fallback metadata surfaced in tools/CLI.
+- CLI/Tools: new `clawdbot memory` commands plus `memory_search`/`memory_get` tools returning snippets + line ranges and provider info.
+- Runtime: memory index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default; inline status replies now stay auth-gated while inline prompts continue to the agent.
 
 ### Fixes
-- Models: make `models.json` generation resilient for custom providers by normalizing `${ENV_VAR}` apiKey values and auto-filling missing `apiKey` from env/auth when provider models are configured (fixes MiniMax “Unknown model” on fresh installs).
-
-## 2026.1.11-5
-
-### Fixes
-- Auto-reply: prevent duplicate /status replies (including /usage alias) and add tests for inline + standalone cases.
-
-## 2026.1.11-4
-
-### Fixes
-- CLI: read the git commit hash from the package root so npm installs show it.
-
-## 2026.1.11-3
-
-### Fixes
-- CLI: avoid top-level await warnings in the entrypoint on fresh installs.
-- CLI: show a commit hash in the banner for npm installs (package.json gitHead fallback).
-
-## 2026.1.11-2
-
-### Fixes
-- Installer: ensure the CLI entrypoint is executable after npm installs.
-- Packaging: include `dist/plugins/` in the npm package to avoid missing module errors.
-
-## 2026.1.11-1
-
-### Fixes
-- Installer: include `patches/` in the npm package so postinstall patching works for npm/bun installs.
+- Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
+- Models: normalize `${ENV_VAR}` apiKey config values and auto-fill missing provider `apiKey` from env/auth when custom provider models are configured (fixes MiniMax “Unknown model” on fresh installs).
+- Telegram: show typing indicator in General forum topics. (#779) — thanks @azade-c.
 
 ## 2026.1.11
 
@@ -45,9 +24,6 @@
 - Agents: automatic pre-compaction memory flush turn to store durable memories before compaction.
 
 ### Changes
-- Deps: update pi-agent-core/pi-ai/pi-coding-agent/pi-tui and refresh the pi-ai patch.
-- Dev: bump @types/node.
-- macOS: add wizard debug CLI and share wizard parsing helpers.
 - CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.
 - CLI: configure section selection now loops until Continue.
 - Docs: explain MiniMax vs MiniMax Lightning (speed vs cost) and restore LM Studio example.
@@ -55,20 +31,16 @@
 - Onboarding/CLI: group model/auth choice by provider and label Z.AI as GLM 4.7.
 - Onboarding/Docs: add Moonshot AI (Kimi K2) auth choice + config example.
 - CLI/Onboarding: prompt to reuse detected API keys for Moonshot/MiniMax/Z.AI/Gemini/Anthropic/OpenCode.
-- CLI/Onboarding: move MiniMax to the top of the provider list.
-- CLI/Onboarding: add MiniMax M2.1 Lightning auth choice.
-- CLI/Onboarding: show key previews when reusing detected API keys.
 - Auto-reply: add compact `/model` picker (models + available providers) and show provider endpoints in `/model status`.
 - Control UI: add Config tab model presets (MiniMax M2.1, GLM 4.7, Kimi) for one-click setup.
 - Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, and config schema + Control UI labels (uiHints).
 - Plugins: add `clawdbot plugins install` (path/tgz/npm), plus `list|info|enable|disable|doctor` UX.
 - Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.
 - Docs: add plugins doc + cross-links from tools/skills/gateway config.
-- Docs: clarify memory flush behavior + writable workspace requirement in Memory/Session/FAQ.
 - Docs: add beginner-friendly plugin quick start + expand Voice Call plugin docs.
 - Tests: add Docker plugin loader + tgz-install smoke test.
 - Tests: extend Docker plugin E2E to cover installing from local folders (`plugins.load.paths`) and `file:` npm specs.
-- Tests: add coverage for pre-compaction memory flush settings (including read-only/CLI skips).
+- Tests: add coverage for pre-compaction memory flush settings.
 - Tests: modernize live model smoke selection for current releases and enforce tools/images/thinking-high coverage. (#769) — thanks @steipete.
 - Agents/Tools: add `apply_patch` tool for multi-file edits (experimental; gated by tools.exec.applyPatch; OpenAI-only).
 - Agents/Tools: rename the bash tool to exec (config alias maintained). (#748) — thanks @myfunc.
@@ -95,17 +67,9 @@
 - Installer UX: add `--install-method git|npm` and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).
 
 ### Fixes
-- Control UI: flatten nav into a single horizontal scroll row on tablet/mobile (and always show collapsed group items). (#771) — thanks @carlulsoe.
-- macOS: start + await local gateway before onboarding wizard begins.
-- macOS: cancel onboarding wizard on close, recover if the gateway drops the session, and time out stalled gateway connects.
-- macOS: wizard debug CLI now surfaces error status instead of exiting as complete.
 - Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible `/anthropic` endpoint by default (keep `minimax-api` as a legacy alias).
-- Agents/Browser: cap Playwright AI snapshots for tool calls (maxChars); CLI snapshots remain full. (#763) — thanks @thesash.
 - Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.
 - CLI: fix guardCancel typing for configure prompts. (#769) — thanks @steipete.
-- Providers: default groupPolicy to allowlist across providers and warn in doctor when groups are open.
-- MS Teams: add groupPolicy/groupAllowFrom gating for group chats and warn when groups are open.
-- Providers: strip tool call/result ids from Gemini CLI payloads to avoid API 400s. (#756)
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging; preserve close codes.
 - Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.
 - Gateway: tighten gateway listener detection.
@@ -117,23 +81,16 @@
 - Config: expand `~` in `CLAWDBOT_CONFIG_PATH` and common path-like config fields (including `plugins.load.paths`); guard invalid `$include` paths. (#731) — thanks @pasogott.
 - Agents: stop pre-creating session transcripts so first user messages persist in JSONL history.
 - Agents: skip pre-compaction memory flush when the session workspace is read-only.
-- Auto-reply: allow inline `/status` for allowlisted senders (stripped before the model); unauthorized senders see it as plain text.
-- Auto-reply: include config-only allowlisted models in `/model` even when the catalog is partial.
-- Auto-reply: allow fuzzy `/model` matches (e.g. `/model kimi` or `/model moonshot/kimi`) when unambiguous.
 - Auto-reply: ignore inline `/status` directives unless the message is directive-only.
-- CLI/Configure: enter the selected section immediately, then return to the section picker.
-- CLI/Configure: apply the chosen auth model as default (skip the extra picker) and refresh the model catalog for new providers.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.
 - Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.
 - Heartbeat: refresh prompt text for updated defaults.
 - Agents/Tools: use PowerShell on Windows to capture system utility output. (#748) — thanks @myfunc.
-- Agents/Tools: normalize Claude Code-style read/write/edit params (file_path/old_string/new_string) and keep sandbox guards in place. (#768) — thanks @hsrvc.
 - Docker: tolerate unset optional env vars in docker-setup.sh under strict mode. (#725) — thanks @petradonka.
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
 - Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
 - Agents: preserve reasoning items on tool-only turns.
-- Agents: enforce `<final>` gating for reasoning-tag providers to prevent tag/reasoning leaks. (#754) — thanks @mcinteerj.
 - Agents/Subagents: wait for completion before announcing, align wait timeout with run timeout, and make announce prompts more emphatic.
 - Agents: route subagent transcripts to the target agent sessions directory and add regression coverage. (#708) — thanks @xMikeMickelson.
 - Agents/Tools: preserve action enums when flattening tool schemas. (#708) — thanks @xMikeMickelson.
