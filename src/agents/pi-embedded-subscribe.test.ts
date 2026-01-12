@@ -1815,6 +1815,60 @@ describe("subscribeEmbeddedPiSession", () => {
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(2);
   });
 
+  it("flushes buffered block chunks before tool execution", () => {
+    let handler: SessionEventHandler | undefined;
+    const session: StubSession = {
+      subscribe: (fn) => {
+        handler = fn;
+        return () => {};
+      },
+    };
+
+    const onBlockReply = vi.fn();
+    const onBlockReplyFlush = vi.fn();
+
+    subscribeEmbeddedPiSession({
+      session: session as unknown as Parameters<
+        typeof subscribeEmbeddedPiSession
+      >[0]["session"],
+      runId: "run-flush-buffer",
+      onBlockReply,
+      onBlockReplyFlush,
+      blockReplyBreak: "text_end",
+      blockReplyChunking: { minChars: 50, maxChars: 200 },
+    });
+
+    handler?.({
+      type: "message_start",
+      message: { role: "assistant" },
+    });
+
+    handler?.({
+      type: "message_update",
+      message: { role: "assistant" },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Short chunk.",
+      },
+    });
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+
+    handler?.({
+      type: "tool_execution_start",
+      toolName: "bash",
+      toolCallId: "tool-flush-buffer-1",
+      args: { command: "echo flush" },
+    });
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]?.text).toBe("Short chunk.");
+    expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.invocationCallOrder[0]).toBeLessThan(
+      onBlockReplyFlush.mock.invocationCallOrder[0],
+    );
+  });
+
   it("does not call onBlockReplyFlush when callback is not provided", () => {
     let handler: SessionEventHandler | undefined;
     const session: StubSession = {
