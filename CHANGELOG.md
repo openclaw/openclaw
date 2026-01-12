@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026.1.12-2
+
+### Changes
+- Subagents: add config to set default sub-agent model (`agents.defaults.subagents.model` + per-agent override); still overridden by `sessions_spawn.model`.
+
+## 2026.1.12-1
+
+### Changes
+- Heartbeat: raise default `ackMaxChars` to 300 so any `HEARTBEAT_OK` replies with short padding stay internal (fewer noisy heartbeat posts on providers).
+- Onboarding: normalize API key inputs (strip `export KEY=...` wrappers) so shell-style entries paste cleanly.
+
 ## 2026.1.12
 
 ### Highlights

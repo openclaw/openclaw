@@ -687,6 +687,91 @@ describe("subagents", () => {
     });
   });
 
+  it("sessions_spawn applies default subagent model from defaults config", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: { defaults: { subagents: { model: "minimax/MiniMax-M2.1" } } },
+    };
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-default-model", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "agent:main:main",
+      agentProvider: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-default-model", {
+      task: "do thing",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      model: "minimax/MiniMax-M2.1",
+    });
+  });
+
+  it("sessions_spawn prefers per-agent subagent model over defaults", async () => {
+    resetSubagentRegistryForTests();
+    callGatewayMock.mockReset();
+    configOverride = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: { subagents: { model: "minimax/MiniMax-M2.1" } },
+        list: [{ id: "research", subagents: { model: "opencode/claude" } }],
+      },
+    };
+    const calls: Array<{ method?: string; params?: unknown }> = [];
+
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string; params?: unknown };
+      calls.push(request);
+      if (request.method === "sessions.patch") {
+        return { ok: true };
+      }
+      if (request.method === "agent") {
+        return { runId: "run-agent-model", status: "accepted" };
+      }
+      return {};
+    });
+
+    const tool = createClawdbotTools({
+      agentSessionKey: "agent:research:main",
+      agentProvider: "discord",
+    }).find((candidate) => candidate.name === "sessions_spawn");
+    if (!tool) throw new Error("missing sessions_spawn tool");
+
+    const result = await tool.execute("call-agent-model", {
+      task: "do thing",
+    });
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      modelApplied: true,
+    });
+
+    const patchCall = calls.find((call) => call.method === "sessions.patch");
+    expect(patchCall?.params).toMatchObject({
+      model: "opencode/claude",
+    });
+  });
+
   it("sessions_spawn skips invalid model overrides and continues", async () => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();

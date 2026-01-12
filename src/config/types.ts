@@ -1090,6 +1090,8 @@ export type ToolsConfig = {
   };
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
+    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
+    model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
       deny?: string[];
@@ -1119,6 +1121,8 @@ export type AgentConfig = {
   subagents?: {
     /** Allow spawning sub-agents under other agent ids. Use "*" to allow any. */
     allowAgents?: string[];
+    /** Per-agent default model for spawned sub-agents (string or {primary,fallbacks}). */
+    model?: string | { primary?: string; fallbacks?: string[] };
   };
   sandbox?: {
     mode?: "off" | "non-main" | "all";
