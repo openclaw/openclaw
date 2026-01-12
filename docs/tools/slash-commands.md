@@ -48,7 +48,7 @@ They run immediately, are stripped before the model sees the message, and the re
 Text + native (when enabled):
 - `/help`
 - `/commands`
-- `/status` (show current status; includes a short usage line when available)
+- `/status` (show current status; includes a short provider usage/quota line when available)
 - `/usage` (alias: `/status`)
 - `/whoami` (show your sender id; alias: `/id`)
 - `/config show|get|set|unset` (persist config to disk, owner-only; requires `commands.config: true`)
@@ -79,6 +79,12 @@ Notes:
 - **Fast path:** command-only messages from allowlisted senders are handled immediately (bypass queue + model).
 - **Inline shortcuts (allowlisted senders only):** `/help`, `/commands`, `/status` (`/usage`), `/whoami` (`/id`) also work when embedded in text.
 - Unauthorized command-only messages are silently ignored, and inline `/...` tokens are treated as plain text.
+
+## Usage vs cost (what shows where)
+
+- **Provider usage/quota** (example: “Claude 80% left”) shows up in `/status` when provider usage tracking is enabled.
+- **Per-response tokens/cost** is controlled by `/cost on|off` (appended to normal replies).
+- `/model status` is about **models/auth/endpoints**, not usage.
 
 ## Model selection (`/model`)
 
