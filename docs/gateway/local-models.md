@@ -113,6 +113,11 @@ Keep hosted models configured even when running local; use `models.mode: "merge"
 
 Swap the primary and fallback order; keep the same providers block and `models.mode: "merge"` so you can fall back to Sonnet or GPT-4.1 when the local box is down.
 
+### Regional hosting / data routing
+
+- Hosted MiniMax/Kimi/GLM variants also exist on OpenRouter with region-pinned endpoints (e.g., US-hosted). Pick the regional variant there to keep traffic in your chosen jurisdiction while still using `models.mode: "merge"` for Anthropic/OpenAI fallbacks.
+- Local-only remains the strongest privacy path; hosted regional routing is the middle ground when you need provider features but want control over data flow.
+
 ## Other OpenAI-compatible local proxies
 
 vLLM, LiteLLM, OAI-proxy, or custom gateways work if they expose an OpenAI-style `/v1` endpoint. Replace the provider block above with your endpoint and model ID:
