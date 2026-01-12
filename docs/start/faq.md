@@ -208,7 +208,8 @@ Clawdbot memory is just Markdown files in the agent workspace:
 - Curated long-term notes in `MEMORY.md` (main/private sessions only)
 
 Clawdbot also runs a **silent pre-compaction memory flush** to remind the model
-to write durable notes before auto-compaction. See [Memory](/concepts/memory).
+to write durable notes before auto-compaction. This only runs when the workspace
+is writable (read-only sandboxes skip it). See [Memory](/concepts/memory).
 
 ## Where things live on disk
 

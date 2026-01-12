@@ -25,6 +25,12 @@ All session state is **owned by the gateway** (the “master” Clawdbot). UI cl
 Clawdbot trims **old tool results** from the in-memory context right before LLM calls by default.
 This does **not** rewrite JSONL history. See [/concepts/session-pruning](/concepts/session-pruning).
 
+## Pre-compaction memory flush
+When a session nears auto-compaction, Clawdbot can run a **silent memory flush**
+turn that reminds the model to write durable notes to disk. This only runs when
+the workspace is writable. See [Memory](/concepts/memory) and
+[Compaction](/concepts/compaction).
+
 ## Mapping transports → session keys
 - Direct chats collapse to the per-agent primary key: `agent:<agentId>:<mainKey>`.
   - Multiple phone numbers and providers can map to the same agent main key; they act as transports into one conversation.

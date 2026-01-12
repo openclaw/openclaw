@@ -23,10 +23,11 @@
 - Plugins: add `clawdbot plugins install` (path/tgz/npm), plus `list|info|enable|disable|doctor` UX.
 - Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.
 - Docs: add plugins doc + cross-links from tools/skills/gateway config.
+- Docs: clarify memory flush behavior + writable workspace requirement in Memory/Session/FAQ.
 - Docs: add beginner-friendly plugin quick start + expand Voice Call plugin docs.
 - Tests: add Docker plugin loader + tgz-install smoke test.
 - Tests: extend Docker plugin E2E to cover installing from local folders (`plugins.load.paths`) and `file:` npm specs.
-- Tests: add coverage for pre-compaction memory flush settings.
+- Tests: add coverage for pre-compaction memory flush settings (including read-only/CLI skips).
 - Tests: modernize live model smoke selection for current releases and enforce tools/images/thinking-high coverage. (#769) — thanks @steipete.
 - Agents/Tools: add `apply_patch` tool for multi-file edits (experimental; gated by tools.exec.applyPatch; OpenAI-only).
 - Agents/Tools: rename the bash tool to exec (config alias maintained). (#748) — thanks @myfunc.
@@ -71,6 +72,7 @@
 - Agents: skip pre-compaction memory flush when the session workspace is read-only.
 - Auto-reply: allow inline `/status` for allowlisted senders (stripped before the model); unauthorized senders see it as plain text.
 - Auto-reply: include config-only allowlisted models in `/model` even when the catalog is partial.
+- Auto-reply: ignore inline `/status` directives unless the message is directive-only.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.
 - Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.
