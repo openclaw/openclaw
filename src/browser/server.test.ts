@@ -2,6 +2,7 @@ import { type AddressInfo, createServer } from "node:net";
 import { fetch as realFetch } from "undici";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./constants.js";
 
 let testPort = 0;
 let cdpBaseUrl = "";
@@ -329,6 +330,7 @@ describe("browser control server", () => {
     expect(pwMocks.snapshotAiViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
+      maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     });
 
     const nav = (await realFetch(`${base}/navigate`, {

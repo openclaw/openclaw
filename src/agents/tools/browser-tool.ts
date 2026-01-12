@@ -20,6 +20,7 @@ import {
   browserScreenshotAction,
 } from "../../browser/client-actions.js";
 import { resolveBrowserConfig } from "../../browser/config.js";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../../browser/constants.js";
 import { loadConfig } from "../../config/config.js";
 import {
   type AnyAgentTool,
@@ -43,8 +44,6 @@ const BROWSER_ACT_KINDS = [
 ] as const;
 
 type BrowserActKind = (typeof BROWSER_ACT_KINDS)[number];
-
-const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
 
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.

@@ -7,6 +7,7 @@ import type express from "express";
 import { ensureMediaDir, saveMediaBuffer } from "../../media/store.js";
 import { captureScreenshot, snapshotAria } from "../cdp.js";
 import type { BrowserFormField } from "../client-actions-core.js";
+import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "../constants.js";
 import {
   DEFAULT_BROWSER_SCREENSHOT_MAX_BYTES,
   DEFAULT_BROWSER_SCREENSHOT_MAX_SIDE,
@@ -1205,6 +1206,8 @@ export function registerBrowserAgentRoutes(
       maxCharsRaw > 0
         ? Math.floor(maxCharsRaw)
         : undefined;
+    const resolvedMaxChars =
+      format === "ai" ? (maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS) : undefined;
     const interactive = toBoolean(req.query.interactive);
     const compact = toBoolean(req.query.compact);
     const depth = toNumber(req.query.depth);
@@ -1239,7 +1242,9 @@ export function registerBrowserAgentRoutes(
               .snapshotAiViaPlaywright({
                 cdpUrl: profileCtx.profile.cdpUrl,
                 targetId: tab.targetId,
-                ...(maxChars ? { maxChars } : {}),
+                ...(typeof resolvedMaxChars === "number"
+                  ? { maxChars: resolvedMaxChars }
+                  : {}),
               })
               .catch(async (err) => {
                 // Public-API fallback when Playwright's private _snapshotForAI is missing.
