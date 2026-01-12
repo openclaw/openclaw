@@ -29,6 +29,36 @@ const UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "maxProperties",
 ]);
 
+// Check if an anyOf/oneOf is a nullable pattern like [{ type: "string" }, { type: "null" }].
+// Cloud Code Assist rejects `type: "null"`, so we flatten to just the non-null type.
+function tryFlattenNullableAnyOf(
+  variants: unknown[],
+): Record<string, unknown> | null {
+  if (variants.length !== 2) return null;
+
+  let nonNullVariant: Record<string, unknown> | null = null;
+  let hasNull = false;
+
+  for (const variant of variants) {
+    if (!variant || typeof variant !== "object") return null;
+    const v = variant as Record<string, unknown>;
+
+    if (v.type === "null") {
+      hasNull = true;
+    } else if (typeof v.type === "string") {
+      if (nonNullVariant) return null;
+      nonNullVariant = v;
+    } else {
+      return null;
+    }
+  }
+
+  if (hasNull && nonNullVariant) {
+    return { ...nonNullVariant };
+  }
+  return null;
+}
+
 // Check if an anyOf/oneOf array contains only literal values that can be flattened.
 // TypeBox Type.Literal generates { const: "value", type: "string" }.
 // Some schemas may use { enum: ["value"], type: "string" }.
@@ -168,6 +198,19 @@ function cleanSchemaForGeminiWithDefs(
   const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
 
   if (hasAnyOf) {
+    // Try to flatten nullable patterns like [string, null] -> string
+    const nullable = tryFlattenNullableAnyOf(obj.anyOf as unknown[]);
+    if (nullable) {
+      const result = cleanSchemaForGeminiWithDefs(nullable, nextDefs, refStack);
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        for (const key of ["description", "title", "default"]) {
+          if (key in obj && obj[key] !== undefined)
+            (result as Record<string, unknown>)[key] = obj[key];
+        }
+      }
+      return result;
+    }
+
     const flattened = tryFlattenLiteralAnyOf(obj.anyOf as unknown[]);
     if (flattened) {
       const result: Record<string, unknown> = {
@@ -182,6 +225,19 @@ function cleanSchemaForGeminiWithDefs(
   }
 
   if (hasOneOf) {
+    // Try to flatten nullable patterns like [string, null] -> string
+    const nullable = tryFlattenNullableAnyOf(obj.oneOf as unknown[]);
+    if (nullable) {
+      const result = cleanSchemaForGeminiWithDefs(nullable, nextDefs, refStack);
+      if (result && typeof result === "object" && !Array.isArray(result)) {
+        for (const key of ["description", "title", "default"]) {
+          if (key in obj && obj[key] !== undefined)
+            (result as Record<string, unknown>)[key] = obj[key];
+        }
+      }
+      return result;
+    }
+
     const flattened = tryFlattenLiteralAnyOf(obj.oneOf as unknown[]);
     if (flattened) {
       const result: Record<string, unknown> = {
