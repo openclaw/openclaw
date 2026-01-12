@@ -407,6 +407,54 @@ describe("directive behavior", () => {
     });
   });
 
+  it("applies inline reasoning in mixed messages and acks immediately", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "done" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const blockReplies: string[] = [];
+      const storePath = path.join(home, "sessions.json");
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "please reply\n/reasoning on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+        },
+        {
+          onBlockReply: (payload) => {
+            if (payload.text) blockReplies.push(payload.text);
+          },
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: {
+            allowFrom: ["*"],
+          },
+          session: { store: storePath },
+        },
+      );
+
+      const texts = (Array.isArray(res) ? res : [res])
+        .map((entry) => entry?.text)
+        .filter(Boolean);
+      expect(texts).toContain("done");
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+    });
+  });
+
   it("acks verbose directive immediately with system marker", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();
