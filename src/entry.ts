@@ -21,5 +21,12 @@ if (parsed.profile) {
   process.argv = parsed.argv;
 }
 
-const { runCli } = await import("./cli/run-main.js");
-await runCli(process.argv);
+import("./cli/run-main.js")
+  .then(({ runCli }) => runCli(process.argv))
+  .catch((error) => {
+    console.error(
+      "[clawdbot] Failed to start CLI:",
+      error instanceof Error ? error.stack ?? error.message : error,
+    );
+    process.exitCode = 1;
+  });

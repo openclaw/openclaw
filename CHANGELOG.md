@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.1.11-3
+
+### Fixes
+- CLI: avoid top-level await warnings in the entrypoint on fresh installs.
+- CLI: show a commit hash in the banner for npm installs (package.json gitHead fallback).
+
 ## 2026.1.11-2
 
 ### Fixes
