@@ -247,6 +247,7 @@ export type DiscordGuildEntryResolved = {
       enabled?: boolean;
       users?: Array<string | number>;
       systemPrompt?: string;
+      autoThread?: boolean;
     }
   >;
 };
@@ -258,6 +259,7 @@ export type DiscordChannelConfigResolved = {
   enabled?: boolean;
   users?: Array<string | number>;
   systemPrompt?: string;
+  autoThread?: boolean;
 };
 
 export type DiscordMessageEvent = Parameters<
@@ -905,8 +907,12 @@ export function createDiscordMessageHandler(params: {
             }
           : undefined;
 
-      const shouldRequireMention =
-        channelConfig?.requireMention ?? guildInfo?.requireMention ?? true;
+      const shouldRequireMention = resolveDiscordShouldRequireMention({
+        isGuildMessage,
+        isThread: Boolean(threadChannel),
+        channelConfig,
+        guildInfo,
+      });
       const hasAnyMention = Boolean(
         !isDirectMessage &&
           (message.mentionedEveryone ||
@@ -1155,6 +1161,39 @@ export function createDiscordMessageHandler(params: {
         return;
       }
 
+      let deliverTarget = replyTarget;
+      if (isGuildMessage && channelConfig?.autoThread && !threadChannel) {
+        try {
+          const base = truncateUtf16Safe(
+            (baseText || combinedBody || "Thread").replace(/\s+/g, " ").trim(),
+            80,
+          );
+          const authorLabel = author.username ?? author.id;
+          const threadName =
+            truncateUtf16Safe(`${authorLabel}: ${base}`.trim(), 100) ||
+            `Thread ${message.id}`;
+
+          const created = (await client.rest.post(
+            `${Routes.channelMessage(message.channelId, message.id)}/threads`,
+            {
+              body: {
+                name: threadName,
+                auto_archive_duration: 60,
+              },
+            },
+          )) as { id?: string };
+
+          const createdId = created?.id ? String(created.id) : "";
+          if (createdId) {
+            deliverTarget = `channel:${createdId}`;
+          }
+        } catch (err) {
+          logVerbose(
+            `discord: autoThread failed for ${message.channelId}/${message.id}: ${String(err)}`,
+          );
+        }
+      }
+
       if (isDirectMessage) {
         const sessionCfg = cfg.session;
         const storePath = resolveStorePath(sessionCfg?.store, {
@@ -1188,12 +1227,12 @@ export function createDiscordMessageHandler(params: {
           deliver: async (payload) => {
             await deliverDiscordReply({
               replies: [payload],
-              target: replyTarget,
+              target: deliverTarget,
               token,
               accountId,
               rest: client.rest,
               runtime,
-              replyToMode,
+              replyToMode: deliverTarget !== replyTarget ? "off" : replyToMode,
               textLimit,
               maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             });
@@ -2370,6 +2409,7 @@ export function resolveDiscordChannelConfig(params: {
       enabled: byId.enabled,
       users: byId.users,
       systemPrompt: byId.systemPrompt,
+      autoThread: byId.autoThread,
     };
   if (channelSlug && channels[channelSlug]) {
     const entry = channels[channelSlug];
@@ -2380,6 +2420,7 @@ export function resolveDiscordChannelConfig(params: {
       enabled: entry.enabled,
       users: entry.users,
       systemPrompt: entry.systemPrompt,
+      autoThread: entry.autoThread,
     };
   }
   if (channelName && channels[channelName]) {
@@ -2391,9 +2432,21 @@ export function resolveDiscordChannelConfig(params: {
       enabled: entry.enabled,
       users: entry.users,
       systemPrompt: entry.systemPrompt,
+      autoThread: entry.autoThread,
     };
   }
   return { allowed: false };
+}
+
+export function resolveDiscordShouldRequireMention(params: {
+  isGuildMessage: boolean;
+  isThread: boolean;
+  channelConfig?: DiscordChannelConfigResolved | null;
+  guildInfo?: DiscordGuildEntryResolved | null;
+}): boolean {
+  if (!params.isGuildMessage) return false;
+  if (params.isThread && params.channelConfig?.autoThread) return false;
+  return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
 }
 
 export function isDiscordGroupAllowedByPolicy(params: {

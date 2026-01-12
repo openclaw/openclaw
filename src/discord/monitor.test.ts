@@ -10,6 +10,7 @@ import {
   resolveDiscordChannelConfig,
   resolveDiscordGuildEntry,
   resolveDiscordReplyTarget,
+  resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
@@ -103,6 +104,7 @@ describe("discord guild/channel resolution", () => {
           enabled: false,
           users: ["123"],
           systemPrompt: "Use short answers.",
+          autoThread: true,
         },
       },
     };
@@ -127,6 +129,7 @@ describe("discord guild/channel resolution", () => {
     expect(help?.enabled).toBe(false);
     expect(help?.users).toEqual(["123"]);
     expect(help?.systemPrompt).toBe("Use short answers.");
+    expect(help?.autoThread).toBe(true);
   });
 
   it("denies channel when config present but no match", () => {
@@ -142,6 +145,54 @@ describe("discord guild/channel resolution", () => {
       channelSlug: "random",
     });
     expect(channel?.allowed).toBe(false);
+  });
+});
+
+describe("discord mention gating", () => {
+  it("requires mention by default", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: true,
+      channels: {
+        general: { allow: true },
+      },
+    };
+    const channelConfig = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "1",
+      channelName: "General",
+      channelSlug: "general",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: false,
+        channelConfig,
+        guildInfo,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not require mention inside autoThread threads", () => {
+    const guildInfo: DiscordGuildEntryResolved = {
+      requireMention: true,
+      channels: {
+        general: { allow: true, autoThread: true },
+      },
+    };
+    const channelConfig = resolveDiscordChannelConfig({
+      guildInfo,
+      channelId: "1",
+      channelName: "General",
+      channelSlug: "general",
+    });
+    expect(
+      resolveDiscordShouldRequireMention({
+        isGuildMessage: true,
+        isThread: true,
+        channelConfig,
+        guildInfo,
+      }),
+    ).toBe(false);
   });
 });
 
