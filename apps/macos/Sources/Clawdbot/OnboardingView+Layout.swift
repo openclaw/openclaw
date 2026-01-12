@@ -54,6 +54,7 @@ extension OnboardingView {
             self.stopPermissionMonitoring()
             self.stopDiscovery()
             self.stopAuthMonitoring()
+            Task { await self.onboardingWizard.cancelIfRunning() }
         }
         .task {
             await self.refreshPerms()

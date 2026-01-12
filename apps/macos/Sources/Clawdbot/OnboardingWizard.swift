@@ -35,6 +35,10 @@ final class OnboardingWizardModel {
     private(set) var errorMessage: String?
     var isStarting = false
     var isSubmitting = false
+    private var lastStartMode: AppState.ConnectionMode?
+    private var lastStartWorkspace: String?
+    private var restartAttempts = 0
+    private let maxRestartAttempts = 1
 
     var isComplete: Bool { self.status == "done" }
     var isRunning: Bool { self.status == "running" }
@@ -46,6 +50,9 @@ final class OnboardingWizardModel {
         self.errorMessage = nil
         self.isStarting = false
         self.isSubmitting = false
+        self.restartAttempts = 0
+        self.lastStartMode = nil
+        self.lastStartWorkspace = nil
     }
 
     func startIfNeeded(mode: AppState.ConnectionMode, workspace: String? = nil) async {
@@ -53,9 +60,18 @@ final class OnboardingWizardModel {
         guard mode == .local else { return }
         self.isStarting = true
         self.errorMessage = nil
+        self.lastStartMode = mode
+        self.lastStartWorkspace = workspace
         defer { self.isStarting = false }
 
         do {
+            GatewayProcessManager.shared.setActive(true)
+            if await GatewayProcessManager.shared.waitForGatewayReady(timeout: 12) == false {
+                throw NSError(
+                    domain: "Gateway",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Gateway did not become ready. Check that it is running."])
+            }
             var params: [String: AnyCodable] = ["mode": AnyCodable("local")]
             if let workspace, !workspace.isEmpty {
                 params["workspace"] = AnyCodable(workspace)
@@ -89,6 +105,9 @@ final class OnboardingWizardModel {
                 params: params)
             self.applyNextResult(res)
         } catch {
+            if self.restartIfSessionLost(error: error) {
+                return
+            }
             self.status = "error"
             self.errorMessage = error.localizedDescription
             onboardingWizardLogger.error("submit failed: \(error.localizedDescription, privacy: .public)")
@@ -111,29 +130,53 @@ final class OnboardingWizardModel {
 
     private func applyStartResult(_ res: WizardStartResult) {
         self.sessionId = res.sessionid
-        self.status = anyCodableStringValue(res.status) ?? (res.done ? "done" : "running")
+        self.status = wizardStatusString(res.status) ?? (res.done ? "done" : "running")
         self.errorMessage = res.error
         self.currentStep = decodeWizardStep(res.step)
+        if self.currentStep == nil, res.step != nil {
+            onboardingWizardLogger.error("wizard step decode failed")
+        }
         if res.done { self.currentStep = nil }
+        self.restartAttempts = 0
     }
 
     private func applyNextResult(_ res: WizardNextResult) {
-        self.status = anyCodableStringValue(res.status) ?? self.status
+        let status = wizardStatusString(res.status)
+        self.status = status ?? self.status
         self.errorMessage = res.error
         self.currentStep = decodeWizardStep(res.step)
+        if self.currentStep == nil, res.step != nil {
+            onboardingWizardLogger.error("wizard step decode failed")
+        }
         if res.done { self.currentStep = nil }
-        if res.done || anyCodableStringValue(res.status) == "done" || anyCodableStringValue(res.status) == "cancelled"
-            || anyCodableStringValue(res.status) == "error"
+        if res.done || status == "done" || status == "cancelled" || status == "error"
         {
             self.sessionId = nil
         }
     }
 
     private func applyStatusResult(_ res: WizardStatusResult) {
-        self.status = anyCodableStringValue(res.status) ?? "unknown"
+        self.status = wizardStatusString(res.status) ?? "unknown"
         self.errorMessage = res.error
         self.currentStep = nil
         self.sessionId = nil
+    }
+
+    private func restartIfSessionLost(error: Error) -> Bool {
+        guard let gatewayError = error as? GatewayResponseError else { return false }
+        guard gatewayError.code == ErrorCode.invalidRequest.rawValue else { return false }
+        let message = gatewayError.message.lowercased()
+        guard message.contains("wizard not found") || message.contains("wizard not running") else { return false }
+        guard let mode = self.lastStartMode, self.restartAttempts < self.maxRestartAttempts else {
+            return false
+        }
+        self.restartAttempts += 1
+        self.sessionId = nil
+        self.currentStep = nil
+        self.status = nil
+        self.errorMessage = "Wizard session lost. Restarting…"
+        Task { await self.startIfNeeded(mode: mode, workspace: self.lastStartWorkspace) }
+        return true
     }
 }
 
@@ -332,99 +375,4 @@ private struct WizardOptionItem: Identifiable {
     let option: WizardOption
 
     var id: Int { self.index }
-}
-
-private struct WizardOption {
-    let value: ProtocolAnyCodable?
-    let label: String
-    let hint: String?
-}
-
-private func decodeWizardStep(_ raw: [String: ProtocolAnyCodable]?) -> WizardStep? {
-    guard let raw else { return nil }
-    do {
-        let data = try JSONEncoder().encode(raw)
-        return try JSONDecoder().decode(WizardStep.self, from: data)
-    } catch {
-        onboardingWizardLogger.error("wizard step decode failed: \(error.localizedDescription, privacy: .public)")
-        return nil
-    }
-}
-
-private func parseWizardOptions(_ raw: [[String: ProtocolAnyCodable]]?) -> [WizardOption] {
-    guard let raw else { return [] }
-    return raw.map { entry in
-        let value = entry["value"]
-        let label = (entry["label"]?.value as? String) ?? ""
-        let hint = entry["hint"]?.value as? String
-        return WizardOption(value: value, label: label, hint: hint)
-    }
-}
-
-private func wizardStepType(_ step: WizardStep) -> String {
-    (step.type.value as? String) ?? ""
-}
-
-private func anyCodableString(_ value: ProtocolAnyCodable?) -> String {
-    switch value?.value {
-    case let string as String:
-        string
-    case let int as Int:
-        String(int)
-    case let double as Double:
-        String(double)
-    case let bool as Bool:
-        bool ? "true" : "false"
-    default:
-        ""
-    }
-}
-
-private func anyCodableStringValue(_ value: ProtocolAnyCodable?) -> String? {
-    value?.value as? String
-}
-
-private func anyCodableBool(_ value: ProtocolAnyCodable?) -> Bool {
-    switch value?.value {
-    case let bool as Bool:
-        bool
-    case let string as String:
-        string.lowercased() == "true"
-    default:
-        false
-    }
-}
-
-private func anyCodableArray(_ value: ProtocolAnyCodable?) -> [ProtocolAnyCodable] {
-    switch value?.value {
-    case let arr as [ProtocolAnyCodable]:
-        arr
-    case let arr as [Any]:
-        arr.map { ProtocolAnyCodable($0) }
-    default:
-        []
-    }
-}
-
-private func anyCodableEqual(_ lhs: ProtocolAnyCodable?, _ rhs: ProtocolAnyCodable?) -> Bool {
-    switch (lhs?.value, rhs?.value) {
-    case let (l as String, r as String):
-        l == r
-    case let (l as Int, r as Int):
-        l == r
-    case let (l as Double, r as Double):
-        l == r
-    case let (l as Bool, r as Bool):
-        l == r
-    case let (l as String, r as Int):
-        l == String(r)
-    case let (l as Int, r as String):
-        String(l) == r
-    case let (l as String, r as Double):
-        l == String(r)
-    case let (l as Double, r as String):
-        String(l) == r
-    default:
-        false
-    }
 }
