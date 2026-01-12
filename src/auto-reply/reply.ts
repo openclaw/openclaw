@@ -64,6 +64,7 @@ import {
   persistInlineDirectives,
   resolveDefaultModel,
 } from "./reply/directive-handling.js";
+import { extractStatusDirective } from "./reply/directives.js";
 import {
   buildGroupIntro,
   defaultGroupActivation,
@@ -489,8 +490,16 @@ export async function getReplyFromConfig(
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
   let parsedDirectives = parseInlineDirectives(commandSource, {
     modelAliases: configuredAliases,
-    allowStatusDirective: command.isAuthorizedSender,
   });
+  const hasInlineStatus =
+    parsedDirectives.hasStatusDirective &&
+    parsedDirectives.cleaned.trim().length > 0;
+  if (hasInlineStatus) {
+    parsedDirectives = {
+      ...parsedDirectives,
+      hasStatusDirective: false,
+    };
+  }
   if (
     isGroup &&
     ctx.WasMentioned !== true &&
@@ -520,7 +529,6 @@ export async function getReplyFromConfig(
     if (noMentions.trim().length > 0) {
       const directiveOnlyCheck = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
-        allowStatusDirective: command.isAuthorizedSender,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
         const allowInlineStatus =
@@ -554,7 +562,6 @@ export async function getReplyFromConfig(
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
-        allowStatusDirective: command.isAuthorizedSender,
       }).cleaned;
     }
 
@@ -562,7 +569,6 @@ export async function getReplyFromConfig(
     if (markerIndex < 0) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
-        allowStatusDirective: command.isAuthorizedSender,
       }).cleaned;
     }
 
@@ -575,7 +581,6 @@ export async function getReplyFromConfig(
     );
     const cleanedTail = parseInlineDirectives(tail, {
       modelAliases: configuredAliases,
-      allowStatusDirective: command.isAuthorizedSender,
     }).cleaned;
     return `${head}${cleanedTail}`;
   })();
@@ -697,7 +702,7 @@ export async function getReplyFromConfig(
     : directives.rawModelDirective;
 
   if (!command.isAuthorizedSender) {
-    cleanedBody = existingBody;
+    cleanedBody = extractStatusDirective(existingBody).cleaned;
     sessionCtx.Body = cleanedBody;
     sessionCtx.BodyStripped = cleanedBody;
     directives = {
