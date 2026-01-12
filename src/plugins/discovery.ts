@@ -214,6 +214,46 @@ function discoverFromPath(params: {
   }
 
   if (stat.isDirectory()) {
+    const manifest = readPackageManifest(resolved);
+    const extensions = manifest ? resolvePackageExtensions(manifest) : [];
+
+    if (extensions.length > 0) {
+      for (const extPath of extensions) {
+        const source = path.resolve(resolved, extPath);
+        addCandidate({
+          candidates: params.candidates,
+          seen: params.seen,
+          idHint: deriveIdHint({
+            filePath: source,
+            packageName: manifest?.name,
+            hasMultipleExtensions: extensions.length > 1,
+          }),
+          source,
+          origin: params.origin,
+          workspaceDir: params.workspaceDir,
+          manifest,
+        });
+      }
+      return;
+    }
+
+    const indexCandidates = ["index.ts", "index.js", "index.mjs", "index.cjs"];
+    const indexFile = indexCandidates
+      .map((candidate) => path.join(resolved, candidate))
+      .find((candidate) => fs.existsSync(candidate));
+
+    if (indexFile && isExtensionFile(indexFile)) {
+      addCandidate({
+        candidates: params.candidates,
+        seen: params.seen,
+        idHint: path.basename(resolved),
+        source: indexFile,
+        origin: params.origin,
+        workspaceDir: params.workspaceDir,
+      });
+      return;
+    }
+
     discoverInDirectory({
       dir: resolved,
       origin: params.origin,
