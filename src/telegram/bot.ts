@@ -954,36 +954,40 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       logVerbose("telegram: setMyCommands unavailable; skipping registration");
     }
 
-    if (typeof (bot as unknown as { command?: unknown }).command !== "function") {
+    if (
+      typeof (bot as unknown as { command?: unknown }).command !== "function"
+    ) {
       logVerbose("telegram: bot.command unavailable; skipping native handlers");
     } else {
       for (const command of nativeCommands) {
         bot.command(command.name, async (ctx) => {
-        const msg = ctx.message;
-        if (!msg) return;
-        if (shouldSkipUpdate(ctx)) return;
-        const chatId = msg.chat.id;
-        const isGroup =
-          msg.chat.type === "group" || msg.chat.type === "supergroup";
-        const messageThreadId = (msg as { message_thread_id?: number })
-          .message_thread_id;
-        const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
-        const storeAllowFrom = await readTelegramAllowFromStore().catch(
-          () => [],
-        );
-        const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
-          chatId,
-          messageThreadId,
-        );
-        const groupAllowOverride = firstDefined(
-          topicConfig?.allowFrom,
-          groupConfig?.allowFrom,
-        );
-        const effectiveGroupAllow = normalizeAllowFrom([
-          ...(groupAllowOverride ?? groupAllowFrom ?? []),
-          ...storeAllowFrom,
-        ]);
-        const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+          const msg = ctx.message;
+          if (!msg) return;
+          if (shouldSkipUpdate(ctx)) return;
+          const chatId = msg.chat.id;
+          const isGroup =
+            msg.chat.type === "group" || msg.chat.type === "supergroup";
+          const messageThreadId = (msg as { message_thread_id?: number })
+            .message_thread_id;
+          const isForum =
+            (msg.chat as { is_forum?: boolean }).is_forum === true;
+          const storeAllowFrom = await readTelegramAllowFromStore().catch(
+            () => [],
+          );
+          const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+            chatId,
+            messageThreadId,
+          );
+          const groupAllowOverride = firstDefined(
+            topicConfig?.allowFrom,
+            groupConfig?.allowFrom,
+          );
+          const effectiveGroupAllow = normalizeAllowFrom([
+            ...(groupAllowOverride ?? groupAllowFrom ?? []),
+            ...storeAllowFrom,
+          ]);
+          const hasGroupAllowOverride =
+            typeof groupAllowOverride !== "undefined";
 
           if (isGroup && groupConfig?.enabled === false) {
             await bot.api.sendMessage(chatId, "This group is disabled.");
@@ -1148,7 +1152,9 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
   } else if (nativeDisabledExplicit) {
-    const api = bot.api as unknown as { setMyCommands?: (commands: []) => Promise<unknown> };
+    const api = bot.api as unknown as {
+      setMyCommands?: (commands: []) => Promise<unknown>;
+    };
     if (typeof api.setMyCommands === "function") {
       api.setMyCommands([]).catch((err) => {
         runtime.error?.(

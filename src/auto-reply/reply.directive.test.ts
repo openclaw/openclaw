@@ -1977,7 +1977,9 @@ describe("directive behavior", () => {
                 baseUrl: "http://127.0.0.1:1234/v1",
                 apiKey: "lmstudio",
                 api: "openai-responses",
-                models: [{ id: "minimax-m2.1-gs32", name: "MiniMax M2.1 GS32" }],
+                models: [
+                  { id: "minimax-m2.1-gs32", name: "MiniMax M2.1 GS32" },
+                ],
               },
             },
           },
@@ -1986,11 +1988,11 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to minimax/MiniMax-M2.1");
+      expect(text).toContain("Model reset to default (minimax/MiniMax-M2.1).");
       const store = loadSessionStore(storePath);
       const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("MiniMax-M2.1");
-      expect(entry.providerOverride).toBe("minimax");
+      expect(entry.modelOverride).toBeUndefined();
+      expect(entry.providerOverride).toBeUndefined();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

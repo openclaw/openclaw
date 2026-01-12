@@ -74,10 +74,8 @@ function scoreFuzzyMatch(params: {
     if (!fragment) return 0;
     let score = 0;
     if (value === fragment) score = Math.max(score, weights.exact);
-    if (value.startsWith(fragment))
-      score = Math.max(score, weights.starts);
-    if (value.includes(fragment))
-      score = Math.max(score, weights.includes);
+    if (value.startsWith(fragment)) score = Math.max(score, weights.starts);
+    if (value.includes(fragment)) score = Math.max(score, weights.includes);
     return score;
   };
 
