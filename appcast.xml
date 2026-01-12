@@ -3,6 +3,22 @@
     <channel>
         <title>Clawdbot</title>
         <item>
+            <title>2026.1.11-1</title>
+            <pubDate>Mon, 12 Jan 2026 09:53:46 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>5207</sparkle:version>
+            <sparkle:shortVersionString>2026.1.11-1</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.11-1</h2>
+<h3>Fixes</h3>
+<ul>
+<li>Installer: include <code>patches/</code> in the npm package so postinstall patching works for npm/bun installs.</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.11-1/Clawdbot-2026.1.11-1.zip" length="19860761" type="application/octet-stream" sparkle:edSignature="CXKzzha/s6cGBeF0TMz+cV8/pfqoAL9ZyNVacYRLnnHEwA1cMbOWRftpGRhYe4HknVQYYBgNQqZK2lBxpOZgBg=="/>
+        </item>
+        <item>
             <title>2026.1.11</title>
             <pubDate>Mon, 12 Jan 2026 09:37:49 +0000</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
@@ -224,78 +240,6 @@
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.10/Clawdbot-2026.1.10.zip" length="199586798" type="application/octet-stream" sparkle:edSignature="Ntb22WL4b0Hu3Ntqm1iqnD+5bUqqa36iSQ8vbT/50C5FnL5IjF4GoHWrfanJ58JhBCQ4eKdK+K0U4OBZiSzZBw=="/>
-        </item>
-        <item>
-            <title>2026.1.9</title>
-            <pubDate>Sat, 10 Jan 2026 05:23:02 +0100</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
-            <sparkle:version>4607</sparkle:version>
-            <sparkle:shortVersionString>2026.1.9</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.9</h2>
-<h3>Highlights</h3>
-<ul>
-<li>Microsoft Teams provider: polling, attachments, outbound CLI send, per-channel policy.</li>
-<li>Models/Auth expansion: OpenCode Zen + MiniMax API onboarding; token auth profiles + auth order; OAuth health in doctor/status.</li>
-<li>CLI/Gateway UX: message subcommands, gateway discover/status/SSH, /config + /debug, sandbox CLI.</li>
-<li>Provider reliability sweep: WhatsApp contact cards/targets, Telegram audio-as-voice + streaming, Signal reactions, Slack threading, Discord stability.</li>
-<li>Auto-reply + status: block-streaming controls, reasoning handling, usage/cost reporting.</li>
-<li>Control UI/TUI: queued messages, session links, reasoning view, mobile polish, logs UX.</li>
-</ul>
-<h3>Breaking</h3>
-<ul>
-<li>CLI: <code>clawdbot message</code> now subcommands (<code>message send|poll|...</code>) and requires <code>--provider</code> unless only one provider configured.</li>
-<li>Commands/Tools: <code>/restart</code> and gateway restart tool disabled by default; enable with <code>commands.restart=true</code>.</li>
-</ul>
-<h3>New Features and Changes</h3>
-<ul>
-<li>Models/Auth: OpenCode Zen onboarding (#623) — thanks @magimetal; MiniMax Anthropic-compatible API + hosted onboarding (#590, #495) — thanks @mneves75, @tobiasbischoff.</li>
-<li>Models/Auth: setup-token + token auth profiles; <code>clawdbot models auth order {get,set,clear}</code>; per-agent auth candidates in <code>/model status</code>; OAuth expiry checks in doctor/status.</li>
-<li>Agent/System: claude-cli runner; <code>session_status</code> tool (and sandbox allow); adaptive context pruning default; system prompt messaging guidance + no auto self-update; eligible skills list injection; sub-agent context trimmed.</li>
-<li>Commands: <code>/commands</code> list; <code>/models</code> alias; <code>/usage</code> alias; <code>/debug</code> runtime overrides + effective config view; <code>/config</code> chat updates + <code>/config get</code>; <code>config --section</code>.</li>
-<li>CLI/Gateway: unified message tool + message subcommands; gateway discover (local + wide-area DNS-SD) with JSON/timeout; gateway status human-readable + JSON + SSH loopback; wide-area records include gatewayPort/sshPort/cliPath + tailnet DNS fallback.</li>
-<li>CLI UX: logs output modes (pretty/plain/JSONL) + colorized health/daemon output; global <code>--no-color</code>; lobster palette in onboarding/config.</li>
-<li>Dev ergonomics: gateway <code>--dev/--reset</code> + dev profile auto-config; C-3PO dev templates; dev gateway/TUI helper scripts.</li>
-<li>Sandbox/Workspace: sandbox list/recreate commands; sync skills into sandbox workspace; sandbox browser auto-start.</li>
-<li>Config/Onboarding: inline env vars; OpenAI API key flow to shared <code>~/.clawdbot/.env</code>; Opus 4.5 default prompt for Anthropic auth; QuickStart auto-install gateway (Node-only) + provider picker tweaks + skip-systemd flags; TUI bootstrap prompt (<code>tui --message</code>); remove Bun runtime choice.</li>
-<li>Providers: Microsoft Teams provider (polling, attachments, outbound sends, requireMention, config reload/DM policy). (#404) — thanks @onutc</li>
-<li>Providers: WhatsApp broadcast groups for multi-agent replies (#547) — thanks @pasogott; inbound media size cap configurable (#505) — thanks @koala73; identity-based message prefixes (#578) — thanks @p6l-richard.</li>
-<li>Providers: Telegram inline keyboard buttons + callback payload routing (#491) — thanks @azade-c; cron topic delivery targets (#474/#478) — thanks @mitschabaude-bot, @nachoiacovino; <code>[[audio_as_voice]]</code> tag support (#490) — thanks @jarvis-medmatic.</li>
-<li>Providers: Signal reactions + notifications with allowlist support.</li>
-<li>Status/Usage: /status cost reporting + <code>/cost</code> lines; auth profile snippet; provider usage windows.</li>
-<li>Control UI: mobile responsiveness (#558) — thanks @carlulsoe; queued messages + Enter-to-send (#527) — thanks @YuriNachos; session links (#471) — thanks @HazAT; reasoning view; skill install feedback (#445) — thanks @pkrmf; chat layout refresh (#475) — thanks @rahthakor; docs link + new session button; drop explicit <code>ui:install</code>.</li>
-<li>TUI: agent picker + agents list RPC; improved status line.</li>
-<li>Doctor/Daemon: audit/repair flows, permissions checks, supervisor config audits; provider status probes + warnings for Discord intents and Telegram privacy; last activity timestamps; gateway restart guidance.</li>
-<li>Docs: Hetzner Docker VPS guide + cross-links (#556/#592) — thanks @Iamadig; Ansible guide (#545) — thanks @pasogott; provider troubleshooting index; hook parameter expansion (#532) — thanks @mcinteerj; model allowlist notes; OAuth deep dive; showcase refresh.</li>
-<li>Apps/Branding: refreshed iOS/Android/macOS icons (#521) — thanks @fishfisher.</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>Packaging: include MS Teams send module in npm tarball.</li>
-<li>Sandbox/Browser: auto-start CDP endpoint; proxy CDP out of container for attachOnly; relax Bun fetch typing; align sandbox list output with config images.</li>
-<li>Agents/Runtime: gate heartbeat prompt to default sessions; /stop aborts between tool calls; require explicit system-event session keys; guard small context windows; fix model fallback stringification; sessions_spawn inherits provider; failover on billing/credits; respect auth cooldown ordering; restore Anthropic OAuth tool dispatch + tool-name bypass; avoid OpenAI invalid reasoning replay; harden Gmail hook model defaults.</li>
-<li>Agent history/schema: strip/skip empty assistant/error blocks to prevent session corruption/Claude 400s; scrub unsupported JSON Schema keywords + sanitize tool call IDs for Cloud Code Assist; simplify Gemini-compatible tool/session schemas; require raw for config.apply.</li>
-<li>Auto-reply/Streaming: default audioAsVoice false; preserve audio_as_voice propagation + buffer audio blocks + guard voice notes; block reply ordering (timeout) + forced-block fence-safe; avoid chunk splits inside parentheses + fence-close breaks + invalid UTF-16 truncation; preserve inline directive spacing + allow whitespace in reply tags; filter NO_REPLY prefixes + normalize routed replies; suppress <think> leakage with separate Reasoning; block streaming defaults (off by default, minChars/idle tuning) + coalesced blocks; dedupe followup queue; restore explicit responsePrefix default.</li>
-<li>Status/Commands: provider prefix in /status model display; usage filtering + provider mapping; auth label + usage snapshots (claude-cli fallback + optional claude.ai); show Verbose/Elevated only when enabled; compact usage/cost line + restore emoji-rich status; /status in directive-only + multi-directive handling; mention-bypass elevated handling; surface provider usage errors; wire /usage to /status; restore hidden gateway-daemon alias; fallback /model list when catalog unavailable.</li>
-<li>WhatsApp: vCard/contact cards (prefer FN, include numbers, show all contacts, keep summary counts, better empty summaries); preserve group JIDs + normalize targets; resolve @lid mappings/JIDs (Baileys/auth-dir) + inbound mapping; route queued replies to sender; improve web listener errors + remove provider name from errors; record outbound activity account id; fix web media fetch errors; broadcast group history consistency.</li>
-<li>Telegram: keep streamMode draft-only; long-poll conflict retries + update dedupe; grammY fetch mismatch fixes + restrict native fetch to Bun; suppress getUpdates stack traces; include user id in pairing; audio_as_voice handling fixes.</li>
-<li>Discord/Slack: thread context helpers + forum thread starters; avoid category parent overrides; gateway reconnect logs + HELLO timeout + stop provider after reconnect exhaustion; DM recipient parsing for numeric IDs; remove incorrect limited warning; reply threading + mrkdwn edge cases; remove ack reactions after reply; gateway debug event visibility.</li>
-<li>Signal: reaction handling safety; own-reaction matching (uuid+phone); UUID-only senders accepted; ignore reaction-only messages.</li>
-<li>MS Teams: download image attachments reliably; fix top-level replies; stop on shutdown + honor chunk limits; normalize poll providers/deps; pairing label fixes.</li>
-<li>iMessage: isolate group-ish threads by chat_id.</li>
-<li>Gateway/Daemon/Doctor: atomic config writes; repair gateway service entrypoint + install switches; non-interactive legacy migrations; systemd unit alignment + KillMode=process; node bridge keepalive/pings; Launch at Login persistence; bundle ClawdbotKit resources + Swift 6.2 compat dylib; relay version check + remove smoke test; regen Swift GatewayModels + keep agent provider string; cron jobId alias + channel alias migration + main session key normalization; heartbeat Telegram accountId resolution; avoid WhatsApp fallback for internal runs; gateway listener error wording; serveBaseUrl param; honor gateway --dev; fix wide-area discovery updates; align agents.defaults schema; provider account metadata in daemon status; refresh Carbon patch for gateway fixes; restore doctor prompter initialValue handling.</li>
-<li>Control UI/TUI: persist per-session verbose off + hide tool cards; logs tab opens at bottom; relative asset paths + landing cleanup; session labels lookup/persistence; stop pinning main session in recents; start logs at bottom; TUI status bar refresh + timeout handling + hide reasoning label when off.</li>
-<li>Onboarding/Configure: QuickStart single-select provider picker; avoid Codex CLI false-expiry warnings; clarify WhatsApp owner prompt; fix Minimax hosted onboarding (agents.defaults + msteams heartbeat target); remove configure Control UI prompt; honor gateway --dev flag.</li>
-</ul>
-<h3>Maintenance</h3>
-<ul>
-<li>Dependencies: bump pi-* stack to 0.42.2.</li>
-<li>Dependencies: Pi 0.40.0 bump (#543) — thanks @mcinteerj.</li>
-<li>Build: Docker build cache layer (#605) — thanks @zknicker.</li>
-</ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.9/Clawdbot-2026.1.9.zip" length="164165451" type="application/octet-stream" sparkle:edSignature="jlfk60gLuMIEOru5kFe7K7lLwsx1RBZGdUnkOR7FR3GAfLum7ocUb+QUO0ZtllUoGPEK0N1yc5BLB702LgLtAQ=="/>
         </item>
     </channel>
 </rss>
