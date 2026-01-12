@@ -314,8 +314,87 @@ describe("trigger handling", () => {
         "1) claude-opus-4-5 — anthropic, openrouter",
       );
       expect(normalized).toContain("3) gpt-5.2 — openai, openai-codex");
+      expect(normalized).toContain("More: /model status");
       expect(normalized).not.toContain("reasoning");
       expect(normalized).not.toContain("image");
+    });
+  });
+
+  it("rejects invalid /model <#> selections", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const sessionKey = "telegram:slash:111";
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model 99",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: sessionKey,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(normalizeTestText(text ?? "")).toContain(
+        'Invalid model selection "99". Use /model to list.',
+      );
+
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[sessionKey]?.providerOverride).toBeUndefined();
+      expect(store[sessionKey]?.modelOverride).toBeUndefined();
+    });
+  });
+
+  it("prefers the current provider when selecting /model <#>", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const sessionKey = "telegram:slash:111";
+
+      await fs.writeFile(
+        cfg.session.store,
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "session-openrouter",
+              updatedAt: Date.now(),
+              providerOverride: "openrouter",
+              modelOverride: "anthropic/claude-opus-4-5",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model 1",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: sessionKey,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(normalizeTestText(text ?? "")).toContain(
+        "Model set to openrouter/anthropic/claude-opus-4-5",
+      );
+
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[sessionKey]?.providerOverride).toBe("openrouter");
+      expect(store[sessionKey]?.modelOverride).toBe(
+        "anthropic/claude-opus-4-5",
+      );
     });
   });
 
@@ -346,6 +425,28 @@ describe("trigger handling", () => {
       const store = loadSessionStore(cfg.session.store);
       expect(store[sessionKey]?.providerOverride).toBe("openai");
       expect(store[sessionKey]?.modelOverride).toBe("gpt-5.2");
+    });
+  });
+
+  it("shows endpoint default in /model status when not configured", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model status",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "telegram:slash:111",
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(normalizeTestText(text ?? "")).toContain("endpoint: default");
     });
   });
 

@@ -505,15 +505,14 @@ export async function getReplyFromConfig(
       };
     }
   }
-  const hasDirective =
+  const hasInlineDirective =
     parsedDirectives.hasThinkDirective ||
     parsedDirectives.hasVerboseDirective ||
     parsedDirectives.hasReasoningDirective ||
     parsedDirectives.hasElevatedDirective ||
-    parsedDirectives.hasStatusDirective ||
     parsedDirectives.hasModelDirective ||
     parsedDirectives.hasQueueDirective;
-  if (hasDirective) {
+  if (hasInlineDirective) {
     const stripped = stripStructuralPrefixes(parsedDirectives.cleaned);
     const noMentions = isGroup
       ? stripMentions(stripped, ctx, cfg, agentId)
@@ -698,6 +697,9 @@ export async function getReplyFromConfig(
     : directives.rawModelDirective;
 
   if (!command.isAuthorizedSender) {
+    cleanedBody = existingBody;
+    sessionCtx.Body = cleanedBody;
+    sessionCtx.BodyStripped = cleanedBody;
     directives = {
       ...directives,
       hasThinkDirective: false,
