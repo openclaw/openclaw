@@ -46,6 +46,7 @@ import {
   formatUsd,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
@@ -411,7 +412,9 @@ export async function runReplyAgent(params: {
             prompt: memoryFlushSettings.prompt,
             extraSystemPrompt: flushSystemPrompt,
             ownerNumbers: followupRun.run.ownerNumbers,
-            enforceFinalTag: followupRun.run.enforceFinalTag,
+            enforceFinalTag:
+              followupRun.run.enforceFinalTag ||
+              isReasoningTagProvider(provider),
             provider,
             model,
             authProfileId: followupRun.run.authProfileId,
@@ -659,7 +662,9 @@ export async function runReplyAgent(params: {
               prompt: commandBody,
               extraSystemPrompt: followupRun.run.extraSystemPrompt,
               ownerNumbers: followupRun.run.ownerNumbers,
-              enforceFinalTag: followupRun.run.enforceFinalTag,
+              enforceFinalTag:
+                followupRun.run.enforceFinalTag ||
+                isReasoningTagProvider(provider),
               provider,
               model,
               authProfileId: followupRun.run.authProfileId,
