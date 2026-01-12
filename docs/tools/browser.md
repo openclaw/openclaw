@@ -150,8 +150,10 @@ HTTP API:
 - Snapshot/screenshot: `GET /snapshot`, `POST /screenshot`
 - Actions: `POST /navigate`, `POST /act`
 - Hooks: `POST /hooks/file-chooser`, `POST /hooks/dialog`
+- Downloads: `POST /download`, `POST /wait/download`
 - Debugging: `GET /console`, `POST /pdf`
 - Debugging: `GET /errors`, `GET /requests`, `POST /trace/start`, `POST /trace/stop`, `POST /highlight`
+- Network: `POST /response/body`
 - State: `GET /cookies`, `POST /cookies/set`, `POST /cookies/clear`
 - State: `GET /storage/:kind`, `POST /storage/:kind/set`, `POST /storage/:kind/clear`
 - Settings: `POST /set/offline`, `POST /set/headers`, `POST /set/credentials`, `POST /set/geolocation`, `POST /set/media`, `POST /set/timezone`, `POST /set/locale`, `POST /set/device`
@@ -208,6 +210,7 @@ Inspection:
 - `clawdbot browser errors --clear`
 - `clawdbot browser requests --filter api --clear`
 - `clawdbot browser pdf`
+- `clawdbot browser responsebody "**/api" --max-chars 5000`
 
 Actions:
 - `clawdbot browser navigate https://example.com`
@@ -219,6 +222,8 @@ Actions:
 - `clawdbot browser hover 44`
 - `clawdbot browser drag 10 11`
 - `clawdbot browser select 9 OptionA OptionB`
+- `clawdbot browser download e12 /tmp/report.pdf`
+- `clawdbot browser waitfordownload /tmp/report.pdf`
 - `clawdbot browser upload /tmp/file.pdf`
 - `clawdbot browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'`
 - `clawdbot browser dialog --accept`
