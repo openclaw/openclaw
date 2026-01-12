@@ -14,6 +14,10 @@ import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { ensureClawdbotModelsJson } from "../agents/models-config.js";
 import { loadConfig } from "../config/config.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { GatewayClient } from "./client.js";
 import { renderCatNoncePngBase64 } from "./live-image-probe.js";
@@ -75,6 +79,10 @@ function isGoogleModelNotFoundText(text: string): boolean {
   return false;
 }
 
+function isRefreshTokenReused(error: string): boolean {
+  return /refresh_token_reused/i.test(error);
+}
+
 function randomImageProbeCode(len = 10): string {
   const alphabet = "2345689ABCEF";
   const bytes = randomBytes(len);
@@ -111,7 +119,6 @@ function editDistance(a: string, b: string): number {
 
   return prev[bLen] ?? Number.POSITIVE_INFINITY;
 }
-
 async function getFreePort(): Promise<number> {
   return await new Promise((resolve, reject) => {
     const srv = createServer();
@@ -175,9 +182,10 @@ async function connectClient(params: { url: string; token: string }) {
     const client = new GatewayClient({
       url: params.url,
       token: params.token,
-      clientName: "vitest-live",
+      clientName: GATEWAY_CLIENT_NAMES.TEST,
+      clientDisplayName: "vitest-live",
       clientVersion: "dev",
-      mode: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
       onHelloOk: () => stop(undefined, client),
       onConnectError: (err) => stop(err),
       onClose: (code, reason) =>
@@ -487,7 +495,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
                 );
               }
             }
-
             // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
             if (
               (model.provider === "openai" &&
@@ -533,7 +540,15 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               }
             }
           } catch (err) {
-            failures.push({ model: modelKey, error: String(err) });
+            const message = String(err);
+            // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
+            if (
+              model.provider === "openai-codex" &&
+              isRefreshTokenReused(message)
+            ) {
+              continue;
+            }
+            failures.push({ model: modelKey, error: message });
           }
         }
 

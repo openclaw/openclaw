@@ -20,7 +20,6 @@ import {
   normalizeCommandBody,
 } from "../auto-reply/commands-registry.js";
 import { formatAgentEnvelope } from "../auto-reply/envelope.js";
-import { resolveTelegramDraftStreamingChunking } from "../auto-reply/reply/block-streaming.js";
 import {
   buildHistoryContextFromMap,
   clearHistoryEntries,
@@ -63,6 +62,7 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { loadWebMedia } from "../web/media.js";
 import { resolveTelegramAccount } from "./accounts.js";
+import { resolveTelegramDraftStreamingChunking } from "./draft-chunking.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { markdownToTelegramHtml } from "./format.js";

@@ -101,16 +101,10 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
-export type AgentElevatedAllowFromConfig = {
-  whatsapp?: string[];
-  telegram?: Array<string | number>;
-  discord?: Array<string | number>;
-  slack?: Array<string | number>;
-  signal?: Array<string | number>;
-  imessage?: Array<string | number>;
-  msteams?: Array<string | number>;
-  webchat?: Array<string | number>;
-};
+// Provider docking: allowlists keyed by provider id (and internal "webchat").
+export type AgentElevatedAllowFromConfig = Partial<
+  Record<string, Array<string | number>>
+>;
 
 export type IdentityConfig = {
   name?: string;
@@ -1318,6 +1312,27 @@ export type SkillsConfig = {
   entries?: Record<string, SkillConfig>;
 };
 
+export type PluginEntryConfig = {
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+};
+
+export type PluginsLoadConfig = {
+  /** Additional plugin/extension paths to load. */
+  paths?: string[];
+};
+
+export type PluginsConfig = {
+  /** Enable or disable plugin loading. */
+  enabled?: boolean;
+  /** Optional plugin allowlist (plugin ids). */
+  allow?: string[];
+  /** Optional plugin denylist (plugin ids). */
+  deny?: string[];
+  load?: PluginsLoadConfig;
+  entries?: Record<string, PluginEntryConfig>;
+};
+
 export type ModelApi =
   | "openai-completions"
   | "openai-responses"
@@ -1622,6 +1637,7 @@ export type ClawdbotConfig = {
     seamColor?: string;
   };
   skills?: SkillsConfig;
+  plugins?: PluginsConfig;
   models?: ModelsConfig;
   agents?: AgentsConfig;
   tools?: ToolsConfig;

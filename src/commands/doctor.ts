@@ -33,6 +33,7 @@ import { resolveClawdbotPackageRoot } from "../infra/clawdbot-root.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { collectProvidersStatusIssues } from "../infra/providers-status-issues.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
+import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -509,6 +510,26 @@ export async function doctorCommand(
     ].join("\n"),
     "Skills status",
   );
+
+  const pluginRegistry = loadClawdbotPlugins({
+    config: cfg,
+    workspaceDir,
+    logger: {
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
+    },
+  });
+  if (pluginRegistry.diagnostics.length > 0) {
+    const lines = pluginRegistry.diagnostics.map((diag) => {
+      const prefix = diag.level.toUpperCase();
+      const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
+      const source = diag.source ? ` (${diag.source})` : "";
+      return `- ${prefix}${plugin}: ${diag.message}${source}`;
+    });
+    note(lines.join("\n"), "Plugin diagnostics");
+  }
 
   let healthOk = false;
   try {

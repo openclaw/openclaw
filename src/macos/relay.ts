@@ -70,8 +70,7 @@ async function main() {
 
   installUnhandledRejectionHandler();
 
-  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-  globalThis.process.on("uncaughtException" as any, (error: Error) => {
+  process.on("uncaughtException", (error) => {
     console.error(
       "[clawdbot] Uncaught exception:",
       error.stack ?? error.message,

@@ -1,7 +1,7 @@
 import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 export const HEARTBEAT_PROMPT =
-  "Read HEARTBEAT.md if exists. Consider outstanding tasks. Checkup sometimes on your human during (user local) day time.";
+  "Consider outstanding tasks and HEARTBEAT.md guidance from the workspace context (if present). Checkup sometimes on your human during (user local) day time.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
 export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 30;
 

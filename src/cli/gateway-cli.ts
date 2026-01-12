@@ -1,11 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import process from "node:process";
 
 import type { Command } from "commander";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
 import { gatewayStatusCommand } from "../commands/gateway-status.js";
+import {
+  formatHealthProviderLines,
+  type HealthSummary,
+} from "../commands/health.js";
 import { handleReset } from "../commands/onboard-helpers.js";
 import {
   CONFIG_PATH_CLAWDBOT,
@@ -41,6 +44,10 @@ import {
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../utils/message-provider.js";
 import { resolveUserPath } from "../utils.js";
 import { forceFreePortAndWait } from "./ports.js";
 import { withProgress } from "./progress.js";
@@ -416,12 +423,9 @@ async function runGatewayLoop(params: {
   let restartResolver: (() => void) | null = null;
 
   const cleanupSignals = () => {
-    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-    globalThis.process.off("SIGTERM" as any, onSigterm);
-    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-    globalThis.process.off("SIGINT" as any, onSigint);
-    // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-    globalThis.process.off("SIGUSR1" as any, onSigusr1);
+    process.removeListener("SIGTERM", onSigterm);
+    process.removeListener("SIGINT", onSigint);
+    process.removeListener("SIGUSR1", onSigusr1);
   };
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -476,12 +480,9 @@ async function runGatewayLoop(params: {
     request("restart", "SIGUSR1");
   };
 
-  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-  globalThis.process.on("SIGTERM" as any, onSigterm);
-  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-  globalThis.process.on("SIGINT" as any, onSigint);
-  // biome-ignore lint/suspicious/noExplicitAny: Node.js types v25 require workaround for process event types
-  globalThis.process.on("SIGUSR1" as any, onSigusr1);
+  process.on("SIGTERM", onSigterm);
+  process.on("SIGINT", onSigint);
+  process.on("SIGUSR1", onSigusr1);
 
   try {
     // Keep process alive; SIGUSR1 triggers an in-process restart (no supervisor required).
@@ -530,8 +531,8 @@ const callGatewayCli = async (
         params,
         expectFinal: Boolean(opts.expectFinal),
         timeoutMs: Number(opts.timeout ?? 10_000),
-        clientName: "cli",
-        mode: "cli",
+        clientName: GATEWAY_CLIENT_NAMES.CLI,
+        mode: GATEWAY_CLIENT_MODES.CLI,
       }),
   );
 
@@ -954,28 +955,12 @@ export function registerGatewayCli(program: Command) {
               durationMs != null ? ` (${durationMs}ms)` : ""
             }`,
           );
-          if (obj.web && typeof obj.web === "object") {
-            const web = obj.web as Record<string, unknown>;
-            const linked = web.linked === true;
-            defaultRuntime.log(
-              `Web: ${linked ? "linked" : "not linked"}${
-                typeof web.authAgeMs === "number" && linked
-                  ? ` (${Math.round(web.authAgeMs / 60_000)}m)`
-                  : ""
-              }`,
-            );
-          }
-          if (obj.telegram && typeof obj.telegram === "object") {
-            const tg = obj.telegram as Record<string, unknown>;
-            defaultRuntime.log(
-              `Telegram: ${tg.configured === true ? "configured" : "not configured"}`,
-            );
-          }
-          if (obj.discord && typeof obj.discord === "object") {
-            const dc = obj.discord as Record<string, unknown>;
-            defaultRuntime.log(
-              `Discord: ${dc.configured === true ? "configured" : "not configured"}`,
-            );
+          if (obj.providers && typeof obj.providers === "object") {
+            for (const line of formatHealthProviderLines(
+              obj as HealthSummary,
+            )) {
+              defaultRuntime.log(line);
+            }
           }
         } catch (err) {
           defaultRuntime.error(String(err));

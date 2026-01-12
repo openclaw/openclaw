@@ -25,7 +25,7 @@ import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
 
-const handlers: GatewayRequestHandlers = {
+export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...connectHandlers,
   ...logsHandlers,
   ...voicewakeHandlers,
@@ -50,10 +50,11 @@ const handlers: GatewayRequestHandlers = {
 };
 
 export async function handleGatewayRequest(
-  opts: GatewayRequestOptions,
+  opts: GatewayRequestOptions & { extraHandlers?: GatewayRequestHandlers },
 ): Promise<void> {
   const { req, respond, client, isWebchatConnect, context } = opts;
-  const handler = handlers[req.method];
+  const handler =
+    opts.extraHandlers?.[req.method] ?? coreGatewayHandlers[req.method];
   if (!handler) {
     respond(
       false,
