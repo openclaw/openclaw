@@ -88,6 +88,7 @@ export class MemoryIndexManager {
       config: cfg,
       agentDir: resolveAgentDir(cfg, agentId),
       provider: settings.provider,
+      remote: settings.remote,
       model: settings.model,
       fallback: settings.fallback,
       local: settings.local,
