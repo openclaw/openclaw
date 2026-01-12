@@ -982,7 +982,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         }
 
         if (isGroup && useAccessGroups) {
-          const groupPolicy = telegramCfg.groupPolicy ?? "allowlist";
+          const groupPolicy = telegramCfg.groupPolicy ?? "open";
           if (groupPolicy === "disabled") {
             await bot.api.sendMessage(
               chatId,
@@ -1214,7 +1214,7 @@ export function createTelegramBot(opts: TelegramBotOptions) {
         // - "open": groups bypass allowFrom, only mention-gating applies
         // - "disabled": block all group messages entirely
         // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-        const groupPolicy = telegramCfg.groupPolicy ?? "allowlist";
+        const groupPolicy = telegramCfg.groupPolicy ?? "open";
         if (groupPolicy === "disabled") {
           logVerbose(`Blocked telegram group message (groupPolicy: disabled)`);
           return;

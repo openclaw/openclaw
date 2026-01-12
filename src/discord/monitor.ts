@@ -382,7 +382,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordCfg = account.config;
   const dmConfig = discordCfg.dm;
   const guildEntries = discordCfg.guilds;
-  const groupPolicy = discordCfg.groupPolicy ?? "allowlist";
+  const groupPolicy = discordCfg.groupPolicy ?? "open";
   const allowFrom = dmConfig?.allowFrom;
   const mediaMaxBytes =
     (opts.mediaMaxMb ?? discordCfg.mediaMaxMb ?? 8) * 1024 * 1024;
@@ -639,7 +639,7 @@ export function createDiscordMessageHandler(params: {
   } = params;
   const logger = getChildLogger({ module: "discord-auto-reply" });
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
-  const groupPolicy = discordConfig?.groupPolicy ?? "allowlist";
+  const groupPolicy = discordConfig?.groupPolicy ?? "open";
 
   return async (data, client) => {
     try {
@@ -1548,7 +1548,7 @@ function createDiscordNativeCommand(params: {
           Object.keys(guildInfo?.channels ?? {}).length > 0;
         const channelAllowed = channelConfig?.allowed !== false;
         const allowByPolicy = isDiscordGroupAllowedByPolicy({
-          groupPolicy: discordConfig?.groupPolicy ?? "allowlist",
+          groupPolicy: discordConfig?.groupPolicy ?? "open",
           channelAllowlistConfigured,
           channelAllowed,
         });
