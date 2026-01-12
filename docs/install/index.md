@@ -17,6 +17,14 @@ curl -fsSL https://clawd.bot/install.sh | bash
 
 This installs the `clawdbot` CLI globally via npm and then starts onboarding.
 
+See installer flags:
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --help
+```
+
+Details: [Installer internals](/install/installer).
+
 Non-interactive (skip onboarding):
 
 ```bash
@@ -99,4 +107,3 @@ Then:
 ```bash
 clawdbot onboard --install-daemon
 ```
-
