@@ -963,74 +963,42 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           if (shouldSkipUpdate(ctx)) return;
           const chatId = msg.chat.id;
           const isGroup =
-          msg.chat.type === "group" || msg.chat.type === "supergroup";
-        const messageThreadId = (msg as { message_thread_id?: number })
-          .message_thread_id;
-        const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
-        const storeAllowFrom = await readTelegramAllowFromStore().catch(
-          () => [],
-        );
-        const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
-          chatId,
-          messageThreadId,
-        );
-        const groupAllowOverride = firstDefined(
-          topicConfig?.allowFrom,
-          groupConfig?.allowFrom,
-        );
-        const effectiveGroupAllow = normalizeAllowFrom([
-          ...(groupAllowOverride ?? groupAllowFrom ?? []),
-          ...storeAllowFrom,
-        ]);
-        const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+            msg.chat.type === "group" || msg.chat.type === "supergroup";
+          const messageThreadId = (msg as { message_thread_id?: number })
+            .message_thread_id;
+          const isForum =
+            (msg.chat as { is_forum?: boolean }).is_forum === true;
+          const storeAllowFrom = await readTelegramAllowFromStore().catch(
+            () => [],
+          );
+          const { groupConfig, topicConfig } = resolveTelegramGroupConfig(
+            chatId,
+            messageThreadId,
+          );
+          const groupAllowOverride = firstDefined(
+            topicConfig?.allowFrom,
+            groupConfig?.allowFrom,
+          );
+          const effectiveGroupAllow = normalizeAllowFrom([
+            ...(groupAllowOverride ?? groupAllowFrom ?? []),
+            ...storeAllowFrom,
+          ]);
+          const hasGroupAllowOverride =
+            typeof groupAllowOverride !== "undefined";
 
-        if (isGroup && groupConfig?.enabled === false) {
-          await bot.api.sendMessage(chatId, "This group is disabled.");
-          return;
-        }
-        if (isGroup && topicConfig?.enabled === false) {
-          await bot.api.sendMessage(chatId, "This topic is disabled.");
-          return;
-        }
-        if (isGroup && hasGroupAllowOverride) {
-          const senderId = msg.from?.id;
-          const senderUsername = msg.from?.username ?? "";
-          if (
-            senderId == null ||
-            !isSenderAllowed({
-              allow: effectiveGroupAllow,
-              senderId: String(senderId),
-              senderUsername,
-            })
-          ) {
-            await bot.api.sendMessage(
-              chatId,
-              "You are not authorized to use this command.",
-            );
+          if (isGroup && groupConfig?.enabled === false) {
+            await bot.api.sendMessage(chatId, "This group is disabled.");
             return;
           }
-        }
-
-        if (isGroup && useAccessGroups) {
-          const groupPolicy = telegramCfg.groupPolicy ?? "open";
-          if (groupPolicy === "disabled") {
-            await bot.api.sendMessage(
-              chatId,
-              "Telegram group commands are disabled.",
-            );
+          if (isGroup && topicConfig?.enabled === false) {
+            await bot.api.sendMessage(chatId, "This topic is disabled.");
             return;
           }
-          if (groupPolicy === "allowlist") {
+          if (isGroup && hasGroupAllowOverride) {
             const senderId = msg.from?.id;
-            if (senderId == null) {
-              await bot.api.sendMessage(
-                chatId,
-                "You are not authorized to use this command.",
-              );
-              return;
-            }
             const senderUsername = msg.from?.username ?? "";
             if (
+              senderId == null ||
               !isSenderAllowed({
                 allow: effectiveGroupAllow,
                 senderId: String(senderId),
@@ -1044,105 +1012,139 @@ export function createTelegramBot(opts: TelegramBotOptions) {
               return;
             }
           }
-          const groupAllowlist = resolveGroupPolicy(chatId);
-          if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
-            await bot.api.sendMessage(chatId, "This group is not allowed.");
+
+          if (isGroup && useAccessGroups) {
+            const groupPolicy = telegramCfg.groupPolicy ?? "open";
+            if (groupPolicy === "disabled") {
+              await bot.api.sendMessage(
+                chatId,
+                "Telegram group commands are disabled.",
+              );
+              return;
+            }
+            if (groupPolicy === "allowlist") {
+              const senderId = msg.from?.id;
+              if (senderId == null) {
+                await bot.api.sendMessage(
+                  chatId,
+                  "You are not authorized to use this command.",
+                );
+                return;
+              }
+              const senderUsername = msg.from?.username ?? "";
+              if (
+                !isSenderAllowed({
+                  allow: effectiveGroupAllow,
+                  senderId: String(senderId),
+                  senderUsername,
+                })
+              ) {
+                await bot.api.sendMessage(
+                  chatId,
+                  "You are not authorized to use this command.",
+                );
+                return;
+              }
+            }
+            const groupAllowlist = resolveGroupPolicy(chatId);
+            if (groupAllowlist.allowlistEnabled && !groupAllowlist.allowed) {
+              await bot.api.sendMessage(chatId, "This group is not allowed.");
+              return;
+            }
+          }
+
+          const allowFromList = Array.isArray(allowFrom)
+            ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
+            : [];
+          const senderId = msg.from?.id ? String(msg.from.id) : "";
+          const senderUsername = msg.from?.username ?? "";
+          const commandAuthorized =
+            allowFromList.length === 0 ||
+            allowFromList.includes("*") ||
+            (senderId && allowFromList.includes(senderId)) ||
+            (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
+            (senderUsername &&
+              allowFromList.some(
+                (entry) =>
+                  entry.toLowerCase() === senderUsername.toLowerCase() ||
+                  entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
+              ));
+          if (!commandAuthorized) {
+            await bot.api.sendMessage(
+              chatId,
+              "You are not authorized to use this command.",
+            );
             return;
           }
-        }
 
-        const allowFromList = Array.isArray(allowFrom)
-          ? allowFrom.map((entry) => String(entry).trim()).filter(Boolean)
-          : [];
-        const senderId = msg.from?.id ? String(msg.from.id) : "";
-        const senderUsername = msg.from?.username ?? "";
-        const commandAuthorized =
-          allowFromList.length === 0 ||
-          allowFromList.includes("*") ||
-          (senderId && allowFromList.includes(senderId)) ||
-          (senderId && allowFromList.includes(`telegram:${senderId}`)) ||
-          (senderUsername &&
-            allowFromList.some(
-              (entry) =>
-                entry.toLowerCase() === senderUsername.toLowerCase() ||
-                entry.toLowerCase() === `@${senderUsername.toLowerCase()}`,
-            ));
-        if (!commandAuthorized) {
-          await bot.api.sendMessage(
-            chatId,
-            "You are not authorized to use this command.",
+          const prompt = buildCommandText(command.name, ctx.match ?? "");
+          const route = resolveAgentRoute({
+            cfg,
+            provider: "telegram",
+            accountId: account.accountId,
+            peer: {
+              kind: isGroup ? "group" : "dm",
+              id: isGroup
+                ? buildTelegramGroupPeerId(chatId, messageThreadId)
+                : String(chatId),
+            },
+          });
+          const skillFilter = firstDefined(
+            topicConfig?.skills,
+            groupConfig?.skills,
           );
-          return;
-        }
+          const systemPromptParts = [
+            groupConfig?.systemPrompt?.trim() || null,
+            topicConfig?.systemPrompt?.trim() || null,
+          ].filter((entry): entry is string => Boolean(entry));
+          const groupSystemPrompt =
+            systemPromptParts.length > 0
+              ? systemPromptParts.join("\n\n")
+              : undefined;
+          const ctxPayload = {
+            Body: prompt,
+            From: isGroup
+              ? buildTelegramGroupFrom(chatId, messageThreadId)
+              : `telegram:${chatId}`,
+            To: `slash:${senderId || chatId}`,
+            ChatType: isGroup ? "group" : "direct",
+            GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
+            GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
+            SenderName: buildSenderName(msg),
+            SenderId: senderId || undefined,
+            SenderUsername: senderUsername || undefined,
+            Surface: "telegram",
+            MessageSid: String(msg.message_id),
+            Timestamp: msg.date ? msg.date * 1000 : undefined,
+            WasMentioned: true,
+            CommandAuthorized: commandAuthorized,
+            CommandSource: "native" as const,
+            SessionKey: `telegram:slash:${senderId || chatId}`,
+            CommandTargetSessionKey: route.sessionKey,
+            MessageThreadId: messageThreadId,
+            IsForum: isForum,
+          };
 
-        const prompt = buildCommandText(command.name, ctx.match ?? "");
-        const route = resolveAgentRoute({
-          cfg,
-          provider: "telegram",
-          accountId: account.accountId,
-          peer: {
-            kind: isGroup ? "group" : "dm",
-            id: isGroup
-              ? buildTelegramGroupPeerId(chatId, messageThreadId)
-              : String(chatId),
-          },
-        });
-        const skillFilter = firstDefined(
-          topicConfig?.skills,
-          groupConfig?.skills,
-        );
-        const systemPromptParts = [
-          groupConfig?.systemPrompt?.trim() || null,
-          topicConfig?.systemPrompt?.trim() || null,
-        ].filter((entry): entry is string => Boolean(entry));
-        const groupSystemPrompt =
-          systemPromptParts.length > 0
-            ? systemPromptParts.join("\n\n")
-            : undefined;
-        const ctxPayload = {
-          Body: prompt,
-          From: isGroup
-            ? buildTelegramGroupFrom(chatId, messageThreadId)
-            : `telegram:${chatId}`,
-          To: `slash:${senderId || chatId}`,
-          ChatType: isGroup ? "group" : "direct",
-          GroupSubject: isGroup ? (msg.chat.title ?? undefined) : undefined,
-          GroupSystemPrompt: isGroup ? groupSystemPrompt : undefined,
-          SenderName: buildSenderName(msg),
-          SenderId: senderId || undefined,
-          SenderUsername: senderUsername || undefined,
-          Surface: "telegram",
-          MessageSid: String(msg.message_id),
-          Timestamp: msg.date ? msg.date * 1000 : undefined,
-          WasMentioned: true,
-          CommandAuthorized: commandAuthorized,
-          CommandSource: "native" as const,
-          SessionKey: `telegram:slash:${senderId || chatId}`,
-          CommandTargetSessionKey: route.sessionKey,
-          MessageThreadId: messageThreadId,
-          IsForum: isForum,
-        };
-
-        const replyResult = await getReplyFromConfig(
-          ctxPayload,
-          { skillFilter },
-          cfg,
-        );
-        const replies = replyResult
-          ? Array.isArray(replyResult)
-            ? replyResult
-            : [replyResult]
-          : [];
-        await deliverReplies({
-          replies,
-          chatId: String(chatId),
-          token: opts.token,
-          runtime,
-          bot,
-          replyToMode,
-          textLimit,
-          messageThreadId,
-        });
+          const replyResult = await getReplyFromConfig(
+            ctxPayload,
+            { skillFilter },
+            cfg,
+          );
+          const replies = replyResult
+            ? Array.isArray(replyResult)
+              ? replyResult
+              : [replyResult]
+            : [];
+          await deliverReplies({
+            replies,
+            chatId: String(chatId),
+            token: opts.token,
+            runtime,
+            bot,
+            replyToMode,
+            textLimit,
+            messageThreadId,
+          });
         });
       }
     }
