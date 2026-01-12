@@ -49,6 +49,30 @@ Rules of thumb:
 - `deny` always wins.
 - If `allow` is non-empty, everything else is treated as blocked.
 
+### Tool groups (shorthands)
+
+For sandbox tool policy, you can use `group:*` entries that expand to multiple tools:
+
+```json5
+{
+  tools: {
+    sandbox: {
+      tools: {
+        allow: ["group:runtime", "group:fs", "group:sessions", "group:memory"]
+      }
+    }
+  }
+}
+```
+
+Available groups:
+- `group:runtime`: `exec`, `bash`, `process`
+- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
+- `group:memory`: `memory_search`, `memory_get`
+
+Legacy shorthand: `memory` expands to `group:memory`.
+
 ## Elevated: exec-only “run on host”
 
 Elevated does **not** grant extra tools; it only affects `exec`.

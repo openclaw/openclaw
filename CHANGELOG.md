@@ -5,6 +5,7 @@
 ### Changes
 - Subagents: add config to set default sub-agent model (`agents.defaults.subagents.model` + per-agent override); still overridden by `sessions_spawn.model`.
 - Plugins: restore full voice-call plugin parity (Telnyx/Twilio, streaming, inbound policies, tools/CLI).
+- Sandbox: support tool-policy groups in `tools.sandbox.tools` (e.g. `group:memory`, `group:fs`) to reduce config churn.
 
 ### Fixes
 - Tools/Models: MiniMax vision now uses the Coding Plan VLM endpoint (`/v1/coding_plan/vlm`) so the `image` tool works with MiniMax keys (also accepts `@/path/to/file.png`-style inputs).

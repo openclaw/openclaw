@@ -246,10 +246,53 @@ function normalizeToolList(values?: string[]) {
     .map((value) => value.toLowerCase());
 }
 
+const TOOL_GROUPS: Record<string, string[]> = {
+  // NOTE: Keep canonical (lowercase) tool names here.
+  "group:memory": ["memory_search", "memory_get"],
+  // Basic workspace/file tools
+  "group:fs": ["read", "write", "edit", "apply_patch"],
+  // Session management tools
+  "group:sessions": [
+    "sessions_list",
+    "sessions_history",
+    "sessions_send",
+    "sessions_spawn",
+    "session_status",
+  ],
+  // Host/runtime execution tools
+  "group:runtime": ["exec", "bash", "process"],
+};
+
+function expandToolGroupEntry(entry: string): string[] {
+  const raw = entry.trim();
+  if (!raw) return [];
+  const lower = raw.toLowerCase();
+
+  // Back-compat shorthand: "memory" => "group:memory"
+  if (lower === "memory") return TOOL_GROUPS["group:memory"];
+
+  const group = TOOL_GROUPS[lower];
+  if (group) return group;
+  return [raw];
+}
+
+function expandToolGroups(values?: string[]): string[] {
+  if (!values) return [];
+  const out: string[] = [];
+  for (const value of values) {
+    for (const expanded of expandToolGroupEntry(value)) {
+      const trimmed = expanded.trim();
+      if (!trimmed) continue;
+      out.push(trimmed);
+    }
+  }
+  return out;
+}
+
 function isToolAllowed(policy: SandboxToolPolicy, name: string) {
-  const deny = new Set(normalizeToolList(policy.deny));
+  const deny = new Set(normalizeToolList(expandToolGroups(policy.deny)));
   if (deny.has(name.toLowerCase())) return false;
-  const allow = normalizeToolList(policy.allow);
+  const allow = normalizeToolList(expandToolGroups(policy.allow));
   if (allow.length === 0) return true;
   return allow.includes(name.toLowerCase());
 }
@@ -480,21 +523,27 @@ export function resolveSandboxToolPolicyForAgent(
     : Array.isArray(globalDeny)
       ? globalDeny
       : DEFAULT_TOOL_DENY;
-  let allow = Array.isArray(agentAllow)
+  const allow = Array.isArray(agentAllow)
     ? agentAllow
     : Array.isArray(globalAllow)
       ? globalAllow
       : DEFAULT_TOOL_ALLOW;
 
+  const expandedDeny = expandToolGroups(deny);
+  let expandedAllow = expandToolGroups(allow);
+
   // `image` is essential for multimodal workflows; always include it in sandboxed
   // sessions unless explicitly denied.
-  if (!deny.includes("image") && !allow.includes("image")) {
-    allow = [...allow, "image"];
+  if (
+    !expandedDeny.map((v) => v.toLowerCase()).includes("image") &&
+    !expandedAllow.map((v) => v.toLowerCase()).includes("image")
+  ) {
+    expandedAllow = [...expandedAllow, "image"];
   }
 
   return {
-    allow,
-    deny,
+    allow: expandedAllow,
+    deny: expandedDeny,
     sources: {
       allow: allowSource,
       deny: denySource,

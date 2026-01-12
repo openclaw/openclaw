@@ -35,6 +35,59 @@ describe("sandbox explain helpers", () => {
     expect(policy.sources.deny.source).toBe("global");
   });
 
+  it("expands group tool shorthands inside sandbox tool policy", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+        list: [
+          {
+            id: "work",
+            workspace: "~/clawd-work",
+            tools: {
+              sandbox: { tools: { allow: ["group:memory", "group:fs"] } },
+            },
+          },
+        ],
+      },
+    };
+
+    const policy = resolveSandboxToolPolicyForAgent(cfg, "work");
+    expect(policy.allow).toEqual([
+      "memory_search",
+      "memory_get",
+      "read",
+      "write",
+      "edit",
+      "apply_patch",
+      "image",
+    ]);
+  });
+
+  it("supports legacy 'memory' shorthand and deny wins after expansion", () => {
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          sandbox: { mode: "all", scope: "agent" },
+        },
+      },
+      tools: {
+        sandbox: {
+          tools: {
+            allow: ["memory"],
+            deny: ["memory_get"],
+          },
+        },
+      },
+    };
+
+    const policy = resolveSandboxToolPolicyForAgent(cfg, "main");
+    expect(policy.allow).toContain("memory_search");
+    expect(policy.allow).toContain("memory_get");
+    expect(policy.deny).toContain("memory_get");
+  });
+
   it("includes config key paths + main-session hint for non-main mode", () => {
     const cfg: ClawdbotConfig = {
       agents: {
