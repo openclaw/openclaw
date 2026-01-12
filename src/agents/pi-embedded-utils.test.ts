@@ -1,6 +1,6 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { extractAssistantText } from "./pi-embedded-utils.js";
-import type { AssistantMessage } from "@mariozechner/pi-ai";
 
 describe("extractAssistantText", () => {
   it("strips Minimax tool invocation XML from text", () => {
