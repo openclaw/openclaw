@@ -530,7 +530,7 @@ describe("trigger handling", () => {
         },
       });
       const blockReplies: Array<{ text?: string }> = [];
-      const res = await getReplyFromConfig(
+      await getReplyFromConfig(
         {
           Body: "please /status now",
           From: "+1002",
