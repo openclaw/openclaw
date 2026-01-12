@@ -34,7 +34,7 @@ const MOONSHOT_DEFAULT_COST = {
 function normalizeApiKeyConfig(value: string): string {
   const trimmed = value.trim();
   const match = /^\$\{([A-Z0-9_]+)\}$/.exec(trimmed);
-  return match ? match[1]! : trimmed;
+  return match ? match[1] : trimmed;
 }
 
 function resolveEnvApiKeyVarName(provider: string): string | undefined {
@@ -194,4 +194,3 @@ export function resolveImplicitProviders(params: {
 
   return providers;
 }
-
