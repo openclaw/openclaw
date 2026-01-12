@@ -17,6 +17,7 @@ echo "==> Run installer smoke test (root): $INSTALL_URL"
 docker run --rm -t \
   -e CLAWDBOT_INSTALL_URL="$INSTALL_URL" \
   -e CLAWDBOT_NO_ONBOARD=1 \
+  -e DEBIAN_FRONTEND=noninteractive \
   "$SMOKE_IMAGE"
 
 echo "==> Build non-root image: $NONROOT_IMAGE"
@@ -29,11 +30,19 @@ echo "==> Run installer non-root test: $INSTALL_URL"
 docker run --rm -t \
   -e CLAWDBOT_INSTALL_URL="$INSTALL_URL" \
   -e CLAWDBOT_NO_ONBOARD=1 \
+  -e DEBIAN_FRONTEND=noninteractive \
   "$NONROOT_IMAGE"
+
+if [[ "${CLAWDBOT_INSTALL_SMOKE_SKIP_CLI:-0}" == "1" ]]; then
+  echo "==> Skip CLI installer smoke (CLAWDBOT_INSTALL_SMOKE_SKIP_CLI=1)"
+  exit 0
+fi
 
 echo "==> Run CLI installer non-root test (same image)"
 docker run --rm -t \
+  --entrypoint /bin/bash \
   -e CLAWDBOT_INSTALL_URL="$INSTALL_URL" \
   -e CLAWDBOT_INSTALL_CLI_URL="$CLI_INSTALL_URL" \
   -e CLAWDBOT_NO_ONBOARD=1 \
-  "$NONROOT_IMAGE" bash -lc "curl -fsSL \"$CLI_INSTALL_URL\" | bash -s -- --set-npm-prefix --no-onboard"
+  -e DEBIAN_FRONTEND=noninteractive \
+  "$NONROOT_IMAGE" -lc "curl -fsSL \"$CLI_INSTALL_URL\" | bash -s -- --set-npm-prefix --no-onboard"
