@@ -114,12 +114,7 @@
   }
 
   .nav-group {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    gap: 6px;
-    margin-bottom: 0;
-    flex-shrink: 0;
+    display: contents;
   }
 
   .nav-label {
@@ -322,4 +317,3 @@
     height: 14px;
   }
 }
-

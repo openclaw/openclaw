@@ -57,6 +57,7 @@
 - Installer UX: add `--install-method git|npm` and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).
 
 ### Fixes
+- Control UI: flatten nav into a single horizontal scroll row on tablet/mobile (and always show collapsed group items). (#771) — thanks @carlulsoe.
 - macOS: start + await local gateway before onboarding wizard begins.
 - Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible `/anthropic` endpoint by default (keep `minimax-api` as a legacy alias).
 - Agents/Browser: cap Playwright AI snapshots for tool calls (maxChars); CLI snapshots remain full. (#763) — thanks @thesash.
