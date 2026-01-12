@@ -8,7 +8,7 @@ import {
   text as clackText,
 } from "@clack/prompts";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
-import type { ClawdbotConfig } from "../config/config.js";
+import type { ClawdbotConfig, GatewayAuthConfig } from "../config/config.js";
 import {
   CONFIG_PATH_CLAWDBOT,
   readConfigFileSnapshot,
@@ -157,6 +157,27 @@ const CONFIGURE_SECTION_OPTIONS: {
 
 type ConfigureSectionChoice = WizardSection | "__continue";
 
+type GatewayAuthChoice = "off" | "token" | "password";
+
+export function buildGatewayAuthConfig(params: {
+  existing?: GatewayAuthConfig;
+  mode: GatewayAuthChoice;
+  token?: string;
+  password?: string;
+}): GatewayAuthConfig | undefined {
+  const allowTailscale = params.existing?.allowTailscale;
+  const base: GatewayAuthConfig = {};
+  if (typeof allowTailscale === "boolean") base.allowTailscale = allowTailscale;
+
+  if (params.mode === "off") {
+    return Object.keys(base).length > 0 ? base : undefined;
+  }
+  if (params.mode === "token") {
+    return { ...base, mode: "token", token: params.token };
+  }
+  return { ...base, mode: "password", password: params.password };
+}
+
 async function promptConfigureSection(
   runtime: RuntimeEnv,
   hasSelection: boolean,
@@ -225,7 +246,7 @@ async function promptGatewayConfig(
       initialValue: "token",
     }),
     runtime,
-  ) as "off" | "token" | "password";
+  ) as GatewayAuthChoice;
 
   const tailscaleMode = guardCancel(
     await select({
@@ -287,6 +308,7 @@ async function promptGatewayConfig(
   }
 
   let gatewayToken: string | undefined;
+  let gatewayPassword: string | undefined;
   let next = cfg;
 
   if (authMode === "token") {
@@ -298,13 +320,6 @@ async function promptGatewayConfig(
       runtime,
     );
     gatewayToken = String(tokenInput).trim() || randomToken();
-    next = {
-      ...next,
-      gateway: {
-        ...next.gateway,
-        auth: { ...next.gateway?.auth, mode: "token", token: gatewayToken },
-      },
-    };
   }
 
   if (authMode === "password") {
@@ -315,18 +330,15 @@ async function promptGatewayConfig(
       }),
       runtime,
     );
-    next = {
-      ...next,
-      gateway: {
-        ...next.gateway,
-        auth: {
-          ...next.gateway?.auth,
-          mode: "password",
-          password: String(password).trim(),
-        },
-      },
-    };
+    gatewayPassword = String(password).trim();
   }
+
+  const authConfig = buildGatewayAuthConfig({
+    existing: next.gateway?.auth,
+    mode: authMode,
+    token: gatewayToken,
+    password: gatewayPassword,
+  });
 
   next = {
     ...next,
@@ -335,6 +347,7 @@ async function promptGatewayConfig(
       mode: "local",
       port,
       bind,
+      auth: authConfig,
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
