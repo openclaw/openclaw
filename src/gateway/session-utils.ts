@@ -13,6 +13,7 @@ import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
+  canonicalizeMainSessionAlias,
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionTranscriptPath,
@@ -299,11 +300,23 @@ export function resolveSessionStoreKey(params: {
   const raw = params.sessionKey.trim();
   if (!raw) return raw;
   if (raw === "global" || raw === "unknown") return raw;
+
+  const parsed = parseAgentSessionKey(raw);
+  if (parsed) {
+    const agentId = normalizeAgentId(parsed.agentId);
+    const canonical = canonicalizeMainSessionAlias({
+      cfg: params.cfg,
+      agentId,
+      sessionKey: raw,
+    });
+    if (canonical !== raw) return canonical;
+    return raw;
+  }
+
   const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
   if (raw === "main" || raw === rawMainKey) {
     return resolveMainSessionKey(params.cfg);
   }
-  if (raw.startsWith("agent:")) return raw;
   const agentId = resolveDefaultStoreAgentId(params.cfg);
   return canonicalizeSessionKeyForAgent(agentId, raw);
 }

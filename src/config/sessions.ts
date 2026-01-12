@@ -250,6 +250,33 @@ export function resolveAgentMainSessionKey(params: {
   return buildAgentMainSessionKey({ agentId: params.agentId, mainKey });
 }
 
+export function canonicalizeMainSessionAlias(params: {
+  cfg?: { session?: { scope?: SessionScope; mainKey?: string } };
+  agentId: string;
+  sessionKey: string;
+}): string {
+  const raw = params.sessionKey.trim();
+  if (!raw) return raw;
+
+  const agentId = normalizeAgentId(params.agentId);
+  const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
+  const agentMainSessionKey = buildAgentMainSessionKey({ agentId, mainKey });
+  const agentMainAliasKey = buildAgentMainSessionKey({
+    agentId,
+    mainKey: "main",
+  });
+
+  const isMainAlias =
+    raw === "main" ||
+    raw === mainKey ||
+    raw === agentMainSessionKey ||
+    raw === agentMainAliasKey;
+
+  if (params.cfg?.session?.scope === "global" && isMainAlias) return "global";
+  if (isMainAlias) return agentMainSessionKey;
+  return raw;
+}
+
 function normalizeGroupLabel(raw?: string) {
   const trimmed = raw?.trim().toLowerCase() ?? "";
   if (!trimmed) return "";
