@@ -151,9 +151,6 @@ describeLive("live models (profile keys)", () => {
       const authStorage = discoverAuthStorage(agentDir);
       const modelRegistry = discoverModels(authStorage, agentDir);
       const models = modelRegistry.getAll() as Array<Model<Api>>;
-      const modelByKey = new Map(
-        models.map((model) => [`${model.provider}/${model.id}`, model]),
-      );
 
       const rawModels = process.env.CLAWDBOT_LIVE_MODELS?.trim();
       const useModern = rawModels === "modern" || rawModels === "all";
@@ -348,10 +345,15 @@ describeLive("live models (profile keys)", () => {
               isAnthropicRateLimitError(message) &&
               attempt + 1 < attemptMax
             ) {
-              logProgress(`${progressLabel}: rate limit, retrying with next key`);
+              logProgress(
+                `${progressLabel}: rate limit, retrying with next key`,
+              );
               continue;
             }
-            if (model.provider === "google" && isGoogleModelNotFoundError(err)) {
+            if (
+              model.provider === "google" &&
+              isGoogleModelNotFoundError(err)
+            ) {
               skipped.push({ model: id, reason: message });
               logProgress(`${progressLabel}: skip (google model not found)`);
               break;
