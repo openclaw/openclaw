@@ -284,7 +284,20 @@ export function listAgentsForGateway(cfg: ClawdbotConfig): {
           : undefined,
     });
   }
-  const agents = listConfiguredAgentIds(cfg).map((id) => {
+  const explicitIds = new Set(
+    (cfg.agents?.list ?? [])
+      .map((entry) => (entry?.id ? normalizeAgentId(entry.id) : ""))
+      .filter(Boolean),
+  );
+  const allowedIds =
+    explicitIds.size > 0 ? new Set([...explicitIds, defaultId]) : null;
+  let agentIds = listConfiguredAgentIds(cfg).filter((id) =>
+    allowedIds ? allowedIds.has(id) : true,
+  );
+  if (mainKey && !agentIds.includes(mainKey)) {
+    agentIds = [...agentIds, mainKey];
+  }
+  const agents = agentIds.map((id) => {
     const meta = configuredById.get(id);
     return {
       id,
