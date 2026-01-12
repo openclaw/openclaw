@@ -1,6 +1,25 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
 
+/**
+ * Strip malformed Minimax tool invocations that leak into text content.
+ * Minimax sometimes embeds tool calls as XML in text blocks instead of
+ * proper structured tool calls. This removes:
+ * - <invoke name="...">...</invoke> blocks
+ * - </minimax:tool_call> closing tags
+ */
+function stripMinimaxToolCallXml(text: string): string {
+  if (!text) return text;
+
+  // Remove <invoke name="...">...</invoke> blocks (non-greedy to handle multiple)
+  let cleaned = text.replace(/<invoke\s+name="[^"]*">[\s\S]*?<\/invoke>/gi, "");
+
+  // Remove stray </minimax:tool_call> tags
+  cleaned = cleaned.replace(/<\/minimax:tool_call>/gi, "");
+
+  return cleaned.trim();
+}
+
 export function extractAssistantText(msg: AssistantMessage): string {
   const isTextBlock = (
     block: unknown,
@@ -13,7 +32,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
   const blocks = Array.isArray(msg.content)
     ? msg.content
         .filter(isTextBlock)
-        .map((c) => c.text.trim())
+        .map((c) => stripMinimaxToolCallXml(c.text).trim())
         .filter(Boolean)
     : [];
   return blocks.join("\n").trim();
