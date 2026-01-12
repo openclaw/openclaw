@@ -1651,6 +1651,8 @@ export type AgentDefaultsConfig = {
     maxConcurrent?: number;
     /** Auto-archive sub-agent sessions after N minutes (default: 60). */
     archiveAfterMinutes?: number;
+    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
+    model?: string | { primary?: string; fallbacks?: string[] };
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: {

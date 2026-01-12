@@ -14,9 +14,7 @@ vi.mock("../commands/models.js", async () => {
 });
 
 describe("models cli", () => {
-  it(
-    "registers github-copilot login command",
-    async () => {
+  it("registers github-copilot login command", async () => {
     const { Command } = await import("commander");
     const { registerModelsCli } = await import("./models-cli.js");
 
@@ -46,7 +44,5 @@ describe("models cli", () => {
       expect.objectContaining({ yes: true }),
       expect.any(Object),
     );
-    },
-    15_000,
-  );
+  }, 15_000);
 });
