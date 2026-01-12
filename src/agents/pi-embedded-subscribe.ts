@@ -36,9 +36,6 @@ import {
   promoteThinkingTagsToBlocks,
 } from "./pi-embedded-utils.js";
 
-const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
-const THINKING_OPEN_RE = /<\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
-const THINKING_CLOSE_RE = /<\s*\/\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const THINKING_TAG_SCAN_RE =
   /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
@@ -182,11 +179,6 @@ export function subscribeEmbeddedPiSession(params: {
   }) => void;
   enforceFinalTag?: boolean;
 }) {
-  if (params.enforceFinalTag) {
-    log.debug("subscribeEmbeddedPiSession: enforceFinalTag is ENABLED");
-  } else {
-    log.debug("subscribeEmbeddedPiSession: enforceFinalTag is DISABLED");
-  }
   const assistantTexts: string[] = [];
   const toolMetas: Array<{ toolName?: string; meta?: string }> = [];
   const toolMetaById = new Map<string, string | undefined>();
@@ -202,7 +194,6 @@ export function subscribeEmbeddedPiSession(params: {
   let blockBuffer = "";
   // Track if a streamed chunk opened a <think> block (stateful across chunks).
   const blockState = { thinking: false, final: false };
-  const streamState = { thinking: false, final: false };
   let lastStreamedAssistant: string | undefined;
   let lastStreamedReasoning: string | undefined;
   let lastBlockReplyText: string | undefined;
@@ -220,8 +211,6 @@ export function subscribeEmbeddedPiSession(params: {
     blockChunker?.reset();
     blockState.thinking = false;
     blockState.final = false;
-    streamState.thinking = false;
-    streamState.final = false;
     lastStreamedAssistant = undefined;
     lastBlockReplyText = undefined;
     lastStreamedReasoning = undefined;
@@ -373,6 +362,7 @@ export function subscribeEmbeddedPiSession(params: {
     // hallucinations (e.g. Minimax copying the style) from leaking, but we
     // do not enforce buffering/extraction logic.
     if (!params.enforceFinalTag) {
+      FINAL_TAG_SCAN_RE.lastIndex = 0;
       return processed.replace(FINAL_TAG_SCAN_RE, "");
     }
 
@@ -404,19 +394,6 @@ export function subscribeEmbeddedPiSession(params: {
       result += processed.slice(lastFinalIndex);
     }
     state.final = inFinal;
-
-    // Log the result of the stripping for debugging purposes
-    if (params.enforceFinalTag && (everInFinal || processed.length > 0)) {
-        log.debug(JSON.stringify({
-            raw: processed.slice(0, 100),
-            stripped: result.slice(0, 100),
-            inFinal,
-            everInFinal,
-            rawLen: processed.length,
-            strippedLen: result.length,
-            tag: "DEBUG_STRIP"
-        }));
-    }
 
     // Strict Mode: If enforcing final tags, we MUST NOT return content unless
     // we have seen a <final> tag. Otherwise, we leak "thinking out loud" text
@@ -936,8 +913,6 @@ export function subscribeEmbeddedPiSession(params: {
           blockChunker?.reset();
           blockState.thinking = false;
           blockState.final = false;
-          streamState.thinking = false;
-          streamState.final = false;
           lastStreamedAssistant = undefined;
         }
       }
@@ -1021,8 +996,6 @@ export function subscribeEmbeddedPiSession(params: {
         }
         blockState.thinking = false;
         blockState.final = false;
-        streamState.thinking = false;
-        streamState.final = false;
         if (pendingCompactionRetry > 0) {
           resolveCompactionRetry();
         } else {
