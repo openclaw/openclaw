@@ -62,6 +62,39 @@ index f07085c64390b211340d6a826b28ea9c2e77302f..7f758532246cc7b062df48e9cec4e6c9
 +                    }
 +                }
 +            }
-             if (output.length === 0)
-                 continue;
-             messages.push(...output);
+            if (output.length === 0)
+                continue;
+            messages.push(...output);
+diff --git a/dist/providers/google-shared.js b/dist/providers/google-shared.js
+index 866446158b0ee3e4c4a4f3f78c71ce72b9aab6a1..c7f9d8a0b0c7a25b62a0bb5f8a4f9d63ccad1d24 100644
+--- a/dist/providers/google-shared.js
++++ b/dist/providers/google-shared.js
+@@ -52,6 +52,8 @@ export function convertMessages(model, context) {
+     const contents = [];
+     const transformedMessages = transformMessages(context.messages, model);
++    const shouldStripFunctionId = typeof model.provider === "string" &&
++        model.provider.startsWith("google");
+     for (const msg of transformedMessages) {
+         if (msg.role === "user") {
+@@ -110,8 +112,8 @@ export function convertMessages(model, context) {
+                             args: block.arguments,
+                         },
+                     };
+-                    if (model.provider === "google-vertex" && part?.functionCall?.id) {
+-                        delete part.functionCall.id; // Vertex AI does not support 'id' in functionCall
++                    if (shouldStripFunctionId && part?.functionCall?.id) {
++                        delete part.functionCall.id; // Google Gemini/Vertex do not support 'id' in functionCall
+                     }
+                     if (block.thoughtSignature) {
+                         part.thoughtSignature = block.thoughtSignature;
+@@ -159,8 +161,8 @@ export function convertMessages(model, context) {
+                     ...(hasImages && supportsMultimodalFunctionResponse && { parts: imageParts }),
+                 },
+             };
+-            if (model.provider === "google-vertex" && functionResponsePart.functionResponse?.id) {
+-                delete functionResponsePart.functionResponse.id; // Vertex AI does not support 'id' in functionResponse
++            if (shouldStripFunctionId && functionResponsePart.functionResponse?.id) {
++                delete functionResponsePart.functionResponse.id; // Google Gemini/Vertex do not support 'id' in functionResponse
+             }
+             // Cloud Code Assist API requires all function responses to be in a single user turn.
+             // Check if the last content is already a user turn with function responses and merge.

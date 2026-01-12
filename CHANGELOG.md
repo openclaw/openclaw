@@ -67,6 +67,7 @@
 - CLI: fix guardCancel typing for configure prompts. (#769) — thanks @steipete.
 - Providers: default groupPolicy to allowlist across providers and warn in doctor when groups are open.
 - MS Teams: add groupPolicy/groupAllowFrom gating for group chats and warn when groups are open.
+- Providers: strip tool call/result ids from Gemini CLI payloads to avoid API 400s. (#756)
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging; preserve close codes.
 - Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.
 - Gateway: tighten gateway listener detection.
