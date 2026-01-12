@@ -1,6 +1,6 @@
-import type { NativeCommandsSetting } from "./types.js";
-import { normalizeProviderId } from "../providers/registry.js";
 import type { ProviderId } from "../providers/plugins/types.js";
+import { normalizeProviderId } from "../providers/registry.js";
+import type { NativeCommandsSetting } from "./types.js";
 
 function resolveAutoDefault(providerId?: ProviderId): boolean {
   const id = normalizeProviderId(providerId);

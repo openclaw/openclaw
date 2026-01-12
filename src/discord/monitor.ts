@@ -14,8 +14,11 @@ import {
   type User,
 } from "@buape/carbon";
 import { GatewayIntents, GatewayPlugin } from "@buape/carbon/gateway";
-import type { APIAttachment } from "discord-api-types/v10";
-import { ApplicationCommandOptionType, Routes } from "discord-api-types/v10";
+import {
+  type APIAttachment,
+  ApplicationCommandOptionType,
+  Routes,
+} from "discord-api-types/v10";
 
 import {
   resolveAckReaction,
@@ -49,12 +52,12 @@ import {
 } from "../auto-reply/reply/reply-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
 } from "../config/commands.js";
+import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import { resolveStorePath, updateLastRoute } from "../config/sessions.js";
 import { danger, logVerbose, shouldLogVerbose } from "../globals.js";
 import { formatDurationSeconds } from "../infra/format-duration.js";
