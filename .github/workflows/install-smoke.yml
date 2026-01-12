@@ -20,8 +20,11 @@ jobs:
       - name: Enable Corepack
         run: corepack enable
 
-      - name: Clone installer site
-        run: git clone --depth=1 https://github.com/clawdbot/clawd.bot ../clawd.bot
+      - name: Checkout installer site
+        uses: actions/checkout@v4
+        with:
+          repository: clawdbot/clawd.bot
+          path: ../clawd.bot
 
       - name: Install pnpm deps (minimal)
         run: pnpm install --ignore-scripts --frozen-lockfile
