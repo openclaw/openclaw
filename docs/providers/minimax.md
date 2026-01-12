@@ -27,51 +27,14 @@ MiniMax highlights these improvements in M2.1:
 
 ## Choose a setup
 
-### Option A: MiniMax Cloud (OpenAI-compatible `/v1`)
+### Option A: MiniMax (Anthropic-compatible `/anthropic`) — recommended
 
-**Best for:** hosted MiniMax with OpenAI-compatible API.
+**Best for:** hosted MiniMax with Anthropic-compatible API.
 
 Configure via CLI:
 - Run `clawdbot configure`
 - Select **Model/auth**
 - Choose **MiniMax M2.1 (minimax.io)**
-
-```json5
-{
-  env: { MINIMAX_API_KEY: "sk-..." },
-  agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
-  models: {
-    mode: "merge",
-    providers: {
-      minimax: {
-        baseUrl: "https://api.minimax.io/v1",
-        apiKey: "${MINIMAX_API_KEY}",
-        api: "openai-completions",
-        models: [
-          {
-            id: "MiniMax-M2.1",
-            name: "MiniMax M2.1",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 200000,
-            maxTokens: 8192
-          }
-        ]
-      }
-    }
-  }
-}
-```
-
-### Option B: MiniMax API (Anthropic-compatible `/anthropic`)
-
-**Best for:** MiniMax's Anthropic-compatible API (platform.minimax.io).
-
-Configure via CLI:
-- Run `clawdbot configure`
-- Select **Model/auth**
-- Choose **MiniMax API (platform.minimax.io)**
 
 ```json5
 {
@@ -93,22 +56,36 @@ Configure via CLI:
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
             contextWindow: 200000,
             maxTokens: 8192
-          },
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+### Option B: MiniMax OpenAI-compatible `/v1` (manual)
+
+**Best for:** setups that require OpenAI-compatible payloads.
+
+```json5
+{
+  env: { MINIMAX_API_KEY: "sk-..." },
+  agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
+  models: {
+    mode: "merge",
+    providers: {
+      minimax: {
+        baseUrl: "https://api.minimax.io/v1",
+        apiKey: "${MINIMAX_API_KEY}",
+        api: "openai-completions",
+        models: [
           {
-            id: "MiniMax-M2.1-lightning",
-            name: "MiniMax M2.1 Lightning",
+            id: "MiniMax-M2.1",
+            name: "MiniMax M2.1",
             reasoning: false,
             input: ["text"],
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
-            contextWindow: 200000,
-            maxTokens: 8192
-          },
-          {
-            id: "MiniMax-M2",
-            name: "MiniMax M2",
-            reasoning: true,
-            input: ["text"],
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 200000,
             maxTokens: 8192
           }

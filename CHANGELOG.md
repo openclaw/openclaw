@@ -33,6 +33,7 @@
 - Installer UX: add `--install-method git|npm` and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).
 
 ### Fixes
+- Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible `/anthropic` endpoint by default (keep `minimax-api` as a legacy alias).
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging.
 - Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.
 - Doctor: surface plugin diagnostics in the report.

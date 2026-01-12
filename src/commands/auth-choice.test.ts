@@ -104,6 +104,68 @@ describe("applyAuthChoice", () => {
     expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
   });
 
+  it("configures MiniMax (minimax-cloud) via the Anthropic-compatible endpoint", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+
+    const text = vi.fn().mockResolvedValue("sk-minimax-test");
+    const select: WizardPrompter["select"] = vi.fn(
+      async (params) => params.options[0]?.value as never,
+    );
+    const multiselect: WizardPrompter["multiselect"] = vi.fn(async () => []);
+    const prompter: WizardPrompter = {
+      intro: vi.fn(noopAsync),
+      outro: vi.fn(noopAsync),
+      note: vi.fn(noopAsync),
+      select,
+      multiselect,
+      text,
+      confirm: vi.fn(async () => false),
+      progress: vi.fn(() => ({ update: noop, stop: noop })),
+    };
+    const runtime: RuntimeEnv = {
+      log: vi.fn(),
+      error: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    const result = await applyAuthChoice({
+      authChoice: "minimax-cloud",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Enter MiniMax API key" }),
+    );
+    expect(result.config.models?.providers?.minimax).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      api: "anthropic-messages",
+    });
+    expect(result.config.agents?.defaults?.model).toMatchObject({
+      primary: "minimax/MiniMax-M2.1",
+    });
+
+    const authProfilePath = path.join(
+      tempStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const raw = await fs.readFile(authProfilePath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { key?: string }>;
+    };
+    expect(parsed.profiles?.["minimax:default"]?.key).toBe("sk-minimax-test");
+  });
+
   it("does not override the default model when selecting opencode-zen without setDefaultModel", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-auth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;

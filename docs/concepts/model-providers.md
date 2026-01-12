@@ -112,8 +112,8 @@ OpenAI/Anthropic‑compatible proxies.
 
 MiniMax is configured via `models.providers` because it uses custom endpoints:
 
-- MiniMax Cloud (OpenAI‑compatible): `--auth-choice minimax-cloud`
-- MiniMax API (Anthropic‑compatible): `--auth-choice minimax-api`
+- MiniMax (Anthropic‑compatible): `--auth-choice minimax-cloud`
+  - `--auth-choice minimax-api` is a legacy alias.
 - Auth: `MINIMAX_API_KEY`
 
 See [/providers/minimax](/providers/minimax) for setup details, model options, and config snippets.

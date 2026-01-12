@@ -80,8 +80,7 @@ Tip: `--json` does **not** imply non-interactive mode. Use `--non-interactive` (
    - **OpenAI API key**: uses `OPENAI_API_KEY` if present or prompts for a key, then saves it to `~/.clawdbot/.env` so launchd can read it.
    - **OpenCode Zen (multi-model proxy)**: prompts for `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`, get it at https://opencode.ai/auth).
    - **API key**: stores the key for you.
-   - **MiniMax M2.1 (minimax.io)**: config is auto‑written for the OpenAI-compatible `/v1` endpoint.
-   - **MiniMax API (platform.minimax.io)**: config is auto‑written for the Anthropic-compatible `/anthropic` endpoint.
+   - **MiniMax M2.1 (minimax.io)**: config is auto‑written for the Anthropic-compatible `/anthropic` endpoint.
    - **MiniMax M2.1 (LM Studio)**: config is auto‑written for the LM Studio endpoint.
    - More detail: [MiniMax](/providers/minimax)
    - **Skip**: no auth configured yet.

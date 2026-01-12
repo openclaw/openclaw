@@ -1830,7 +1830,7 @@ Use MiniMax's Anthropic-compatible API directly without LM Studio:
 ```
 
 Notes:
-- Set `MINIMAX_API_KEY` environment variable or use `clawdbot onboard --auth-choice minimax-api`
+- Set `MINIMAX_API_KEY` environment variable or use `clawdbot onboard --auth-choice minimax-cloud`
 - Available models: `MiniMax-M2.1` (default), `MiniMax-M2.1-lightning` (~100 tps), `MiniMax-M2` (reasoning)
 - Pricing is a placeholder; MiniMax doesn't publish public rates. Override in `models.json` for accurate cost tracking.
 
