@@ -629,13 +629,15 @@ export async function applyInlineDirectivesFastLane(params: {
   provider: string;
   model: string;
   initialModelLabel: string;
-  formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg?: NonNullable<ClawdbotConfig["agents"]>["defaults"];
-  modelState: {
-    resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
-    allowedModelKeys: Set<string>;
-    allowedModelCatalog: Awaited<
-      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+	  formatModelSwitchEvent: (label: string, alias?: string) => string;
+	  agentCfg?: NonNullable<ClawdbotConfig["agents"]>["defaults"];
+	  modelState: {
+	    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+	    allowedModelKeys: Set<string>;
+	    allowedModelCatalog: Awaited<
+	      ReturnType<
+	        typeof import("../../agents/model-catalog.js").loadModelCatalog
+      >
     >;
     resetModelOverride: boolean;
   };
@@ -1357,7 +1359,9 @@ export async function handleDirectiveOnly(params: {
     }
   }
   if (directives.hasQueueDirective && directives.queueMode) {
-    parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
+    parts.push(
+      formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`),
+    );
   } else if (directives.hasQueueDirective && directives.queueReset) {
     parts.push(formatDirectiveAck("Queue mode reset to default."));
   }
@@ -1373,7 +1377,9 @@ export async function handleDirectiveOnly(params: {
     parts.push(formatDirectiveAck(`Queue cap set to ${directives.cap}.`));
   }
   if (directives.hasQueueDirective && directives.dropPolicy) {
-    parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
+    parts.push(
+      formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`),
+    );
   }
   const ack = parts.join(" ").trim();
   if (!ack && directives.hasStatusDirective) return undefined;

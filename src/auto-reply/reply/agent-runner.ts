@@ -565,7 +565,8 @@ export async function runReplyAgent(params: {
             }
             text = stripped.text;
           }
-          if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) return { skip: true };
+          if (isSilentReplyText(text, SILENT_REPLY_TOKEN))
+            return { skip: true };
           return { text, skip: false };
         };
         const handlePartialForTyping = async (
@@ -713,8 +714,8 @@ export async function runReplyAgent(params: {
                 blockStreamingEnabled && opts?.onBlockReply
                   ? async (payload) => {
                       const { text, skip } = normalizeStreamingText(payload);
-                      const hasMedia = (payload.mediaUrls?.length ?? 0) > 0;
-                      if (skip && !hasMedia) return;
+                      if (skip && (payload.mediaUrls?.length ?? 0) === 0)
+                        return;
                       const taggedPayload = applyReplyTagsToPayload(
                         {
                           text,
