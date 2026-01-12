@@ -9,7 +9,7 @@ import {
   discoverAuthStorage,
   discoverModels,
 } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
 import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import {
   collectAnthropicApiKeys,
@@ -34,8 +34,7 @@ const GATEWAY_LIVE = process.env.CLAWDBOT_LIVE_GATEWAY === "1";
 const ZAI_FALLBACK = process.env.CLAWDBOT_LIVE_GATEWAY_ZAI_FALLBACK === "1";
 const PROVIDERS = parseFilter(process.env.CLAWDBOT_LIVE_GATEWAY_PROVIDERS);
 const THINKING_LEVEL = "high";
-const THINKING_TAG_RE =
-  /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
+const THINKING_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking)\s*>/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/i;
 
 const describeLive = LIVE || GATEWAY_LIVE ? describe : describe.skip;
@@ -286,7 +285,11 @@ function buildMinimaxProviderOverride(params: {
   baseUrl: string;
 }): ModelProviderConfig | null {
   const existing = params.cfg.models?.providers?.minimax;
-  if (!existing || !Array.isArray(existing.models) || existing.models.length === 0)
+  if (
+    !existing ||
+    !Array.isArray(existing.models) ||
+    existing.models.length === 0
+  )
     return null;
   return {
     ...existing,
@@ -356,7 +359,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     const anthropicKeys = collectAnthropicApiKeys();
     if (anthropicKeys.length > 0) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
-      logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
+      logProgress(
+        `[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`,
+      );
     }
     const sessionKey = `agent:dev:${params.label}`;
     const failures: Array<{ model: string; error: string }> = [];
@@ -387,231 +392,235 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             key: sessionKey,
           });
 
-        logProgress(`${progressLabel}: prompt`);
-        const runId = randomUUID();
-        const payload = await client.request<AgentFinalPayload>(
-          "agent",
-          {
-            sessionKey,
-            idempotencyKey: `idem-${runId}`,
-            message:
-              "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
-            thinking: params.thinkingLevel,
-            deliver: false,
-          },
-          { expectFinal: true },
-        );
-
-        if (payload?.status !== "ok") {
-          throw new Error(`agent status=${String(payload?.status)}`);
-        }
-        const text = extractPayloadText(payload?.result);
-        if (model.provider === "google" && isGoogleModelNotFoundText(text)) {
-          // Catalog drift: model IDs can disappear or become unavailable on the API.
-          // Treat as skip when scanning "all models" for Google.
-          logProgress(`${progressLabel}: skip (google model not found)`);
-          break;
-        }
-        assertNoReasoningTags({
-          text,
-          model: modelKey,
-          phase: "prompt",
-          label: params.label,
-        });
-        if (!isMeaningful(text)) throw new Error(`not meaningful: ${text}`);
-        if (
-          !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
-          !/\bmacro\s*-?\s*tasks?\b/i.test(text)
-        ) {
-          throw new Error(`missing required keywords: ${text}`);
-        }
-
-        // Real tool invocation: force the agent to Read a local file and echo a nonce.
-        logProgress(`${progressLabel}: tool-read`);
-        const runIdTool = randomUUID();
-        const toolProbe = await client.request<AgentFinalPayload>(
-          "agent",
-          {
-            sessionKey,
-            idempotencyKey: `idem-${runIdTool}-tool`,
-            message:
-              "Clawdbot live tool probe (local, safe): " +
-              `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
-              "Then reply with the two nonce values you read (include both).",
-            thinking: params.thinkingLevel,
-            deliver: false,
-          },
-          { expectFinal: true },
-        );
-        if (toolProbe?.status !== "ok") {
-          throw new Error(`tool probe failed: status=${String(toolProbe?.status)}`);
-        }
-        const toolText = extractPayloadText(toolProbe?.result);
-        assertNoReasoningTags({
-          text: toolText,
-          model: modelKey,
-          phase: "tool-read",
-          label: params.label,
-        });
-        if (!toolText.includes(nonceA) || !toolText.includes(nonceB)) {
-          throw new Error(`tool probe missing nonce: ${toolText}`);
-        }
-
-        if (params.extraToolProbes) {
-          logProgress(`${progressLabel}: tool-exec`);
-          const nonceC = randomUUID();
-          const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
-
-          const execReadProbe = await client.request<AgentFinalPayload>(
+          logProgress(`${progressLabel}: prompt`);
+          const runId = randomUUID();
+          const payload = await client.request<AgentFinalPayload>(
             "agent",
             {
               sessionKey,
-              idempotencyKey: `idem-${runIdTool}-exec-read`,
+              idempotencyKey: `idem-${runId}`,
+              message:
+                "Explain in 2-3 sentences how the JavaScript event loop handles microtasks vs macrotasks. Must mention both words: microtask and macrotask.",
+              thinking: params.thinkingLevel,
+              deliver: false,
+            },
+            { expectFinal: true },
+          );
+
+          if (payload?.status !== "ok") {
+            throw new Error(`agent status=${String(payload?.status)}`);
+          }
+          const text = extractPayloadText(payload?.result);
+          if (model.provider === "google" && isGoogleModelNotFoundText(text)) {
+            // Catalog drift: model IDs can disappear or become unavailable on the API.
+            // Treat as skip when scanning "all models" for Google.
+            logProgress(`${progressLabel}: skip (google model not found)`);
+            break;
+          }
+          assertNoReasoningTags({
+            text,
+            model: modelKey,
+            phase: "prompt",
+            label: params.label,
+          });
+          if (!isMeaningful(text)) throw new Error(`not meaningful: ${text}`);
+          if (
+            !/\bmicro\s*-?\s*tasks?\b/i.test(text) ||
+            !/\bmacro\s*-?\s*tasks?\b/i.test(text)
+          ) {
+            throw new Error(`missing required keywords: ${text}`);
+          }
+
+          // Real tool invocation: force the agent to Read a local file and echo a nonce.
+          logProgress(`${progressLabel}: tool-read`);
+          const runIdTool = randomUUID();
+          const toolProbe = await client.request<AgentFinalPayload>(
+            "agent",
+            {
+              sessionKey,
+              idempotencyKey: `idem-${runIdTool}-tool`,
               message:
                 "Clawdbot live tool probe (local, safe): " +
-                "use the tool named `exec` (or `Exec`) to run this command: " +
-                `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
-                `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
-                "Finally reply including the nonce text you read back.",
+                `use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolProbePath}"}. ` +
+                "Then reply with the two nonce values you read (include both).",
               thinking: params.thinkingLevel,
               deliver: false,
             },
             { expectFinal: true },
           );
-          if (execReadProbe?.status !== "ok") {
+          if (toolProbe?.status !== "ok") {
             throw new Error(
-              `exec+read probe failed: status=${String(execReadProbe?.status)}`,
+              `tool probe failed: status=${String(toolProbe?.status)}`,
             );
           }
-          const execReadText = extractPayloadText(execReadProbe?.result);
+          const toolText = extractPayloadText(toolProbe?.result);
           assertNoReasoningTags({
-            text: execReadText,
+            text: toolText,
             model: modelKey,
-            phase: "tool-exec",
+            phase: "tool-read",
             label: params.label,
           });
-          if (!execReadText.includes(nonceC)) {
-            throw new Error(`exec+read probe missing nonce: ${execReadText}`);
+          if (!toolText.includes(nonceA) || !toolText.includes(nonceB)) {
+            throw new Error(`tool probe missing nonce: ${toolText}`);
           }
 
-          await fs.rm(toolWritePath, { force: true });
-        }
+          if (params.extraToolProbes) {
+            logProgress(`${progressLabel}: tool-exec`);
+            const nonceC = randomUUID();
+            const toolWritePath = path.join(tempDir, `write-${runIdTool}.txt`);
 
-        if (params.extraImageProbes && model.input?.includes("image")) {
-          logProgress(`${progressLabel}: image`);
-          const imageCode = randomImageProbeCode(10);
-          const imageBase64 = renderCatNoncePngBase64(imageCode);
-          const runIdImage = randomUUID();
-
-          const imageProbe = await client.request<AgentFinalPayload>(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${runIdImage}-image`,
-              message:
-                "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
-                "(1) the animal shown or written in the image, lowercase; " +
-                "(2) the code printed in the image, uppercase. No extra text.",
-              attachments: [
-                {
-                  mimeType: "image/png",
-                  fileName: `probe-${runIdImage}.png`,
-                  content: imageBase64,
-                },
-              ],
-              thinking: params.thinkingLevel,
-              deliver: false,
-            },
-            { expectFinal: true },
-          );
-          if (imageProbe?.status !== "ok") {
-            throw new Error(
-              `image probe failed: status=${String(imageProbe?.status)}`,
+            const execReadProbe = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runIdTool}-exec-read`,
+                message:
+                  "Clawdbot live tool probe (local, safe): " +
+                  "use the tool named `exec` (or `Exec`) to run this command: " +
+                  `mkdir -p "${tempDir}" && printf '%s' '${nonceC}' > "${toolWritePath}". ` +
+                  `Then use the tool named \`read\` (or \`Read\`) with JSON arguments {"path":"${toolWritePath}"}. ` +
+                  "Finally reply including the nonce text you read back.",
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
             );
+            if (execReadProbe?.status !== "ok") {
+              throw new Error(
+                `exec+read probe failed: status=${String(execReadProbe?.status)}`,
+              );
+            }
+            const execReadText = extractPayloadText(execReadProbe?.result);
+            assertNoReasoningTags({
+              text: execReadText,
+              model: modelKey,
+              phase: "tool-exec",
+              label: params.label,
+            });
+            if (!execReadText.includes(nonceC)) {
+              throw new Error(`exec+read probe missing nonce: ${execReadText}`);
+            }
+
+            await fs.rm(toolWritePath, { force: true });
           }
-          const imageText = extractPayloadText(imageProbe?.result);
-          assertNoReasoningTags({
-            text: imageText,
-            model: modelKey,
-            phase: "image",
-            label: params.label,
-          });
-          if (!/\bcat\b/i.test(imageText)) {
-            throw new Error(`image probe missing 'cat': ${imageText}`);
-          }
-          const candidates =
-            imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
-          const bestDistance = candidates.reduce((best, cand) => {
-            if (Math.abs(cand.length - imageCode.length) > 2) return best;
-            return Math.min(best, editDistance(cand, imageCode));
-          }, Number.POSITIVE_INFINITY);
-          if (!(bestDistance <= 2)) {
-            throw new Error(
-              `image probe missing code (${imageCode}): ${imageText}`,
+
+          if (params.extraImageProbes && model.input?.includes("image")) {
+            logProgress(`${progressLabel}: image`);
+            const imageCode = randomImageProbeCode(10);
+            const imageBase64 = renderCatNoncePngBase64(imageCode);
+            const runIdImage = randomUUID();
+
+            const imageProbe = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runIdImage}-image`,
+                message:
+                  "Look at the attached image. Reply with exactly two tokens separated by a single space: " +
+                  "(1) the animal shown or written in the image, lowercase; " +
+                  "(2) the code printed in the image, uppercase. No extra text.",
+                attachments: [
+                  {
+                    mimeType: "image/png",
+                    fileName: `probe-${runIdImage}.png`,
+                    content: imageBase64,
+                  },
+                ],
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
             );
+            if (imageProbe?.status !== "ok") {
+              throw new Error(
+                `image probe failed: status=${String(imageProbe?.status)}`,
+              );
+            }
+            const imageText = extractPayloadText(imageProbe?.result);
+            assertNoReasoningTags({
+              text: imageText,
+              model: modelKey,
+              phase: "image",
+              label: params.label,
+            });
+            if (!/\bcat\b/i.test(imageText)) {
+              throw new Error(`image probe missing 'cat': ${imageText}`);
+            }
+            const candidates =
+              imageText.toUpperCase().match(/[A-Z0-9]{6,20}/g) ?? [];
+            const bestDistance = candidates.reduce((best, cand) => {
+              if (Math.abs(cand.length - imageCode.length) > 2) return best;
+              return Math.min(best, editDistance(cand, imageCode));
+            }, Number.POSITIVE_INFINITY);
+            if (!(bestDistance <= 2)) {
+              throw new Error(
+                `image probe missing code (${imageCode}): ${imageText}`,
+              );
+            }
           }
-        }
 
-        // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
-        if (
-          (model.provider === "openai" && model.api === "openai-responses") ||
-          (model.provider === "openai-codex" &&
-            model.api === "openai-codex-responses")
-        ) {
-          logProgress(`${progressLabel}: tool-only regression`);
-          const runId2 = randomUUID();
-          const first = await client.request<AgentFinalPayload>(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${runId2}-1`,
-              message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
-              thinking: params.thinkingLevel,
-              deliver: false,
-            },
-            { expectFinal: true },
-          );
-          if (first?.status !== "ok") {
-            throw new Error(`tool-only turn failed: status=${String(first?.status)}`);
-          }
-          const firstText = extractPayloadText(first?.result);
-          assertNoReasoningTags({
-            text: firstText,
-            model: modelKey,
-            phase: "tool-only",
-            label: params.label,
-          });
-
-          const second = await client.request<AgentFinalPayload>(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${runId2}-2`,
-              message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
-              thinking: params.thinkingLevel,
-              deliver: false,
-            },
-            { expectFinal: true },
-          );
-          if (second?.status !== "ok") {
-            throw new Error(
-              `post-tool message failed: status=${String(second?.status)}`,
+          // Regression: tool-call-only turn followed by a user message (OpenAI responses bug class).
+          if (
+            (model.provider === "openai" && model.api === "openai-responses") ||
+            (model.provider === "openai-codex" &&
+              model.api === "openai-codex-responses")
+          ) {
+            logProgress(`${progressLabel}: tool-only regression`);
+            const runId2 = randomUUID();
+            const first = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runId2}-1`,
+                message: `Call the tool named \`read\` (or \`Read\`) on "${toolProbePath}". Do not write any other text.`,
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
             );
-          }
-          const reply = extractPayloadText(second?.result);
-          assertNoReasoningTags({
-            text: reply,
-            model: modelKey,
-            phase: "tool-only-followup",
-            label: params.label,
-          });
-          if (!reply.includes(nonceA) || !reply.includes(nonceB)) {
-            throw new Error(`unexpected reply: ${reply}`);
-          }
-        }
+            if (first?.status !== "ok") {
+              throw new Error(
+                `tool-only turn failed: status=${String(first?.status)}`,
+              );
+            }
+            const firstText = extractPayloadText(first?.result);
+            assertNoReasoningTags({
+              text: firstText,
+              model: modelKey,
+              phase: "tool-only",
+              label: params.label,
+            });
 
-        logProgress(`${progressLabel}: done`);
-        break;
+            const second = await client.request<AgentFinalPayload>(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${runId2}-2`,
+                message: `Now answer: what are the values of nonceA and nonceB in "${toolProbePath}"? Reply with exactly: ${nonceA} ${nonceB}.`,
+                thinking: params.thinkingLevel,
+                deliver: false,
+              },
+              { expectFinal: true },
+            );
+            if (second?.status !== "ok") {
+              throw new Error(
+                `post-tool message failed: status=${String(second?.status)}`,
+              );
+            }
+            const reply = extractPayloadText(second?.result);
+            assertNoReasoningTags({
+              text: reply,
+              model: modelKey,
+              phase: "tool-only-followup",
+              label: params.label,
+            });
+            if (!reply.includes(nonceA) || !reply.includes(nonceB)) {
+              throw new Error(`unexpected reply: ${reply}`);
+            }
+          }
+
+          logProgress(`${progressLabel}: done`);
+          break;
         } catch (err) {
           const message = String(err);
           if (
@@ -686,7 +695,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
 
       const candidates: Array<Model<Api>> = [];
       for (const model of wanted) {
-        const id = `${model.provider}/${model.id}`;
         if (PROVIDERS && !PROVIDERS.has(model.provider)) continue;
         try {
           // eslint-disable-next-line no-await-in-loop
@@ -721,9 +729,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         thinkingLevel: THINKING_LEVEL,
       });
 
-      const minimaxCandidates = candidates.filter((model) => model.provider === "minimax");
+      const minimaxCandidates = candidates.filter(
+        (model) => model.provider === "minimax",
+      );
       if (minimaxCandidates.length === 0) {
-        logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
+        logProgress(
+          "[minimax] no candidates with keys; skipping dual endpoint probes",
+        );
         return;
       }
 
@@ -743,7 +755,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           providerOverrides: { minimax: minimaxOpenAi },
         });
       } else {
-        logProgress("[minimax-openai] missing minimax provider config; skipping");
+        logProgress(
+          "[minimax-openai] missing minimax provider config; skipping",
+        );
       }
 
       const minimaxAnthropic = buildMinimaxProviderOverride({
@@ -762,7 +776,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           providerOverrides: { minimax: minimaxAnthropic },
         });
       } else {
-        logProgress("[minimax-anthropic] missing minimax provider config; skipping");
+        logProgress(
+          "[minimax-anthropic] missing minimax provider config; skipping",
+        );
       }
     },
     20 * 60 * 1000,

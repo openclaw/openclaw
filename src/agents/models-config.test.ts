@@ -166,10 +166,7 @@ describe("models config", () => {
         providers: Record<string, { models: Array<{ id: string }> }>;
       };
       const ids = parsed.providers.google?.models?.map((model) => model.id);
-      expect(ids).toEqual([
-        "gemini-3-pro-preview",
-        "gemini-3-flash-preview",
-      ]);
+      expect(ids).toEqual(["gemini-3-pro-preview", "gemini-3-flash-preview"]);
     });
   });
 });
