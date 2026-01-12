@@ -70,6 +70,37 @@ With **multiple agents**, each `agentId` becomes a **fully isolated persona**:
 
 This lets **multiple people** share one Gateway server while keeping their AI “brains” and data isolated.
 
+## One WhatsApp number, multiple people (DM split)
+
+You can route **different WhatsApp DMs** to different agents while staying on **one WhatsApp account**. Replies still come from the same WhatsApp number (no per‑agent sender identity).
+
+Important detail: direct chats collapse to the agent’s **main session key**, so true isolation requires **one agent per person**.
+
+Example:
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "alex", workspace: "~/clawd-alex" },
+      { id: "mia", workspace: "~/clawd-mia" }
+    ]
+  },
+  bindings: [
+    { agentId: "alex", match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551230001" } } },
+    { agentId: "mia",  match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551230002" } } }
+  ],
+  whatsapp: {
+    dmPolicy: "allowlist",
+    allowFrom: ["+15551230001", "+15551230002"]
+  }
+}
+```
+
+Notes:
+- DM access control is **global per WhatsApp account** (pairing/allowlist), not per agent.
+- For shared groups, bind the group to one agent or use [Broadcast groups](/broadcast-groups).
+
 ## Routing rules (how messages pick an agent)
 
 Bindings are **deterministic** and **most-specific wins**:
