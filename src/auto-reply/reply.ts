@@ -57,6 +57,7 @@ import {
   handleCommands,
 } from "./reply/commands.js";
 import {
+  applyInlineDirectivesFastLane,
   handleDirectiveOnly,
   type InlineDirectives,
   isDirectiveOnly,
@@ -810,6 +811,54 @@ export async function getReplyFromConfig(
     return statusReply ?? directiveReply;
   }
 
+  const hasAnyDirective =
+    directives.hasThinkDirective ||
+    directives.hasVerboseDirective ||
+    directives.hasReasoningDirective ||
+    directives.hasElevatedDirective ||
+    directives.hasModelDirective ||
+    directives.hasQueueDirective ||
+    directives.hasStatusDirective;
+
+  if (hasAnyDirective && command.isAuthorizedSender) {
+    const fastLane = await applyInlineDirectivesFastLane({
+      directives,
+      commandAuthorized: command.isAuthorizedSender,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      messageProviderKey,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      resetModelOverride: modelState.resetModelOverride,
+      provider,
+      model,
+      initialModelLabel,
+      formatModelSwitchEvent,
+      agentCfg,
+      modelState: {
+        resolveDefaultThinkingLevel: modelState.resolveDefaultThinkingLevel,
+        allowedModelKeys: modelState.allowedModelKeys,
+        allowedModelCatalog: modelState.allowedModelCatalog,
+        resetModelOverride: modelState.resetModelOverride,
+      },
+    });
+    directiveAck = fastLane.directiveAck;
+    provider = fastLane.provider;
+    model = fastLane.model;
+  }
+
   const persisted = await persistInlineDirectives({
     directives,
     effectiveModelDirective,
@@ -853,77 +902,6 @@ export async function getReplyFromConfig(
     if (!opts?.onBlockReply) return;
     await opts.onBlockReply(reply);
   };
-
-  const hasAnyDirective =
-    directives.hasThinkDirective ||
-    directives.hasVerboseDirective ||
-    directives.hasReasoningDirective ||
-    directives.hasElevatedDirective ||
-    directives.hasModelDirective ||
-    directives.hasQueueDirective ||
-    directives.hasStatusDirective;
-
-  if (
-    hasAnyDirective &&
-    command.isAuthorizedSender &&
-    !isDirectiveOnly({
-      directives,
-      cleanedBody: directives.cleaned,
-      ctx,
-      cfg,
-      agentId,
-      isGroup,
-    })
-  ) {
-    const resolvedDefaultThinkLevel =
-      (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
-      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
-      (await modelState.resolveDefaultThinkingLevel());
-    const currentThinkLevel = resolvedDefaultThinkLevel;
-    const currentVerboseLevel =
-      (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
-      (agentCfg?.verboseDefault as VerboseLevel | undefined);
-    const currentReasoningLevel =
-      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
-    const currentElevatedLevel =
-      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
-      (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
-
-    directiveAck = await handleDirectiveOnly({
-      cfg,
-      directives,
-      sessionEntry,
-      sessionStore,
-      sessionKey,
-      storePath,
-      elevatedEnabled,
-      elevatedAllowed,
-      elevatedFailures,
-      messageProviderKey,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-      allowedModelKeys: modelState.allowedModelKeys,
-      allowedModelCatalog: modelState.allowedModelCatalog,
-      resetModelOverride: modelState.resetModelOverride,
-      provider,
-      model,
-      initialModelLabel,
-      formatModelSwitchEvent,
-      currentThinkLevel,
-      currentVerboseLevel,
-      currentReasoningLevel,
-      currentElevatedLevel,
-    });
-
-    // Refresh provider/model from session overrides applied by directives.
-    if (sessionEntry?.providerOverride) {
-      provider = sessionEntry.providerOverride;
-    }
-    if (sessionEntry?.modelOverride) {
-      model = sessionEntry.modelOverride;
-    }
-  }
 
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender

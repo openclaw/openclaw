@@ -117,7 +117,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    // Second enqueue with same prompt should be allowed (we only dedupe with message id)
+    // Second enqueue with same prompt should be allowed (default dedupe: message id only)
     const second = enqueueFollowupRun(
       key,
       createRun({
@@ -172,6 +172,40 @@ describe("followup queue deduplication", () => {
       settings,
     );
     expect(second).toBe(true);
+  });
+
+  it("can opt-in to prompt-based dedupe when message id is absent", async () => {
+    const key = `test-dedup-prompt-mode-${Date.now()}`;
+    const settings: QueueSettings = {
+      mode: "collect",
+      debounceMs: 0,
+      cap: 50,
+      dropPolicy: "summarize",
+    };
+
+    const first = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "Hello world",
+        originatingChannel: "whatsapp",
+        originatingTo: "+1234567890",
+      }),
+      settings,
+      "prompt",
+    );
+    expect(first).toBe(true);
+
+    const second = enqueueFollowupRun(
+      key,
+      createRun({
+        prompt: "Hello world",
+        originatingChannel: "whatsapp",
+        originatingTo: "+1234567890",
+      }),
+      settings,
+      "prompt",
+    );
+    expect(second).toBe(false);
   });
 });
 

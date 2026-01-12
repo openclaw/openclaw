@@ -455,6 +455,72 @@ describe("directive behavior", () => {
     });
   });
 
+  it("keeps reasoning acks for rapid mixed directives", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const blockReplies: string[] = [];
+      const storePath = path.join(home, "sessions.json");
+
+      await getReplyFromConfig(
+        {
+          Body: "do it\n/reasoning on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+        },
+        {
+          onBlockReply: (payload) => {
+            if (payload.text) blockReplies.push(payload.text);
+          },
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      await getReplyFromConfig(
+        {
+          Body: "again\n/reasoning on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+        },
+        {
+          onBlockReply: (payload) => {
+            if (payload.text) blockReplies.push(payload.text);
+          },
+        },
+        {
+          agents: {
+            defaults: {
+              model: "anthropic/claude-opus-4-5",
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
+      expect(blockReplies.length).toBe(0);
+    });
+  });
+
   it("acks verbose directive immediately with system marker", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockReset();

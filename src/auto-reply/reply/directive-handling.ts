@@ -62,6 +62,12 @@ import {
 } from "./queue.js";
 
 const SYSTEM_MARK = "⚙️";
+export const formatDirectiveAck = (text: string): string => {
+  if (!text) return text;
+  if (text.startsWith(SYSTEM_MARK)) return text;
+  return `${SYSTEM_MARK} ${text}`;
+};
+
 const formatOptionsLine = (options: string) => `Options: ${options}.`;
 const withOptions = (line: string, options: string) =>
   `${line}\n${formatOptionsLine(options)}`;
@@ -595,6 +601,135 @@ export function isDirectiveOnly(params: {
     ? stripMentions(stripped, ctx, cfg, agentId)
     : stripped;
   return noMentions.length === 0;
+}
+
+export async function applyInlineDirectivesFastLane(params: {
+  directives: InlineDirectives;
+  commandAuthorized: boolean;
+  ctx: MsgContext;
+  cfg: ClawdbotConfig;
+  agentId?: string;
+  isGroup: boolean;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey: string;
+  storePath?: string;
+  elevatedEnabled: boolean;
+  elevatedAllowed: boolean;
+  elevatedFailures?: Array<{ gate: string; key: string }>;
+  messageProviderKey?: string;
+  defaultProvider: string;
+  defaultModel: string;
+  aliasIndex: ModelAliasIndex;
+  allowedModelKeys: Set<string>;
+  allowedModelCatalog: Awaited<
+    ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+  >;
+  resetModelOverride: boolean;
+  provider: string;
+  model: string;
+  initialModelLabel: string;
+  formatModelSwitchEvent: (label: string, alias?: string) => string;
+  agentCfg?: NonNullable<ClawdbotConfig["agents"]>["defaults"];
+  modelState: {
+    resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
+    allowedModelKeys: Set<string>;
+    allowedModelCatalog: Awaited<
+      ReturnType<typeof import("../../agents/model-catalog.js").loadModelCatalog>
+    >;
+    resetModelOverride: boolean;
+  };
+}): Promise<{ directiveAck?: ReplyPayload; provider: string; model: string }> {
+  const {
+    directives,
+    commandAuthorized,
+    ctx,
+    cfg,
+    agentId,
+    isGroup,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    elevatedFailures,
+    messageProviderKey,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    allowedModelKeys,
+    allowedModelCatalog,
+    resetModelOverride,
+    formatModelSwitchEvent,
+    modelState,
+  } = params;
+
+  let { provider, model } = params;
+  if (
+    !commandAuthorized ||
+    isDirectiveOnly({
+      directives,
+      cleanedBody: directives.cleaned,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+    })
+  ) {
+    return { directiveAck: undefined, provider, model };
+  }
+
+  const agentCfg = params.agentCfg;
+  const resolvedDefaultThinkLevel =
+    (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+    (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+    (await modelState.resolveDefaultThinkingLevel());
+  const currentThinkLevel = resolvedDefaultThinkLevel;
+  const currentVerboseLevel =
+    (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+    (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const currentReasoningLevel =
+    (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+  const currentElevatedLevel =
+    (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+    (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
+
+  const directiveAck = await handleDirectiveOnly({
+    cfg,
+    directives,
+    sessionEntry,
+    sessionStore,
+    sessionKey,
+    storePath,
+    elevatedEnabled,
+    elevatedAllowed,
+    elevatedFailures,
+    messageProviderKey,
+    defaultProvider,
+    defaultModel,
+    aliasIndex,
+    allowedModelKeys,
+    allowedModelCatalog,
+    resetModelOverride,
+    provider,
+    model,
+    initialModelLabel: params.initialModelLabel,
+    formatModelSwitchEvent,
+    currentThinkLevel,
+    currentVerboseLevel,
+    currentReasoningLevel,
+    currentElevatedLevel,
+  });
+
+  if (sessionEntry?.providerOverride) {
+    provider = sessionEntry.providerOverride;
+  }
+  if (sessionEntry?.modelOverride) {
+    model = sessionEntry.modelOverride;
+  }
+
+  return { directiveAck, provider, model };
 }
 
 export async function handleDirectiveOnly(params: {
@@ -1186,24 +1321,24 @@ export async function handleDirectiveOnly(params: {
   if (directives.hasVerboseDirective && directives.verboseLevel) {
     parts.push(
       directives.verboseLevel === "off"
-        ? `${SYSTEM_MARK} Verbose logging disabled.`
-        : `${SYSTEM_MARK} Verbose logging enabled.`,
+        ? formatDirectiveAck("Verbose logging disabled.")
+        : formatDirectiveAck("Verbose logging enabled."),
     );
   }
   if (directives.hasReasoningDirective && directives.reasoningLevel) {
     parts.push(
       directives.reasoningLevel === "off"
-        ? `${SYSTEM_MARK} Reasoning visibility disabled.`
+        ? formatDirectiveAck("Reasoning visibility disabled.")
         : directives.reasoningLevel === "stream"
-          ? `${SYSTEM_MARK} Reasoning stream enabled (Telegram only).`
-          : `${SYSTEM_MARK} Reasoning visibility enabled.`,
+          ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
+          : formatDirectiveAck("Reasoning visibility enabled."),
     );
   }
   if (directives.hasElevatedDirective && directives.elevatedLevel) {
     parts.push(
       directives.elevatedLevel === "off"
-        ? `${SYSTEM_MARK} Elevated mode disabled.`
-        : `${SYSTEM_MARK} Elevated mode enabled.`,
+        ? formatDirectiveAck("Elevated mode disabled.")
+        : formatDirectiveAck("Elevated mode enabled."),
     );
     if (shouldHintDirectRuntime) parts.push(formatElevatedRuntimeHint());
   }
@@ -1222,23 +1357,23 @@ export async function handleDirectiveOnly(params: {
     }
   }
   if (directives.hasQueueDirective && directives.queueMode) {
-    parts.push(`${SYSTEM_MARK} Queue mode set to ${directives.queueMode}.`);
+    parts.push(formatDirectiveAck(`Queue mode set to ${directives.queueMode}.`));
   } else if (directives.hasQueueDirective && directives.queueReset) {
-    parts.push(`${SYSTEM_MARK} Queue mode reset to default.`);
+    parts.push(formatDirectiveAck("Queue mode reset to default."));
   }
   if (
     directives.hasQueueDirective &&
     typeof directives.debounceMs === "number"
   ) {
     parts.push(
-      `${SYSTEM_MARK} Queue debounce set to ${directives.debounceMs}ms.`,
+      formatDirectiveAck(`Queue debounce set to ${directives.debounceMs}ms.`),
     );
   }
   if (directives.hasQueueDirective && typeof directives.cap === "number") {
-    parts.push(`${SYSTEM_MARK} Queue cap set to ${directives.cap}.`);
+    parts.push(formatDirectiveAck(`Queue cap set to ${directives.cap}.`));
   }
   if (directives.hasQueueDirective && directives.dropPolicy) {
-    parts.push(`${SYSTEM_MARK} Queue drop set to ${directives.dropPolicy}.`);
+    parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
   }
   const ack = parts.join(" ").trim();
   if (!ack && directives.hasStatusDirective) return undefined;

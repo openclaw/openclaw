@@ -25,6 +25,7 @@ export type QueueSettings = {
   cap?: number;
   dropPolicy?: QueueDropPolicy;
 };
+export type QueueDedupeMode = "message-id" | "prompt" | "none";
 export type FollowupRun = {
   prompt: string;
   /** Provider message ID, when available (for deduplication). */
@@ -345,6 +346,7 @@ function getFollowupQueue(
 function isRunAlreadyQueued(
   run: FollowupRun,
   queue: FollowupQueueState,
+  allowPromptFallback = false,
 ): boolean {
   const hasSameRouting = (item: FollowupRun) =>
     item.originatingChannel === run.originatingChannel &&
@@ -358,21 +360,28 @@ function isRunAlreadyQueued(
       (item) => item.messageId?.trim() === messageId && hasSameRouting(item),
     );
   }
-  // Without a provider message id, avoid prompt-based dedupe to ensure rapid
-  // directive messages are not dropped.
-  return false;
+  if (!allowPromptFallback) return false;
+  return queue.items.some(
+    (item) => item.prompt === run.prompt && hasSameRouting(item),
+  );
 }
 
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
   settings: QueueSettings,
+  dedupeMode: QueueDedupeMode = "message-id",
 ): boolean {
   const queue = getFollowupQueue(key, settings);
 
   // Deduplicate: skip if the same message is already queued.
-  if (isRunAlreadyQueued(run, queue)) {
-    return false;
+  if (dedupeMode !== "none") {
+    if (dedupeMode === "message-id" && isRunAlreadyQueued(run, queue)) {
+      return false;
+    }
+    if (dedupeMode === "prompt" && isRunAlreadyQueued(run, queue, true)) {
+      return false;
+    }
   }
 
   queue.lastEnqueuedAt = Date.now();
