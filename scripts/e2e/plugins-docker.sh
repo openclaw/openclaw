@@ -98,6 +98,81 @@ if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("de
 }
 console.log("ok");
 NODE
+
+  echo "Testing install from local folder (plugins.load.paths)..."
+  dir_plugin="$(mktemp -d "/tmp/clawdbot-plugin-dir.XXXXXX")"
+  cat > "$dir_plugin/package.json" <<'"'"'JSON'"'"'
+{
+  "name": "@clawdbot/demo-plugin-dir",
+  "version": "0.0.1",
+  "clawdbot": { "extensions": ["./index.js"] }
+}
+JSON
+  cat > "$dir_plugin/index.js" <<'"'"'JS'"'"'
+module.exports = {
+  id: "demo-plugin-dir",
+  name: "Demo Plugin DIR",
+  register(api) {
+    api.registerGatewayMethod("demo.dir", async () => ({ ok: true }));
+  },
+};
+JS
+
+  node dist/index.js plugins install "$dir_plugin"
+  node dist/index.js plugins list --json > /tmp/plugins3.json
+
+  node - <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+
+const data = JSON.parse(fs.readFileSync("/tmp/plugins3.json", "utf8"));
+const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-dir");
+if (!plugin) throw new Error("dir plugin not found");
+if (plugin.status !== "loaded") {
+  throw new Error(`unexpected status: ${plugin.status}`);
+}
+if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("demo.dir")) {
+  throw new Error("expected gateway method demo.dir");
+}
+console.log("ok");
+NODE
+
+  echo "Testing install from npm spec (file:)..."
+  file_pack_dir="$(mktemp -d "/tmp/clawdbot-plugin-filepack.XXXXXX")"
+  mkdir -p "$file_pack_dir/package"
+  cat > "$file_pack_dir/package/package.json" <<'"'"'JSON'"'"'
+{
+  "name": "@clawdbot/demo-plugin-file",
+  "version": "0.0.1",
+  "clawdbot": { "extensions": ["./index.js"] }
+}
+JSON
+  cat > "$file_pack_dir/package/index.js" <<'"'"'JS'"'"'
+module.exports = {
+  id: "demo-plugin-file",
+  name: "Demo Plugin FILE",
+  register(api) {
+    api.registerGatewayMethod("demo.file", async () => ({ ok: true }));
+  },
+};
+JS
+
+  node dist/index.js plugins install "file:$file_pack_dir/package"
+  node dist/index.js plugins list --json > /tmp/plugins4.json
+
+  node - <<'"'"'NODE'"'"'
+const fs = require("node:fs");
+
+const data = JSON.parse(fs.readFileSync("/tmp/plugins4.json", "utf8"));
+const plugin = (data.plugins || []).find((entry) => entry.id === "demo-plugin-file");
+if (!plugin) throw new Error("file plugin not found");
+if (plugin.status !== "loaded") {
+  throw new Error(`unexpected status: ${plugin.status}`);
+}
+if (!Array.isArray(plugin.gatewayMethods) || !plugin.gatewayMethods.includes("demo.file")) {
+  throw new Error("expected gateway method demo.file");
+}
+console.log("ok");
+NODE
 '
 
 echo "OK"
