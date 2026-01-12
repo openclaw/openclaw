@@ -64,6 +64,37 @@ describe("models config", () => {
     });
   });
 
+  it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
+    await withTempHome(async () => {
+      vi.resetModules();
+      const prevKey = process.env.MINIMAX_API_KEY;
+      process.env.MINIMAX_API_KEY = "sk-minimax-test";
+      try {
+        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
+
+        await ensureClawdbotModelsJson({});
+
+        const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<
+            string,
+            { baseUrl?: string; models?: Array<{ id: string }> }
+          >;
+        };
+        expect(parsed.providers.minimax?.baseUrl).toBe(
+          "https://api.minimax.io/anthropic",
+        );
+        const ids = parsed.providers.minimax?.models?.map((model) => model.id);
+        expect(ids).toContain("MiniMax-M2.1");
+      } finally {
+        if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
+        else process.env.MINIMAX_API_KEY = prevKey;
+      }
+    });
+  });
+
   it("merges providers by default", async () => {
     await withTempHome(async () => {
       vi.resetModules();
