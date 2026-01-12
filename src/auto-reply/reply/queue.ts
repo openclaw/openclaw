@@ -358,9 +358,9 @@ function isRunAlreadyQueued(
       (item) => item.messageId?.trim() === messageId && hasSameRouting(item),
     );
   }
-  return queue.items.some(
-    (item) => item.prompt === run.prompt && hasSameRouting(item),
-  );
+  // Without a provider message id, avoid prompt-based dedupe to ensure rapid
+  // directive messages are not dropped.
+  return false;
 }
 
 export function enqueueFollowupRun(

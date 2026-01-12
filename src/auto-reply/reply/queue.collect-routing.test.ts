@@ -117,7 +117,7 @@ describe("followup queue deduplication", () => {
     );
     expect(first).toBe(true);
 
-    // Second enqueue with same prompt should be deduplicated
+    // Second enqueue with same prompt should be allowed (we only dedupe with message id)
     const second = enqueueFollowupRun(
       key,
       createRun({
@@ -127,7 +127,7 @@ describe("followup queue deduplication", () => {
       }),
       settings,
     );
-    expect(second).toBe(false);
+    expect(second).toBe(true);
 
     // Third enqueue with different prompt should succeed
     const third = enqueueFollowupRun(

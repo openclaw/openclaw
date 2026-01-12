@@ -708,6 +708,9 @@ export async function getReplyFromConfig(
   const inlineStatusRequested =
     hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
 
+  // Inline control directives should apply immediately, even when mixed with text.
+  let directiveAck: ReplyPayload | undefined;
+
   if (!command.isAuthorizedSender) {
     directives = {
       ...directives,
@@ -851,6 +854,77 @@ export async function getReplyFromConfig(
     await opts.onBlockReply(reply);
   };
 
+  const hasAnyDirective =
+    directives.hasThinkDirective ||
+    directives.hasVerboseDirective ||
+    directives.hasReasoningDirective ||
+    directives.hasElevatedDirective ||
+    directives.hasModelDirective ||
+    directives.hasQueueDirective ||
+    directives.hasStatusDirective;
+
+  if (
+    hasAnyDirective &&
+    command.isAuthorizedSender &&
+    !isDirectiveOnly({
+      directives,
+      cleanedBody: directives.cleaned,
+      ctx,
+      cfg,
+      agentId,
+      isGroup,
+    })
+  ) {
+    const resolvedDefaultThinkLevel =
+      (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+      (await modelState.resolveDefaultThinkingLevel());
+    const currentThinkLevel = resolvedDefaultThinkLevel;
+    const currentVerboseLevel =
+      (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
+      (agentCfg?.verboseDefault as VerboseLevel | undefined);
+    const currentReasoningLevel =
+      (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    const currentElevatedLevel =
+      (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
+      (agentCfg?.elevatedDefault as ElevatedLevel | undefined);
+
+    directiveAck = await handleDirectiveOnly({
+      cfg,
+      directives,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      elevatedEnabled,
+      elevatedAllowed,
+      elevatedFailures,
+      messageProviderKey,
+      defaultProvider,
+      defaultModel,
+      aliasIndex,
+      allowedModelKeys: modelState.allowedModelKeys,
+      allowedModelCatalog: modelState.allowedModelCatalog,
+      resetModelOverride: modelState.resetModelOverride,
+      provider,
+      model,
+      initialModelLabel,
+      formatModelSwitchEvent,
+      currentThinkLevel,
+      currentVerboseLevel,
+      currentReasoningLevel,
+      currentElevatedLevel,
+    });
+
+    // Refresh provider/model from session overrides applied by directives.
+    if (sessionEntry?.providerOverride) {
+      provider = sessionEntry.providerOverride;
+    }
+    if (sessionEntry?.modelOverride) {
+      model = sessionEntry.modelOverride;
+    }
+  }
+
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender
       ? extractInlineSimpleCommand(cleanedBody)
@@ -928,6 +1002,10 @@ export async function getReplyFromConfig(
       }
       await sendInlineReply(inlineResult.reply);
     }
+  }
+
+  if (directiveAck) {
+    await sendInlineReply(directiveAck);
   }
 
   const isEmptyConfig = Object.keys(cfg).length === 0;
