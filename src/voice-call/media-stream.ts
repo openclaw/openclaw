@@ -148,9 +148,6 @@ export class MediaStreamHandler {
       this.config.onTranscript?.(callSid, transcript);
     });
 
-    // Connect to OpenAI
-    await sttSession.connect();
-
     const session: StreamSession = {
       callId: callSid,
       streamSid,
@@ -159,7 +156,17 @@ export class MediaStreamHandler {
     };
 
     this.sessions.set(streamSid, session);
+
+    // Notify connection BEFORE STT connect so TTS can work even if STT fails
     this.config.onConnect?.(callSid, streamSid);
+
+    // Connect to OpenAI STT (non-blocking, log errors but don't fail the call)
+    sttSession.connect().catch((err) => {
+      console.warn(
+        `[MediaStream] STT connection failed (TTS still works):`,
+        err.message,
+      );
+    });
 
     return session;
   }
@@ -180,10 +187,7 @@ export class MediaStreamHandler {
    */
   private getOpenSession(streamSid: string): StreamSession | undefined {
     const session = this.sessions.get(streamSid);
-    if (session?.ws.readyState === WebSocket.OPEN) {
-      return session;
-    }
-    return undefined;
+    return session?.ws.readyState === WebSocket.OPEN ? session : undefined;
   }
 
   /**

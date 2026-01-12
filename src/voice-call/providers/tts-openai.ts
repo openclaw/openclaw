@@ -4,6 +4,12 @@
  * Generates speech audio using OpenAI's text-to-speech API.
  * Handles audio format conversion for telephony (mu-law 8kHz).
  *
+ * Best practices from OpenAI docs:
+ * - Use gpt-4o-mini-tts for intelligent realtime applications (supports instructions)
+ * - Use tts-1 for lower latency, tts-1-hd for higher quality
+ * - Use marin or cedar voices for best quality
+ * - Use pcm or wav format for fastest response times
+ *
  * @see https://platform.openai.com/docs/guides/text-to-speech
  */
 
@@ -13,24 +19,47 @@
 export interface OpenAITTSConfig {
   /** OpenAI API key (uses OPENAI_API_KEY env if not set) */
   apiKey?: string;
-  /** TTS model: tts-1 (faster) or tts-1-hd (higher quality) */
+  /**
+   * TTS model:
+   * - gpt-4o-mini-tts: newest, supports instructions for tone/style control (recommended)
+   * - tts-1: lower latency
+   * - tts-1-hd: higher quality
+   */
   model?: string;
-  /** Voice: alloy, echo, fable, onyx, nova, shimmer */
+  /**
+   * Voice to use. For best quality, use marin or cedar.
+   * All 13 voices: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar
+   * Note: tts-1/tts-1-hd only support: alloy, ash, coral, echo, fable, onyx, nova, sage, shimmer
+   */
   voice?: string;
   /** Speed multiplier (0.25 to 4.0) */
   speed?: number;
+  /**
+   * Instructions for speech style (only works with gpt-4o-mini-tts model).
+   * Examples: "Speak in a cheerful tone", "Talk like a sympathetic customer service agent"
+   */
+  instructions?: string;
 }
 
 /**
- * Supported OpenAI TTS voices.
+ * Supported OpenAI TTS voices (all 13 built-in voices).
+ * For best quality, use marin or cedar.
+ * Note: tts-1 and tts-1-hd support a smaller set.
  */
 export const OPENAI_TTS_VOICES = [
   "alloy",
+  "ash",
+  "ballad",
+  "coral",
   "echo",
   "fable",
-  "onyx",
   "nova",
+  "onyx",
+  "sage",
   "shimmer",
+  "verse",
+  "marin",
+  "cedar",
 ] as const;
 
 export type OpenAITTSVoice = (typeof OPENAI_TTS_VOICES)[number];
@@ -43,12 +72,16 @@ export class OpenAITTSProvider {
   private model: string;
   private voice: OpenAITTSVoice;
   private speed: number;
+  private instructions?: string;
 
   constructor(config: OpenAITTSConfig = {}) {
     this.apiKey = config.apiKey || process.env.OPENAI_API_KEY || "";
-    this.model = config.model || "tts-1";
-    this.voice = (config.voice as OpenAITTSVoice) || "onyx";
+    // Default to gpt-4o-mini-tts for intelligent realtime applications
+    this.model = config.model || "gpt-4o-mini-tts";
+    // Default to coral - good balance of quality and natural tone
+    this.voice = (config.voice as OpenAITTSVoice) || "coral";
     this.speed = config.speed || 1.0;
+    this.instructions = config.instructions;
 
     if (!this.apiKey) {
       throw new Error(
@@ -61,20 +94,29 @@ export class OpenAITTSProvider {
    * Generate speech audio from text.
    * Returns raw PCM audio data (24kHz, mono, 16-bit).
    */
-  async synthesize(text: string): Promise<Buffer> {
+  async synthesize(text: string, instructions?: string): Promise<Buffer> {
+    // Build request body
+    const body: Record<string, unknown> = {
+      model: this.model,
+      input: text,
+      voice: this.voice,
+      response_format: "pcm", // Raw PCM audio (24kHz, mono, 16-bit signed LE)
+      speed: this.speed,
+    };
+
+    // Add instructions if using gpt-4o-mini-tts model
+    const effectiveInstructions = instructions || this.instructions;
+    if (effectiveInstructions && this.model.includes("gpt-4o-mini-tts")) {
+      body.instructions = effectiveInstructions;
+    }
+
     const response = await fetch("https://api.openai.com/v1/audio/speech", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: this.model,
-        input: text,
-        voice: this.voice,
-        response_format: "pcm", // Raw PCM audio (24kHz, mono, 16-bit signed LE)
-        speed: this.speed,
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {

@@ -1,16 +1,28 @@
 /**
- * Voice call response generator using the agent system.
- * Routes through runEmbeddedPiAgent for consistent model handling.
+ * Voice call response generator - uses the embedded Pi agent for tool support.
+ * Routes voice responses through the same agent infrastructure as messaging.
  */
 
 import crypto from "node:crypto";
-import path from "node:path";
 
-import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
-import { resolveModelRefFromString } from "../agents/model-selection.js";
+import {
+  resolveAgentDir,
+  resolveAgentWorkspaceDir,
+} from "../agents/agent-scope.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveAgentIdentity } from "../agents/identity.js";
+import { resolveThinkingDefault } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
+import { resolveAgentTimeoutMs } from "../agents/timeout.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import { loadConfig } from "../config/config.js";
-import { resolveConfigDir } from "../utils.js";
+import {
+  loadSessionStore,
+  resolveSessionFilePath,
+  resolveStorePath,
+  type SessionEntry,
+  saveSessionStore,
+} from "../config/sessions.js";
 
 import type { VoiceCallConfig } from "./config.js";
 
@@ -32,13 +44,9 @@ export type VoiceResponseResult = {
   error?: string;
 };
 
-const DEFAULT_VOICE_MODEL = "openai/gpt-4o-mini";
-const DEFAULT_PROVIDER = "openai";
-const DEFAULT_TIMEOUT_MS = 30_000;
-
 /**
- * Generate a voice response using the agent system.
- * Supports any model provider (OpenAI, Anthropic, Google, local, etc.)
+ * Generate a voice response using the embedded Pi agent with full tool support.
+ * Uses the same agent infrastructure as messaging for consistent behavior.
  */
 export async function generateVoiceResponse(
   params: VoiceResponseParams,
@@ -46,69 +54,108 @@ export async function generateVoiceResponse(
   const { voiceConfig, callId, from, transcript, userMessage } = params;
 
   const cfg = loadConfig();
-  const agentDir = resolveClawdbotAgentDir();
-  const configDir = resolveConfigDir();
 
-  // Resolve model from config (e.g., "anthropic/claude-sonnet-4" or "openai/gpt-4o")
-  const modelRef = voiceConfig.responseModel || DEFAULT_VOICE_MODEL;
-  const resolved = resolveModelRefFromString({
-    raw: modelRef,
-    defaultProvider: DEFAULT_PROVIDER,
+  // Build voice-specific session key based on phone number
+  const normalizedPhone = from.replace(/\D/g, "");
+  const sessionKey = `voice:${normalizedPhone}`;
+  const agentId = "main";
+
+  // Resolve paths
+  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const agentDir = resolveAgentDir(cfg, agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+
+  // Ensure workspace exists
+  await ensureAgentWorkspace({ dir: workspaceDir });
+
+  // Load or create session entry
+  const sessionStore = loadSessionStore(storePath);
+  const now = Date.now();
+  let sessionEntry = sessionStore[sessionKey] as SessionEntry | undefined;
+
+  if (!sessionEntry) {
+    sessionEntry = {
+      sessionId: crypto.randomUUID(),
+      updatedAt: now,
+    };
+    sessionStore[sessionKey] = sessionEntry;
+    await saveSessionStore(storePath, sessionStore);
+  }
+
+  const sessionId = sessionEntry.sessionId;
+  const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
+    agentId,
   });
 
-  // Extract provider and model from resolved ref
-  const provider = resolved?.ref.provider ?? DEFAULT_PROVIDER;
-  const model = resolved?.ref.model ?? "gpt-4o-mini";
+  // Resolve model from config
+  const modelRef =
+    voiceConfig.responseModel || `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
+  const slashIndex = modelRef.indexOf("/");
+  const provider =
+    slashIndex === -1 ? DEFAULT_PROVIDER : modelRef.slice(0, slashIndex);
+  const model = slashIndex === -1 ? modelRef : modelRef.slice(slashIndex + 1);
 
-  // Build system prompt
-  const systemPrompt =
+  // Resolve thinking level
+  const thinkLevel = resolveThinkingDefault({ cfg, provider, model });
+
+  // Resolve agent identity for personalized prompt
+  const identity = resolveAgentIdentity(cfg, agentId);
+  const agentName = identity?.name?.trim() || "assistant";
+
+  // Build system prompt with conversation history
+  const basePrompt =
     voiceConfig.responseSystemPrompt ??
-    `You are Haki, a helpful voice assistant. Keep responses brief and conversational (1-2 sentences max). You're on a phone call, so be natural and friendly. The caller's phone number is ${from}.`;
+    `You are ${agentName}, a helpful voice assistant on a phone call. Keep responses brief and conversational (1-2 sentences max). Be natural and friendly. The caller's phone number is ${from}. You have access to tools - use them when helpful.`;
 
-  // Build conversation history as a prompt
-  const historyText = transcript
-    .map((entry) => {
-      const role = entry.speaker === "bot" ? "Assistant" : "User";
-      return `${role}: ${entry.text}`;
-    })
-    .join("\n");
+  let extraSystemPrompt = basePrompt;
+  if (transcript.length > 0) {
+    const history = transcript
+      .map(
+        (entry) =>
+          `${entry.speaker === "bot" ? "You" : "Caller"}: ${entry.text}`,
+      )
+      .join("\n");
+    extraSystemPrompt = `${basePrompt}\n\nConversation so far:\n${history}`;
+  }
 
-  const prompt = historyText
-    ? `${historyText}\n\nUser: ${userMessage}\n\nRespond briefly (1-2 sentences).`
-    : `User: ${userMessage}\n\nRespond briefly (1-2 sentences).`;
-
-  // Session setup for the agent runner
-  const sessionId = `voice-call-${callId}`;
-  const sessionFile = path.join(configDir, "voice-calls", `${sessionId}.jsonl`);
-  const workspaceDir = path.join(configDir, "voice-calls", "workspace");
-  const runId = crypto.randomUUID();
+  // Resolve timeout
+  const timeoutMs =
+    voiceConfig.responseTimeoutMs ?? resolveAgentTimeoutMs({ cfg });
+  const runId = `voice:${callId}:${Date.now()}`;
 
   try {
     const result = await runEmbeddedPiAgent({
       sessionId,
-      sessionKey: `voice-call:${callId}`,
+      sessionKey,
+      messageProvider: "voice",
       sessionFile,
       workspaceDir,
-      agentDir,
       config: cfg,
-      prompt,
+      prompt: userMessage,
       provider,
       model,
-      thinkLevel: "off", // Fast responses, no extended thinking
-      timeoutMs: voiceConfig.responseTimeoutMs ?? DEFAULT_TIMEOUT_MS,
+      thinkLevel,
+      verboseLevel: "off",
+      timeoutMs,
       runId,
-      lane: "voice-call",
-      extraSystemPrompt: systemPrompt,
+      lane: "voice",
+      extraSystemPrompt,
+      agentDir,
     });
 
     // Extract text from payloads
-    const payloads = result.payloads ?? [];
-    const text = payloads
+    const texts = (result.payloads ?? [])
+      .filter((p) => p.text && !p.isError)
       .map((p) => p.text?.trim())
-      .filter(Boolean)
-      .join(" ");
+      .filter(Boolean);
 
-    return { text: text || null };
+    const text = texts.join(" ") || null;
+
+    if (!text && result.meta.aborted) {
+      return { text: null, error: "Response generation was aborted" };
+    }
+
+    return { text };
   } catch (err) {
     console.error(`[voice-call] Response generation failed:`, err);
     return { text: null, error: String(err) };

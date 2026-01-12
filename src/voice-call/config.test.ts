@@ -48,7 +48,8 @@ describe("VoiceCallConfigSchema", () => {
     expect(config.maxConcurrentCalls).toBe(1);
     expect(config.serve.port).toBe(3334);
     expect(config.serve.bind).toBe("127.0.0.1");
-    expect(config.tts.voice).toBe("onyx");
+    expect(config.tts.voice).toBe("coral");
+    expect(config.tts.model).toBe("gpt-4o-mini-tts");
     expect(config.outbound.defaultMode).toBe("notify");
     expect(config.outbound.notifyHangupDelaySec).toBe(3);
   });

@@ -95,8 +95,11 @@ export class VoiceCallWebhookServer {
         };
         this.manager.processEvent(event);
 
-        // Auto-respond for inbound calls
-        if (call.direction === "inbound") {
+        // Auto-respond in conversation mode (inbound always, outbound if mode is conversation)
+        const callMode = call.metadata?.mode as string | undefined;
+        const shouldRespond =
+          call.direction === "inbound" || callMode === "conversation";
+        if (shouldRespond) {
           this.handleInboundResponse(call.callId, transcript).catch((err) => {
             console.warn(`[voice-call] Failed to auto-respond:`, err);
           });
@@ -291,7 +294,7 @@ export class VoiceCallWebhookServer {
 
   /**
    * Handle auto-response for inbound calls using the agent system.
-   * Supports any model provider (OpenAI, Anthropic, Google, local, etc.)
+   * Supports tool calling for richer voice interactions.
    */
   private async handleInboundResponse(
     callId: string,

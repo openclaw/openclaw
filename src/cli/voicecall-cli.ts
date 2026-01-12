@@ -2,13 +2,15 @@ import fs from "node:fs";
 
 import type { Command } from "commander";
 
+import { callGateway } from "../gateway/call.js";
+
 function resolveDefaultStorePath(): string {
   const home = process.env.HOME || "/tmp";
   return `${home}/clawd/voice-calls/calls.jsonl`;
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function resolveMode(input: string): "off" | "serve" | "funnel" {
@@ -75,6 +77,46 @@ export function registerVoiceCallCli(program: Command) {
             // ignore and retry
           }
           await sleep(pollMs);
+        }
+      },
+    );
+
+  root
+    .command("call")
+    .description("Initiate an outbound voice call")
+    .requiredOption(
+      "-m, --message <text>",
+      "Message to speak when call connects",
+    )
+    .option(
+      "-t, --to <phone>",
+      "Phone number to call (E.164 format, uses voiceCall.toNumber if not set)",
+    )
+    .option(
+      "--mode <mode>",
+      "Call mode: notify (hangup after message) or conversation (stay open)",
+      "conversation",
+    )
+    .action(
+      async (options: { message: string; to?: string; mode?: string }) => {
+        try {
+          const result = await callGateway<{
+            callId: string;
+            initiated: boolean;
+          }>({
+            method: "voicecall.initiate",
+            params: {
+              message: options.message,
+              to: options.to,
+              mode: options.mode,
+            },
+          });
+          console.log(JSON.stringify(result, null, 2));
+        } catch (err) {
+          console.error(
+            `Call failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          process.exit(1);
         }
       },
     );

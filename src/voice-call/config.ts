@@ -6,11 +6,11 @@ import { z } from "zod";
 
 /**
  * E.164 phone number format: +[country code][number]
- * Example: +15551234567, +15550001234
+ * Examples use 555 prefix (reserved for fictional numbers)
  */
 export const E164Schema = z
   .string()
-  .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15551234567");
+  .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
 
 // -----------------------------------------------------------------------------
 // Inbound Policy
@@ -71,12 +71,25 @@ export const TtsConfigSchema = z
   .object({
     /** TTS provider (currently only OpenAI supported) */
     provider: z.literal("openai").default("openai"),
-    /** TTS model to use */
-    model: z.string().min(1).default("tts-1"),
-    /** Voice ID */
-    voice: z.string().min(1).default("onyx"),
+    /**
+     * TTS model to use:
+     * - gpt-4o-mini-tts: newest, supports instructions for tone/style control (recommended)
+     * - tts-1: lower latency
+     * - tts-1-hd: higher quality
+     */
+    model: z.string().min(1).default("gpt-4o-mini-tts"),
+    /**
+     * Voice ID. For best quality, use marin or cedar.
+     * All voices: alloy, ash, ballad, coral, echo, fable, nova, onyx, sage, shimmer, verse, marin, cedar
+     */
+    voice: z.string().min(1).default("coral"),
+    /**
+     * Instructions for speech style (only works with gpt-4o-mini-tts).
+     * Examples: "Speak in a cheerful tone", "Talk like a sympathetic customer service agent"
+     */
+    instructions: z.string().optional(),
   })
-  .default({ provider: "openai", model: "tts-1", voice: "onyx" });
+  .default({ provider: "openai", model: "gpt-4o-mini-tts", voice: "coral" });
 export type TtsConfig = z.infer<typeof TtsConfigSchema>;
 
 // -----------------------------------------------------------------------------
