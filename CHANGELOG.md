@@ -24,12 +24,14 @@
 ### Fixes
 - Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
 - Models: normalize `${ENV_VAR}` apiKey config values and auto-fill missing provider `apiKey` from env/auth when custom provider models are configured (fixes MiniMax “Unknown model” on fresh installs).
+- Models/Tools: include `MiniMax-VL-01` in implicit MiniMax provider so image pairing uses a real vision model.
 - Telegram: show typing indicator in General forum topics. (#779) — thanks @azade-c.
 - Models: keep explicit GitHub Copilot provider config and honor agent-dir auth profiles for auto-injection. (#705) — thanks @TAGOOZ.
 - Auto-reply: restore 300-char heartbeat ack limit and keep >300 char replies instead of dropping them; adjust long heartbeat test content accordingly.
 - Gateway: `agents.list` now honors explicit `agents.list` config without pulling stray agents from disk; GitHub Copilot CLI auth path uses the updated provider build.
 - Google: apply patched pi-ai `google-gemini-cli` function call handling (strips ids) after upgrading to pi-ai 0.43.0.
 - Auto-reply: elevated/reasoning toggles now enqueue system events so the model sees the mode change immediately.
+- Tools: keep `image` available in sandbox and fail over when image models return empty output (fixes “(no text returned)”).
 
 ## 2026.1.11
 

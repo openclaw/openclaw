@@ -443,6 +443,7 @@ describe("models config", () => {
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");
+        expect(ids).toContain("MiniMax-VL-01");
       } finally {
         if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = prevKey;
