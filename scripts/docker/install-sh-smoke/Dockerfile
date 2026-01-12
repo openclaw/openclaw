@@ -5,6 +5,7 @@ RUN apt-get update \
     bash \
     ca-certificates \
     curl \
+    git \
     sudo \
   && rm -rf /var/lib/apt/lists/*
 

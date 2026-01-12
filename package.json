@@ -109,6 +109,7 @@
     "test:docker:all": "pnpm test:docker:live-models && pnpm test:docker:live-gateway && pnpm test:docker:onboard && pnpm test:docker:gateway-network && pnpm test:docker:qr && pnpm test:docker:doctor-switch && pnpm test:docker:plugins && pnpm test:docker:cleanup",
     "test:all": "pnpm lint && pnpm build && pnpm test && pnpm test:e2e && pnpm test:live && pnpm test:docker:all",
     "test:install:e2e": "bash scripts/test-install-sh-e2e-docker.sh",
+    "test:install:smoke": "bash scripts/test-install-sh-docker.sh",
     "test:install:e2e:openai": "CLAWDBOT_E2E_MODELS=openai bash scripts/test-install-sh-e2e-docker.sh",
     "test:install:e2e:anthropic": "CLAWDBOT_E2E_MODELS=anthropic bash scripts/test-install-sh-e2e-docker.sh",
     "protocol:gen": "tsx scripts/protocol-gen.ts",
