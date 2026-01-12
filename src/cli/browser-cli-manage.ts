@@ -1,5 +1,5 @@
 import type { Command } from "commander";
-
+import type { BrowserTab } from "../browser/client.js";
 import {
   browserCloseTab,
   browserCreateProfile,
@@ -11,6 +11,7 @@ import {
   browserStart,
   browserStatus,
   browserStop,
+  browserTabAction,
   browserTabs,
   resolveBrowserControlUrl,
 } from "../browser/client.js";
@@ -153,6 +154,128 @@ export function registerBrowserManageCommands(
             )
             .join("\n"),
         );
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  const tab = browser
+    .command("tab")
+    .description("Tab shortcuts (index-based)")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      try {
+        const result = (await browserTabAction(baseUrl, {
+          action: "list",
+          profile,
+        })) as { ok: true; tabs: BrowserTab[] };
+        const tabs = result.tabs ?? [];
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify({ tabs }, null, 2));
+          return;
+        }
+        if (tabs.length === 0) {
+          defaultRuntime.log("No tabs (browser closed or no targets).");
+          return;
+        }
+        defaultRuntime.log(
+          tabs
+            .map(
+              (t, i) =>
+                `${i + 1}. ${t.title || "(untitled)"}\n   ${t.url}\n   id: ${t.targetId}`,
+            )
+            .join("\n"),
+        );
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  tab
+    .command("new")
+    .description("Open a new tab (about:blank)")
+    .action(async (_opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      try {
+        const result = await browserTabAction(baseUrl, {
+          action: "new",
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log("opened new tab");
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  tab
+    .command("select")
+    .description("Focus tab by index (1-based)")
+    .argument("<index>", "Tab index (1-based)", (v: string) => Number(v))
+    .action(async (index: number, _opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      if (!Number.isFinite(index) || index < 1) {
+        defaultRuntime.error(danger("index must be a positive number"));
+        defaultRuntime.exit(1);
+        return;
+      }
+      try {
+        const result = await browserTabAction(baseUrl, {
+          action: "select",
+          index: Math.floor(index) - 1,
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log(`selected tab ${Math.floor(index)}`);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  tab
+    .command("close")
+    .description("Close tab by index (1-based); default: first tab")
+    .argument("[index]", "Tab index (1-based)", (v: string) => Number(v))
+    .action(async (index: number | undefined, _opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      const idx =
+        typeof index === "number" && Number.isFinite(index)
+          ? Math.floor(index) - 1
+          : undefined;
+      if (typeof idx === "number" && idx < 0) {
+        defaultRuntime.error(danger("index must be >= 1"));
+        defaultRuntime.exit(1);
+        return;
+      }
+      try {
+        const result = await browserTabAction(baseUrl, {
+          action: "close",
+          index: idx,
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log("closed tab");
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);
