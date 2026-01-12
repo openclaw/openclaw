@@ -366,6 +366,8 @@ async function promptAuthConfig(
       setDefaultModel: true,
     });
     next = applied.config;
+    // Auth choice already set a sensible default model; skip the model picker.
+    return next;
   }
 
   const modelSelection = await promptDefaultModel({

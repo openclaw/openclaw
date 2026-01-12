@@ -78,6 +78,7 @@
 - Auto-reply: allow fuzzy `/model` matches (e.g. `/model kimi` or `/model moonshot/kimi`) when unambiguous.
 - Auto-reply: ignore inline `/status` directives unless the message is directive-only.
 - CLI/Configure: enter the selected section immediately, then return to the section picker.
+- CLI/Configure: apply the chosen auth model as default (skip the extra picker) and refresh the model catalog for new providers.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.
 - Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.
 - Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.
