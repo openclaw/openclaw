@@ -11,6 +11,7 @@
 - Internal doc links in `docs/**/*.md`: root-relative, no `.md`/`.mdx` (example: `[Config](/configuration)`).
 - Section cross-references: use anchors on root-relative paths (example: `[Hooks](/configuration#hooks)`).
 - When Peter asks for links, reply with full `https://docs.clawd.bot/...` URLs (not root-relative).
+- When you touch docs, end the reply with the `https://docs.clawd.bot/...` URLs you referenced.
 - README (GitHub): keep absolute docs URLs (`https://docs.clawd.bot/...`) so links work on GitHub.
 - Docs content must be generic: no personal device names/hostnames/paths; use placeholders like `user@gateway-host` and “gateway host”.
 
