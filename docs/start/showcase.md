@@ -136,6 +136,14 @@ Full setup walkthrough (28m) by VelvetShark.
 
 <CardGroup cols={2}>
 
+<Card title="Winix Air Purifier Control" icon="wind" href="https://x.com/antonplex/status/2010518442471006253">
+  **@antonplex** • `automation` `hardware` `air-quality`
+
+  Claude Code discovered and confirmed the purifier controls, then Clawdbot takes over to manage room air quality.
+
+  <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via Clawdbot" />
+</Card>
+
 <Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
   **@buddyhadry** • `automation` `briefing` `images` `telegram`
 
