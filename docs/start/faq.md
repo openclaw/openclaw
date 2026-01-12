@@ -112,6 +112,19 @@ Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI
 
 Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
 
+### Does Homebrew work on Linux?
+
+Yes. Homebrew supports Linux (Linuxbrew). Quick setup:
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+echo 'eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"' >> ~/.profile
+eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+brew install <formula>
+```
+
+If you run Clawdbot via systemd, ensure the service PATH includes `/home/linuxbrew/.linuxbrew/bin` (or your brew prefix) so `brew`-installed tools resolve in non‑login shells.
+
 ### Can I switch between npm and git installs later?
 
 Yes. Install the other flavor, then run Doctor so the gateway service points at the new entrypoint.
@@ -140,6 +153,33 @@ Doctor detects a gateway service entrypoint mismatch and offers to rewrite the s
 ### How do I customize skills without keeping the repo dirty?
 
 Use managed overrides instead of editing the repo copy. Put your changes in `~/.clawdbot/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.clawdbot/clawdbot.json`). Precedence is `<workspace>/skills` > `~/.clawdbot/skills` > bundled, so managed overrides win without touching git. Only upstream-worthy edits should live in the repo and go out as PRs.
+
+### How do I install skills on Linux?
+
+Use **ClawdHub** (CLI) or drop skills into your workspace. The macOS Skills UI isn’t available on Linux.
+
+Install the ClawdHub CLI (pick one package manager):
+
+```bash
+npm i -g clawdhub
+```
+
+```bash
+pnpm add -g clawdhub
+```
+
+```bash
+bun add -g clawdhub
+```
+
+Install skills:
+
+```bash
+clawdhub install <skill-slug>
+clawdhub update --all
+```
+
+ClawdHub installs into `./skills` under your current directory; Clawdbot treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.clawdbot/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [ClawdHub](/tools/clawdhub).
 
 ### Is there a dedicated sandboxing doc?
 
