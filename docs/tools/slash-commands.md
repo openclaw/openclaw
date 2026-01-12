@@ -7,6 +7,7 @@ read_when:
 # Slash commands
 
 Commands are handled by the Gateway. Most commands must be sent as a **standalone** message that starts with `/`.
+The host-only bash chat command uses `! <cmd>` (with `/bash <cmd>` as an alias).
 
 There are two related systems:
 
@@ -26,6 +27,8 @@ They run immediately, are stripped before the model sees the message, and the re
   commands: {
     native: "auto",
     text: true,
+    bash: false,
+    bashForegroundMs: 2000,
     config: false,
     debug: false,
     restart: false,
@@ -40,6 +43,8 @@ They run immediately, are stripped before the model sees the message, and the re
   - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
   - Set `discord.commands.native`, `telegram.commands.native`, or `slack.commands.native` to override per provider (bool or `"auto"`).
   - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.bash` (default `false`) enables `! <cmd>` to run host shell commands (`/bash <cmd>` is an alias; requires `tools.elevated` allowlists).
+- `commands.bashForegroundMs` (default `2000`) controls how long bash waits before switching to background mode (`0` backgrounds immediately).
 - `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
@@ -66,9 +71,13 @@ Text + native (when enabled):
 - `/elevated on|off` (alias: `/elev`)
 - `/model <name>` (alias: `/models`; or `/<alias>` from `agents.defaults.models.*.alias`)
 - `/queue <mode>` (plus options like `debounce:2s cap:25 drop:summarize`; send `/queue` to see current settings)
+- `/bash <command>` (host-only; alias for `! <command>`; requires `commands.bash: true` + `tools.elevated` allowlists)
 
 Text-only:
 - `/compact [instructions]` (see [/concepts/compaction](/concepts/compaction))
+- `! <command>` (host-only; one at a time; use `!poll` + `!stop` for long-running jobs)
+- `!poll` (check output / status; accepts optional `sessionId`; `/bash poll` also works)
+- `!stop` (stop the running bash job; accepts optional `sessionId`; `/bash stop` also works)
 
 Notes:
 - Commands accept an optional `:` between the command and args (e.g. `/think: high`, `/send: on`, `/help:`).
