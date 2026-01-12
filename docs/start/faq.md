@@ -83,6 +83,10 @@ pnpm clawdbot onboard
 
 The wizard can also build UI assets automatically. After onboarding, you typically run the Gateway on port **18789**.
 
+### How do I open the dashboard after onboarding?
+
+The wizard now opens your browser with a tokenized dashboard URL right after onboarding and also prints the full link (with token) in the summary. Keep that tab open; if it didn’t launch, copy/paste the printed URL on the same machine. Tokens stay local to your host—nothing is fetched from the browser.
+
 ### What runtime do I need?
 
 Node **>= 22** is required. `pnpm` is recommended; `bun` is optional.
