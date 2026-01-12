@@ -1,6 +1,6 @@
 import fs from "node:fs";
-import path from "node:path";
 import { createRequire } from "node:module";
+import path from "node:path";
 
 const formatCommit = (value?: string | null) => {
   if (!value) return null;
@@ -41,7 +41,7 @@ let cachedCommit: string | null | undefined;
 const readCommitFromPackageJson = () => {
   try {
     const require = createRequire(import.meta.url);
-    const pkg = require("../package.json") as {
+    const pkg = require("../../package.json") as {
       gitHead?: string;
       githead?: string;
     };

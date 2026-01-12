@@ -26,7 +26,7 @@ import("./cli/run-main.js")
   .catch((error) => {
     console.error(
       "[clawdbot] Failed to start CLI:",
-      error instanceof Error ? error.stack ?? error.message : error,
+      error instanceof Error ? (error.stack ?? error.message) : error,
     );
     process.exitCode = 1;
   });

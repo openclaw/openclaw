@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.11-4
+
+### Fixes
+- CLI: read the git commit hash from the package root so npm installs show it.
+
 ## 2026.1.11-3
 
 ### Fixes
