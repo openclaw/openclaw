@@ -1,3 +1,53 @@
+/* Tablet/Mobile nav fix (under 1100px) - single horizontal scroll row */
+@media (max-width: 1100px) {
+  /* Flatten nav into single horizontal scroll */
+  .nav {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 10px 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Nav groups should flow inline, not stack */
+  .nav-group {
+    display: contents; /* Flatten group wrapper - items flow directly into .nav */
+  }
+
+  .nav-group__items {
+    display: contents; /* Flatten items wrapper too */
+  }
+
+  /* Hide group labels on tablet/mobile */
+  .nav-label {
+    display: none;
+  }
+
+  /* Don't hide nav items even if group is "collapsed" */
+  .nav-group--collapsed .nav-group__items {
+    display: contents;
+  }
+
+  .nav-item {
+    padding: 8px 14px;
+    font-size: 13px;
+    border-radius: 10px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .nav-item::before {
+    display: none;
+  }
+}
+
 /* Mobile-specific improvements */
 @media (max-width: 600px) {
   .shell {
@@ -64,12 +114,7 @@
   }
 
   .nav-group {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    gap: 6px;
-    margin-bottom: 0;
-    flex-shrink: 0;
+    display: contents;
   }
 
   .nav-label {
@@ -272,4 +317,3 @@
     height: 14px;
   }
 }
-
