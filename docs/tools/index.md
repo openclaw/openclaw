@@ -153,7 +153,7 @@ Core parameters:
 - `maxBytesMb` (optional size cap)
 
 Notes:
-- Only available when `agents.defaults.imageModel` is configured (primary or fallbacks).
+- Only available when `agents.defaults.imageModel` is configured (primary or fallbacks), or when an implicit image model can be inferred from your default model + configured auth (best-effort pairing).
 - Uses the image model directly (independent of the main chat model).
 
 ### `message`

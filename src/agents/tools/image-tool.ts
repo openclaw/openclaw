@@ -14,15 +14,23 @@ import { Type } from "@sinclair/typebox";
 import type { ClawdbotConfig } from "../../config/config.js";
 import { resolveUserPath } from "../../utils.js";
 import { loadWebMedia } from "../../web/media.js";
-import { getApiKeyForModel } from "../model-auth.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "../auth-profiles.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { getApiKeyForModel, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
+import { parseModelRef } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
 import type { AnyAgentTool } from "./common.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
 
-function ensureImageToolConfigured(cfg?: ClawdbotConfig): boolean {
+type ImageModelConfig = { primary?: string; fallbacks?: string[] };
+
+function coerceImageModelConfig(cfg?: ClawdbotConfig): ImageModelConfig {
   const imageModel = cfg?.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
     | string
@@ -31,7 +39,150 @@ function ensureImageToolConfigured(cfg?: ClawdbotConfig): boolean {
     typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
   const fallbacks =
     typeof imageModel === "object" ? (imageModel?.fallbacks ?? []) : [];
-  return Boolean(primary?.trim() || fallbacks.length > 0);
+  return {
+    ...(primary?.trim() ? { primary: primary.trim() } : {}),
+    ...(fallbacks.length > 0 ? { fallbacks } : {}),
+  };
+}
+
+function resolveProviderVisionModelFromConfig(params: {
+  cfg?: ClawdbotConfig;
+  provider: string;
+}): string | null {
+  const providerCfg = params.cfg?.models?.providers?.[
+    params.provider
+  ] as unknown as
+    | { models?: Array<{ id?: string; input?: string[] }> }
+    | undefined;
+  const models = providerCfg?.models ?? [];
+  const preferMinimaxVl =
+    params.provider === "minimax"
+      ? models.find(
+          (m) =>
+            (m?.id ?? "").trim() === "MiniMax-VL-01" &&
+            Array.isArray(m?.input) &&
+            m.input.includes("image"),
+        )
+      : null;
+  const picked =
+    preferMinimaxVl ??
+    models.find(
+      (m) => Boolean((m?.id ?? "").trim()) && m.input?.includes("image"),
+    );
+  const id = (picked?.id ?? "").trim();
+  return id ? `${params.provider}/${id}` : null;
+}
+
+function resolveDefaultModelRef(cfg?: ClawdbotConfig): {
+  provider: string;
+  model: string;
+} {
+  const modelConfig = cfg?.agents?.defaults?.model as
+    | { primary?: string }
+    | string
+    | undefined;
+  const raw =
+    typeof modelConfig === "string"
+      ? modelConfig.trim()
+      : modelConfig?.primary?.trim();
+  const parsed =
+    parseModelRef(raw ?? "", DEFAULT_PROVIDER) ??
+    ({ provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL } as const);
+  return { provider: parsed.provider, model: parsed.model };
+}
+
+function hasAuthForProvider(params: {
+  provider: string;
+  agentDir: string;
+}): boolean {
+  if (resolveEnvApiKey(params.provider)?.apiKey) return true;
+  const store = ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+  });
+  return listProfilesForProvider(store, params.provider).length > 0;
+}
+
+/**
+ * Resolve the effective image model config for the `image` tool.
+ *
+ * - Prefer explicit config (`agents.defaults.imageModel`).
+ * - Otherwise, try to "pair" the primary model with an image-capable model:
+ *   - same provider (best effort)
+ *   - fall back to OpenAI/Anthropic when available
+ */
+export function resolveImageModelConfigForTool(params: {
+  cfg?: ClawdbotConfig;
+  agentDir: string;
+}): ImageModelConfig | null {
+  const explicit = coerceImageModelConfig(params.cfg);
+  if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+    return explicit;
+  }
+
+  const primary = resolveDefaultModelRef(params.cfg);
+  const openaiOk = hasAuthForProvider({
+    provider: "openai",
+    agentDir: params.agentDir,
+  });
+  const anthropicOk = hasAuthForProvider({
+    provider: "anthropic",
+    agentDir: params.agentDir,
+  });
+
+  const fallbacks: string[] = [];
+  const addFallback = (modelRef: string | null) => {
+    const ref = (modelRef ?? "").trim();
+    if (!ref) return;
+    if (fallbacks.includes(ref)) return;
+    fallbacks.push(ref);
+  };
+
+  const providerVisionFromConfig = resolveProviderVisionModelFromConfig({
+    cfg: params.cfg,
+    provider: primary.provider,
+  });
+  const providerOk = hasAuthForProvider({
+    provider: primary.provider,
+    agentDir: params.agentDir,
+  });
+
+  let preferred: string | null = null;
+
+  // MiniMax users: always try the canonical vision model first when auth exists.
+  if (primary.provider === "minimax" && providerOk) {
+    preferred = "minimax/MiniMax-VL-01";
+  } else if (providerOk && providerVisionFromConfig) {
+    preferred = providerVisionFromConfig;
+  } else if (primary.provider === "openai" && openaiOk) {
+    preferred = "openai/gpt-5-mini";
+  } else if (primary.provider === "anthropic" && anthropicOk) {
+    preferred = "anthropic/claude-opus-4-5";
+  }
+
+  if (preferred?.trim()) {
+    if (openaiOk) addFallback("openai/gpt-5-mini");
+    if (anthropicOk) addFallback("anthropic/claude-opus-4-5");
+    // Don't duplicate primary in fallbacks.
+    const pruned = fallbacks.filter((ref) => ref !== preferred);
+    return {
+      primary: preferred,
+      ...(pruned.length > 0 ? { fallbacks: pruned } : {}),
+    };
+  }
+
+  // Cross-provider fallback when we can't pair with the primary provider.
+  if (openaiOk) {
+    if (anthropicOk) addFallback("anthropic/claude-opus-4-5");
+    return {
+      primary: "openai/gpt-5-mini",
+      ...(fallbacks.length ? { fallbacks } : {}),
+    };
+  }
+  if (anthropicOk) {
+    return { primary: "anthropic/claude-opus-4-5" };
+  }
+
+  return null;
 }
 
 function pickMaxBytes(
@@ -78,17 +229,31 @@ function buildImageContext(
 async function runImagePrompt(params: {
   cfg?: ClawdbotConfig;
   agentDir: string;
+  imageModelConfig: ImageModelConfig;
   modelOverride?: string;
   prompt: string;
   base64: string;
   mimeType: string;
 }): Promise<{ text: string; provider: string; model: string }> {
-  await ensureClawdbotModelsJson(params.cfg, params.agentDir);
+  const effectiveCfg: ClawdbotConfig | undefined = params.cfg
+    ? {
+        ...params.cfg,
+        agents: {
+          ...params.cfg.agents,
+          defaults: {
+            ...params.cfg.agents?.defaults,
+            imageModel: params.imageModelConfig,
+          },
+        },
+      }
+    : undefined;
+
+  await ensureClawdbotModelsJson(effectiveCfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
 
   const result = await runWithImageModelFallback({
-    cfg: params.cfg,
+    cfg: effectiveCfg,
     modelOverride: params.modelOverride,
     run: async (provider, modelId) => {
       const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
@@ -102,7 +267,7 @@ async function runImagePrompt(params: {
       }
       const apiKeyInfo = await getApiKeyForModel({
         model,
-        cfg: params.cfg,
+        cfg: effectiveCfg,
         agentDir: params.agentDir,
       });
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
@@ -132,11 +297,15 @@ export function createImageTool(options?: {
   config?: ClawdbotConfig;
   agentDir?: string;
 }): AnyAgentTool | null {
-  if (!ensureImageToolConfigured(options?.config)) return null;
   const agentDir = options?.agentDir;
   if (!agentDir?.trim()) {
     throw new Error("createImageTool requires agentDir when enabled");
   }
+  const imageModelConfig = resolveImageModelConfigForTool({
+    cfg: options?.config,
+    agentDir,
+  });
+  if (!imageModelConfig) return null;
   return {
     label: "Image",
     name: "image",
@@ -181,6 +350,7 @@ export function createImageTool(options?: {
       const result = await runImagePrompt({
         cfg: options?.config,
         agentDir,
+        imageModelConfig,
         modelOverride,
         prompt: promptRaw,
         base64,
