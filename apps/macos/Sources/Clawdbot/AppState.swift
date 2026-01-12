@@ -204,7 +204,7 @@ final class AppState {
     private var earBoostTask: Task<Void, Never>?
 
     init(preview: Bool = false) {
-        self.isPreview = preview
+        self.isPreview = preview || ProcessInfo.processInfo.isRunningTests
         let onboardingSeen = UserDefaults.standard.bool(forKey: "clawdbot.onboardingSeen")
         self.isPaused = UserDefaults.standard.bool(forKey: pauseDefaultsKey)
         self.launchAtLogin = false
