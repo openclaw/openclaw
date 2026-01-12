@@ -30,6 +30,7 @@
 - Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
 - Agents: route subagent transcripts to the target agent sessions directory and add regression coverage. (#708) — thanks @xMikeMickelson.
 - Agents/Tools: preserve action enums when flattening tool schemas. (#708) — thanks @xMikeMickelson.
+- Gateway/Agents: canonicalize main session aliases for store writes and add regression coverage. (#709) — thanks @xMikeMickelson.
 - Agents: reset sessions and retry when auto-compaction overflows instead of crashing the gateway.
 
 ## 2026.1.10
