@@ -12,7 +12,6 @@ import {
 } from "../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "./sandbox.js";
-import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 import {
   isValidCloudCodeAssistToolId,
   sanitizeToolCallId,
@@ -96,11 +95,9 @@ export async function sanitizeSessionMessagesImages(
 ): Promise<AgentMessage[]> {
   // We sanitize historical session messages because Anthropic can reject a request
   // if the transcript contains oversized base64 images (see MAX_IMAGE_DIMENSION_PX).
-  const sanitizedIds = options?.sanitizeToolCallIds
+  const base = options?.sanitizeToolCallIds
     ? sanitizeToolCallIdsForCloudCodeAssist(messages)
     : messages;
-  const repaired = repairToolUseResultPairing(sanitizedIds);
-  const base = repaired.messages;
   const out: AgentMessage[] = [];
   for (const msg of base) {
     if (!msg || typeof msg !== "object") {
