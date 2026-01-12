@@ -242,6 +242,73 @@ describe("validateAnthropicTurns", () => {
     expect(content).toHaveLength(3);
   });
 
+  it("keeps newest metadata when merging consecutive users", () => {
+    const msgs: AgentMessage[] = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Old" }],
+        timestamp: 1000,
+        attachments: [{ type: "image", url: "old.png" }],
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "New" }],
+        timestamp: 2000,
+        attachments: [{ type: "image", url: "new.png" }],
+        someCustomField: "keep-me",
+      } as AgentMessage,
+    ];
+
+    const result = validateAnthropicTurns(msgs) as Extract<
+      AgentMessage,
+      { role: "user" }
+    >[];
+
+    expect(result).toHaveLength(1);
+    const merged = result[0];
+    expect(merged.timestamp).toBe(2000);
+    expect((merged as { attachments?: unknown[] }).attachments).toEqual([
+      { type: "image", url: "new.png" },
+    ]);
+    expect((merged as { someCustomField?: string }).someCustomField).toBe(
+      "keep-me",
+    );
+    expect(merged.content).toEqual([
+      { type: "text", text: "Old" },
+      { type: "text", text: "New" },
+    ]);
+  });
+
+  it("merges consecutive users with images and preserves order", () => {
+    const msgs: AgentMessage[] = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "first" },
+          { type: "image", url: "img1" },
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          { type: "image", url: "img2" },
+          { type: "text", text: "second" },
+        ],
+      },
+    ];
+
+    const [merged] = validateAnthropicTurns(msgs) as Extract<
+      AgentMessage,
+      { role: "user" }
+    >[];
+    expect(merged.content).toEqual([
+      { type: "text", text: "first" },
+      { type: "image", url: "img1" },
+      { type: "image", url: "img2" },
+      { type: "text", text: "second" },
+    ]);
+  });
+
   it("should not merge consecutive assistant messages", () => {
     const msgs: AgentMessage[] = [
       { role: "user", content: [{ type: "text", text: "Question" }] },
@@ -452,6 +519,15 @@ describe("formatAssistantErrorText", () => {
   it("returns a friendly message for context overflow", () => {
     const msg = makeAssistantError("request_too_large");
     expect(formatAssistantErrorText(msg)).toContain("Context overflow");
+  });
+
+  it("returns a friendly message for Anthropic role ordering", () => {
+    const msg = makeAssistantError(
+      'messages: roles must alternate between "user" and "assistant"',
+    );
+    expect(formatAssistantErrorText(msg)).toContain(
+      "Message ordering conflict",
+    );
   });
 });
 

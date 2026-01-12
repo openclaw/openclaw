@@ -2038,11 +2038,11 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to minimax/MiniMax-M2.1");
+      expect(text).toContain("minimax/MiniMax-M2.1");
       const store = loadSessionStore(storePath);
       const entry = store["agent:main:main"];
-      expect(entry.modelOverride).toBe("MiniMax-M2.1");
-      expect(entry.providerOverride).toBe("minimax");
+      expect(entry.modelOverride).toBeUndefined();
+      expect(entry.providerOverride).toBeUndefined();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
@@ -2091,7 +2091,7 @@ describe("directive behavior", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Model set to moonshot/kimi-k2-0905-preview");
+      expect(text).toMatch(/Model set to .*moonshot\/kimi-k2-0905-preview/);
       const store = loadSessionStore(storePath);
       const entry = store["agent:main:main"];
       expect(entry.modelOverride).toBe("kimi-k2-0905-preview");

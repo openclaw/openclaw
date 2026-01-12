@@ -599,25 +599,24 @@ export function validateAnthropicTurns(
 
     // Check if this message has the same role as the last one
     if (msgRole === lastRole && lastRole === "user") {
-      // Merge consecutive user messages
+      // Merge consecutive user messages. Base on the newest message so we keep
+      // fresh metadata (attachments, timestamps, future fields) while
+      // appending prior content.
       const lastMsg = result[result.length - 1];
       const currentMsg = msg as Extract<AgentMessage, { role: "user" }>;
 
       if (lastMsg && typeof lastMsg === "object") {
         const lastUser = lastMsg as Extract<AgentMessage, { role: "user" }>;
 
-        // Merge content blocks
         const mergedContent = [
           ...(Array.isArray(lastUser.content) ? lastUser.content : []),
           ...(Array.isArray(currentMsg.content) ? currentMsg.content : []),
         ];
 
-        // Preserve timestamp from the later message (more recent)
         const merged: Extract<AgentMessage, { role: "user" }> = {
-          ...lastUser,
+          ...currentMsg, // newest wins for metadata
           content: mergedContent,
-          // Take timestamp from the newer message
-          ...(currentMsg.timestamp && { timestamp: currentMsg.timestamp }),
+          timestamp: currentMsg.timestamp ?? lastUser.timestamp,
         };
 
         // Replace the last message with merged version

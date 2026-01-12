@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.12-4
+
+### Fixes
+- Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
+
 ## 2026.1.12-3
 
 ### Changes
