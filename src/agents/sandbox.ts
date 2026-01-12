@@ -19,9 +19,12 @@ import {
   loadConfig,
   STATE_DIR_CLAWDBOT,
 } from "../config/config.js";
-import { resolveAgentMainSessionKey } from "../config/sessions.js";
+import {
+  canonicalizeMainSessionAlias,
+  resolveAgentMainSessionKey,
+} from "../config/sessions.js";
 import { PROVIDER_IDS } from "../providers/registry.js";
-import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import {
@@ -566,22 +569,11 @@ function resolveComparableSessionKeyForSandbox(params: {
   agentId: string;
   sessionKey: string;
 }): string {
-  const trimmed = params.sessionKey.trim();
-  if (!trimmed) return trimmed;
-
-  const mainKey = normalizeMainKey(params.cfg?.session?.mainKey);
-  const agentMainSessionKey = resolveAgentMainSessionKey({
+  return canonicalizeMainSessionAlias({
     cfg: params.cfg,
     agentId: params.agentId,
+    sessionKey: params.sessionKey,
   });
-  const isMainAlias =
-    trimmed === "main" ||
-    trimmed === mainKey ||
-    trimmed === agentMainSessionKey;
-
-  if (params.cfg?.session?.scope === "global" && isMainAlias) return "global";
-  if (isMainAlias) return agentMainSessionKey;
-  return trimmed;
 }
 
 export function resolveSandboxRuntimeStatus(params: {

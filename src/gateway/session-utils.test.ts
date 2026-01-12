@@ -48,6 +48,9 @@ describe("gateway session utils", () => {
     expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe(
       "agent:ops:work",
     );
+    expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe(
+      "agent:ops:work",
+    );
   });
 
   test("resolveSessionStoreKey canonicalizes bare keys to default agent", () => {

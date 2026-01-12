@@ -106,9 +106,25 @@ describe("resolveSandboxContext", () => {
     ).toBeNull();
 
     expect(
+      await resolveSandboxContext({
+        config: cfg,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/clawdbot-test",
+      }),
+    ).toBeNull();
+
+    expect(
       await ensureSandboxWorkspaceForSession({
         config: cfg,
         sessionKey: "work",
+        workspaceDir: "/tmp/clawdbot-test",
+      }),
+    ).toBeNull();
+
+    expect(
+      await ensureSandboxWorkspaceForSession({
+        config: cfg,
+        sessionKey: "agent:main:main",
         workspaceDir: "/tmp/clawdbot-test",
       }),
     ).toBeNull();
