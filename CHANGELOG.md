@@ -20,6 +20,8 @@
 - Skills: bundle `skill-creator` to guide creating and packaging skills.
 - Discord: expose channel/category management actions in the message tool. (#730) — thanks @NicholasSpisak
 - Docs: rename README “macOS app” section to “Apps”. (#733) — thanks @AbhisekBasu1.
+- Gateway: require `client.id` in WebSocket connect params; use `client.instanceId` for presence de-dupe; update docs/tests.
+- macOS: remove the attach-only gateway setting; local mode now always manages launchd while still attaching to an existing gateway if present.
 
 ### Installer
 - Postinstall: replace `git apply` with builtin JS patcher (works npm/pnpm/bun; no git dependency) plus regression tests.
