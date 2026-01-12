@@ -1913,6 +1913,67 @@ describe("directive behavior", () => {
     });
   });
 
+  it("queues a system event when toggling elevated", async () => {
+    await withTempHome(async (home) => {
+      drainSystemEvents(MAIN_SESSION_KEY);
+      const storePath = path.join(home, "sessions.json");
+
+      await getReplyFromConfig(
+        {
+          Body: "/elevated on",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-4.1-mini" },
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          tools: { elevated: { allowFrom: { whatsapp: ["*"] } } },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const events = drainSystemEvents(MAIN_SESSION_KEY);
+      expect(events.some((e) => e.includes("Elevated ON"))).toBe(true);
+    });
+  });
+
+  it("queues a system event when toggling reasoning", async () => {
+    await withTempHome(async (home) => {
+      drainSystemEvents(MAIN_SESSION_KEY);
+      const storePath = path.join(home, "sessions.json");
+
+      await getReplyFromConfig(
+        {
+          Body: "/reasoning stream",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+        },
+        {},
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-4.1-mini" },
+              workspace: path.join(home, "clawd"),
+            },
+          },
+          whatsapp: { allowFrom: ["*"] },
+          session: { store: storePath },
+        },
+      );
+
+      const events = drainSystemEvents(MAIN_SESSION_KEY);
+      expect(events.some((e) => e.includes("Reasoning STREAM"))).toBe(true);
+    });
+  });
+
   it("ignores inline /model and uses the default model", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");

@@ -29,6 +29,7 @@
 - Auto-reply: restore 300-char heartbeat ack limit and keep >300 char replies instead of dropping them; adjust long heartbeat test content accordingly.
 - Gateway: `agents.list` now honors explicit `agents.list` config without pulling stray agents from disk; GitHub Copilot CLI auth path uses the updated provider build.
 - Google: apply patched pi-ai `google-gemini-cli` function call handling (strips ids) after upgrading to pi-ai 0.43.0.
+- Auto-reply: elevated/reasoning toggles now enqueue system events so the model sees the mode change immediately.
 
 ## 2026.1.11
 

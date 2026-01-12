@@ -68,6 +68,17 @@ const withOptions = (line: string, options: string) =>
 const formatElevatedRuntimeHint = () =>
   `${SYSTEM_MARK} Runtime is direct; sandboxing does not apply.`;
 
+const formatElevatedEvent = (level: ElevatedLevel) =>
+  level === "on"
+    ? "Elevated ON — exec runs on host; set elevated:false to stay sandboxed."
+    : "Elevated OFF — exec stays in sandbox.";
+
+const formatReasoningEvent = (level: ReasoningLevel) => {
+  if (level === "stream") return "Reasoning STREAM — emit live <think>.";
+  if (level === "on") return "Reasoning ON — include <think>.";
+  return "Reasoning OFF — hide <think>.";
+};
+
 function formatElevatedUnavailableText(params: {
   runtimeSandboxed: boolean;
   failures?: Array<{ gate: string; key: string }>;
@@ -1070,6 +1081,22 @@ export async function handleDirectiveOnly(params: {
   }
 
   if (sessionEntry && sessionStore && sessionKey) {
+    const prevElevatedLevel =
+      currentElevatedLevel ??
+      (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
+      (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
+    const prevReasoningLevel =
+      currentReasoningLevel ??
+      (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ??
+      "off";
+    let elevatedChanged =
+      directives.hasElevatedDirective &&
+      directives.elevatedLevel !== undefined &&
+      elevatedEnabled &&
+      elevatedAllowed;
+    let reasoningChanged =
+      directives.hasReasoningDirective &&
+      directives.reasoningLevel !== undefined;
     if (directives.hasThinkDirective && directives.thinkLevel) {
       if (directives.thinkLevel === "off") delete sessionEntry.thinkingLevel;
       else sessionEntry.thinkingLevel = directives.thinkLevel;
@@ -1081,11 +1108,18 @@ export async function handleDirectiveOnly(params: {
       if (directives.reasoningLevel === "off")
         delete sessionEntry.reasoningLevel;
       else sessionEntry.reasoningLevel = directives.reasoningLevel;
+      reasoningChanged =
+        directives.reasoningLevel !== prevReasoningLevel &&
+        directives.reasoningLevel !== undefined;
     }
     if (directives.hasElevatedDirective && directives.elevatedLevel) {
       // Unlike other toggles, elevated defaults can be "on".
       // Persist "off" explicitly so `/elevated off` actually overrides defaults.
       sessionEntry.elevatedLevel = directives.elevatedLevel;
+      elevatedChanged =
+        elevatedChanged ||
+        (directives.elevatedLevel !== prevElevatedLevel &&
+          directives.elevatedLevel !== undefined);
     }
     if (modelSelection) {
       if (modelSelection.isDefault) {
@@ -1122,6 +1156,22 @@ export async function handleDirectiveOnly(params: {
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       await saveSessionStore(storePath, sessionStore);
+    }
+    if (elevatedChanged) {
+      const nextElevated =
+        (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+      enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+        sessionKey,
+        contextKey: "mode:elevated",
+      });
+    }
+    if (reasoningChanged) {
+      const nextReasoning =
+        (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+      enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+        sessionKey,
+        contextKey: "mode:reasoning",
+      });
     }
   }
 
@@ -1240,6 +1290,20 @@ export async function persistInlineDirectives(params: {
   const agentDir = resolveAgentDir(cfg, activeAgentId);
 
   if (sessionEntry && sessionStore && sessionKey) {
+    const prevElevatedLevel =
+      (sessionEntry.elevatedLevel as ElevatedLevel | undefined) ??
+      (agentCfg?.elevatedDefault as ElevatedLevel | undefined) ??
+      (elevatedAllowed ? ("on" as ElevatedLevel) : ("off" as ElevatedLevel));
+    const prevReasoningLevel =
+      (sessionEntry.reasoningLevel as ReasoningLevel | undefined) ?? "off";
+    let elevatedChanged =
+      directives.hasElevatedDirective &&
+      directives.elevatedLevel !== undefined &&
+      elevatedEnabled &&
+      elevatedAllowed;
+    let reasoningChanged =
+      directives.hasReasoningDirective &&
+      directives.reasoningLevel !== undefined;
     let updated = false;
     if (directives.hasThinkDirective && directives.thinkLevel) {
       if (directives.thinkLevel === "off") {
@@ -1259,6 +1323,10 @@ export async function persistInlineDirectives(params: {
       } else {
         sessionEntry.reasoningLevel = directives.reasoningLevel;
       }
+      reasoningChanged =
+        reasoningChanged ||
+        (directives.reasoningLevel !== prevReasoningLevel &&
+          directives.reasoningLevel !== undefined);
       updated = true;
     }
     if (
@@ -1269,6 +1337,10 @@ export async function persistInlineDirectives(params: {
     ) {
       // Persist "off" explicitly so inline `/elevated off` overrides defaults.
       sessionEntry.elevatedLevel = directives.elevatedLevel;
+      elevatedChanged =
+        elevatedChanged ||
+        (directives.elevatedLevel !== prevElevatedLevel &&
+          directives.elevatedLevel !== undefined);
       updated = true;
     }
     const modelDirective =
@@ -1340,6 +1412,22 @@ export async function persistInlineDirectives(params: {
       sessionStore[sessionKey] = sessionEntry;
       if (storePath) {
         await saveSessionStore(storePath, sessionStore);
+      }
+      if (elevatedChanged) {
+        const nextElevated =
+          (sessionEntry.elevatedLevel ?? "off") as ElevatedLevel;
+        enqueueSystemEvent(formatElevatedEvent(nextElevated), {
+          sessionKey,
+          contextKey: "mode:elevated",
+        });
+      }
+      if (reasoningChanged) {
+        const nextReasoning =
+          (sessionEntry.reasoningLevel ?? "off") as ReasoningLevel;
+        enqueueSystemEvent(formatReasoningEvent(nextReasoning), {
+          sessionKey,
+          contextKey: "mode:reasoning",
+        });
       }
     }
   }
