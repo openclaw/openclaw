@@ -97,7 +97,7 @@ export async function promptDefaultModel(
   const resolvedKey = modelKey(resolved.provider, resolved.model);
   const configuredKey = configuredRaw ? resolvedKey : "";
 
-  const catalog = await loadModelCatalog({ config: cfg });
+  const catalog = await loadModelCatalog({ config: cfg, useCache: false });
   if (catalog.length === 0) {
     return promptManualModel({
       prompter: params.prompter,
