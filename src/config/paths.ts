@@ -57,7 +57,7 @@ export function resolveConfigPath(
   stateDir: string = resolveStateDir(env, os.homedir),
 ): string {
   const override = env.CLAWDBOT_CONFIG_PATH?.trim();
-  if (override) return override;
+  if (override) return resolveUserPath(override);
   return path.join(stateDir, "clawdbot.json");
 }
 

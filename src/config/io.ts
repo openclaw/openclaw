@@ -24,6 +24,7 @@ import {
 } from "./defaults.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type {
@@ -182,6 +183,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           ),
         ),
       );
+      normalizeConfigPaths(cfg);
 
       const duplicates = findDuplicateAgentDirs(cfg, {
         env: deps.env,
@@ -306,10 +308,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         raw,
         parsed: parsedRes.parsed,
         valid: true,
-        config: applyTalkApiKey(
-          applyModelDefaults(
-            applySessionDefaults(
-              applyLoggingDefaults(applyMessageDefaults(validated.config)),
+        config: normalizeConfigPaths(
+          applyTalkApiKey(
+            applyModelDefaults(
+              applySessionDefaults(
+                applyLoggingDefaults(applyMessageDefaults(validated.config)),
+              ),
             ),
           ),
         ),
