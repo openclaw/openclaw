@@ -1,11 +1,11 @@
 ---
-summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/Slack/Signal/iMessage)"
+summary: "Group chat behavior across surfaces (WhatsApp/Telegram/Discord/Slack/Signal/iMessage/Microsoft Teams)"
 read_when:
   - Changing group chat behavior or mention gating
 ---
 # Groups
 
-Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage.
+Clawdbot treats group chats consistently across surfaces: WhatsApp, Telegram, Discord, Slack, Signal, iMessage, Microsoft Teams.
 
 ## Beginner intro (2 minutes)
 Clawdbot “lives” on your own messaging accounts. There is no separate WhatsApp bot user.
@@ -15,7 +15,7 @@ Default behavior:
 - Groups are restricted (`groupPolicy: "allowlist"`).
 - Replies require a mention unless you explicitly disable mention gating.
 
-Translation: anyone in the group can trigger Clawdbot by mentioning it.
+Translation: allowlisted senders can trigger Clawdbot by mentioning it.
 
 > TL;DR
 > - **DM access** is controlled by `*.allowFrom`.
@@ -71,6 +71,10 @@ Control how group/room messages are handled per provider:
     groupPolicy: "disabled",
     groupAllowFrom: ["chat_id:123"]
   },
+  msteams: {
+    groupPolicy: "disabled",
+    groupAllowFrom: ["user@org.com"]
+  },
   discord: {
     groupPolicy: "allowlist",
     guilds: {
@@ -92,7 +96,7 @@ Control how group/room messages are handled per provider:
 
 Notes:
 - `groupPolicy` is separate from mention-gating (which requires @mentions).
-- WhatsApp/Telegram/Signal/iMessage: use `groupAllowFrom` (fallback: explicit `allowFrom`).
+- WhatsApp/Telegram/Signal/iMessage/Microsoft Teams: use `groupAllowFrom` (fallback: explicit `allowFrom`).
 - Discord: allowlist uses `discord.guilds.<id>.channels`.
 - Slack: allowlist uses `slack.channels`.
 - Group DMs are controlled separately (`discord.dm.*`, `slack.dm.*`).

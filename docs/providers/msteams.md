@@ -30,11 +30,33 @@ Minimal config:
   }
 }
 ```
+Note: group chats are blocked by default (`msteams.groupPolicy: "allowlist"`). To allow group replies, set `msteams.groupAllowFrom` (or use `groupPolicy: "open"` to allow any member, mention-gated).
 
 ## Goals
 - Talk to Clawdbot via Teams DMs, group chats, or channels.
 - Keep routing deterministic: replies always go back to the provider they arrived on.
 - Default to safe channel behavior (mentions required unless configured otherwise).
+
+## Access control (DMs + groups)
+
+**DM access**
+- Default: `msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
+- `msteams.allowFrom` accepts AAD object IDs or UPNs.
+
+**Group access**
+- Default: `msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`).
+- `msteams.groupAllowFrom` controls which senders can trigger in group chats/channels (falls back to `msteams.allowFrom`).
+- Set `groupPolicy: "open"` to allow any member (still mention‑gated by default).
+
+Example:
+```json5
+{
+  msteams: {
+    groupPolicy: "allowlist",
+    groupAllowFrom: ["user@org.com"]
+  }
+}
+```
 
 ## How it works
 1. Create an **Azure Bot** (App ID + secret + tenant ID).

@@ -1481,6 +1481,16 @@ describe("legacy config detection", () => {
     }
   });
 
+  it("defaults msteams.groupPolicy to allowlist when msteams section exists", async () => {
+    vi.resetModules();
+    const { validateConfigObject } = await import("./config.js");
+    const res = validateConfigObject({ msteams: {} });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.msteams?.groupPolicy).toBe("allowlist");
+    }
+  });
+
   it("rejects unsafe executable config values", async () => {
     vi.resetModules();
     const { validateConfigObject } = await import("./config.js");

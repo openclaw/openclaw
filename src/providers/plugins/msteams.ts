@@ -80,6 +80,15 @@ export const msteamsPlugin: ProviderPlugin<ResolvedMSTeamsAccount> = {
         .filter(Boolean)
         .map((entry) => entry.toLowerCase()),
   },
+  security: {
+    collectWarnings: ({ cfg }) => {
+      const groupPolicy = cfg.msteams?.groupPolicy ?? "allowlist";
+      if (groupPolicy !== "open") return [];
+      return [
+        `- MS Teams groups: groupPolicy="open" allows any member to trigger (mention-gated). Set msteams.groupPolicy="allowlist" + msteams.groupAllowFrom to restrict senders.`,
+      ];
+    },
+  },
   setup: {
     resolveAccountId: () => DEFAULT_ACCOUNT_ID,
     applyAccountConfig: ({ cfg }) => ({

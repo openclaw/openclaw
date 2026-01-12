@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { MSTeamsConfig } from "../config/types.js";
 import {
+  isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
@@ -94,6 +95,74 @@ describe("msteams policy", () => {
         globalConfig: { requireMention: false, replyStyle: "thread" },
       });
       expect(policy).toEqual({ requireMention: false, replyStyle: "thread" });
+    });
+  });
+
+  describe("isMSTeamsGroupAllowed", () => {
+    it("allows when policy is open", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "open",
+          allowFrom: [],
+          senderId: "user-id",
+          senderName: "User",
+        }),
+      ).toBe(true);
+    });
+
+    it("blocks when policy is disabled", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "disabled",
+          allowFrom: ["user-id"],
+          senderId: "user-id",
+          senderName: "User",
+        }),
+      ).toBe(false);
+    });
+
+    it("blocks allowlist when empty", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: [],
+          senderId: "user-id",
+          senderName: "User",
+        }),
+      ).toBe(false);
+    });
+
+    it("allows allowlist when sender matches", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: ["User-Id"],
+          senderId: "user-id",
+          senderName: "User",
+        }),
+      ).toBe(true);
+    });
+
+    it("allows allowlist when sender name matches", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: ["user"],
+          senderId: "other",
+          senderName: "User",
+        }),
+      ).toBe(true);
+    });
+
+    it("allows allowlist wildcard", () => {
+      expect(
+        isMSTeamsGroupAllowed({
+          groupPolicy: "allowlist",
+          allowFrom: ["*"],
+          senderId: "other",
+          senderName: "User",
+        }),
+      ).toBe(true);
     });
   });
 });

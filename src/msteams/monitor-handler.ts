@@ -39,6 +39,7 @@ import {
 import type { MSTeamsAdapter } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import {
+  isMSTeamsGroupAllowed,
   resolveMSTeamsReplyPolicy,
   resolveMSTeamsRouteConfig,
 } from "./policy.js";
@@ -176,6 +177,9 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
+    const storedAllowFrom = await readProviderAllowFromStore("msteams").catch(
+      () => [],
+    );
 
     // Check DM policy for direct messages
     if (isDirectMessage && msteamsCfg) {
@@ -189,7 +193,6 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       if (dmPolicy !== "open") {
         // Check allowlist - look up from config and pairing store
-        const storedAllowFrom = await readProviderAllowFromStore("msteams");
         const effectiveAllowFrom = [
           ...allowFrom.map((v) => String(v).toLowerCase()),
           ...storedAllowFrom,
@@ -217,6 +220,49 @@ function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }
           }
           log.debug("dropping dm (not allowlisted)", {
+            sender: senderId,
+            label: senderName,
+          });
+          return;
+        }
+      }
+    }
+
+    if (!isDirectMessage && msteamsCfg) {
+      const groupPolicy = msteamsCfg.groupPolicy ?? "allowlist";
+      const groupAllowFrom =
+        msteamsCfg.groupAllowFrom ??
+        (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0
+          ? msteamsCfg.allowFrom
+          : []);
+      const effectiveGroupAllowFrom = [
+        ...groupAllowFrom.map((v) => String(v)),
+        ...storedAllowFrom,
+      ];
+
+      if (groupPolicy === "disabled") {
+        log.debug("dropping group message (groupPolicy: disabled)", {
+          conversationId,
+        });
+        return;
+      }
+
+      if (groupPolicy === "allowlist") {
+        if (effectiveGroupAllowFrom.length === 0) {
+          log.debug(
+            "dropping group message (groupPolicy: allowlist, no groupAllowFrom)",
+            { conversationId },
+          );
+          return;
+        }
+        const allowed = isMSTeamsGroupAllowed({
+          groupPolicy,
+          allowFrom: effectiveGroupAllowFrom,
+          senderId,
+          senderName,
+        });
+        if (!allowed) {
+          log.debug("dropping group message (not in groupAllowFrom)", {
             sender: senderId,
             label: senderName,
           });
