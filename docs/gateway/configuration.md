@@ -1764,6 +1764,48 @@ Notes:
   override (see the custom providers section above).
 - Use a fake placeholder in docs/configs; never commit real API keys.
 
+### Moonshot AI (Kimi)
+
+Use Moonshot's OpenAI-compatible endpoint:
+
+```json5
+{
+  env: { MOONSHOT_API_KEY: "sk-..." },
+  agents: {
+    defaults: {
+      model: { primary: "moonshot/kimi-k2-0905-preview" },
+      models: { "moonshot/kimi-k2-0905-preview": { alias: "Kimi K2" } }
+    }
+  },
+  models: {
+    mode: "merge",
+    providers: {
+      moonshot: {
+        baseUrl: "https://api.moonshot.ai/v1",
+        apiKey: "${MOONSHOT_API_KEY}",
+        api: "openai-completions",
+        models: [
+          {
+            id: "kimi-k2-0905-preview",
+            name: "Kimi K2 0905 Preview",
+            reasoning: false,
+            input: ["text"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256000,
+            maxTokens: 8192
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Notes:
+- Set `MOONSHOT_API_KEY` in the environment or use `clawdbot onboard --auth-choice moonshot-api-key`.
+- Model ref: `moonshot/kimi-k2-0905-preview`.
+- Use `https://api.moonshot.cn/v1` if you need the China endpoint.
+
 ### Local models (LM Studio) — recommended setup
 
 Best current local setup (what we’re running): **MiniMax M2.1** on a powerful local machine
