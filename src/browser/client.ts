@@ -71,6 +71,7 @@ export type SnapshotResult =
       targetId: string;
       url: string;
       snapshot: string;
+      truncated?: boolean;
     };
 
 export function resolveBrowserControlUrl(overrideUrl?: string) {
@@ -248,6 +249,7 @@ export async function browserSnapshot(
     format: "aria" | "ai";
     targetId?: string;
     limit?: number;
+    maxChars?: number;
     profile?: string;
   },
 ): Promise<SnapshotResult> {
@@ -255,6 +257,9 @@ export async function browserSnapshot(
   q.set("format", opts.format);
   if (opts.targetId) q.set("targetId", opts.targetId);
   if (typeof opts.limit === "number") q.set("limit", String(opts.limit));
+  if (typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)) {
+    q.set("maxChars", String(opts.maxChars));
+  }
   if (opts.profile) q.set("profile", opts.profile);
   return await fetchBrowserJson<SnapshotResult>(
     `${baseUrl}/snapshot?${q.toString()}`,

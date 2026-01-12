@@ -20,7 +20,8 @@ export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   timeoutMs?: number;
-}): Promise<{ snapshot: string }> {
+  maxChars?: number;
+}): Promise<{ snapshot: string; truncated?: boolean }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -41,7 +42,17 @@ export async function snapshotAiViaPlaywright(opts: {
     ),
     track: "response",
   });
-  return { snapshot: String(result?.full ?? "") };
+  let snapshot = String(result?.full ?? "");
+  const maxChars = opts.maxChars;
+  const limit =
+    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
+      ? Math.floor(maxChars)
+      : undefined;
+  if (limit && snapshot.length > limit) {
+    snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
+    return { snapshot, truncated: true };
+  }
+  return { snapshot };
 }
 
 export async function clickViaPlaywright(opts: {

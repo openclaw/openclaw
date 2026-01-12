@@ -560,8 +560,19 @@ export function registerBrowserAgentRoutes(
           : (await getPwAiModule())
             ? "ai"
             : "aria";
-    const limit =
+    const limitRaw =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const maxCharsRaw =
+      typeof req.query.maxChars === "string"
+        ? Number(req.query.maxChars)
+        : undefined;
+    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+    const maxChars =
+      typeof maxCharsRaw === "number" &&
+      Number.isFinite(maxCharsRaw) &&
+      maxCharsRaw > 0
+        ? Math.floor(maxCharsRaw)
+        : undefined;
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
@@ -571,6 +582,7 @@ export function registerBrowserAgentRoutes(
         const snap = await pw.snapshotAiViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
+          ...(maxChars ? { maxChars } : {}),
         });
         return res.json({
           ok: true,
