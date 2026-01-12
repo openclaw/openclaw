@@ -44,6 +44,7 @@ import type {
   SlackSlashCommandConfig,
 } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import {
   resolveSessionKey,
   resolveStorePath,
@@ -1944,8 +1945,14 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     }
   };
 
-  const nativeCommands =
-    cfg.commands?.native === true ? listNativeCommandSpecsForConfig(cfg) : [];
+  const nativeEnabled = resolveNativeCommandsEnabled({
+    providerId: "slack",
+    providerSetting: account.config.commands?.native,
+    globalSetting: cfg.commands?.native,
+  });
+  const nativeCommands = nativeEnabled
+    ? listNativeCommandSpecsForConfig(cfg)
+    : [];
   if (nativeCommands.length > 0) {
     for (const command of nativeCommands) {
       app.command(

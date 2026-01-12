@@ -756,8 +756,8 @@ Controls how chat commands are enabled across connectors.
 Notes:
 - Text commands must be sent as a **standalone** message and use the leading `/` (no plain-text aliases).
 - `commands.text: false` disables parsing chat messages for commands.
-- `commands.native: true` registers native commands on supported connectors (Discord/Slack/Telegram). Platforms without native commands still rely on text commands.
-- `commands.native: false` skips native registration; Discord/Telegram clear previously registered commands on startup. Slack commands are managed in the Slack app.
+- `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off; unsupported providers stay text-only.
+- Set `commands.native: true|false` to force all, or override per provider with `discord.commands.native`, `telegram.commands.native`, `slack.commands.native` (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup; Slack commands are managed in the Slack app.
 - `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.

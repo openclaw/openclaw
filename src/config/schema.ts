@@ -283,6 +283,12 @@ const FIELD_HELP: Record<string, string> = {
     "Allow /restart and gateway restart tool actions (default: false).",
   "commands.useAccessGroups":
     "Enforce access-group allowlists/policies for commands.",
+  "discord.commands.native":
+    'Override native commands for Discord (bool or "auto").',
+  "telegram.commands.native":
+    'Override native commands for Telegram (bool or "auto").',
+  "slack.commands.native":
+    'Override native commands for Slack (bool or "auto").',
   "session.agentToAgent.maxPingPongTurns":
     "Max reply-back turns between requester and target (0–5).",
   "messages.ackReaction":

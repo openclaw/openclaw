@@ -27,6 +27,7 @@
 - Runtime: memory index stored under `~/.clawdbot/memory/{agentId}.sqlite` with watch-on-by-default; inline status replies now stay auth-gated while inline prompts continue to the agent.
 - Discord: add `discord.allowBots` to permit bot-authored messages (still ignores its own messages) with docs warning about bot loops. (#802) — thanks @zknicker.
 - CLI/Onboarding: `clawdbot dashboard` prints/copies the tokenized Control UI link and opens it; onboarding now auto-opens the dashboard with your token and keeps the link in the summary.
+- Commands: native slash commands now default to `"auto"` (on for Discord/Telegram, off for Slack) with per-provider overrides (`discord/telegram/slack.commands.native`) and docs updated.
 
 ### Fixes
 - Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.

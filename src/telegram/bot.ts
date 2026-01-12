@@ -36,6 +36,10 @@ import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
+  isNativeCommandsExplicitlyDisabled,
+  resolveNativeCommandsEnabled,
+} from "../config/commands.js";
+import {
   resolveProviderGroupPolicy,
   resolveProviderGroupRequireMention,
 } from "../config/group-policy.js";
@@ -291,8 +295,15 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   };
   const replyToMode = opts.replyToMode ?? telegramCfg.replyToMode ?? "first";
   const streamMode = resolveTelegramStreamMode(telegramCfg);
-  const nativeEnabled = cfg.commands?.native === true;
-  const nativeDisabledExplicit = cfg.commands?.native === false;
+  const nativeEnabled = resolveNativeCommandsEnabled({
+    providerId: "telegram",
+    providerSetting: telegramCfg.commands?.native,
+    globalSetting: cfg.commands?.native,
+  });
+  const nativeDisabledExplicit = isNativeCommandsExplicitlyDisabled({
+    providerSetting: telegramCfg.commands?.native,
+    globalSetting: cfg.commands?.native,
+  });
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
   const mediaMaxBytes =
