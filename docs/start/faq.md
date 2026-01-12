@@ -236,8 +236,10 @@ Example (repo as default cwd):
 
 ```json5
 {
-  agent: {
-    workspace: "~/Projects/my-repo"
+  agents: {
+    defaults: {
+      workspace: "~/Projects/my-repo"
+    }
   }
 }
 ```
@@ -303,6 +305,23 @@ The common pattern is **one Gateway** (e.g. Raspberry Pi) plus **nodes** and **a
 
 Docs: [Nodes](/nodes), [Remote access](/gateway/remote), [Multi-Agent Routing](/concepts/multi-agent), [Sub-agents](/tools/subagents), [TUI](/tui).
 
+### Can the Clawdbot browser run headless?
+
+Yes. It’s a config option:
+
+```json5
+{
+  browser: { headless: true },
+  agents: {
+    defaults: {
+      sandbox: { browser: { headless: true } }
+    }
+  }
+}
+```
+
+Default is `false` (headful). Headless is more likely to trigger anti‑bot checks on some sites. See [Browser](/tools/browser).
+
 ## Remote gateways + nodes
 
 ### How do commands propagate between Telegram, the gateway, and nodes?
@@ -329,7 +348,7 @@ Yes. `config.apply` validates + writes the full config and restarts the Gateway 
 
 ```json5
 {
-  agent: { workspace: "~/clawd" },
+  agents: { defaults: { workspace: "~/clawd" } },
   whatsapp: { allowFrom: ["+15555550123"] }
 }
 ```
@@ -508,12 +527,14 @@ Aliases come from `agents.defaults.models.<modelId>.alias`. Example:
 
 ```json5
 {
-  agent: {
-    model: { primary: "anthropic/claude-opus-4-5" },
-    models: {
-      "anthropic/claude-opus-4-5": { alias: "opus" },
-      "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
-      "anthropic/claude-haiku-4-5": { alias: "haiku" }
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-opus-4-5" },
+      models: {
+        "anthropic/claude-opus-4-5": { alias: "opus" },
+        "anthropic/claude-sonnet-4-5": { alias: "sonnet" },
+        "anthropic/claude-haiku-4-5": { alias: "haiku" }
+      }
     }
   }
 }
@@ -527,9 +548,11 @@ OpenRouter (pay‑per‑token; many models):
 
 ```json5
 {
-  agent: {
-    model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
-    models: { "openrouter/anthropic/claude-sonnet-4-5": {} }
+  agents: {
+    defaults: {
+      model: { primary: "openrouter/anthropic/claude-sonnet-4-5" },
+      models: { "openrouter/anthropic/claude-sonnet-4-5": {} }
+    }
   },
   env: { OPENROUTER_API_KEY: "sk-or-..." }
 }
@@ -539,9 +562,11 @@ Z.AI (GLM models):
 
 ```json5
 {
-  agent: {
-    model: { primary: "zai/glm-4.7" },
-    models: { "zai/glm-4.7": {} }
+  agents: {
+    defaults: {
+      model: { primary: "zai/glm-4.7" },
+      models: { "zai/glm-4.7": {} }
+    }
   },
   env: { ZAI_API_KEY: "..." }
 }
