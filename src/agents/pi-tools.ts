@@ -15,9 +15,9 @@ import {
   resolveAgentIdFromSessionKey,
 } from "./agent-scope.js";
 import {
-  type BashToolDefaults,
-  createBashTool,
+  createExecTool,
   createProcessTool,
+  type ExecToolDefaults,
   type ProcessToolDefaults,
 } from "./bash-tools.js";
 import { createClawdbotTools } from "./clawdbot-tools.js";
@@ -290,9 +290,18 @@ function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
   return cleanSchemaForGemini(schema);
 }
 
+const TOOL_NAME_ALIASES: Record<string, string> = {
+  bash: "exec",
+};
+
+function normalizeToolName(name: string) {
+  const normalized = name.trim().toLowerCase();
+  return TOOL_NAME_ALIASES[normalized] ?? normalized;
+}
+
 function normalizeToolNames(list?: string[]) {
   if (!list) return [];
-  return list.map((entry) => entry.trim().toLowerCase()).filter(Boolean);
+  return list.map(normalizeToolName).filter(Boolean);
 }
 
 const DEFAULT_SUBAGENT_TOOL_DENY = [
@@ -354,7 +363,7 @@ function isToolAllowedByPolicy(name: string, policy?: SandboxToolPolicy) {
   const deny = new Set(normalizeToolNames(policy.deny));
   const allowRaw = normalizeToolNames(policy.allow);
   const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
-  const normalized = name.trim().toLowerCase();
+  const normalized = normalizeToolName(name);
   if (deny.has(normalized)) return false;
   if (allow) return allow.has(normalized);
   return true;
@@ -467,7 +476,7 @@ function wrapToolWithAbortSignal(
 }
 
 export function createClawdbotCodingTools(options?: {
-  bash?: BashToolDefaults & ProcessToolDefaults;
+  exec?: ExecToolDefaults & ProcessToolDefaults;
   messageProvider?: string;
   agentAccountId?: string;
   sandbox?: SandboxContext | null;
@@ -495,14 +504,14 @@ export function createClawdbotCodingTools(options?: {
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
 }): AnyAgentTool[] {
-  const bashToolName = "bash";
+  const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { agentId, policy: effectiveToolsPolicy } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
   });
   const scopeKey =
-    options?.bash?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
+    options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
     isSubagentSessionKey(options?.sessionKey) && options?.sessionKey
       ? resolveSubagentToolPolicy(options.config)
@@ -524,7 +533,7 @@ export function createClawdbotCodingTools(options?: {
       const freshReadTool = createReadTool(workspaceRoot);
       return [createClawdbotReadTool(freshReadTool)];
     }
-    if (tool.name === bashToolName) return [];
+    if (tool.name === "bash" || tool.name === execToolName) return [];
     if (tool.name === "write") {
       if (sandboxRoot) return [];
       return [createWriteTool(workspaceRoot)];
@@ -535,8 +544,8 @@ export function createClawdbotCodingTools(options?: {
     }
     return [tool as AnyAgentTool];
   });
-  const bashTool = createBashTool({
-    ...options?.bash,
+  const execTool = createExecTool({
+    ...options?.exec,
     cwd: options?.workspaceDir,
     allowBackground,
     scopeKey,
@@ -550,7 +559,7 @@ export function createClawdbotCodingTools(options?: {
       : undefined,
   });
   const processTool = createProcessTool({
-    cleanupMs: options?.bash?.cleanupMs,
+    cleanupMs: options?.exec?.cleanupMs,
     scopeKey,
   });
   const tools: AnyAgentTool[] = [
@@ -563,7 +572,7 @@ export function createClawdbotCodingTools(options?: {
           ]
         : []
       : []),
-    bashTool as unknown as AnyAgentTool,
+    execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     // Provider docking: include provider-defined agent tools (login, etc.).
     ...listProviderAgentTools({ cfg: options?.config }),

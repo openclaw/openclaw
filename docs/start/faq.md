@@ -861,7 +861,7 @@ exit
 
 These are abort triggers (not slash commands).
 
-For background processes (from the bash tool), you can ask the agent to run:
+For background processes (from the exec tool), you can ask the agent to run:
 
 ```
 process action:kill sessionId:XXX

@@ -45,7 +45,7 @@ To disable bootstrap file creation entirely (for pre-seeded workspaces), set:
 
 ## Built-in tools
 
-Core tools (read/bash/edit/write and related system tools) are always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
+Core tools (read/exec/edit/write and related system tools) are always available. `TOOLS.md` does **not** control which tools exist; it’s guidance for how *you* want them used.
 
 ## Skills
 

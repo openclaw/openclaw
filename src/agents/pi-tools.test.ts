@@ -153,9 +153,9 @@ describe("createClawdbotCodingTools", () => {
     }
   });
 
-  it("includes bash and process tools", () => {
+  it("includes exec and process tools", () => {
     const tools = createClawdbotCodingTools();
-    expect(tools.some((tool) => tool.name === "bash")).toBe(true);
+    expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "process")).toBe(true);
   });
 
@@ -165,7 +165,7 @@ describe("createClawdbotCodingTools", () => {
       modelAuthMode: "oauth",
     });
     const names = new Set(tools.map((tool) => tool.name));
-    expect(names.has("bash")).toBe(true);
+    expect(names.has("exec")).toBe(true);
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
@@ -210,7 +210,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("sessions_spawn")).toBe(false);
 
     expect(names.has("read")).toBe(true);
-    expect(names.has("bash")).toBe(true);
+    expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
   });
 
@@ -330,7 +330,7 @@ describe("createClawdbotCodingTools", () => {
       browserAllowHostControl: false,
     };
     const tools = createClawdbotCodingTools({ sandbox });
-    expect(tools.some((tool) => tool.name === "bash")).toBe(true);
+    expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "read")).toBe(false);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
   });
@@ -371,7 +371,7 @@ describe("createClawdbotCodingTools", () => {
     const tools = createClawdbotCodingTools({
       config: { tools: { deny: ["browser"] } },
     });
-    expect(tools.some((tool) => tool.name === "bash")).toBe(true);
+    expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
   });
 

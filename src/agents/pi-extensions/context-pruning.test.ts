@@ -94,28 +94,28 @@ describe("context-pruning", () => {
       makeAssistant("a1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "x".repeat(20_000),
       }),
       makeUser("u2"),
       makeAssistant("a2"),
       makeToolResult({
         toolCallId: "t2",
-        toolName: "bash",
+        toolName: "exec",
         text: "y".repeat(20_000),
       }),
       makeUser("u3"),
       makeAssistant("a3"),
       makeToolResult({
         toolCallId: "t3",
-        toolName: "bash",
+        toolName: "exec",
         text: "z".repeat(20_000),
       }),
       makeUser("u4"),
       makeAssistant("a4"),
       makeToolResult({
         toolCallId: "t4",
-        toolName: "bash",
+        toolName: "exec",
         text: "w".repeat(20_000),
       }),
     ];
@@ -161,7 +161,7 @@ describe("context-pruning", () => {
       makeUser("u1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "y".repeat(20_000),
       }),
     ];
@@ -184,19 +184,19 @@ describe("context-pruning", () => {
       makeAssistant("a1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "x".repeat(20_000),
       }),
       makeToolResult({
         toolCallId: "t2",
-        toolName: "bash",
+        toolName: "exec",
         text: "y".repeat(20_000),
       }),
       makeUser("u2"),
       makeAssistant("a2"),
       makeToolResult({
         toolCallId: "t3",
-        toolName: "bash",
+        toolName: "exec",
         text: "z".repeat(20_000),
       }),
     ];
@@ -225,7 +225,7 @@ describe("context-pruning", () => {
       makeAssistant("a1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "x".repeat(20_000),
       }),
       makeAssistant("a2"),
@@ -273,7 +273,7 @@ describe("context-pruning", () => {
       makeAssistant("a1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "x".repeat(20_000),
       }),
       makeAssistant("a2"),
@@ -313,7 +313,7 @@ describe("context-pruning", () => {
       makeUser("u1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "Bash",
+        toolName: "Exec",
         text: "x".repeat(20_000),
       }),
       makeToolResult({
@@ -329,7 +329,7 @@ describe("context-pruning", () => {
       softTrimRatio: 0.0,
       hardClearRatio: 0.0,
       minPrunableToolChars: 0,
-      tools: { allow: ["ba*"], deny: ["bash"] },
+      tools: { allow: ["ex*"], deny: ["exec"] },
       hardClear: { enabled: true, placeholder: "[cleared]" },
       softTrim: { maxChars: 10, headChars: 3, tailChars: 3 },
     };
@@ -339,7 +339,7 @@ describe("context-pruning", () => {
     } as unknown as ExtensionContext;
     const next = pruneContextMessages({ messages, settings, ctx });
 
-    // Deny wins => bash is not pruned, even though allow matches.
+    // Deny wins => exec is not pruned, even though allow matches.
     expect(toolText(findToolResult(next, "t1"))).toContain("x".repeat(20_000));
     // allow is non-empty and browser is not allowed => never pruned.
     expect(toolText(findToolResult(next, "t2"))).toContain("y".repeat(20_000));
@@ -350,7 +350,7 @@ describe("context-pruning", () => {
       makeUser("u1"),
       makeImageToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "x".repeat(20_000),
       }),
     ];
@@ -384,7 +384,7 @@ describe("context-pruning", () => {
       {
         role: "toolResult",
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         content: [
           { type: "text", text: "AAAAA" },
           { type: "text", text: "BBBBB" },
@@ -418,7 +418,7 @@ describe("context-pruning", () => {
       makeUser("u1"),
       makeToolResult({
         toolCallId: "t1",
-        toolName: "bash",
+        toolName: "exec",
         text: "abcdefghij".repeat(1000),
       }),
     ];

@@ -54,11 +54,11 @@ const _stringEnum = <T extends readonly string[]>(
     ...options,
   });
 
-export type BashToolDefaults = {
+export type ExecToolDefaults = {
   backgroundMs?: number;
   timeoutSec?: number;
   sandbox?: BashSandboxConfig;
-  elevated?: BashElevatedDefaults;
+  elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
   scopeKey?: string;
   cwd?: string;
@@ -76,14 +76,14 @@ export type BashSandboxConfig = {
   env?: Record<string, string>;
 };
 
-export type BashElevatedDefaults = {
+export type ExecElevatedDefaults = {
   enabled: boolean;
   allowed: boolean;
   defaultLevel: "on" | "off";
 };
 
-const bashSchema = Type.Object({
-  command: Type.String({ description: "Bash command to execute" }),
+const execSchema = Type.Object({
+  command: Type.String({ description: "Shell command to execute" }),
   workdir: Type.Optional(
     Type.String({ description: "Working directory (defaults to cwd)" }),
   ),
@@ -108,7 +108,7 @@ const bashSchema = Type.Object({
   ),
 });
 
-export type BashToolDetails =
+export type ExecToolDetails =
   | {
       status: "running";
       sessionId: string;
@@ -125,10 +125,10 @@ export type BashToolDetails =
       cwd?: string;
     };
 
-export function createBashTool(
-  defaults?: BashToolDefaults,
+export function createExecTool(
+  defaults?: ExecToolDefaults,
   // biome-ignore lint/suspicious/noExplicitAny: TypeBox schema type from pi-agent-core uses a different module instance.
-): AgentTool<any, BashToolDetails> {
+): AgentTool<any, ExecToolDetails> {
   const defaultBackgroundMs = clampNumber(
     defaults?.backgroundMs ?? readEnvInt("PI_BASH_YIELD_MS"),
     10_000,
@@ -142,11 +142,11 @@ export function createBashTool(
       : 1800;
 
   return {
-    name: "bash",
-    label: "bash",
+    name: "exec",
+    label: "exec",
     description:
-      "Execute bash with background continuation. Use yieldMs/background to continue later via process tool. For real TTY mode, use the tmux skill.",
-    parameters: bashSchema,
+      "Execute shell commands with background continuation. Use yieldMs/background to continue later via process tool. For real TTY mode, use the tmux skill.",
+    parameters: execSchema,
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = args as {
         command: string;
@@ -218,7 +218,7 @@ export function createBashTool(
           );
         }
         logInfo(
-          `bash: elevated command (${sessionId.slice(0, 8)}) ${truncateMiddle(
+          `exec: elevated command (${sessionId.slice(0, 8)}) ${truncateMiddle(
             params.command,
             120,
           )}`,
@@ -265,15 +265,17 @@ export function createBashTool(
             {
               cwd: workdir,
               env: process.env,
-              detached: true,
+              detached: process.platform !== "win32",
               stdio: ["pipe", "pipe", "pipe"],
+              windowsHide: true,
             },
           )
         : spawn(shell, [...shellArgs, params.command], {
             cwd: workdir,
             env,
-            detached: true,
+            detached: process.platform !== "win32",
             stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
           });
 
       const session = {
@@ -361,7 +363,7 @@ export function createBashTool(
         }
       });
 
-      return new Promise<AgentToolResult<BashToolDetails>>(
+      return new Promise<AgentToolResult<ExecToolDetails>>(
         (resolve, reject) => {
           const resolveRunning = () => {
             settle(() =>
@@ -480,7 +482,7 @@ export function createBashTool(
   };
 }
 
-export const bashTool = createBashTool();
+export const execTool = createExecTool();
 
 const processSchema = Type.Object({
   action: Type.String({ description: "Process action" }),
@@ -507,7 +509,7 @@ export function createProcessTool(
   return {
     name: "process",
     label: "process",
-    description: "Manage running bash sessions: list, poll, log, write, kill.",
+    description: "Manage running exec sessions: list, poll, log, write, kill.",
     parameters: processSchema,
     execute: async (_toolCallId, args) => {
       const params = args as {

@@ -356,7 +356,7 @@ describe("sanitizeGoogleTurnOrdering", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call_1", name: "bash", arguments: {} },
+          { type: "toolCall", id: "call_1", name: "exec", arguments: {} },
         ],
       },
     ] satisfies AgentMessage[];
@@ -403,7 +403,7 @@ describe("sanitizeSessionMessagesImages", () => {
           {
             type: "toolCall",
             id: "call_abc|item:456",
-            name: "bash",
+            name: "exec",
             arguments: {},
           },
         ],

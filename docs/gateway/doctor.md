@@ -111,7 +111,7 @@ Current migrations:
 - `routing.agentToAgent` → `tools.agentToAgent`
 - `routing.transcribeAudio` → `tools.audio.transcription`
 - `identity` → `agents.list[].identity`
-- `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/bash/sandbox/subagents)
+- `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
 - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks`
   → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
 

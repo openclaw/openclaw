@@ -1,19 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resetProcessRegistryForTests } from "./bash-process-registry.js";
 import {
-  bashTool,
-  createBashTool,
+  createExecTool,
   createProcessTool,
+  execTool,
   processTool,
 } from "./bash-tools.js";
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
-const shortDelayCmd = isWin ? "ping -n 2 127.0.0.1 > nul" : "sleep 0.05";
-const yieldDelayCmd = isWin ? "ping -n 3 127.0.0.1 > nul" : "sleep 0.2";
-const longDelayCmd = isWin ? "ping -n 4 127.0.0.1 > nul" : "sleep 2";
-const joinCommands = (commands: string[]) =>
-  commands.join(isWin ? " & " : "; ");
+// PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
+const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
+const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
+const longDelayCmd = isWin ? "Start-Sleep -Seconds 2" : "sleep 2";
+// Both PowerShell and bash use ; for command separation
+const joinCommands = (commands: string[]) => commands.join("; ");
 const echoAfterDelay = (message: string) =>
   joinCommands([shortDelayCmd, `echo ${message}`]);
 const echoLines = (lines: string[]) =>
@@ -49,7 +50,7 @@ beforeEach(() => {
   resetProcessRegistryForTests();
 });
 
-describe("bash tool backgrounding", () => {
+describe("exec tool backgrounding", () => {
   const originalShell = process.env.SHELL;
 
   beforeEach(() => {
@@ -63,7 +64,7 @@ describe("bash tool backgrounding", () => {
   it(
     "backgrounds after yield and can be polled",
     async () => {
-      const result = await bashTool.execute("call1", {
+      const result = await execTool.execute("call1", {
         command: joinCommands([yieldDelayCmd, "echo done"]),
         yieldMs: 10,
       });
@@ -96,7 +97,7 @@ describe("bash tool backgrounding", () => {
   );
 
   it("supports explicit background", async () => {
-    const result = await bashTool.execute("call1", {
+    const result = await execTool.execute("call1", {
       command: echoAfterDelay("later"),
       background: true,
     });
@@ -112,7 +113,7 @@ describe("bash tool backgrounding", () => {
   });
 
   it("derives a session name from the command", async () => {
-    const result = await bashTool.execute("call1", {
+    const result = await execTool.execute("call1", {
       command: "echo hello",
       background: true,
     });
@@ -128,7 +129,7 @@ describe("bash tool backgrounding", () => {
   });
 
   it("uses default timeout when timeout is omitted", async () => {
-    const customBash = createBashTool({ timeoutSec: 1, backgroundMs: 10 });
+    const customBash = createExecTool({ timeoutSec: 1, backgroundMs: 10 });
     const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
@@ -155,7 +156,7 @@ describe("bash tool backgrounding", () => {
   });
 
   it("rejects elevated requests when not allowed", async () => {
-    const customBash = createBashTool({
+    const customBash = createExecTool({
       elevated: { enabled: true, allowed: false, defaultLevel: "off" },
     });
 
@@ -168,7 +169,7 @@ describe("bash tool backgrounding", () => {
   });
 
   it("does not default to elevated when not allowed", async () => {
-    const customBash = createBashTool({
+    const customBash = createExecTool({
       elevated: { enabled: true, allowed: false, defaultLevel: "on" },
       backgroundMs: 1000,
       timeoutSec: 5,
@@ -182,7 +183,7 @@ describe("bash tool backgrounding", () => {
   });
 
   it("logs line-based slices and defaults to last lines", async () => {
-    const result = await bashTool.execute("call1", {
+    const result = await execTool.execute("call1", {
       command: echoLines(["one", "two", "three"]),
       background: true,
     });
@@ -202,7 +203,7 @@ describe("bash tool backgrounding", () => {
   });
 
   it("supports line offsets for log slices", async () => {
-    const result = await bashTool.execute("call1", {
+    const result = await execTool.execute("call1", {
       command: echoLines(["alpha", "beta", "gamma"]),
       background: true,
     });
@@ -220,9 +221,9 @@ describe("bash tool backgrounding", () => {
   });
 
   it("scopes process sessions by scopeKey", async () => {
-    const bashA = createBashTool({ backgroundMs: 10, scopeKey: "agent:alpha" });
+    const bashA = createExecTool({ backgroundMs: 10, scopeKey: "agent:alpha" });
     const processA = createProcessTool({ scopeKey: "agent:alpha" });
-    const bashB = createBashTool({ backgroundMs: 10, scopeKey: "agent:beta" });
+    const bashB = createExecTool({ backgroundMs: 10, scopeKey: "agent:beta" });
     const processB = createProcessTool({ scopeKey: "agent:beta" });
 
     const resultA = await bashA.execute("call1", {

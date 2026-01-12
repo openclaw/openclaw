@@ -200,9 +200,9 @@ Details: [Tailscale guide](https://docs.clawd.bot/tailscale) · [Web surfaces](h
 
 It’s perfectly fine to run the Gateway on a small Linux instance. Clients (macOS app, CLI, WebChat) can connect over **Tailscale Serve/Funnel** or **SSH tunnels**, and you can still pair device nodes (macOS/iOS/Android) to execute device‑local actions when needed.
 
-- **Gateway host** runs the bash tool and provider connections by default.
+- **Gateway host** runs the exec tool and provider connections by default.
 - **Device nodes** run device‑local actions (`system.run`, camera, screen recording, notifications) via `node.invoke`.
-In short: bash runs where the Gateway lives; device actions run where the device lives.
+In short: exec runs where the Gateway lives; device actions run where the device lives.
 
 Details: [Remote access](https://docs.clawd.bot/remote) · [Nodes](https://docs.clawd.bot/nodes) · [Security](https://docs.clawd.bot/security)
 

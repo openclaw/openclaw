@@ -95,7 +95,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 
 - [Tools surface](/tools)
 - [CLI reference](/cli)
-- [Bash tool](/tools/bash)
+- [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
 - [Cron jobs](/automation/cron-jobs)
 - [Thinking + verbose](/tools/thinking)

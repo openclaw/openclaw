@@ -1,6 +1,6 @@
 ---
 title: Sandbox vs Tool Policy vs Elevated
-summary: "Why a tool is blocked: sandbox runtime, tool allow/deny policy, and elevated bash gates"
+summary: "Why a tool is blocked: sandbox runtime, tool allow/deny policy, and elevated exec gates"
 read_when: "You hit 'sandbox jail' or see a tool/elevated refusal and want the exact config key to change."
 status: active
 ---
@@ -11,7 +11,7 @@ Clawdbot has three related (but different) controls:
 
 1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (Docker vs host).
 2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) decides **which tools are available/allowed**.
-3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is a **bash-only escape hatch** to run on the host when you’re sandboxed.
+3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is an **exec-only escape hatch** to run on the host when you’re sandboxed.
 
 ## Quick debug
 
@@ -49,10 +49,10 @@ Rules of thumb:
 - `deny` always wins.
 - If `allow` is non-empty, everything else is treated as blocked.
 
-## Elevated: bash-only “run on host”
+## Elevated: exec-only “run on host”
 
-Elevated does **not** grant extra tools; it only affects `bash`.
-- If you’re sandboxed, `/elevated on` (or `bash` with `elevated: true`) runs on the host.
+Elevated does **not** grant extra tools; it only affects `exec`.
+- If you’re sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs on the host.
 - If you’re already running direct, elevated is effectively a no-op (still gated).
 
 Gates:
@@ -74,4 +74,3 @@ Fix-it keys (pick one):
 ### “I thought this was main, why is it sandboxed?”
 
 In `"non-main"` mode, group/channel keys are *not* main. Use the main session key (shown by `sandbox explain`) or switch mode to `"off"`.
-

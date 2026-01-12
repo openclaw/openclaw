@@ -110,13 +110,13 @@ describe("workspace path resolution", () => {
     });
   });
 
-  it("defaults bash cwd to workspaceDir when workdir is omitted", async () => {
+  it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("clawdbot-ws-", async (workspaceDir) => {
       const tools = createClawdbotCodingTools({ workspaceDir });
-      const bashTool = tools.find((tool) => tool.name === "bash");
-      expect(bashTool).toBeDefined();
+      const execTool = tools.find((tool) => tool.name === "exec");
+      expect(execTool).toBeDefined();
 
-      const result = await bashTool?.execute("ws-bash", {
+      const result = await execTool?.execute("ws-exec", {
         command: "echo ok",
       });
       const cwd =
@@ -134,14 +134,14 @@ describe("workspace path resolution", () => {
     });
   });
 
-  it("lets bash workdir override the workspace default", async () => {
+  it("lets exec workdir override the workspace default", async () => {
     await withTempDir("clawdbot-ws-", async (workspaceDir) => {
       await withTempDir("clawdbot-override-", async (overrideDir) => {
         const tools = createClawdbotCodingTools({ workspaceDir });
-        const bashTool = tools.find((tool) => tool.name === "bash");
-        expect(bashTool).toBeDefined();
+        const execTool = tools.find((tool) => tool.name === "exec");
+        expect(execTool).toBeDefined();
 
-        const result = await bashTool?.execute("ws-bash-override", {
+        const result = await execTool?.execute("ws-exec-override", {
           command: "echo ok",
           workdir: overrideDir,
         });

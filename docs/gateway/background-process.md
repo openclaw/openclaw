@@ -1,15 +1,15 @@
 ---
-summary: "Background bash execution and process management"
+summary: "Background exec execution and process management"
 read_when:
-  - Adding or modifying background bash behavior
-  - Debugging long-running bash tasks
+  - Adding or modifying background exec behavior
+  - Debugging long-running exec tasks
 ---
 
-# Background Bash + Process Tool
+# Background Exec + Process Tool
 
-Clawdbot runs shell commands through the `bash` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
+Clawdbot runs shell commands through the `exec` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
 
-## bash tool
+## exec tool
 
 Key parameters:
 - `command` (required)
@@ -24,7 +24,7 @@ Behavior:
 - Foreground runs return output directly.
 - When backgrounded (explicit or timeout), the tool returns `status: "running"` + `sessionId` and a short tail.
 - Output is kept in memory until the session is polled or cleared.
-- If the `process` tool is disallowed, `bash` runs synchronously and ignores `yieldMs`/`background`.
+- If the `process` tool is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 
 Environment overrides:
 - `PI_BASH_YIELD_MS`: default yield (ms)
@@ -32,9 +32,9 @@ Environment overrides:
 - `PI_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
 
 Config (preferred):
-- `tools.bash.backgroundMs` (default 10000)
-- `tools.bash.timeoutSec` (default 1800)
-- `tools.bash.cleanupMs` (default 1800000)
+- `tools.exec.backgroundMs` (default 10000)
+- `tools.exec.timeoutSec` (default 1800)
+- `tools.exec.cleanupMs` (default 1800000)
 
 ## process tool
 
@@ -59,7 +59,7 @@ Notes:
 
 Run a long task and poll later:
 ```json
-{"tool": "bash", "command": "sleep 5 && echo done", "yieldMs": 1000}
+{"tool": "exec", "command": "sleep 5 && echo done", "yieldMs": 1000}
 ```
 ```json
 {"tool": "process", "action": "poll", "sessionId": "<id>"}
@@ -67,7 +67,7 @@ Run a long task and poll later:
 
 Start immediately in background:
 ```json
-{"tool": "bash", "command": "npm run build", "background": true}
+{"tool": "exec", "command": "npm run build", "background": true}
 ```
 
 Send stdin:
