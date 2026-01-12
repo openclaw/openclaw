@@ -1179,23 +1179,26 @@ export function createDiscordMessageHandler(params: {
         OriginatingChannel: "discord" as const,
         OriginatingTo: discordTo,
       };
-      const replyTarget = ctxPayload.To ?? undefined;
+      let replyTarget = ctxPayload.To ?? undefined;
       if (!replyTarget) {
         runtime.error?.(danger("discord: missing reply target"));
         return;
       }
 
+      const originalReplyTarget = replyTarget;
+
       let deliverTarget = replyTarget;
       if (isGuildMessage && channelConfig?.autoThread && !threadChannel) {
         try {
-          const base = truncateUtf16Safe(
-            (baseText || combinedBody || "Thread").replace(/\s+/g, " ").trim(),
-            80,
-          );
-          const authorLabel = author.username ?? author.id;
-          const threadName =
-            truncateUtf16Safe(`${authorLabel}: ${base}`.trim(), 100) ||
-            `Thread ${message.id}`;
+          const rawName = baseText || combinedBody || "Thread";
+          const cleanedName = rawName
+            .replace(/<@!?\d+>/g, "") // user mentions
+            .replace(/<@&\d+>/g, "") // role mentions
+            .replace(/<#\d+>/g, "") // channel mentions
+            .replace(/\s+/g, " ")
+            .trim();
+          const base = truncateUtf16Safe(cleanedName || "Thread", 80);
+          const threadName = truncateUtf16Safe(base, 100) || `Thread ${message.id}`;
 
           const created = (await client.rest.post(
             `${Routes.channelMessage(message.channelId, message.id)}/threads`,
@@ -1210,6 +1213,8 @@ export function createDiscordMessageHandler(params: {
           const createdId = created?.id ? String(created.id) : "";
           if (createdId) {
             deliverTarget = `channel:${createdId}`;
+            // When autoThread is enabled, *always* reply in the created thread.
+            replyTarget = deliverTarget;
           }
         } catch (err) {
           logVerbose(
@@ -1251,12 +1256,15 @@ export function createDiscordMessageHandler(params: {
           deliver: async (payload) => {
             await deliverDiscordReply({
               replies: [payload],
-              target: deliverTarget,
+              target: replyTarget,
               token,
               accountId,
               rest: client.rest,
               runtime,
-              replyToMode: deliverTarget !== replyTarget ? "off" : replyToMode,
+              // The original message is in the parent channel; never try to reply-reference it
+              // when posting inside the newly-created thread.
+              replyToMode:
+                deliverTarget !== originalReplyTarget ? "off" : replyToMode,
               textLimit,
               maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             });
