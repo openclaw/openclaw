@@ -67,33 +67,15 @@ sudo xattr -cr "$APP_TARGET"
 sudo chown -R root:wheel "$APP_TARGET"
 sudo chmod -R go+rX "$APP_TARGET"
 sudo chmod +x "$APP_TARGET/Contents/MacOS/Clawdbot"
-sudo chmod +x "$APP_TARGET/Contents/Resources/Relay/clawdbot"
-
-echo "🔗 Installing CLI wrappers..."
-# Create wrapper scripts instead of symlinks (symlinks break dirname resolution)
-RELAY_DIR="$APP_TARGET/Contents/Resources/Relay"
-for bin_path in /usr/local/bin/clawdbot /opt/homebrew/bin/clawdbot; do
-  sudo rm -f "$bin_path"
-  sudo tee "$bin_path" > /dev/null <<WRAPPER
-#!/bin/sh
-exec "$RELAY_DIR/clawdbot" "\$@"
-WRAPPER
-  sudo chmod +x "$bin_path"
-done
 
 echo ""
-echo "✅ Deployment complete\!"
+echo "✅ Deployment complete!"
 echo ""
 echo "Installed version:"
 /usr/libexec/PlistBuddy -c "Print CFBundleShortVersionString" \
   "$APP_TARGET/Contents/Info.plist" 2>/dev/null || echo "(version info not available)"
 echo ""
-echo "CLI version:"
-# Skip version check - can hang during first run
-echo "(run 'clawdbot --version' manually to verify)"
-echo ""
 echo "Next steps:"
 echo "1. Switch back to petter account"
-echo "2. Run: clawdbot gateway restart"
-echo "3. Run: killall Clawdbot || open /Applications/Clawdbot.app"
+echo "2. Launch: open /Applications/Clawdbot.app"
 echo ""
