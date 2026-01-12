@@ -359,8 +359,8 @@ describe("applyAuthChoice", () => {
     process.env.SSH_TTY = "1";
     process.env.CHUTES_CLIENT_ID = "cid_test";
 
-    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+    const fetchSpy = vi.fn(async (input: string | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
       if (url === "https://api.chutes.ai/idp/token") {
         return new Response(
           JSON.stringify({

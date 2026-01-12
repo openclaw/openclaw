@@ -73,8 +73,8 @@ describe("auth-profiles (chutes)", () => {
     };
     await fs.writeFile(authProfilePath, `${JSON.stringify(store)}\n`);
 
-    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
-      const url = String(input);
+    const fetchSpy = vi.fn(async (input: string | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
       if (url !== CHUTES_TOKEN_ENDPOINT)
         return new Response("not found", { status: 404 });
       return new Response(
