@@ -299,5 +299,6 @@ Slack tool actions can be gated with `slack.actions.*`:
 - Multi-agent override: set per-agent patterns on `agents.list[].groupChat.mentionPatterns`.
 - Reaction notifications follow `slack.reactionNotifications` (use `reactionAllowlist` with mode `allowlist`).
 - Bot-authored messages are ignored by default; enable via `slack.allowBots` or `slack.channels.<id>.allowBots`.
+- Warning: If you allow replies to other bots (`slack.allowBots=true` or `slack.channels.<id>.allowBots=true`), prevent bot-to-bot reply loops with `requireMention`, `slack.channels.<id>.users` allowlists, and/or clear guardrails in `AGENTS.md` and `SOUL.md`.
 - For the Slack tool, reaction removal semantics are in [/tools/reactions](/tools/reactions).
 - Attachments are downloaded to the media store when permitted and under the size limit.
