@@ -299,9 +299,13 @@ export function createImageTool(options?: {
   agentDir?: string;
   sandboxRoot?: string;
 }): AnyAgentTool | null {
-  const agentDir = options?.agentDir;
-  if (!agentDir?.trim()) {
-    throw new Error("createImageTool requires agentDir when enabled");
+  const agentDir = options?.agentDir?.trim();
+  if (!agentDir) {
+    const explicit = coerceImageModelConfig(options?.config);
+    if (explicit.primary?.trim() || (explicit.fallbacks?.length ?? 0) > 0) {
+      throw new Error("createImageTool requires agentDir when enabled");
+    }
+    return null;
   }
   const imageModelConfig = resolveImageModelConfigForTool({
     cfg: options?.config,

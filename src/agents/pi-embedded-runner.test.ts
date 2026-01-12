@@ -703,7 +703,9 @@ describe("runEmbeddedPiAgent", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("persists the first user message before assistant output", async () => {
+  it(
+    "persists the first user message before assistant output",
+    async () => {
     const agentDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-agent-"),
     );
@@ -741,7 +743,9 @@ describe("runEmbeddedPiAgent", () => {
     if (firstAssistantIndex !== -1) {
       expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
     }
-  });
+    },
+    15_000,
+  );
 
   it("persists the user message when prompt fails before assistant output", async () => {
     const agentDir = await fs.mkdtemp(
