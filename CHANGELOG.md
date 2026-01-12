@@ -1,11 +1,5 @@
 # Changelog
 
-## 2026.1.12
-
-### Changes
-- Deps: update pi-agent-core/pi-ai/pi-coding-agent/pi-tui and refresh the pi-ai patch.
-- Dev: bump @types/node.
-
 ## 2026.1.11
 
 ### Highlights
@@ -15,6 +9,8 @@
 - Agents: automatic pre-compaction memory flush turn to store durable memories before compaction.
 
 ### Changes
+- Deps: update pi-agent-core/pi-ai/pi-coding-agent/pi-tui and refresh the pi-ai patch.
+- Dev: bump @types/node.
 - macOS: add wizard debug CLI and share wizard parsing helpers.
 - CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.
 - CLI: configure section selection now loops until Continue.
