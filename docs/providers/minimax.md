@@ -123,7 +123,7 @@ Configure via CLI:
 
 **Best for:** local inference with LM Studio.
 We have seen strong results with MiniMax M2.1 on powerful hardware (e.g. a
-beefy Mac Studio) using LM Studio's local server.
+desktop/server) using LM Studio's local server.
 
 Configure via CLI:
 - Run `clawdbot configure`

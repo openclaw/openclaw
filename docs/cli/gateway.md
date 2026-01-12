@@ -92,7 +92,7 @@ The macOS app “Remote over SSH” mode uses a local port-forward so the remote
 CLI equivalent:
 
 ```bash
-clawdbot gateway status --ssh steipete@peters-mac-studio-1
+clawdbot gateway status --ssh user@gateway-host
 ```
 
 Options:

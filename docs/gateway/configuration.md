@@ -1726,7 +1726,7 @@ Notes:
 
 ### Local models (LM Studio) — recommended setup
 
-Best current local setup (what we’re running): **MiniMax M2.1** on a beefy Mac Studio
+Best current local setup (what we’re running): **MiniMax M2.1** on a powerful local machine
 via **LM Studio** using the **Responses API**.
 
 ```json5

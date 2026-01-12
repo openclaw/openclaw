@@ -11,7 +11,7 @@ Clawdbot.app uses SSH tunneling to connect to a remote gateway. This guide shows
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                          MacBook                              │
+│                        Client Machine                          │
 │                                                              │
 │  Clawdbot.app ──► ws://127.0.0.1:18789 (local port)           │
 │                     │                                        │
@@ -150,4 +150,4 @@ launchctl bootout gui/$UID/com.clawdbot.ssh-tunnel
 | `KeepAlive` | Automatically restarts tunnel if it crashes |
 | `RunAtLoad` | Starts tunnel when the agent loads |
 
-Clawdbot.app connects to `ws://127.0.0.1:18789` on your MacBook. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
+Clawdbot.app connects to `ws://127.0.0.1:18789` on your client machine. The SSH tunnel forwards that connection to port 18789 on the remote machine where the Gateway is running.
