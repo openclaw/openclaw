@@ -188,6 +188,39 @@ multiple phone numbers without mixing sessions.
 }
 ```
 
+## Example: WhatsApp daily chat + Telegram deep work
+
+Split by provider: route WhatsApp to a fast everyday agent and Telegram to an Opus agent.
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "chat",
+        name: "Everyday",
+        workspace: "~/clawd-chat",
+        model: "anthropic/claude-sonnet-4-5"
+      },
+      {
+        id: "opus",
+        name: "Deep Work",
+        workspace: "~/clawd-opus",
+        model: "anthropic/claude-opus-4-5"
+      }
+    ]
+  },
+  bindings: [
+    { agentId: "chat", match: { provider: "whatsapp" } },
+    { agentId: "opus", match: { provider: "telegram" } }
+  ]
+}
+```
+
+Notes:
+- If you have multiple accounts for a provider, add `accountId` to the binding (for example `{ provider: "whatsapp", accountId: "personal" }`).
+- To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over provider-wide rules.
+
 ## Per-Agent Sandbox and Tool Configuration
 
 Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
