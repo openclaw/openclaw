@@ -86,6 +86,25 @@ Example allowlist config:
 }
 ```
 
+## Switching models in chat (`/model`)
+
+You can switch models for the current session without restarting:
+
+```
+/model
+/model list
+/model 3
+/model openai/gpt-5.2
+/model status
+```
+
+Notes:
+- `/model` (and `/model list`) is a compact, numbered picker (model family + available providers).
+- `/model <#>` selects from that picker.
+- `/model status` is the detailed view (auth candidates and, when configured, provider endpoint `baseUrl` + `api` mode).
+
+Full command behavior/config: [Slash commands](/tools/slash-commands).
+
 ## CLI commands
 
 ```bash
