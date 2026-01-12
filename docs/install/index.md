@@ -1,0 +1,102 @@
+---
+summary: "Install Clawdbot (recommended installer, global install, or from source)"
+read_when:
+  - Installing Clawdbot
+  - You want to install from GitHub
+---
+
+# Install
+
+Runtime baseline: **Node >=22**.
+
+## Recommended (installer script)
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash
+```
+
+This installs the `clawdbot` CLI globally via npm and then starts onboarding.
+
+Non-interactive (skip onboarding):
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --no-onboard
+```
+
+## Install method: npm vs git
+
+The installer supports two methods:
+
+- `npm` (default): `npm install -g clawdbot@latest`
+- `git`: clone/build from GitHub and run from a source checkout
+
+### CLI flags
+
+```bash
+# Explicit npm
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method npm
+
+# Install from GitHub (source checkout)
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git
+```
+
+Common flags:
+
+- `--install-method npm|git`
+- `--git-dir <path>` (default: `~/clawdbot`)
+- `--no-git-update` (skip `git pull` when using an existing checkout)
+- `--no-prompt` (disable prompts; required in CI/automation)
+- `--dry-run` (print what would happen; make no changes)
+- `--no-onboard` (skip onboarding)
+
+### Environment variables
+
+Equivalent env vars (useful for automation):
+
+- `CLAWDBOT_INSTALL_METHOD=git|npm`
+- `CLAWDBOT_GIT_DIR=...`
+- `CLAWDBOT_GIT_UPDATE=0|1`
+- `CLAWDBOT_NO_PROMPT=1`
+- `CLAWDBOT_DRY_RUN=1`
+- `CLAWDBOT_NO_ONBOARD=1`
+
+## Install from GitHub (from source)
+
+Use this if you want a source checkout you can edit, or you prefer `clawdbot update`.
+
+```bash
+curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --no-onboard
+```
+
+What it does:
+
+- Clones `https://github.com/clawdbot/clawdbot.git` into `~/clawdbot` (or `--git-dir`)
+- Runs `pnpm install`, `pnpm ui:build` (best-effort), and `pnpm build`
+- Adds a wrapper at `~/.local/bin/clawdbot` pointing at `<checkout>/dist/entry.js`
+
+Update later:
+
+```bash
+clawdbot update --restart
+```
+
+## Global install (manual)
+
+If you already have Node:
+
+```bash
+npm install -g clawdbot@latest
+```
+
+Or:
+
+```bash
+pnpm add -g clawdbot@latest
+```
+
+Then:
+
+```bash
+clawdbot onboard --install-daemon
+```
+

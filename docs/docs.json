@@ -575,6 +575,7 @@
       {
         "group": "Install & Updates",
         "pages": [
+          "install/index",
           "install/updating",
           "install/ansible",
           "install/nix",

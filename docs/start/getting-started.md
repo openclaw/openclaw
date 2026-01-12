@@ -50,6 +50,8 @@ Windows: use **WSL2** (Ubuntu recommended). WSL2 is strongly recommended; native
 curl -fsSL https://clawd.bot/install.sh | bash
 ```
 
+Installer options (install method, non-interactive, from GitHub): [Install](/install).
+
 Windows (PowerShell):
 
 ```powershell
