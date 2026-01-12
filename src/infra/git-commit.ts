@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createRequire } from "node:module";
 
 const formatCommit = (value?: string | null) => {
   if (!value) return null;
@@ -37,6 +38,19 @@ const resolveGitHead = (startDir: string) => {
 
 let cachedCommit: string | null | undefined;
 
+const readCommitFromPackageJson = () => {
+  try {
+    const require = createRequire(import.meta.url);
+    const pkg = require("../package.json") as {
+      gitHead?: string;
+      githead?: string;
+    };
+    return formatCommit(pkg.gitHead ?? pkg.githead ?? null);
+  } catch {
+    return null;
+  }
+};
+
 export const resolveCommitHash = (
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {},
 ) => {
@@ -46,6 +60,11 @@ export const resolveCommitHash = (
   const normalized = formatCommit(envCommit);
   if (normalized) {
     cachedCommit = normalized;
+    return cachedCommit;
+  }
+  const pkgCommit = readCommitFromPackageJson();
+  if (pkgCommit) {
+    cachedCommit = pkgCommit;
     return cachedCommit;
   }
   try {
