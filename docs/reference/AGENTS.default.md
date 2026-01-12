@@ -88,7 +88,6 @@ git commit -m "Add Clawd workspace"
 - **Peekaboo** — Fast macOS screenshots with optional AI vision analysis.
 - **camsnap** — Capture frames, clips, or motion alerts from RTSP/ONVIF security cams.
 - **oracle** — OpenAI-ready agent CLI with session replay and browser control.
-- **qmd** — Hybrid markdown search (BM25 + vectors + rerank) with a local server for agents.
 - **eightctl** — Control your sleep, from the terminal.
 - **imsg** — Send, read, stream iMessage & SMS.
 - **wacli** — WhatsApp CLI: sync, search, send.
