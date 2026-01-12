@@ -922,6 +922,8 @@ export type SandboxDockerSettings = {
   dns?: string[];
   /** Extra host mappings (e.g. ["api.local:10.0.0.2"]). */
   extraHosts?: string[];
+  /** Additional bind mounts (host:container:mode format, e.g. ["/host/path:/container/path:rw"]). */
+  binds?: string[];
 };
 
 export type SandboxBrowserSettings = {

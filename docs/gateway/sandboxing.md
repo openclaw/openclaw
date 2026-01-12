@@ -56,6 +56,12 @@ Clawdbot mirrors eligible skills into the sandbox workspace (`.../skills`) so
 they can be read. With `"rw"`, workspace skills are readable from
 `/workspace/skills`.
 
+## Custom bind mounts
+`agents.defaults.sandbox.docker.binds` mounts additional host directories into the container.
+Format: `host:container:mode` (e.g., `"/home/user/source:/source:rw"`).
+
+Global and per-agent binds are **merged** (not replaced). Under `scope: "shared"`, per-agent binds are ignored.
+
 ## Images + setup
 Default image: `clawdbot-sandbox:bookworm-slim`
 
