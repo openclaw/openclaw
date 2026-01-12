@@ -116,6 +116,10 @@ Not currently. Clawdbot doesn’t ship a Bedrock provider today. If you must use
 
 Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI login (`~/.codex/auth.json`). The wizard can import the CLI login or run the OAuth flow and will set the default model to `openai-codex/gpt-5.2` when appropriate. See [Model providers](/concepts/model-providers) and [Wizard](/start/wizard).
 
+### Is a local model OK for casual chats?
+
+Usually no. Clawdbot needs large context + strong safety; small cards truncate. See [/gateway/local-models](/gateway/local-models) for hardware expectations and the LM Studio MiniMax M2.1 setup.
+
 ### Can I use Bun?
 
 Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
