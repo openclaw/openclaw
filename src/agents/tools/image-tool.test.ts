@@ -21,6 +21,8 @@ async function writeAuthProfiles(agentDir: string, profiles: unknown) {
 }
 
 describe("image tool implicit imageModel config", () => {
+  const priorFetch = global.fetch;
+
   beforeEach(() => {
     vi.stubEnv("OPENAI_API_KEY", "");
     vi.stubEnv("ANTHROPIC_API_KEY", "");
@@ -30,6 +32,8 @@ describe("image tool implicit imageModel config", () => {
 
   afterEach(() => {
     vi.unstubAllEnvs();
+    // @ts-expect-error global fetch cleanup
+    global.fetch = priorFetch;
   });
 
   it("stays disabled without auth when no pairing is possible", async () => {
@@ -132,6 +136,60 @@ describe("image tool implicit imageModel config", () => {
       tool.execute("t2", { image: "../escape.png" }),
     ).rejects.toThrow(/escapes sandbox root/i);
   });
+
+  it("rewrites inbound absolute paths into sandbox media/inbound", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-image-sandbox-"),
+    );
+    const agentDir = path.join(stateDir, "agent");
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(path.join(sandboxRoot, "media", "inbound"), {
+      recursive: true,
+    });
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(
+      path.join(sandboxRoot, "media", "inbound", "photo.png"),
+      Buffer.from(pngB64, "base64"),
+    );
+
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(),
+      json: async () => ({
+        content: "ok",
+        base_resp: { status_code: 0, status_msg: "" },
+      }),
+    });
+    // @ts-expect-error partial global
+    global.fetch = fetch;
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "minimax/MiniMax-M2.1" },
+          imageModel: { primary: "minimax/MiniMax-VL-01" },
+        },
+      },
+    };
+    const tool = createImageTool({ config: cfg, agentDir, sandboxRoot });
+    expect(tool).not.toBeNull();
+    if (!tool) throw new Error("expected image tool");
+
+    const res = await tool.execute("t1", {
+      prompt: "Describe the image.",
+      image: "/Users/steipete/.clawdbot/media/inbound/photo.png",
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect((res.details as { rewrittenFrom?: string }).rewrittenFrom).toContain(
+      "photo.png",
+    );
+  });
 });
 
 describe("image tool data URL support", () => {
@@ -148,6 +206,99 @@ describe("image tool data URL support", () => {
     expect(() =>
       __testing.decodeDataUrl("data:text/plain;base64,SGVsbG8="),
     ).toThrow(/Unsupported data URL type/i);
+  });
+});
+
+describe("image tool MiniMax VLM routing", () => {
+  const pngB64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+  const priorFetch = global.fetch;
+
+  beforeEach(() => {
+    vi.stubEnv("MINIMAX_API_KEY", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    // @ts-expect-error global fetch cleanup
+    global.fetch = priorFetch;
+  });
+
+  it("calls /v1/coding_plan/vlm for minimax image models", async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(),
+      json: async () => ({
+        content: "ok",
+        base_resp: { status_code: 0, status_msg: "" },
+      }),
+    });
+    // @ts-expect-error partial global
+    global.fetch = fetch;
+
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-minimax-vlm-"),
+    );
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
+    };
+    const tool = createImageTool({ config: cfg, agentDir });
+    expect(tool).not.toBeNull();
+    if (!tool) throw new Error("expected image tool");
+
+    const res = await tool.execute("t1", {
+      prompt: "Describe the image.",
+      image: `data:image/png;base64,${pngB64}`,
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(1);
+    const [url, init] = fetch.mock.calls[0];
+    expect(String(url)).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+    expect(init?.method).toBe("POST");
+    expect(
+      String((init?.headers as Record<string, string>)?.Authorization),
+    ).toBe("Bearer minimax-test");
+    expect(String(init?.body)).toContain('"prompt":"Describe the image."');
+    expect(String(init?.body)).toContain('"image_url":"data:image/png;base64,');
+
+    const text = res.content?.find((b) => b.type === "text")?.text ?? "";
+    expect(text).toBe("ok");
+  });
+
+  it("surfaces MiniMax API errors from /v1/coding_plan/vlm", async () => {
+    const fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      headers: new Headers(),
+      json: async () => ({
+        content: "",
+        base_resp: { status_code: 1004, status_msg: "bad key" },
+      }),
+    });
+    // @ts-expect-error partial global
+    global.fetch = fetch;
+
+    const agentDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-minimax-vlm-"),
+    );
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
+    };
+    const tool = createImageTool({ config: cfg, agentDir });
+    expect(tool).not.toBeNull();
+    if (!tool) throw new Error("expected image tool");
+
+    await expect(
+      tool.execute("t1", {
+        prompt: "Describe the image.",
+        image: `data:image/png;base64,${pngB64}`,
+      }),
+    ).rejects.toThrow(/MiniMax VLM API error/i);
   });
 });
 

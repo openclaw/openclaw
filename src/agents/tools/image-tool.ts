@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import {
   type Api,
   type AssistantMessage,
@@ -19,6 +22,7 @@ import {
   listProfilesForProvider,
 } from "../auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
+import { minimaxUnderstandImage } from "../minimax-vlm.js";
 import { getApiKeyForModel, resolveEnvApiKey } from "../model-auth.js";
 import { runWithImageModelFallback } from "../model-fallback.js";
 import { parseModelRef } from "../model-selection.js";
@@ -278,6 +282,38 @@ function buildImageContext(
   };
 }
 
+async function resolveSandboxedImagePath(params: {
+  sandboxRoot: string;
+  imagePath: string;
+}): Promise<{ resolved: string; rewrittenFrom?: string }> {
+  const normalize = (p: string) =>
+    p.startsWith("file://") ? p.slice("file://".length) : p;
+  const filePath = normalize(params.imagePath);
+  try {
+    const out = await assertSandboxPath({
+      filePath,
+      cwd: params.sandboxRoot,
+      root: params.sandboxRoot,
+    });
+    return { resolved: out.resolved };
+  } catch (err) {
+    const name = path.basename(filePath);
+    const candidateRel = path.join("media", "inbound", name);
+    const candidateAbs = path.join(params.sandboxRoot, candidateRel);
+    try {
+      await fs.stat(candidateAbs);
+    } catch {
+      throw err;
+    }
+    const out = await assertSandboxPath({
+      filePath: candidateRel,
+      cwd: params.sandboxRoot,
+      root: params.sandboxRoot,
+    });
+    return { resolved: out.resolved, rewrittenFrom: filePath };
+  }
+}
+
 async function runImagePrompt(params: {
   cfg?: ClawdbotConfig;
   agentDir: string;
@@ -328,6 +364,18 @@ async function runImagePrompt(params: {
         agentDir: params.agentDir,
       });
       authStorage.setRuntimeApiKey(model.provider, apiKeyInfo.apiKey);
+      const imageDataUrl = `data:${params.mimeType};base64,${params.base64}`;
+
+      if (model.provider === "minimax") {
+        const text = await minimaxUnderstandImage({
+          apiKey: apiKeyInfo.apiKey,
+          prompt: params.prompt,
+          imageDataUrl,
+          modelBaseUrl: model.baseUrl,
+        });
+        return { text, provider: model.provider, model: model.id };
+      }
+
       const context = buildImageContext(
         params.prompt,
         params.base64,
@@ -337,23 +385,19 @@ async function runImagePrompt(params: {
         apiKey: apiKeyInfo.apiKey,
         maxTokens: 512,
       })) as AssistantMessage;
-      return {
+      const text = coerceImageAssistantText({
         message,
         provider: model.provider,
         model: model.id,
-      };
+      });
+      return { text, provider: model.provider, model: model.id };
     },
   });
 
-  const text = coerceImageAssistantText({
-    message: result.result.message,
+  return {
+    text: result.result.text,
     provider: result.result.provider,
     model: result.result.model,
-  });
-  return {
-    text,
-    provider: result.provider,
-    model: result.model,
     attempts: result.attempts.map((attempt) => ({
       provider: attempt.provider,
       model: attempt.model,
@@ -423,21 +467,20 @@ export function createImageTool(options?: {
         if (imageRaw.startsWith("~")) return resolveUserPath(imageRaw);
         return imageRaw;
       })();
-      const resolvedPath = isDataUrl
-        ? null
-        : sandboxRoot
-          ? (
-              await assertSandboxPath({
-                filePath: resolvedImage.startsWith("file://")
+      const resolvedPathInfo: { resolved: string; rewrittenFrom?: string } =
+        isDataUrl
+          ? { resolved: "" }
+          : sandboxRoot
+            ? await resolveSandboxedImagePath({
+                sandboxRoot,
+                imagePath: resolvedImage,
+              })
+            : {
+                resolved: resolvedImage.startsWith("file://")
                   ? resolvedImage.slice("file://".length)
                   : resolvedImage,
-                cwd: sandboxRoot,
-                root: sandboxRoot,
-              })
-            ).resolved
-          : resolvedImage.startsWith("file://")
-            ? resolvedImage.slice("file://".length)
-            : resolvedImage;
+              };
+      const resolvedPath = isDataUrl ? null : resolvedPathInfo.resolved;
 
       const media = isDataUrl
         ? decodeDataUrl(resolvedImage)
@@ -465,6 +508,9 @@ export function createImageTool(options?: {
         details: {
           model: `${result.provider}/${result.model}`,
           image: resolvedImage,
+          ...(resolvedPathInfo.rewrittenFrom
+            ? { rewrittenFrom: resolvedPathInfo.rewrittenFrom }
+            : {}),
           attempts: result.attempts,
         },
       };
