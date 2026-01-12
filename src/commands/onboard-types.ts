@@ -20,6 +20,7 @@ export type AuthChoice =
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
+  | "minimax-api-lightning"
   | "opencode-zen"
   | "skip";
 export type GatewayAuthChoice = "off" | "token" | "password";
