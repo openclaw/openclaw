@@ -253,7 +253,7 @@ export async function monitorWebInbox(options: {
       // - "open": groups bypass allowFrom, only mention-gating applies
       // - "disabled": block all group messages entirely
       // - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
-      const groupPolicy = account.groupPolicy ?? "allowlist";
+      const groupPolicy = account.groupPolicy ?? "open";
       if (group && groupPolicy === "disabled") {
         logVerbose(`Blocked group message (groupPolicy: disabled)`);
         continue;

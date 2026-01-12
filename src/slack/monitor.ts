@@ -493,7 +493,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const groupDmChannels = normalizeAllowList(dmConfig?.groupChannels);
   const channelsConfig = slackCfg.channels;
   const dmEnabled = dmConfig?.enabled ?? true;
-  const groupPolicy = slackCfg.groupPolicy ?? "allowlist";
+  const groupPolicy = slackCfg.groupPolicy ?? "open";
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
   const reactionMode = slackCfg.reactionNotifications ?? "own";
   const reactionAllowlist = slackCfg.reactionAllowlist ?? [];
