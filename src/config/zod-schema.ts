@@ -368,6 +368,7 @@ const DiscordAccountSchema = z.object({
   capabilities: z.array(z.string()).optional(),
   enabled: z.boolean().optional(),
   token: z.string().optional(),
+  allowBots: z.boolean().optional(),
   groupPolicy: GroupPolicySchema.optional().default("allowlist"),
   historyLimit: z.number().int().min(0).optional(),
   dmHistoryLimit: z.number().int().min(0).optional(),

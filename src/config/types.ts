@@ -513,6 +513,8 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: string;
+  /** Allow bot-authored messages to trigger replies (default: false). */
+  allowBots?: boolean;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies

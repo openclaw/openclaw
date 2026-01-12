@@ -852,6 +852,7 @@ Multi-account support lives under `discord.accounts` (see the multi-account sect
     enabled: true,
     token: "your-bot-token",
     mediaMaxMb: 8,                          // clamp inbound media size
+    allowBots: false,                       // allow bot-authored messages
     actions: {                              // tool action gates (false disables)
       reactions: true,
       stickers: true,
@@ -910,6 +911,7 @@ Multi-account support lives under `discord.accounts` (see the multi-account sect
 
 Clawdbot starts Discord only when a `discord` config section exists. The token is resolved from `DISCORD_BOT_TOKEN` or `discord.token` (unless `discord.enabled` is `false`). Use `user:<id>` (DM) or `channel:<id>` (guild channel) when specifying delivery targets for cron/CLI commands; bare numeric IDs are ambiguous and rejected.
 Guild slugs are lowercase with spaces replaced by `-`; channel keys use the slugged channel name (no leading `#`). Prefer guild ids as keys to avoid rename ambiguity.
+Bot-authored messages are ignored by default. Enable with `discord.allowBots` (own messages are still filtered to prevent self-reply loops).
 Reaction notification modes:
 - `off`: no reaction events.
 - `own`: reactions on the bot's own messages (default).

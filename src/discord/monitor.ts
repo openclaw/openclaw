@@ -647,7 +647,17 @@ export function createDiscordMessageHandler(params: {
     try {
       const message = data.message;
       const author = data.author;
-      if (!author || author.bot) return;
+      if (!author) return;
+
+      const allowBots = discordConfig?.allowBots ?? false;
+      if (author.bot) {
+        // Always ignore own messages to prevent self-reply loops
+        if (botUserId && author.id === botUserId) return;
+        if (!allowBots) {
+          logVerbose("discord: drop bot message (allowBots=false)");
+          return;
+        }
+      }
 
       const isGuildMessage = Boolean(data.guild_id);
       const channelInfo = await resolveDiscordChannelInfo(
