@@ -39,6 +39,14 @@ Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 
 See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images).
 
+### Bind mounts (security quick check)
+
+- `docker.binds` *pierces* the sandbox filesystem: whatever you mount is visible inside the container with the mode you set (`:ro` or `:rw`).
+- Default is read-write if you omit the mode; prefer `:ro` for source/secrets.
+- `scope: "shared"` ignores per-agent binds (only global binds apply).
+- Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
+- Workspace access (`workspaceAccess: "ro"`/`"rw"`) is independent of bind modes.
+
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:

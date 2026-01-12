@@ -38,13 +38,13 @@ import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispa
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import type {
   ClawdbotConfig,
   SlackReactionNotificationMode,
   SlackSlashCommandConfig,
 } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
-import { resolveNativeCommandsEnabled } from "../config/commands.js";
 import {
   resolveSessionKey,
   resolveStorePath,

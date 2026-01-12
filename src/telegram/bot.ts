@@ -33,12 +33,12 @@ import {
 import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/provider-dispatcher.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
-import { loadConfig } from "../config/config.js";
 import {
   isNativeCommandsExplicitlyDisabled,
   resolveNativeCommandsEnabled,
 } from "../config/commands.js";
+import type { ClawdbotConfig, ReplyToMode } from "../config/config.js";
+import { loadConfig } from "../config/config.js";
 import {
   resolveProviderGroupPolicy,
   resolveProviderGroupRequireMention,
