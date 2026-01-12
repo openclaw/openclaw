@@ -648,7 +648,10 @@ describe("trigger handling", () => {
         makeCfg(home),
       );
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
-      expect(blockReplies.length).toBe(0);
+      // Allowlisted senders: inline /status runs immediately (like /help) and is
+      // stripped from the prompt; the remaining text continues through the agent.
+      expect(blockReplies.length).toBe(1);
+      expect(String(blockReplies[0]?.text ?? "").length).toBeGreaterThan(0);
       const prompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
       expect(prompt).not.toContain("/status");
@@ -818,7 +821,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("strips inline /status for unauthorized senders", async () => {
+  it("keeps inline /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
@@ -855,7 +858,8 @@ describe("trigger handling", () => {
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
       const prompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).not.toContain("/status");
+      // Not allowlisted: inline /status is treated as plain text and is not stripped.
+      expect(prompt).toContain("/status");
     });
   });
 

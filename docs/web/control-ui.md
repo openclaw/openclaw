@@ -43,6 +43,18 @@ The onboarding wizard generates a gateway token by default, so paste it here on 
 - Logs: live tail of gateway file logs with filter/export (`logs.tail`)
 - Update: run a package/git update + restart (`update.run`) with a restart report
 
+## Model presets (Config tab)
+
+The Config tab includes **Model presets**: one-click inserts to add common model providers and set a default model:
+
+- **MiniMax M2.1 (Anthropic)** → configures MiniMax via `https://api.minimax.io/anthropic` and `anthropic-messages` (see [/providers/minimax](/providers/minimax))
+- **GLM 4.7 (Z.AI)** → adds `ZAI_API_KEY` + sets `zai/glm-4.7` (see [/providers/zai](/providers/zai))
+- **Kimi (Moonshot)** → configures Moonshot + sets `moonshot/kimi-k2-0905-preview` (see [/providers/moonshot](/providers/moonshot))
+
+Notes:
+- Presets **keep existing API keys and per-model params** when present.
+- Use `/model` (see [/tools/slash-commands](/tools/slash-commands)) to switch models from chat without editing config.
+
 ## Chat behavior
 
 - `chat.send` is **non-blocking**: it acks immediately with `{ runId, status: "started" }` and the response streams via `chat` events.
