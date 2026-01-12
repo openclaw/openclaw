@@ -14,7 +14,7 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   buildGroupDisplayName,
   loadSessionStore,
-  resolveAgentIdFromSessionKey,
+  resolveMainSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
@@ -167,13 +167,18 @@ export function capArrayByJsonBytes<T>(
 export function loadSessionEntry(sessionKey: string) {
   const cfg = loadConfig();
   const sessionCfg = cfg.session;
-  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  const canonicalKey = resolveSessionStoreKey({ cfg, sessionKey });
+  const agentId = resolveSessionStoreAgentId(cfg, canonicalKey);
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
-  const parsed = parseAgentSessionKey(sessionKey);
-  const legacyKey = parsed?.rest;
-  const entry = store[sessionKey] ?? (legacyKey ? store[legacyKey] : undefined);
-  return { cfg, storePath, store, entry };
+  const parsed = parseAgentSessionKey(canonicalKey);
+  const legacyKey =
+    parsed?.rest ?? parseAgentSessionKey(sessionKey)?.rest ?? undefined;
+  const entry =
+    store[canonicalKey] ??
+    store[sessionKey] ??
+    (legacyKey ? store[legacyKey] : undefined);
+  return { cfg, storePath, store, entry, canonicalKey };
 }
 
 export function classifySessionKey(
@@ -283,6 +288,38 @@ function canonicalizeSessionKeyForAgent(agentId: string, key: string): string {
   return `agent:${normalizeAgentId(agentId)}:${key}`;
 }
 
+function resolveDefaultStoreAgentId(cfg: ClawdbotConfig): string {
+  return normalizeAgentId(resolveDefaultAgentId(cfg));
+}
+
+export function resolveSessionStoreKey(params: {
+  cfg: ClawdbotConfig;
+  sessionKey: string;
+}): string {
+  const raw = params.sessionKey.trim();
+  if (!raw) return raw;
+  if (raw === "global" || raw === "unknown") return raw;
+  const rawMainKey = normalizeMainKey(params.cfg.session?.mainKey);
+  if (raw === "main" || raw === rawMainKey) {
+    return resolveMainSessionKey(params.cfg);
+  }
+  if (raw.startsWith("agent:")) return raw;
+  const agentId = resolveDefaultStoreAgentId(params.cfg);
+  return canonicalizeSessionKeyForAgent(agentId, raw);
+}
+
+function resolveSessionStoreAgentId(
+  cfg: ClawdbotConfig,
+  canonicalKey: string,
+): string {
+  if (canonicalKey === "global" || canonicalKey === "unknown") {
+    return resolveDefaultStoreAgentId(cfg);
+  }
+  const parsed = parseAgentSessionKey(canonicalKey);
+  if (parsed?.agentId) return normalizeAgentId(parsed.agentId);
+  return resolveDefaultStoreAgentId(cfg);
+}
+
 function canonicalizeSpawnedByForAgent(
   agentId: string,
   spawnedBy?: string,
@@ -304,40 +341,29 @@ export function resolveGatewaySessionStoreTarget(params: {
   storeKeys: string[];
 } {
   const key = params.key.trim();
-  const agentId = resolveAgentIdFromSessionKey(key);
+  const canonicalKey = resolveSessionStoreKey({
+    cfg: params.cfg,
+    sessionKey: key,
+  });
+  const agentId = resolveSessionStoreAgentId(params.cfg, canonicalKey);
   const storeConfig = params.cfg.session?.store;
   const storePath = resolveStorePath(storeConfig, { agentId });
 
-  if (key === "global" || key === "unknown") {
-    return { agentId, storePath, canonicalKey: key, storeKeys: [key] };
+  if (canonicalKey === "global" || canonicalKey === "unknown") {
+    const storeKeys = key && key !== canonicalKey ? [canonicalKey, key] : [key];
+    return { agentId, storePath, canonicalKey, storeKeys };
   }
 
-  const parsed = parseAgentSessionKey(key);
-  if (parsed) {
-    return {
-      agentId,
-      storePath,
-      canonicalKey: key,
-      storeKeys: [key, parsed.rest],
-    };
-  }
-
-  if (key.startsWith("subagent:")) {
-    const canonical = canonicalizeSessionKeyForAgent(agentId, key);
-    return {
-      agentId,
-      storePath,
-      canonicalKey: canonical,
-      storeKeys: [canonical, key],
-    };
-  }
-
-  const canonical = canonicalizeSessionKeyForAgent(agentId, key);
+  const parsed = parseAgentSessionKey(canonicalKey);
+  const storeKeys = new Set<string>();
+  storeKeys.add(canonicalKey);
+  if (parsed?.rest) storeKeys.add(parsed.rest);
+  if (key && key !== canonicalKey) storeKeys.add(key);
   return {
     agentId,
     storePath,
-    canonicalKey: canonical,
-    storeKeys: [canonical, key],
+    canonicalKey,
+    storeKeys: Array.from(storeKeys),
   };
 }
 

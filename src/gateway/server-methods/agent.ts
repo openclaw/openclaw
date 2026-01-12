@@ -11,7 +11,6 @@ import {
 import { registerAgentRunContext } from "../../infra/agent-events.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { DEFAULT_CHAT_PROVIDER } from "../../providers/registry.js";
-import { normalizeMainKey } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -29,7 +28,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -189,22 +188,22 @@ export const agentHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      resolvedSessionId = sessionId;
+      const canonicalSessionKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: requestedSessionKey,
+      });
+      const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
+      const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (store) {
-        store[requestedSessionKey] = nextEntry;
+        store[canonicalSessionKey] = nextEntry;
         if (storePath) {
           await saveSessionStore(storePath, store);
         }
       }
-      resolvedSessionId = sessionId;
-      const agentId = resolveAgentIdFromSessionKey(requestedSessionKey);
-      const mainSessionKey = resolveAgentMainSessionKey({
-        cfg,
-        agentId,
-      });
-      const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       if (
-        requestedSessionKey === mainSessionKey ||
-        requestedSessionKey === rawMainKey
+        canonicalSessionKey === mainSessionKey ||
+        canonicalSessionKey === "global"
       ) {
         context.addChatRun(idem, {
           sessionKey: requestedSessionKey,

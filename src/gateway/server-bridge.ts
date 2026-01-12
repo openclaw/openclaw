@@ -89,6 +89,7 @@ import {
   readSessionMessages,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
+  resolveSessionStoreKey,
   resolveSessionTranscriptCandidates,
   type SessionsPatchResult,
 } from "./session-utils.js";
@@ -918,8 +919,12 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               clientRunId,
             });
 
+            const storeKey = resolveSessionStoreKey({
+              cfg,
+              sessionKey: p.sessionKey,
+            });
             if (store) {
-              store[p.sessionKey] = sessionEntry;
+              store[storeKey] = sessionEntry;
               if (storePath) {
                 await saveSessionStore(storePath, store);
               }
@@ -1032,12 +1037,15 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
         if (text.length > 20_000) return;
         const sessionKeyRaw =
           typeof obj.sessionKey === "string" ? obj.sessionKey.trim() : "";
-        const mainKey = normalizeMainKey(loadConfig().session?.mainKey);
-        const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : mainKey;
+        const cfg = loadConfig();
+        const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
+        const sessionKey =
+          sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
         const { storePath, store, entry } = loadSessionEntry(sessionKey);
+        const storeKey = resolveSessionStoreKey({ cfg, sessionKey });
         const now = Date.now();
         const sessionId = entry?.sessionId ?? randomUUID();
-        store[sessionKey] = {
+        store[storeKey] = {
           sessionId,
           updatedAt: now,
           thinkingLevel: entry?.thinkingLevel,
@@ -1112,9 +1120,14 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
         const sessionKey =
           sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
         const { storePath, store, entry } = loadSessionEntry(sessionKey);
+        const nodeCfg = loadConfig();
+        const nodeStoreKey = resolveSessionStoreKey({
+          cfg: nodeCfg,
+          sessionKey,
+        });
         const now = Date.now();
         const sessionId = entry?.sessionId ?? randomUUID();
-        store[sessionKey] = {
+        store[nodeStoreKey] = {
           sessionId,
           updatedAt: now,
           thinkingLevel: entry?.thinkingLevel,

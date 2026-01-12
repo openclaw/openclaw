@@ -32,6 +32,7 @@ import {
   loadSessionEntry,
   readSessionMessages,
   resolveSessionModelRef,
+  resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -306,8 +307,12 @@ export const chatHandlers: GatewayRequestHandlers = {
         clientRunId,
       });
 
+      const storeKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: p.sessionKey,
+      });
       if (store) {
-        store[p.sessionKey] = sessionEntry;
+        store[storeKey] = sessionEntry;
         if (storePath) {
           await saveSessionStore(storePath, store);
         }
