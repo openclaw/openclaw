@@ -17,6 +17,7 @@ export type AuthChoiceGroupId =
   | "anthropic"
   | "google"
   | "openrouter"
+  | "moonshot"
   | "zai"
   | "opencode-zen"
   | "minimax";
@@ -57,6 +58,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     label: "OpenRouter",
     hint: "API key",
     choices: ["openrouter-api-key"],
+  },
+  {
+    value: "moonshot",
+    label: "Moonshot AI",
+    hint: "Kimi K2 preview",
+    choices: ["moonshot-api-key"],
   },
   {
     value: "zai",
@@ -159,6 +166,7 @@ export function buildAuthChoiceOptions(params: {
   });
   options.push({ value: "openai-api-key", label: "OpenAI API key" });
   options.push({ value: "openrouter-api-key", label: "OpenRouter API key" });
+  options.push({ value: "moonshot-api-key", label: "Moonshot AI API key" });
   options.push({
     value: "antigravity",
     label: "Google Antigravity (Claude Opus 4.5, Gemini 3, etc.)",

@@ -41,15 +41,19 @@ import {
   applyMinimaxApiProviderConfig,
   applyMinimaxConfig,
   applyMinimaxProviderConfig,
+  applyMoonshotConfig,
+  applyMoonshotProviderConfig,
   applyOpencodeZenConfig,
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
   applyZaiConfig,
+  MOONSHOT_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setGeminiApiKey,
   setMinimaxApiKey,
+  setMoonshotApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
   setZaiApiKey,
@@ -439,6 +443,38 @@ export async function applyAuthChoice(params: {
       agentModelOverride = OPENROUTER_DEFAULT_MODEL_REF;
       await noteAgentModel(OPENROUTER_DEFAULT_MODEL_REF);
     }
+  } else if (params.authChoice === "moonshot-api-key") {
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("moonshot");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MOONSHOT_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMoonshotApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Moonshot API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setMoonshotApiKey(String(key).trim(), params.agentDir);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "moonshot:default",
+      provider: "moonshot",
+      mode: "api_key",
+    });
+    if (params.setDefaultModel) {
+      nextConfig = applyMoonshotConfig(nextConfig);
+    } else {
+      nextConfig = applyMoonshotProviderConfig(nextConfig);
+      agentModelOverride = MOONSHOT_DEFAULT_MODEL_REF;
+      await noteAgentModel(MOONSHOT_DEFAULT_MODEL_REF);
+    }
   } else if (params.authChoice === "openai-codex") {
     const isRemote = isRemoteEnvironment();
     await params.prompter.note(
@@ -651,11 +687,25 @@ export async function applyAuthChoice(params: {
       );
     }
   } else if (params.authChoice === "gemini-api-key") {
-    const key = await params.prompter.text({
-      message: "Enter Gemini API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    await setGeminiApiKey(String(key).trim(), params.agentDir);
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("google");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing GEMINI_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setGeminiApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Gemini API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setGeminiApiKey(String(key).trim(), params.agentDir);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "google:default",
       provider: "google",
@@ -675,11 +725,25 @@ export async function applyAuthChoice(params: {
       await noteAgentModel(GOOGLE_GEMINI_DEFAULT_MODEL);
     }
   } else if (params.authChoice === "zai-api-key") {
-    const key = await params.prompter.text({
-      message: "Enter Z.AI API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    await setZaiApiKey(String(key).trim(), params.agentDir);
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("zai");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing ZAI_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setZaiApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Z.AI API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setZaiApiKey(String(key).trim(), params.agentDir);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "zai:default",
       provider: "zai",
@@ -714,11 +778,25 @@ export async function applyAuthChoice(params: {
       await noteAgentModel(ZAI_DEFAULT_MODEL_REF);
     }
   } else if (params.authChoice === "apiKey") {
-    const key = await params.prompter.text({
-      message: "Enter Anthropic API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    await setAnthropicApiKey(String(key).trim(), params.agentDir);
+    let hasCredential = false;
+    const envKey = process.env.ANTHROPIC_API_KEY?.trim();
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: "Use existing ANTHROPIC_API_KEY (env)?",
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setAnthropicApiKey(envKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter Anthropic API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setAnthropicApiKey(String(key).trim(), params.agentDir);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",
       provider: "anthropic",
@@ -729,11 +807,25 @@ export async function applyAuthChoice(params: {
     params.authChoice === "minimax-api"
   ) {
     const modelId = "MiniMax-M2.1";
-    const key = await params.prompter.text({
-      message: "Enter MiniMax API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    await setMinimaxApiKey(String(key).trim(), params.agentDir);
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("minimax");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing MINIMAX_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setMinimaxApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter MiniMax API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setMinimaxApiKey(String(key).trim(), params.agentDir);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "minimax:default",
       provider: "minimax",
@@ -764,11 +856,25 @@ export async function applyAuthChoice(params: {
       ].join("\n"),
       "OpenCode Zen",
     );
-    const key = await params.prompter.text({
-      message: "Enter OpenCode Zen API key",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    });
-    await setOpencodeZenApiKey(String(key).trim(), params.agentDir);
+    let hasCredential = false;
+    const envKey = resolveEnvApiKey("opencode");
+    if (envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing OPENCODE_API_KEY (${envKey.source})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        await setOpencodeZenApiKey(envKey.apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+    if (!hasCredential) {
+      const key = await params.prompter.text({
+        message: "Enter OpenCode Zen API key",
+        validate: (value) => (value?.trim() ? undefined : "Required"),
+      });
+      await setOpencodeZenApiKey(String(key).trim(), params.agentDir);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "opencode:default",
       provider: "opencode",
@@ -807,6 +913,8 @@ export function resolvePreferredProviderForAuthChoice(
       return "openai";
     case "openrouter-api-key":
       return "openrouter";
+    case "moonshot-api-key":
+      return "moonshot";
     case "gemini-api-key":
       return "google";
     case "zai-api-key":

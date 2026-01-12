@@ -11,6 +11,11 @@ export const MINIMAX_HOSTED_MODEL_ID = "MiniMax-M2.1";
 const DEFAULT_MINIMAX_CONTEXT_WINDOW = 200000;
 const DEFAULT_MINIMAX_MAX_TOKENS = 8192;
 export const MINIMAX_HOSTED_MODEL_REF = `minimax/${MINIMAX_HOSTED_MODEL_ID}`;
+const MOONSHOT_BASE_URL = "https://api.moonshot.ai/v1";
+export const MOONSHOT_DEFAULT_MODEL_ID = "kimi-k2-0905-preview";
+const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
+const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
+export const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 const MINIMAX_API_COST = {
   input: 15,
@@ -25,6 +30,12 @@ const MINIMAX_HOSTED_COST = {
   cacheWrite: 0,
 };
 const MINIMAX_LM_STUDIO_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+const MOONSHOT_DEFAULT_COST = {
   input: 0,
   output: 0,
   cacheRead: 0,
@@ -72,6 +83,18 @@ function buildMinimaxApiModelDefinition(
     contextWindow: DEFAULT_MINIMAX_CONTEXT_WINDOW,
     maxTokens: DEFAULT_MINIMAX_MAX_TOKENS,
   });
+}
+
+function buildMoonshotModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: MOONSHOT_DEFAULT_MODEL_ID,
+    name: "Kimi K2 0905 Preview",
+    reasoning: false,
+    input: ["text"],
+    cost: MOONSHOT_DEFAULT_COST,
+    contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
+  };
 }
 
 export async function writeOAuthCredentials(
@@ -124,6 +147,19 @@ export async function setMinimaxApiKey(key: string, agentDir?: string) {
     credential: {
       type: "api_key",
       provider: "minimax",
+      key,
+    },
+    agentDir: agentDir ?? resolveDefaultAgentDir(),
+  });
+}
+
+export async function setMoonshotApiKey(key: string, agentDir?: string) {
+  // Write to the multi-agent path so gateway finds credentials on startup
+  upsertAuthProfile({
+    profileId: "moonshot:default",
+    credential: {
+      type: "api_key",
+      provider: "moonshot",
       key,
     },
     agentDir: agentDir ?? resolveDefaultAgentDir(),
@@ -227,6 +263,80 @@ export function applyOpenrouterConfig(cfg: ClawdbotConfig): ClawdbotConfig {
               }
             : undefined),
           primary: OPENROUTER_DEFAULT_MODEL_REF,
+        },
+      },
+    },
+  };
+}
+
+export function applyMoonshotProviderConfig(
+  cfg: ClawdbotConfig,
+): ClawdbotConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[MOONSHOT_DEFAULT_MODEL_REF] = {
+    ...models[MOONSHOT_DEFAULT_MODEL_REF],
+    alias: models[MOONSHOT_DEFAULT_MODEL_REF]?.alias ?? "Kimi K2",
+  };
+
+  const providers = { ...cfg.models?.providers };
+  const existingProvider = providers.moonshot;
+  const existingModels = Array.isArray(existingProvider?.models)
+    ? existingProvider.models
+    : [];
+  const defaultModel = buildMoonshotModelDefinition();
+  const hasDefaultModel = existingModels.some(
+    (model) => model.id === MOONSHOT_DEFAULT_MODEL_ID,
+  );
+  const mergedModels = hasDefaultModel
+    ? existingModels
+    : [...existingModels, defaultModel];
+  const { apiKey: existingApiKey, ...existingProviderRest } =
+    (existingProvider ?? {}) as Record<string, unknown> as { apiKey?: string };
+  const resolvedApiKey =
+    typeof existingApiKey === "string" ? existingApiKey : undefined;
+  const normalizedApiKey = resolvedApiKey?.trim();
+  providers.moonshot = {
+    ...existingProviderRest,
+    baseUrl: MOONSHOT_BASE_URL,
+    api: "openai-completions",
+    ...(normalizedApiKey ? { apiKey: normalizedApiKey } : {}),
+    models: mergedModels.length > 0 ? mergedModels : [defaultModel],
+  };
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...cfg.agents?.defaults,
+        models,
+      },
+    },
+    models: {
+      mode: cfg.models?.mode ?? "merge",
+      providers,
+    },
+  };
+}
+
+export function applyMoonshotConfig(cfg: ClawdbotConfig): ClawdbotConfig {
+  const next = applyMoonshotProviderConfig(cfg);
+  const existingModel = next.agents?.defaults?.model;
+  return {
+    ...next,
+    agents: {
+      ...next.agents,
+      defaults: {
+        ...next.agents?.defaults,
+        model: {
+          ...(existingModel &&
+          "fallbacks" in (existingModel as Record<string, unknown>)
+            ? {
+                fallbacks: (existingModel as { fallbacks?: string[] })
+                  .fallbacks,
+              }
+            : undefined),
+          primary: MOONSHOT_DEFAULT_MODEL_REF,
         },
       },
     },
