@@ -671,10 +671,11 @@ export async function getReplyFromConfig(
       isGroup,
     })
   ) {
-    const currentThinkLevel =
+    const resolvedDefaultThinkLevel =
       (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
       (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
       (await modelState.resolveDefaultThinkingLevel());
+    const currentThinkLevel = resolvedDefaultThinkLevel;
     const currentVerboseLevel =
       (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
       (agentCfg?.verboseDefault as VerboseLevel | undefined);
@@ -720,16 +721,12 @@ export async function getReplyFromConfig(
         provider,
         model,
         contextTokens,
-        resolvedThinkLevel:
-          currentThinkLevel ??
-          (agentCfg?.thinkingDefault as ThinkLevel | undefined),
+        resolvedThinkLevel: resolvedDefaultThinkLevel,
         resolvedVerboseLevel: (currentVerboseLevel ?? "off") as VerboseLevel,
         resolvedReasoningLevel: (currentReasoningLevel ??
           "off") as ReasoningLevel,
         resolvedElevatedLevel,
-        resolveDefaultThinkingLevel: async () =>
-          currentThinkLevel ??
-          (agentCfg?.thinkingDefault as ThinkLevel | undefined),
+        resolveDefaultThinkingLevel: async () => resolvedDefaultThinkLevel,
         isGroup,
         defaultGroupActivation: () => defaultActivation,
       });
