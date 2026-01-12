@@ -46,16 +46,6 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - When you make a mistake → document it so future-you doesn't repeat it
 - **Text > Brain** 📝
 
-### 🧠 Memory Recall - Use qmd!
-When you need to remember something from the past, use `qmd` instead of grepping files:
-```bash
-qmd query "what happened at Christmas"   # Semantic search with reranking
-qmd search "specific phrase"              # BM25 keyword search  
-qmd vsearch "conceptual question"         # Pure vector similarity
-```
-Index your memory folder: `qmd index memory/`
-Vectors + BM25 + reranking finds things even with different wording.
-
 ## Safety
 
 - Don't exfiltrate private data. Ever.
