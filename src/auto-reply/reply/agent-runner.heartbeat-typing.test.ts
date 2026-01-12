@@ -206,7 +206,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
           text?: string;
         }) => Promise<void> | void;
       }) => {
-        await params.onReasoningStream?.({ text: "Reasoning:\nstep" });
+        await params.onReasoningStream?.({ text: "Reasoning:\n_step_" });
         await params.onPartialReply?.({ text: "hi" });
         return { payloads: [{ text: "final" }], meta: {} };
       },

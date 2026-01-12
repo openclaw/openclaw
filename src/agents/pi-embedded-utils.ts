@@ -37,7 +37,9 @@ export function extractAssistantThinking(msg: AssistantMessage): string {
 export function formatReasoningMessage(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return "";
-  return `Reasoning:\n${trimmed}`;
+  // Show reasoning in italics (cursive) for markdown-friendly surfaces (Discord, etc.).
+  // Keep the plain "Reasoning:" prefix so existing parsing/detection keeps working.
+  return `Reasoning:\n_${trimmed}_`;
 }
 
 type ThinkTaggedSplitBlock =
