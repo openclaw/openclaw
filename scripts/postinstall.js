@@ -2,6 +2,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+function detectPackageManager(ua = process.env.npm_config_user_agent ?? "") {
+  // Examples:
+  // - "pnpm/10.23.0 npm/? node/v22.21.1 darwin arm64"
+  // - "npm/10.9.4 node/v22.12.0 linux x64"
+  // - "bun/1.2.2"
+  const normalized = String(ua).trim();
+  if (normalized.startsWith("pnpm/")) return "pnpm";
+  if (normalized.startsWith("bun/")) return "bun";
+  if (normalized.startsWith("npm/")) return "npm";
+  if (normalized.startsWith("yarn/")) return "yarn";
+  return "unknown";
+}
+
+function shouldApplyPnpmPatchedDependenciesFallback(pm = detectPackageManager()) {
+  // pnpm already applies pnpm.patchedDependencies itself; re-applying would fail.
+  return pm !== "pnpm";
+}
+
 function getRepoRoot() {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..");
@@ -195,6 +213,10 @@ function main() {
   const repoRoot = getRepoRoot();
   process.chdir(repoRoot);
 
+  if (!shouldApplyPnpmPatchedDependenciesFallback()) {
+    return;
+  }
+
   const pkgPath = path.join(repoRoot, "package.json");
   const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
   const patched = pkg?.pnpm?.patchedDependencies ?? {};
@@ -230,5 +252,7 @@ export {
   applyPatchFile,
   applyPatchSet,
   applyPatchToFile,
+  detectPackageManager,
   parsePatch,
+  shouldApplyPnpmPatchedDependenciesFallback,
 };

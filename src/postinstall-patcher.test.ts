@@ -3,13 +3,32 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { applyPatchSet } from "../scripts/postinstall.js";
+import {
+  applyPatchSet,
+  detectPackageManager,
+  shouldApplyPnpmPatchedDependenciesFallback,
+} from "../scripts/postinstall.js";
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "clawdbot-patch-"));
 }
 
 describe("postinstall patcher", () => {
+  it("detects package manager from user agent", () => {
+    expect(detectPackageManager("pnpm/10.0.0 npm/? node/v22.0.0")).toBe("pnpm");
+    expect(detectPackageManager("npm/10.9.0 node/v22.0.0")).toBe("npm");
+    expect(detectPackageManager("bun/1.2.2")).toBe("bun");
+    expect(detectPackageManager("yarn/4.0.0 npm/? node/v22.0.0")).toBe("yarn");
+    expect(detectPackageManager("")).toBe("unknown");
+  });
+
+  it("skips pnpm.patchedDependencies fallback for pnpm", () => {
+    expect(shouldApplyPnpmPatchedDependenciesFallback("pnpm")).toBe(false);
+    expect(shouldApplyPnpmPatchedDependenciesFallback("npm")).toBe(true);
+    expect(shouldApplyPnpmPatchedDependenciesFallback("bun")).toBe(true);
+    expect(shouldApplyPnpmPatchedDependenciesFallback("unknown")).toBe(true);
+  });
+
   it("applies a simple patch", () => {
     const dir = makeTempDir();
     const target = path.join(dir, "lib");
