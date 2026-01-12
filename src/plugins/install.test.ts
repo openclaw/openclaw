@@ -14,6 +14,38 @@ function makeTempDir() {
   return dir;
 }
 
+function resolveNpmCliJs() {
+  const fromEnv = process.env.npm_execpath;
+  if (
+    fromEnv?.includes(`${path.sep}npm${path.sep}`) &&
+    fromEnv?.endsWith("npm-cli.js")
+  ) {
+    return fromEnv ?? null;
+  }
+
+  const fromNodeDir = path.join(
+    path.dirname(process.execPath),
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  if (fs.existsSync(fromNodeDir)) return fromNodeDir;
+
+  const fromLibNodeModules = path.resolve(
+    path.dirname(process.execPath),
+    "..",
+    "lib",
+    "node_modules",
+    "npm",
+    "bin",
+    "npm-cli.js",
+  );
+  if (fs.existsSync(fromLibNodeModules)) return fromLibNodeModules;
+
+  return null;
+}
+
 function packToArchive({
   pkgDir,
   outDir,
@@ -23,13 +55,13 @@ function packToArchive({
   outDir: string;
   outName: string;
 }) {
-  const res = spawnSync(
-    "npm",
-    ["pack", "--silent", "--pack-destination", outDir, pkgDir],
-    {
-      encoding: "utf-8",
-    },
-  );
+  const npmCli = resolveNpmCliJs();
+  const cmd = npmCli ? process.execPath : "npm";
+  const args = npmCli
+    ? [npmCli, "pack", "--silent", "--pack-destination", outDir, pkgDir]
+    : ["pack", "--silent", "--pack-destination", outDir, pkgDir];
+
+  const res = spawnSync(cmd, args, { encoding: "utf-8" });
   expect(res.status).toBe(0);
   if (res.status !== 0) {
     throw new Error(
