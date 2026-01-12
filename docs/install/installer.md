@@ -30,6 +30,13 @@ What it does (high level):
   - `git`: clone/build a source checkout and install a wrapper script
 - On Linux: avoid global npm permission errors by switching npm’s prefix to `~/.npm-global` when needed.
 - If upgrading an existing install: runs `clawdbot doctor --non-interactive` (best effort).
+- Mitigates `sharp` native install gotchas by defaulting `SHARP_IGNORE_GLOBAL_LIBVIPS=1` (avoids building against system libvips).
+
+If you *want* `sharp` to link against a globally-installed libvips (or you’re debugging), set:
+
+```bash
+SHARP_IGNORE_GLOBAL_LIBVIPS=0 curl -fsSL https://clawd.bot/install.sh | bash
+```
 
 ### Discoverability / “git install” prompt
 
@@ -69,4 +76,3 @@ curl -fsSL https://clawd.bot/install-cli.sh | bash -s -- --help
 Clawdbot’s `postinstall` script includes a builtin JS patcher that can apply `pnpm.patchedDependencies` patches even when the package manager doesn’t support them (notably Bun). pnpm itself already applies `pnpm.patchedDependencies`, so the fallback skips pnpm installs to avoid double-applying.
 
 See: [Bun notes](/install/bun).
-

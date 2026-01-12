@@ -67,6 +67,7 @@ Equivalent env vars (useful for automation):
 - `CLAWDBOT_NO_PROMPT=1`
 - `CLAWDBOT_DRY_RUN=1`
 - `CLAWDBOT_NO_ONBOARD=1`
+- `SHARP_IGNORE_GLOBAL_LIBVIPS=0|1` (default: `1`; avoids `sharp` building against system libvips)
 
 ## Install from GitHub (from source)
 
@@ -94,6 +95,12 @@ If you already have Node:
 
 ```bash
 npm install -g clawdbot@latest
+```
+
+If you have libvips installed globally (common on macOS via Homebrew) and `sharp` fails to install, force prebuilt binaries:
+
+```bash
+SHARP_IGNORE_GLOBAL_LIBVIPS=1 npm install -g clawdbot@latest
 ```
 
 Or:
