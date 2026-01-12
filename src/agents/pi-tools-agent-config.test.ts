@@ -31,6 +31,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).toContain("write");
     expect(toolNames).not.toContain("exec");
+    expect(toolNames).not.toContain("apply_patch");
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
@@ -65,6 +66,32 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("exec");
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("apply_patch");
+  });
+
+  it("should allow apply_patch when exec is allow-listed and applyPatch is enabled", () => {
+    const cfg: ClawdbotConfig = {
+      tools: {
+        allow: ["read", "exec"],
+        exec: {
+          applyPatch: { enabled: true },
+        },
+      },
+    };
+
+    const tools = createClawdbotCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test",
+      agentDir: "/tmp/agent",
+      modelProvider: "openai",
+      modelId: "gpt-5.2",
+    });
+
+    const toolNames = tools.map((t) => t.name);
+    expect(toolNames).toContain("read");
+    expect(toolNames).toContain("exec");
+    expect(toolNames).toContain("apply_patch");
   });
 
   it("should apply agent-specific tool policy", () => {
@@ -98,6 +125,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("read");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("write");
+    expect(toolNames).not.toContain("apply_patch");
     expect(toolNames).not.toContain("edit");
   });
 
@@ -133,6 +161,7 @@ describe("Agent-specific tool filtering", () => {
     expect(mainToolNames).toContain("exec");
     expect(mainToolNames).toContain("write");
     expect(mainToolNames).toContain("edit");
+    expect(mainToolNames).not.toContain("apply_patch");
 
     // family agent: restricted
     const familyTools = createClawdbotCodingTools({
@@ -146,6 +175,7 @@ describe("Agent-specific tool filtering", () => {
     expect(familyToolNames).not.toContain("exec");
     expect(familyToolNames).not.toContain("write");
     expect(familyToolNames).not.toContain("edit");
+    expect(familyToolNames).not.toContain("apply_patch");
   });
 
   it("should prefer agent-specific tool policy over global", () => {
@@ -178,6 +208,7 @@ describe("Agent-specific tool filtering", () => {
     expect(toolNames).toContain("browser");
     expect(toolNames).not.toContain("exec");
     expect(toolNames).not.toContain("process");
+    expect(toolNames).not.toContain("apply_patch");
   });
 
   it("should work with sandbox tools filtering", () => {

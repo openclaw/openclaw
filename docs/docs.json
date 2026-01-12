@@ -701,6 +701,7 @@
           "tools",
           "plugin",
           "tools/exec",
+          "tools/apply-patch",
           "tools/elevated",
           "tools/browser",
           "tools/browser-linux-troubleshooting",

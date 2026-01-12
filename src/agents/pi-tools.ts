@@ -14,6 +14,7 @@ import {
   resolveAgentConfig,
   resolveAgentIdFromSessionKey,
 } from "./agent-scope.js";
+import { createApplyPatchTool } from "./apply-patch.js";
 import {
   createExecTool,
   createProcessTool,
@@ -292,6 +293,7 @@ function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
 
 const TOOL_NAME_ALIASES: Record<string, string> = {
   bash: "exec",
+  "apply-patch": "apply_patch",
 };
 
 function normalizeToolName(name: string) {
@@ -302,6 +304,35 @@ function normalizeToolName(name: string) {
 function normalizeToolNames(list?: string[]) {
   if (!list) return [];
   return list.map(normalizeToolName).filter(Boolean);
+}
+
+function isOpenAIProvider(provider?: string) {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "openai" || normalized === "openai-codex";
+}
+
+function isApplyPatchAllowedForModel(params: {
+  modelProvider?: string;
+  modelId?: string;
+  allowModels?: string[];
+}) {
+  const allowModels = Array.isArray(params.allowModels)
+    ? params.allowModels
+    : [];
+  if (allowModels.length === 0) return true;
+  const modelId = params.modelId?.trim();
+  if (!modelId) return false;
+  const normalizedModelId = modelId.toLowerCase();
+  const provider = params.modelProvider?.trim().toLowerCase();
+  const normalizedFull =
+    provider && !normalizedModelId.includes("/")
+      ? `${provider}/${normalizedModelId}`
+      : normalizedModelId;
+  return allowModels.some((entry) => {
+    const normalized = entry.trim().toLowerCase();
+    if (!normalized) return false;
+    return normalized === normalizedModelId || normalized === normalizedFull;
+  });
 }
 
 const DEFAULT_SUBAGENT_TOOL_DENY = [
@@ -321,20 +352,30 @@ function resolveSubagentToolPolicy(cfg?: ClawdbotConfig): SandboxToolPolicy {
   return { allow, deny };
 }
 
+function isToolAllowedByPolicyName(
+  name: string,
+  policy?: SandboxToolPolicy,
+): boolean {
+  if (!policy) return true;
+  const deny = new Set(normalizeToolNames(policy.deny));
+  const allowRaw = normalizeToolNames(policy.allow);
+  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
+  const normalized = normalizeToolName(name);
+  if (deny.has(normalized)) return false;
+  if (allow) {
+    if (allow.has(normalized)) return true;
+    if (normalized === "apply_patch" && allow.has("exec")) return true;
+    return false;
+  }
+  return true;
+}
+
 function filterToolsByPolicy(
   tools: AnyAgentTool[],
   policy?: SandboxToolPolicy,
 ) {
   if (!policy) return tools;
-  const deny = new Set(normalizeToolNames(policy.deny));
-  const allowRaw = normalizeToolNames(policy.allow);
-  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
-  return tools.filter((tool) => {
-    const name = tool.name.toLowerCase();
-    if (deny.has(name)) return false;
-    if (allow) return allow.has(name);
-    return true;
-  });
+  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
 function resolveEffectiveToolPolicy(params: {
@@ -359,14 +400,7 @@ function resolveEffectiveToolPolicy(params: {
 }
 
 function isToolAllowedByPolicy(name: string, policy?: SandboxToolPolicy) {
-  if (!policy) return true;
-  const deny = new Set(normalizeToolNames(policy.deny));
-  const allowRaw = normalizeToolNames(policy.allow);
-  const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
-  const normalized = normalizeToolName(name);
-  if (deny.has(normalized)) return false;
-  if (allow) return allow.has(normalized);
-  return true;
+  return isToolAllowedByPolicyName(name, policy);
 }
 
 function isToolAllowedByPolicies(
@@ -490,6 +524,8 @@ export function createClawdbotCodingTools(options?: {
    * Example: "anthropic", "openai", "google", "openai-codex".
    */
   modelProvider?: string;
+  /** Model id for the current provider (used for model-specific tool gating). */
+  modelId?: string;
   /**
    * Auth mode for the current provider. We only need this for Anthropic OAuth
    * tool-name blocking quirks.
@@ -524,6 +560,15 @@ export function createClawdbotCodingTools(options?: {
   const sandboxRoot = sandbox?.workspaceDir;
   const allowWorkspaceWrites = sandbox?.workspaceAccess !== "ro";
   const workspaceRoot = options?.workspaceDir ?? process.cwd();
+  const applyPatchConfig = options?.config?.tools?.exec?.applyPatch;
+  const applyPatchEnabled =
+    !!applyPatchConfig?.enabled &&
+    isOpenAIProvider(options?.modelProvider) &&
+    isApplyPatchAllowedForModel({
+      modelProvider: options?.modelProvider,
+      modelId: options?.modelId,
+      allowModels: applyPatchConfig?.allowModels,
+    });
 
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
@@ -562,6 +607,14 @@ export function createClawdbotCodingTools(options?: {
     cleanupMs: options?.exec?.cleanupMs,
     scopeKey,
   });
+  const applyPatchTool =
+    !applyPatchEnabled || (sandboxRoot && !allowWorkspaceWrites)
+      ? null
+      : createApplyPatchTool({
+          cwd: sandboxRoot ?? workspaceRoot,
+          sandboxRoot:
+            sandboxRoot && allowWorkspaceWrites ? sandboxRoot : undefined,
+        });
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -572,6 +625,7 @@ export function createClawdbotCodingTools(options?: {
           ]
         : []
       : []),
+    ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
     execTool as unknown as AnyAgentTool,
     processTool as unknown as AnyAgentTool,
     // Provider docking: include provider-defined agent tools (login, etc.).

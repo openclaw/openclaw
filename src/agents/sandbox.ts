@@ -171,6 +171,7 @@ const DEFAULT_TOOL_ALLOW = [
   "read",
   "write",
   "edit",
+  "apply_patch",
   "sessions_list",
   "sessions_history",
   "sessions_send",

@@ -1018,6 +1018,16 @@ export type ToolsConfig = {
     timeoutSec?: number;
     /** How long to keep finished sessions in memory (ms). */
     cleanupMs?: number;
+    /** apply_patch subtool configuration (experimental). */
+    applyPatch?: {
+      /** Enable apply_patch for OpenAI models (default: false). */
+      enabled?: boolean;
+      /**
+       * Optional allowlist of model ids that can use apply_patch.
+       * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+       */
+      allowModels?: string[];
+    };
   };
   /** @deprecated Use tools.exec. */
   bash?: {

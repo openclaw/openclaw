@@ -17,7 +17,7 @@ This is not a perfect security boundary, but it materially limits filesystem
 and process access when the model does something dumb.
 
 ## What gets sandboxed
-- Tool execution (`exec`, `read`, `write`, `edit`, `process`, etc.).
+- Tool execution (`exec`, `read`, `write`, `edit`, `apply_patch`, `process`, etc.).
 - Optional sandboxed browser (`agents.defaults.sandbox.browser`).
   - By default, the sandbox browser auto-starts (ensures CDP is reachable) when the browser tool needs it.
     Configure via `agents.defaults.sandbox.browser.autoStart` and `agents.defaults.sandbox.browser.autoStartTimeoutMs`.
@@ -47,7 +47,7 @@ Group/channel sessions use their own keys, so they count as non-main and will be
 ## Workspace access
 `agents.defaults.sandbox.workspaceAccess` controls **what the sandbox can see**:
 - `"none"` (default): tools see a sandbox workspace under `~/.clawdbot/sandboxes`.
-- `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`).
+- `"ro"`: mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).
 - `"rw"`: mounts the agent workspace read/write at `/workspace`.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).

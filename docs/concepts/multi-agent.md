@@ -217,7 +217,7 @@ Starting with v2026.1.6, each agent can have its own sandbox and tool restrictio
         },
         tools: {
           allow: ["read"],                    // Only read tool
-          deny: ["exec", "write", "edit"],    // Deny others
+          deny: ["exec", "write", "edit", "apply_patch"],    // Deny others
         },
       },
     ],

@@ -50,6 +50,11 @@
       "title": "Edit",
       "detailKeys": ["path"]
     },
+    "apply_patch": {
+      "emoji": "🩹",
+      "title": "Apply Patch",
+      "detailKeys": []
+    },
     "attach": {
       "emoji": "📎",
       "title": "Attach",

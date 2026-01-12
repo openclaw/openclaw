@@ -4,6 +4,7 @@ import path from "node:path";
 
 import sharp from "sharp";
 import { describe, expect, it } from "vitest";
+import type { ClawdbotConfig } from "../config/config.js";
 import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
@@ -153,10 +154,59 @@ describe("createClawdbotCodingTools", () => {
     }
   });
 
-  it("includes exec and process tools", () => {
+  it("includes exec and process tools by default", () => {
     const tools = createClawdbotCodingTools();
     expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "process")).toBe(true);
+    expect(tools.some((tool) => tool.name === "apply_patch")).toBe(false);
+  });
+
+  it("gates apply_patch behind tools.exec.applyPatch for OpenAI models", () => {
+    const config: ClawdbotConfig = {
+      tools: {
+        exec: {
+          applyPatch: { enabled: true },
+        },
+      },
+    };
+    const openAiTools = createClawdbotCodingTools({
+      config,
+      modelProvider: "openai",
+      modelId: "gpt-5.2",
+    });
+    expect(openAiTools.some((tool) => tool.name === "apply_patch")).toBe(true);
+
+    const anthropicTools = createClawdbotCodingTools({
+      config,
+      modelProvider: "anthropic",
+      modelId: "claude-opus-4-5",
+    });
+    expect(anthropicTools.some((tool) => tool.name === "apply_patch")).toBe(
+      false,
+    );
+  });
+
+  it("respects apply_patch allowModels", () => {
+    const config: ClawdbotConfig = {
+      tools: {
+        exec: {
+          applyPatch: { enabled: true, allowModels: ["gpt-5.2"] },
+        },
+      },
+    };
+    const allowed = createClawdbotCodingTools({
+      config,
+      modelProvider: "openai",
+      modelId: "gpt-5.2",
+    });
+    expect(allowed.some((tool) => tool.name === "apply_patch")).toBe(true);
+
+    const denied = createClawdbotCodingTools({
+      config,
+      modelProvider: "openai",
+      modelId: "gpt-5-mini",
+    });
+    expect(denied.some((tool) => tool.name === "apply_patch")).toBe(false);
   });
 
   it("keeps canonical tool names for Anthropic OAuth (pi-ai remaps on the wire)", () => {
@@ -169,6 +219,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
+    expect(names.has("apply_patch")).toBe(false);
   });
 
   it("provides top-level object schemas for all tools", () => {
@@ -212,6 +263,7 @@ describe("createClawdbotCodingTools", () => {
     expect(names.has("read")).toBe(true);
     expect(names.has("exec")).toBe(true);
     expect(names.has("process")).toBe(true);
+    expect(names.has("apply_patch")).toBe(false);
   });
 
   it("supports allow-only sub-agent tool policy", () => {

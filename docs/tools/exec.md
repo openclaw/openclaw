@@ -33,3 +33,23 @@ Background + poll:
 {"tool":"exec","command":"npm run build","yieldMs":1000}
 {"tool":"process","action":"poll","sessionId":"<id>"}
 ```
+
+## apply_patch (experimental)
+
+`apply_patch` is a subtool of `exec` for structured multi-file edits.
+Enable it explicitly:
+
+```json5
+{
+  tools: {
+    exec: {
+      applyPatch: { enabled: true, allowModels: ["gpt-5.2"] }
+    }
+  }
+}
+```
+
+Notes:
+- Only available for OpenAI/OpenAI Codex models.
+- Tool policy still applies; `allow: ["exec"]` implicitly allows `apply_patch`.
+- Config lives under `tools.exec.applyPatch` (no `tools.bash` alias).

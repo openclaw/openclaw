@@ -31,6 +31,10 @@ alongside tools (for example, the voice-call plugin).
 
 ## Tool inventory
 
+### `apply_patch`
+Apply structured patches across one or more files. Use for multi-hunk edits.
+Experimental: enable via `tools.exec.applyPatch.enabled` (OpenAI models only).
+
 ### `exec`
 Run shell commands in the workspace.
 

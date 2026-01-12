@@ -1110,6 +1110,7 @@ export async function compactEmbeddedPiSession(params: {
           config: params.config,
           abortSignal: runAbortController.signal,
           modelProvider: model.provider,
+          modelId,
           modelAuthMode: resolveModelAuthMode(model.provider, params.config),
           // No currentChannelId/currentThreadTs for compaction - not in message context
         });
@@ -1524,6 +1525,7 @@ export async function runEmbeddedPiAgent(params: {
             config: params.config,
             abortSignal: runAbortController.signal,
             modelProvider: model.provider,
+            modelId,
             modelAuthMode: resolveModelAuthMode(model.provider, params.config),
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,

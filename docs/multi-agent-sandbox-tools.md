@@ -48,7 +48,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
         },
         "tools": {
           "allow": ["read"],
-          "deny": ["exec", "write", "edit", "process", "browser"]
+          "deny": ["exec", "write", "edit", "apply_patch", "process", "browser"]
         }
       }
     ]
@@ -95,7 +95,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
           "workspaceRoot": "/tmp/work-sandboxes"
         },
         "tools": {
-          "allow": ["read", "write", "exec"],
+          "allow": ["read", "write", "apply_patch", "exec"],
           "deny": ["browser", "gateway", "discord"]
         }
       }
@@ -134,7 +134,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
         },
         "tools": {
           "allow": ["read"],
-          "deny": ["exec", "write", "edit"]
+          "deny": ["exec", "write", "edit", "apply_patch"]
         }
       }
     ]
@@ -200,7 +200,7 @@ Mitigation patterns:
   "tools": {
     "sandbox": {
       "tools": {
-        "allow": ["read", "write", "exec"],
+        "allow": ["read", "write", "apply_patch", "exec"],
         "deny": []
       }
     }
@@ -235,7 +235,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 {
   "tools": {
     "allow": ["read"],
-    "deny": ["exec", "write", "edit", "process"]
+    "deny": ["exec", "write", "edit", "apply_patch", "process"]
   }
 }
 ```
@@ -245,7 +245,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 {
   "tools": {
     "allow": ["read", "exec", "process"],
-    "deny": ["write", "edit", "browser", "gateway"]
+    "deny": ["write", "edit", "apply_patch", "browser", "gateway"]
   }
 }
 ```
@@ -255,7 +255,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 {
   "tools": {
     "allow": ["sessions_list", "sessions_send", "sessions_history", "session_status"],
-    "deny": ["exec", "write", "edit", "read", "browser"]
+    "deny": ["exec", "write", "edit", "apply_patch", "read", "browser"]
   }
 }
 ```

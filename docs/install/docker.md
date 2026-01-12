@@ -246,7 +246,7 @@ precedence, and troubleshooting.
 - Image: `clawdbot-sandbox:bookworm-slim`
 - One container per agent
 - Agent workspace access: `workspaceAccess: "none"` (default) uses `~/.clawdbot/sandboxes`
-  - `"ro"` keeps the sandbox workspace at `/workspace` and mounts the agent workspace read-only at `/agent` (disables `write`/`edit`)
+  - `"ro"` keeps the sandbox workspace at `/workspace` and mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`)
   - `"rw"` mounts the agent workspace read/write at `/workspace`
 - Auto-prune: idle > 24h OR age > 7d
 - Network: `none` by default (explicitly opt-in if you need egress)
@@ -424,7 +424,7 @@ Example:
 
 ### Security notes
 
-- Hard wall only applies to **tools** (exec/read/write/edit).  
+- Hard wall only applies to **tools** (exec/read/write/edit/apply_patch).  
 - Host-only tools like browser/camera/canvas are blocked by default.  
 - Allowing `browser` in sandbox **breaks isolation** (browser runs on host).
 
