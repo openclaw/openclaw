@@ -472,9 +472,23 @@ describe("gateway server sessions", () => {
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
 
-    await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:ops:work": {
+            sessionId: "sess-ops-main",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     const { ws } = await startServerWithClient();
+    await connectOk(ws);
     const resolved = await rpcReq<{ ok: true; key: string }>(
       ws,
       "sessions.resolve",
