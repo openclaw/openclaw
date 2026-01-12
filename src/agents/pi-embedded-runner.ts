@@ -117,11 +117,8 @@ import { makeToolPrunablePredicate } from "./pi-extensions/context-pruning/tools
 import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 import { createClawdbotCodingTools } from "./pi-tools.js";
 import { resolveSandboxContext } from "./sandbox.js";
+import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
-import {
-  guardSessionManager,
-  type GuardedSessionManager,
-} from "./session-tool-result-guard-wrapper.js";
 import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
@@ -1672,8 +1669,7 @@ export async function runEmbeddedPiAgent(params: {
             model,
           });
 
-          const toolResultGuard =
-            installSessionToolResultGuard(sessionManager);
+          const toolResultGuard = guardSessionManager(sessionManager);
 
           const { builtInTools, customTools } = splitSdkTools({
             tools,
@@ -1727,7 +1723,7 @@ export async function runEmbeddedPiAgent(params: {
               session.agent.replaceMessages(limited);
             }
           } catch (err) {
-            toolResultGuard.flushPendingToolResults();
+            toolResultGuard.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             throw err;
@@ -1759,7 +1755,7 @@ export async function runEmbeddedPiAgent(params: {
               enforceFinalTag: params.enforceFinalTag,
             });
           } catch (err) {
-            toolResultGuard.flushPendingToolResults();
+            toolResultGuard.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             throw err;
@@ -1857,7 +1853,7 @@ export async function runEmbeddedPiAgent(params: {
               ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
               notifyEmbeddedRunEnded(params.sessionId);
             }
-            sessionManager.flushPendingToolResults?.();
+            toolResultGuard.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             params.abortSignal?.removeEventListener?.("abort", onAbort);

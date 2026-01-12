@@ -14,10 +14,7 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 import { isGoogleModelApi } from "../pi-embedded-helpers.js";
-import {
-  repairToolUseResultPairing,
-  sanitizeToolUseResultPairing,
-} from "../session-transcript-repair.js";
+import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 
 export default function transcriptSanitizeExtension(api: ExtensionAPI): void {

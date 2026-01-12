@@ -94,7 +94,8 @@ export function installSessionToolResultGuard(sessionManager: SessionManager): {
   };
 
   // Monkey-patch appendMessage with our guarded version.
-  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+  sessionManager.appendMessage =
+    guardedAppend as SessionManager["appendMessage"];
 
   return {
     flushPendingToolResults,

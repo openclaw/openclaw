@@ -12,16 +12,13 @@ import {
 } from "../auto-reply/thinking.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { formatSandboxToolPolicyBlockedMessage } from "./sandbox.js";
+import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 import {
   isValidCloudCodeAssistToolId,
   sanitizeToolCallId,
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "./tool-call-id.js";
 import { sanitizeContentBlocksImages } from "./tool-images.js";
-import {
-  repairToolUseResultPairing,
-  sanitizeToolUseResultPairing,
-} from "./session-transcript-repair.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export type EmbeddedContextFile = { path: string; content: string };

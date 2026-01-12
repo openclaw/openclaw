@@ -1,7 +1,6 @@
-import { describe, expect, it } from "vitest";
-
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
+import { describe, expect, it } from "vitest";
 
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
@@ -34,9 +33,10 @@ describe("guardSessionManager integration", () => {
       "assistant",
     ]);
     expect((messages[1] as { toolCallId?: string }).toolCallId).toBe("call_1");
-    expect(
-      sanitizeToolUseResultPairing(messages).map((m) => m.role),
-    ).toEqual(["assistant", "toolResult", "assistant"]);
+    expect(sanitizeToolUseResultPairing(messages).map((m) => m.role)).toEqual([
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
   });
 });
-

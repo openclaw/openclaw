@@ -14,7 +14,10 @@ export type GuardedSessionManager = SessionManager & {
 export function guardSessionManager(
   sessionManager: SessionManager,
 ): GuardedSessionManager {
-  if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
+  if (
+    typeof (sessionManager as GuardedSessionManager).flushPendingToolResults ===
+    "function"
+  ) {
     return sessionManager as GuardedSessionManager;
   }
 
@@ -23,4 +26,3 @@ export function guardSessionManager(
     guard.flushPendingToolResults;
   return sessionManager as GuardedSessionManager;
 }
-

@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import { describe, expect, it } from "vitest";
 
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
@@ -110,9 +110,7 @@ describe("installSessionToolResultGuard", () => {
       "toolResult", // synthetic for call_b
       "assistant", // text
     ]);
-    expect(
-      (messages[2] as { toolCallId?: string }).toolCallId,
-    ).toBe("call_b");
+    expect((messages[2] as { toolCallId?: string }).toolCallId).toBe("call_b");
     expect(guard.getPendingIds()).toEqual([]);
   });
 
