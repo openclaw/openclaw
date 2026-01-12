@@ -80,14 +80,61 @@ describe("models config", () => {
         const parsed = JSON.parse(raw) as {
           providers: Record<
             string,
-            { baseUrl?: string; models?: Array<{ id: string }> }
+            { baseUrl?: string; apiKey?: string; models?: Array<{ id: string }> }
           >;
         };
         expect(parsed.providers.minimax?.baseUrl).toBe(
           "https://api.minimax.io/anthropic",
         );
+        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-M2.1");
+      } finally {
+        if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
+        else process.env.MINIMAX_API_KEY = prevKey;
+      }
+    });
+  });
+
+  it("fills missing provider.apiKey from env var name when models exist", async () => {
+    await withTempHome(async () => {
+      vi.resetModules();
+      const prevKey = process.env.MINIMAX_API_KEY;
+      process.env.MINIMAX_API_KEY = "sk-minimax-test";
+      try {
+        const { ensureClawdbotModelsJson } = await import("./models-config.js");
+        const { resolveClawdbotAgentDir } = await import("./agent-paths.js");
+
+        const cfg: ClawdbotConfig = {
+          models: {
+            providers: {
+              minimax: {
+                baseUrl: "https://api.minimax.io/anthropic",
+                api: "anthropic-messages",
+                models: [
+                  {
+                    id: "MiniMax-M2.1",
+                    name: "MiniMax M2.1",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureClawdbotModelsJson(cfg);
+
+        const modelPath = path.join(resolveClawdbotAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<string, { apiKey?: string }>;
+        };
+        expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
       } finally {
         if (prevKey === undefined) delete process.env.MINIMAX_API_KEY;
         else process.env.MINIMAX_API_KEY = prevKey;
