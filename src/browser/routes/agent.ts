@@ -567,23 +567,22 @@ export function registerBrowserAgentRoutes(
         ? Number(req.query.maxChars)
         : undefined;
     const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
-    const maxChars = Number.isFinite(maxCharsRaw) ? maxCharsRaw : undefined;
+    const maxChars =
+      typeof maxCharsRaw === "number" &&
+      Number.isFinite(maxCharsRaw) &&
+      maxCharsRaw > 0
+        ? Math.floor(maxCharsRaw)
+        : undefined;
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       if (format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");
         if (!pw) return;
-        const resolvedMaxChars =
-          typeof maxChars === "number" && maxChars > 0
-            ? maxChars
-            : typeof limit === "number" && limit > 0
-              ? limit
-              : undefined;
         const snap = await pw.snapshotAiViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
-          ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
+          ...(maxChars ? { maxChars } : {}),
         });
         return res.json({
           ok: true,

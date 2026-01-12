@@ -44,6 +44,8 @@ const BROWSER_ACT_KINDS = [
 
 type BrowserActKind = (typeof BROWSER_ACT_KINDS)[number];
 
+const DEFAULT_AI_SNAPSHOT_MAX_CHARS = 80_000;
+
 // NOTE: Using a flattened object schema instead of Type.Union([Type.Object(...), ...])
 // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
 // The discriminator (kind) determines which properties are relevant; runtime validates.
@@ -326,14 +328,19 @@ export function createBrowserTool(opts?: {
               : undefined;
           const maxChars =
             typeof params.maxChars === "number" &&
-            Number.isFinite(params.maxChars)
-              ? params.maxChars
+            Number.isFinite(params.maxChars) &&
+            params.maxChars > 0
+              ? Math.floor(params.maxChars)
+              : undefined;
+          const resolvedMaxChars =
+            format === "ai"
+              ? (maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS)
               : undefined;
           const snapshot = await browserSnapshot(baseUrl, {
             format,
             targetId,
             limit,
-            maxChars,
+            ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
             profile,
           });
           if (snapshot.format === "ai") {

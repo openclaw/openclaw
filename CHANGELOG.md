@@ -53,6 +53,7 @@
 
 ### Fixes
 - Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible `/anthropic` endpoint by default (keep `minimax-api` as a legacy alias).
+- Agents/Browser: cap Playwright AI snapshots for tool calls (maxChars); CLI snapshots remain full. (#763) — thanks @thesash.
 - Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.
 - CLI: fix guardCancel typing for configure prompts. (#769) — thanks @steipete.
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging; preserve close codes.
