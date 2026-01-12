@@ -134,9 +134,14 @@ type BrowserOpenCommand = {
   argv: string[] | null;
   reason?: string;
   command?: string;
+  /**
+   * Whether the URL must be wrapped in quotes when appended to argv.
+   * Needed for Windows `cmd /c start` where `&` splits commands.
+   */
+  quoteUrl?: boolean;
 };
 
-async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
+export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   const platform = process.platform;
   const hasDisplay = Boolean(
     process.env.DISPLAY || process.env.WAYLAND_DISPLAY,
@@ -151,7 +156,11 @@ async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
   }
 
   if (platform === "win32") {
-    return { argv: ["cmd", "/c", "start", ""], command: "cmd" };
+    return {
+      argv: ["cmd", "/c", "start", ""],
+      command: "cmd",
+      quoteUrl: true,
+    };
   }
 
   if (platform === "darwin") {
@@ -223,7 +232,7 @@ function resolveSshTargetHint(): string {
 export async function openUrl(url: string): Promise<boolean> {
   const resolved = await resolveBrowserOpenCommand();
   if (!resolved.argv) return false;
-  const command = [...resolved.argv, url];
+  const command = [...resolved.argv, resolved.quoteUrl ? `"${url}"` : url];
   try {
     await runCommandWithTimeout(command, { timeoutMs: 5_000 });
     return true;
