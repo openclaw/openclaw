@@ -44,11 +44,13 @@ export function createClawdbotTools(options?: {
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
 }): AnyAgentTool[] {
-  const imageTool = createImageTool({
-    config: options?.config,
-    agentDir: options?.agentDir,
-    sandboxRoot: options?.sandboxRoot,
-  });
+  const imageTool = options?.agentDir?.trim()
+    ? createImageTool({
+        config: options?.config,
+        agentDir: options.agentDir,
+        sandboxRoot: options?.sandboxRoot,
+      })
+    : null;
   const memorySearchTool = createMemorySearchTool({
     config: options?.config,
     agentSessionKey: options?.agentSessionKey,

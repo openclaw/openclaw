@@ -703,45 +703,49 @@ describe("runEmbeddedPiAgent", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("persists the first user message before assistant output", async () => {
-    const agentDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-agent-"),
-    );
-    const workspaceDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "clawdbot-workspace-"),
-    );
-    const sessionFile = path.join(workspaceDir, "session.jsonl");
+  it(
+    "persists the first user message before assistant output",
+    { timeout: 15_000 },
+    async () => {
+      const agentDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "clawdbot-agent-"),
+      );
+      const workspaceDir = await fs.mkdtemp(
+        path.join(os.tmpdir(), "clawdbot-workspace-"),
+      );
+      const sessionFile = path.join(workspaceDir, "session.jsonl");
 
-    const cfg = makeOpenAiConfig(["mock-1"]);
-    await ensureModels(cfg, agentDir);
+      const cfg = makeOpenAiConfig(["mock-1"]);
+      await ensureModels(cfg, agentDir);
 
-    await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey: "agent:main:main",
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "hello",
-      provider: "openai",
-      model: "mock-1",
-      timeoutMs: 5_000,
-      agentDir,
-    });
+      await runEmbeddedPiAgent({
+        sessionId: "session:test",
+        sessionKey: "agent:main:main",
+        sessionFile,
+        workspaceDir,
+        config: cfg,
+        prompt: "hello",
+        provider: "openai",
+        model: "mock-1",
+        timeoutMs: 5_000,
+        agentDir,
+      });
 
-    const messages = await readSessionMessages(sessionFile);
-    const firstUserIndex = messages.findIndex(
-      (message) =>
-        message?.role === "user" &&
-        textFromContent(message.content) === "hello",
-    );
-    const firstAssistantIndex = messages.findIndex(
-      (message) => message?.role === "assistant",
-    );
-    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-    if (firstAssistantIndex !== -1) {
-      expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
-    }
-  }, 15_000);
+      const messages = await readSessionMessages(sessionFile);
+      const firstUserIndex = messages.findIndex(
+        (message) =>
+          message?.role === "user" &&
+          textFromContent(message.content) === "hello",
+      );
+      const firstAssistantIndex = messages.findIndex(
+        (message) => message?.role === "assistant",
+      );
+      expect(firstUserIndex).toBeGreaterThanOrEqual(0);
+      if (firstAssistantIndex !== -1) {
+        expect(firstUserIndex).toBeLessThan(firstAssistantIndex);
+      }
+    },
+  );
 
   it("persists the user message when prompt fails before assistant output", async () => {
     const agentDir = await fs.mkdtemp(
