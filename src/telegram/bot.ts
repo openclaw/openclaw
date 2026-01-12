@@ -932,18 +932,24 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     ? listNativeCommandSpecsForConfig(cfg)
     : [];
   if (nativeCommands.length > 0) {
-    bot.api
-      .setMyCommands(
-        nativeCommands.map((command) => ({
-          command: command.name,
-          description: command.description,
-        })),
-      )
-      .catch((err) => {
-        runtime.error?.(
-          danger(`telegram setMyCommands failed: ${String(err)}`),
-        );
-      });
+    if (typeof bot.api.setMyCommands === "function") {
+      bot.api
+        .setMyCommands(
+          nativeCommands.map((command) => ({
+            command: command.name,
+            description: command.description,
+          })),
+        )
+        .catch((err) => {
+          runtime.error?.(
+            danger(`telegram setMyCommands failed: ${String(err)}`),
+          );
+        });
+    } else {
+      runtime.info?.(
+        "telegram: setMyCommands not available on api mock; skipping",
+      );
+    }
 
     for (const command of nativeCommands) {
       bot.command(command.name, async (ctx) => {
