@@ -28,6 +28,10 @@ describe("image tool implicit imageModel config", () => {
     vi.stubEnv("ANTHROPIC_API_KEY", "");
     vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
     vi.stubEnv("MINIMAX_API_KEY", "");
+    // Avoid implicit Copilot provider discovery hitting the network in tests.
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
   });
 
   afterEach(() => {
@@ -216,6 +220,9 @@ describe("image tool MiniMax VLM routing", () => {
 
   beforeEach(() => {
     vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
   });
 
   afterEach(() => {
