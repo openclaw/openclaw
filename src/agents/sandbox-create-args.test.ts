@@ -91,4 +91,70 @@ describe("buildSandboxCreateArgs", () => {
       expect.arrayContaining(["nofile=1024:2048", "nproc=128", "core=0"]),
     );
   });
+
+  it("emits -v flags for custom binds", () => {
+    const cfg: SandboxDockerConfig = {
+      image: "clawdbot-sandbox:bookworm-slim",
+      containerPrefix: "clawdbot-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      binds: [
+        "/home/user/source:/source:rw",
+        "/var/run/docker.sock:/var/run/docker.sock",
+      ],
+    };
+
+    const args = buildSandboxCreateArgs({
+      name: "clawdbot-sbx-binds",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).toContain("-v");
+    const vFlags: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-v") {
+        const value = args[i + 1];
+        if (value) vFlags.push(value);
+      }
+    }
+    expect(vFlags).toContain("/home/user/source:/source:rw");
+    expect(vFlags).toContain("/var/run/docker.sock:/var/run/docker.sock");
+  });
+
+  it("omits -v flags when binds is empty or undefined", () => {
+    const cfg: SandboxDockerConfig = {
+      image: "clawdbot-sandbox:bookworm-slim",
+      containerPrefix: "clawdbot-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      binds: [],
+    };
+
+    const args = buildSandboxCreateArgs({
+      name: "clawdbot-sbx-no-binds",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    // Count -v flags that are NOT workspace mounts (workspace mounts are internal)
+    const customVFlags: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      if (args[i] === "-v") {
+        const value = args[i + 1];
+        if (value && !value.includes("/workspace")) {
+          customVFlags.push(value);
+        }
+      }
+    }
+    expect(customVFlags).toHaveLength(0);
+  });
 });

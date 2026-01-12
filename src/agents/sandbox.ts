@@ -1020,6 +1020,11 @@ export function buildSandboxCreateArgs(params: {
     const formatted = formatUlimitValue(name, value);
     if (formatted) args.push("--ulimit", formatted);
   }
+  if (params.cfg.binds?.length) {
+    for (const bind of params.cfg.binds) {
+      args.push("-v", bind);
+    }
+  }
   return args;
 }
 
@@ -1054,11 +1059,6 @@ async function createSandboxContainer(params: {
       "-v",
       `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
     );
-  }
-  if (cfg.binds?.length) {
-    for (const bind of cfg.binds) {
-      args.push("-v", bind);
-    }
   }
   args.push(cfg.image, "sleep", "infinity");
 
