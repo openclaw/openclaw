@@ -286,7 +286,7 @@ describe("runHeartbeatOnce", () => {
       };
 
       replySpy.mockResolvedValue([
-        { text: "Reasoning:\nBecause it helps" },
+        { text: "Reasoning:\n_Because it helps_" },
         { text: "Final alert" },
       ]);
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -309,7 +309,7 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenNthCalledWith(
         1,
         "+1555",
-        "Reasoning:\nBecause it helps",
+        "Reasoning:\n_Because it helps_",
         expect.any(Object),
       );
       expect(sendWhatsApp).toHaveBeenNthCalledWith(
@@ -361,7 +361,7 @@ describe("runHeartbeatOnce", () => {
       };
 
       replySpy.mockResolvedValue([
-        { text: "Reasoning:\nBecause it helps" },
+        { text: "Reasoning:\n_Because it helps_" },
         { text: "HEARTBEAT_OK" },
       ]);
       const sendWhatsApp = vi.fn().mockResolvedValue({
@@ -384,7 +384,7 @@ describe("runHeartbeatOnce", () => {
       expect(sendWhatsApp).toHaveBeenNthCalledWith(
         1,
         "+1555",
-        "Reasoning:\nBecause it helps",
+        "Reasoning:\n_Because it helps_",
         expect.any(Object),
       );
     } finally {

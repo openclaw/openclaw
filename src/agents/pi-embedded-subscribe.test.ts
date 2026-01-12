@@ -164,7 +164,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(onBlockReply.mock.calls[0][0].text).toBe(
-      "Reasoning:\nBecause it helps",
+      "Reasoning:\n_Because it helps_",
     );
     expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
   });
@@ -209,7 +209,7 @@ describe("subscribeEmbeddedPiSession", () => {
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
     expect(onBlockReply.mock.calls[0][0].text).toBe(
-      "Reasoning:\nBecause it helps",
+      "Reasoning:\n_Because it helps_",
     );
     expect(onBlockReply.mock.calls[1][0].text).toBe("Final answer");
 
@@ -283,7 +283,7 @@ describe("subscribeEmbeddedPiSession", () => {
     const streamTexts = onReasoningStream.mock.calls
       .map((call) => call[0]?.text)
       .filter((value): value is string => typeof value === "string");
-    expect(streamTexts.at(-1)).toBe("Reasoning:\nBecause it helps");
+    expect(streamTexts.at(-1)).toBe("Reasoning:\n_Because it helps_");
 
     expect(assistantMessage.content).toEqual([
       { type: "thinking", thinking: "Because it helps" },
