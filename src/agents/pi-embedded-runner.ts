@@ -100,6 +100,7 @@ import {
   pickFallbackThinkingLevel,
   sanitizeGoogleTurnOrdering,
   sanitizeSessionMessagesImages,
+  validateAnthropicTurns,
   validateGeminiTurns,
 } from "./pi-embedded-helpers.js";
 import {
@@ -1291,7 +1292,9 @@ export async function compactEmbeddedPiSession(params: {
               sessionManager,
               sessionId: params.sessionId,
             });
-            const validated = validateGeminiTurns(prior);
+            // Validate turn ordering for both Gemini (consecutive assistant) and Anthropic (consecutive user)
+            const validatedGemini = validateGeminiTurns(prior);
+            const validated = validateAnthropicTurns(validatedGemini);
             const limited = limitHistoryTurns(
               validated,
               getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
@@ -1714,7 +1717,9 @@ export async function runEmbeddedPiAgent(params: {
               sessionManager,
               sessionId: params.sessionId,
             });
-            const validated = validateGeminiTurns(prior);
+            // Validate turn ordering for both Gemini (consecutive assistant) and Anthropic (consecutive user)
+            const validatedGemini = validateGeminiTurns(prior);
+            const validated = validateAnthropicTurns(validatedGemini);
             const limited = limitHistoryTurns(
               validated,
               getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),

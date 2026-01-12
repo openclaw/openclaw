@@ -297,6 +297,16 @@ export function formatAssistantErrorText(
     );
   }
 
+  // Check for role ordering errors (Anthropic 400 "Incorrect role information")
+  // This typically happens when consecutive user messages are sent without
+  // an assistant response between them, often due to steering/queueing timing.
+  if (/incorrect role information|roles must alternate/i.test(raw)) {
+    return (
+      "Message ordering conflict - please try again. " +
+      "If this persists, use /new to start a fresh session."
+    );
+  }
+
   const invalidRequest = raw.match(
     /"type":"invalid_request_error".*?"message":"([^"]+)"/,
   );
@@ -537,6 +547,77 @@ export function validateGeminiTurns(messages: AgentMessage[]): AgentMessage[] {
           ...(currentMsg.errorMessage && {
             errorMessage: currentMsg.errorMessage,
           }),
+        };
+
+        // Replace the last message with merged version
+        result[result.length - 1] = merged;
+        continue;
+      }
+    }
+
+    // Not a consecutive duplicate, add normally
+    result.push(msg);
+    lastRole = msgRole;
+  }
+
+  return result;
+}
+
+/**
+ * Validates and fixes conversation turn sequences for Anthropic API.
+ * Anthropic requires strict alternating user→assistant pattern.
+ * This function:
+ * 1. Detects consecutive user messages
+ * 2. Merges consecutive user messages together
+ * 3. Preserves timestamps from the later message
+ *
+ * This prevents the "400 Incorrect role information" error that occurs
+ * when steering messages are injected during streaming and create
+ * consecutive user messages.
+ */
+export function validateAnthropicTurns(
+  messages: AgentMessage[],
+): AgentMessage[] {
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return messages;
+  }
+
+  const result: AgentMessage[] = [];
+  let lastRole: string | undefined;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") {
+      result.push(msg);
+      continue;
+    }
+
+    const msgRole = (msg as { role?: unknown }).role as string | undefined;
+    if (!msgRole) {
+      result.push(msg);
+      continue;
+    }
+
+    // Check if this message has the same role as the last one
+    if (msgRole === lastRole && lastRole === "user") {
+      // Merge consecutive user messages
+      const lastMsg = result[result.length - 1];
+      const currentMsg = msg as Extract<AgentMessage, { role: "user" }>;
+
+      if (lastMsg && typeof lastMsg === "object") {
+        const lastUser = lastMsg as Extract<AgentMessage, { role: "user" }>;
+
+        // Merge content blocks
+        const mergedContent = [
+          ...(Array.isArray(lastUser.content) ? lastUser.content : []),
+          ...(Array.isArray(currentMsg.content) ? currentMsg.content : []),
+        ];
+
+        // Preserve timestamp from the later message (more recent)
+        const merged: Extract<AgentMessage, { role: "user" }> = {
+          ...lastUser,
+          content: mergedContent,
+          // Take timestamp from the newer message
+          ...(currentMsg.timestamp && { timestamp: currentMsg.timestamp }),
         };
 
         // Replace the last message with merged version
