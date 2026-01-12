@@ -5,6 +5,7 @@ import {
   agentsDeleteCommand,
   agentsListCommand,
 } from "../commands/agents.js";
+import { dashboardCommand } from "../commands/dashboard.js";
 import {
   CONFIGURE_WIZARD_SECTIONS,
   configureCommand,
@@ -475,6 +476,21 @@ export function buildProgram() {
           nonInteractive: Boolean(opts.nonInteractive),
           generateGatewayToken: Boolean(opts.generateGatewayToken),
           deep: Boolean(opts.deep),
+        });
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  program
+    .command("dashboard")
+    .description("Open the Control UI with your current token")
+    .option("--no-open", "Print URL but do not launch a browser", false)
+    .action(async (opts) => {
+      try {
+        await dashboardCommand(defaultRuntime, {
+          noOpen: Boolean(opts.noOpen),
         });
       } catch (err) {
         defaultRuntime.error(String(err));

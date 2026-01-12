@@ -641,6 +641,11 @@ export function createClawdbotCodingTools(options?: {
         }
       : undefined,
   });
+  const bashTool = {
+    ...(execTool as unknown as AnyAgentTool),
+    name: "bash",
+    label: "bash",
+  } satisfies AnyAgentTool;
   const processTool = createProcessTool({
     cleanupMs: options?.exec?.cleanupMs,
     scopeKey,
@@ -665,6 +670,7 @@ export function createClawdbotCodingTools(options?: {
       : []),
     ...(applyPatchTool ? [applyPatchTool as unknown as AnyAgentTool] : []),
     execTool as unknown as AnyAgentTool,
+    bashTool,
     processTool as unknown as AnyAgentTool,
     // Provider docking: include provider-defined agent tools (login, etc.).
     ...listProviderAgentTools({ cfg: options?.config }),

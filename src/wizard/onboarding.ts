@@ -735,10 +735,13 @@ export async function runOnboardingWizard(
     "Optional apps",
   );
 
+  const controlUiBasePath =
+    nextConfig.gateway?.controlUi?.basePath ??
+    baseConfig.gateway?.controlUi?.basePath;
   const links = resolveControlUiLinks({
     bind,
     port,
-    basePath: baseConfig.gateway?.controlUi?.basePath,
+    basePath: controlUiBasePath,
   });
   const tokenParam =
     authMode === "token" && gatewayToken
@@ -748,7 +751,7 @@ export async function runOnboardingWizard(
   const gatewayProbe = await probeGatewayReachable({
     url: links.wsUrl,
     token: authMode === "token" ? gatewayToken : undefined,
-    password: authMode === "password" ? baseConfig.gateway?.auth?.password : "",
+    password: authMode === "password" ? nextConfig.gateway?.auth?.password : "",
   });
   const gatewayStatusLine = gatewayProbe.ok
     ? "Gateway: reachable"
@@ -802,29 +805,16 @@ export async function runOnboardingWizard(
         await prompter.note(
           formatControlUiSshHint({
             port,
-            basePath: baseConfig.gateway?.controlUi?.basePath,
+            basePath: controlUiBasePath,
             token: authMode === "token" ? gatewayToken : undefined,
           }),
           "Open Control UI",
         );
       } else {
-        const wantsOpen = await prompter.confirm({
-          message: "Open Control UI now?",
-          initialValue: true,
-        });
-        if (wantsOpen) {
-          const opened = await openUrl(`${links.httpUrl}${tokenParam}`);
-          if (!opened) {
-            await prompter.note(
-              formatControlUiSshHint({
-                port,
-                basePath: baseConfig.gateway?.controlUi?.basePath,
-                token: authMode === "token" ? gatewayToken : undefined,
-              }),
-              "Open Control UI",
-            );
-          }
-        }
+        await prompter.note(
+          "Opening Control UI automatically after onboarding (no extra prompts).",
+          "Open Control UI",
+        );
       }
     }
   } else if (opts.skipUi) {
@@ -844,5 +834,46 @@ export async function runOnboardingWizard(
     "Security",
   );
 
-  await prompter.outro("Onboarding complete.");
+  const shouldOpenControlUi =
+    !opts.skipUi && authMode === "token" && Boolean(gatewayToken);
+  let controlUiOpened = false;
+  let controlUiOpenHint: string | undefined;
+  if (shouldOpenControlUi) {
+    const browserSupport = await detectBrowserOpenSupport();
+    if (browserSupport.ok) {
+      controlUiOpened = await openUrl(authedUrl);
+      if (!controlUiOpened) {
+        controlUiOpenHint = formatControlUiSshHint({
+          port,
+          basePath: controlUiBasePath,
+          token: gatewayToken,
+        });
+      }
+    } else {
+      controlUiOpenHint = formatControlUiSshHint({
+        port,
+        basePath: controlUiBasePath,
+        token: gatewayToken,
+      });
+    }
+
+    await prompter.note(
+      [
+        `Dashboard link (with token): ${authedUrl}`,
+        controlUiOpened
+          ? "Opened in your browser. Keep that tab to control Clawdbot."
+          : "Copy/paste this URL in a browser on this machine to control Clawdbot.",
+        controlUiOpenHint,
+      ]
+        .filter(Boolean)
+        .join("\n"),
+      "Dashboard ready",
+    );
+  }
+
+  await prompter.outro(
+    controlUiOpened
+      ? "Onboarding complete. Dashboard opened with your token; keep that tab to control Clawdbot."
+      : "Onboarding complete. Use the tokenized dashboard link above to control Clawdbot.",
+  );
 }
