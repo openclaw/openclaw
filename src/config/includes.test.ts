@@ -109,6 +109,15 @@ describe("resolveConfigIncludes", () => {
     );
   });
 
+  it("throws when sibling keys are used with primitive includes", () => {
+    const files = { "/config/value.json": "hello" };
+    const obj = { $include: "./value.json", extra: true };
+    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj, files)).toThrow(
+      /Sibling keys require included content to be an object/,
+    );
+  });
+
   it("resolves nested includes", () => {
     const files = {
       "/config/level1.json": { nested: { $include: "./level2.json" } },
@@ -154,12 +163,23 @@ describe("resolveConfigIncludes", () => {
       parseJson: JSON.parse,
     };
     const obj = { $include: "./a.json" };
-    expect(() =>
-      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
-    ).toThrow(CircularIncludeError);
-    expect(() =>
-      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
-    ).toThrow(/Circular include detected/);
+    try {
+      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver);
+      throw new Error("expected circular include error");
+    } catch (err) {
+      expect(err).toBeInstanceOf(CircularIncludeError);
+      const circular = err as CircularIncludeError;
+      expect(circular.chain).toEqual(
+        expect.arrayContaining([
+          "/config/clawdbot.json",
+          "/config/a.json",
+          "/config/b.json",
+        ]),
+      );
+      expect(circular.message).toMatch(/Circular include detected/);
+      expect(circular.message).toMatch(/\/config\/a\.json/);
+      expect(circular.message).toMatch(/\/config\/b\.json/);
+    }
   });
 
   it("throws ConfigIncludeError for invalid $include value type", () => {
@@ -175,6 +195,21 @@ describe("resolveConfigIncludes", () => {
     expect(() => resolve(obj, files)).toThrow(/expected string, got number/);
   });
 
+  it("throws ConfigIncludeError for null/boolean include items", () => {
+    const files = { "/config/valid.json": { valid: true } };
+    const cases = [
+      { value: null, expected: "object" },
+      { value: false, expected: "boolean" },
+    ];
+    for (const item of cases) {
+      const obj = { $include: ["./valid.json", item.value] };
+      expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+      expect(() => resolve(obj, files)).toThrow(
+        new RegExp(`expected string, got ${item.expected}`),
+      );
+    }
+  });
+
   it("respects max depth limit", () => {
     const files: Record<string, unknown> = {};
     for (let i = 0; i < 15; i++) {
@@ -187,11 +222,45 @@ describe("resolveConfigIncludes", () => {
     expect(() => resolve(obj, files)).toThrow(/Maximum include depth/);
   });
 
+  it("allows depth 10 but rejects depth 11", () => {
+    const okFiles: Record<string, unknown> = {};
+    for (let i = 0; i < 9; i++) {
+      okFiles[`/config/ok${i}.json`] = { $include: `./ok${i + 1}.json` };
+    }
+    okFiles["/config/ok9.json"] = { done: true };
+    expect(resolve({ $include: "./ok0.json" }, okFiles)).toEqual({
+      done: true,
+    });
+
+    const failFiles: Record<string, unknown> = {};
+    for (let i = 0; i < 10; i++) {
+      failFiles[`/config/fail${i}.json`] = { $include: `./fail${i + 1}.json` };
+    }
+    failFiles["/config/fail10.json"] = { done: true };
+    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(
+      ConfigIncludeError,
+    );
+    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(
+      /Maximum include depth/,
+    );
+  });
+
   it("handles relative paths correctly", () => {
     const files = { "/config/clients/mueller/agents.json": { id: "mueller" } };
     const obj = { agent: { $include: "./clients/mueller/agents.json" } };
     expect(resolve(obj, files)).toEqual({
       agent: { id: "mueller" },
+    });
+  });
+
+  it("applies nested includes before sibling overrides", () => {
+    const files = {
+      "/config/base.json": { nested: { $include: "./nested.json" } },
+      "/config/nested.json": { a: 1, b: 2 },
+    };
+    const obj = { $include: "./base.json", nested: { b: 9 } };
+    expect(resolve(obj, files)).toEqual({
+      nested: { a: 1, b: 9 },
     });
   });
 

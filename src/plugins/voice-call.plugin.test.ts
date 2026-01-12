@@ -11,18 +11,12 @@ const noopLogger = {
 };
 
 type Registered = {
-  methods: Map<
-    string,
-    (ctx: Record<string, unknown>) => Promise<unknown> | unknown
-  >;
+  methods: Map<string, (ctx: Record<string, unknown>) => unknown>;
   tools: unknown[];
 };
 
 function setup(config: Record<string, unknown>): Registered {
-  const methods = new Map<
-    string,
-    (ctx: Record<string, unknown>) => Promise<unknown> | unknown
-  >();
+  const methods = new Map<string, (ctx: Record<string, unknown>) => unknown>();
   const tools: unknown[] = [];
   plugin.register({
     id: "voice-call",
@@ -174,7 +168,7 @@ describe("voice-call plugin", () => {
     };
     const program = new Command();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
-    register({
+    await register({
       id: "voice-call",
       name: "Voice Call",
       description: "test",
