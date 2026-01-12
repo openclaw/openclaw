@@ -82,6 +82,132 @@ To prevent the bot from responding to WhatsApp @-mentions in groups (only respon
 }
 ```
 
+## Config Includes (`$include`)
+
+Split your config into multiple files using the `$include` directive. This is useful for:
+- Organizing large configs (e.g., per-client agent definitions)
+- Sharing common settings across environments
+- Keeping sensitive configs separate
+
+### Basic usage
+
+```json5
+// ~/.clawdbot/clawdbot.json
+{
+  gateway: { port: 18789 },
+  
+  // Include a single file (replaces the key's value)
+  agents: { "$include": "./agents.json5" },
+  
+  // Include multiple files (deep-merged in order)
+  broadcast: { 
+    "$include": [
+      "./clients/mueller.json5",
+      "./clients/schmidt.json5"
+    ]
+  }
+}
+```
+
+```json5
+// ~/.clawdbot/agents.json5
+{
+  defaults: { sandbox: { mode: "all", scope: "session" } },
+  list: [
+    { id: "main", workspace: "~/clawd" }
+  ]
+}
+```
+
+### Merge behavior
+
+- **Single file**: Replaces the object containing `$include`
+- **Array of files**: Deep-merges files in order (later files override earlier ones)
+- **With sibling keys**: Sibling keys are merged after includes (override included values)
+- **Sibling keys + arrays/primitives**: Not supported (included content must be an object)
+
+```json5
+// Sibling keys override included values
+{
+  "$include": "./base.json5",   // { a: 1, b: 2 }
+  b: 99                          // Result: { a: 1, b: 99 }
+}
+```
+
+### Nested includes
+
+Included files can themselves contain `$include` directives (up to 10 levels deep):
+
+```json5
+// clients/mueller.json5
+{
+  agents: { "$include": "./mueller/agents.json5" },
+  broadcast: { "$include": "./mueller/broadcast.json5" }
+}
+```
+
+### Path resolution
+
+- **Relative paths**: Resolved relative to the including file
+- **Absolute paths**: Used as-is
+- **Parent directories**: `../` references work as expected
+
+```json5
+{ "$include": "./sub/config.json5" }      // relative
+{ "$include": "/etc/clawdbot/base.json5" } // absolute
+{ "$include": "../shared/common.json5" }   // parent dir
+```
+
+### Error handling
+
+- **Missing file**: Clear error with resolved path
+- **Parse error**: Shows which included file failed
+- **Circular includes**: Detected and reported with include chain
+
+### Example: Multi-client legal setup
+
+```json5
+// ~/.clawdbot/clawdbot.json
+{
+  gateway: { port: 18789, auth: { token: "secret" } },
+  
+  // Common agent defaults
+  agents: {
+    defaults: {
+      sandbox: { mode: "all", scope: "session" }
+    },
+    // Merge agent lists from all clients
+    list: { "$include": [
+      "./clients/mueller/agents.json5",
+      "./clients/schmidt/agents.json5"
+    ]}
+  },
+  
+  // Merge broadcast configs
+  broadcast: { "$include": [
+    "./clients/mueller/broadcast.json5",
+    "./clients/schmidt/broadcast.json5"
+  ]},
+  
+  whatsapp: { groupPolicy: "allowlist" }
+}
+```
+
+```json5
+// ~/.clawdbot/clients/mueller/agents.json5
+[
+  { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
+  { id: "mueller-docs", workspace: "~/clients/mueller/docs" }
+]
+```
+
+```json5
+// ~/.clawdbot/clients/mueller/broadcast.json5
+{
+  "120363403215116621@g.us": ["mueller-transcribe", "mueller-docs"]
+}
+```
+
 ## Common options
 
 ### Env vars + `.env`
