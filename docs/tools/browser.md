@@ -179,6 +179,7 @@ you swap local/remote browsers and profiles.
 ## CLI quick reference
 
 All commands accept `--browser-profile <name>` to target a specific profile.
+All commands also accept `--json` for machine-readable output (stable payloads).
 
 Basics:
 - `clawdbot browser status`
@@ -258,6 +259,93 @@ Notes:
   - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
 - `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
   CSS selectors are intentionally not supported for actions.
+
+## Snapshots and refs
+
+Clawdbot supports two “snapshot” styles:
+
+- **AI snapshot (numeric refs)**: `clawdbot browser snapshot` (default; `--format ai`)
+  - Output: a text snapshot that includes numeric refs.
+  - Actions: `clawdbot browser click 12`, `clawdbot browser type 23 "hello"`.
+  - Internally, the ref is resolved via Playwright’s `aria-ref`.
+
+- **Role snapshot (role refs like `e12`)**: `clawdbot browser snapshot --interactive` (or `--compact`, `--depth`, `--selector`, `--frame`)
+  - Output: a role-based list/tree with `[ref=e12]` (and optional `[nth=1]`).
+  - Actions: `clawdbot browser click e12`, `clawdbot browser highlight e12`.
+  - Internally, the ref is resolved via `getByRole(...)` (plus `nth()` for duplicates).
+
+Ref behavior:
+- Refs are **not stable across navigations**; if something fails, re-run `snapshot` and use a fresh ref.
+- If the role snapshot was taken with `--frame`, role refs are scoped to that iframe until the next role snapshot.
+
+## Wait power-ups
+
+You can wait on more than just time/text:
+
+- Wait for URL (globs supported by Playwright):
+  - `clawdbot browser wait --url "**/dash"`
+- Wait for load state:
+  - `clawdbot browser wait --load networkidle`
+- Wait for a JS predicate:
+  - `clawdbot browser wait --fn "window.ready===true"`
+- Wait for a selector to become visible:
+  - `clawdbot browser wait "#main"`
+
+These can be combined:
+
+```bash
+clawdbot browser wait "#main" \
+  --url "**/dash" \
+  --load networkidle \
+  --fn "window.ready===true" \
+  --timeout-ms 15000
+```
+
+## Debug workflows
+
+When an action fails (e.g. “not visible”, “strict mode violation”, “covered”):
+
+1. `clawdbot browser snapshot --interactive`
+2. Use `click <ref>` / `type <ref>` (prefer role refs in interactive mode)
+3. If it still fails: `clawdbot browser highlight <ref>` to see what Playwright is targeting
+4. If the page behaves oddly:
+   - `clawdbot browser errors --clear`
+   - `clawdbot browser requests --filter api --clear`
+5. For deep debugging: record a trace:
+   - `clawdbot browser trace start`
+   - reproduce the issue
+   - `clawdbot browser trace stop` (prints `TRACE:<path>`)
+
+## JSON output
+
+`--json` is for scripting and structured tooling.
+
+Examples:
+
+```bash
+clawdbot browser status --json
+clawdbot browser snapshot --interactive --json
+clawdbot browser requests --filter api --json
+clawdbot browser cookies --json
+```
+
+Role snapshots in JSON include `refs` plus a small `stats` block (lines/chars/refs/interactive) so tools can reason about payload size and density.
+
+## State and environment knobs
+
+These are useful for “make the site behave like X” workflows:
+
+- Cookies: `cookies`, `cookies set`, `cookies clear`
+- Storage: `storage local|session get|set|clear`
+- Offline: `set offline on|off`
+- Headers: `set headers --json '{"X-Debug":"1"}'` (or `--clear`)
+- HTTP basic auth: `set credentials user pass` (or `--clear`)
+- Geolocation: `set geo <lat> <lon> --origin "https://example.com"` (or `--clear`)
+- Media: `set media dark|light|no-preference|none`
+- Timezone / locale: `set timezone ...`, `set locale ...`
+- Device / viewport:
+  - `set device "iPhone 14"` (Playwright device presets)
+  - `set viewport 1280 720`
 
 ## Security & privacy
 
