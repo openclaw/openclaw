@@ -33,7 +33,7 @@ Minimal config:
    - `channel_rename`
    - `pin_added`, `pin_removed`
 5) Invite the bot to channels you want it to read.
-6) Slash Commands → create `/clawd` if you use `slack.slashCommand`. If you enable `commands.native`, add slash commands for the built-in chat commands (same names as `/help`).
+6) Slash Commands → create `/clawd` if you use `slack.slashCommand`. If you enable native commands, add one slash command per built-in command (same names as `/help`). Native defaults to off for Slack unless you set `slack.commands.native: true` (global `commands.native` is `"auto"` which leaves Slack off).
 7) App Home → enable the **Messages Tab** so users can DM the bot.
 
 Use the manifest below so scopes and events stay in sync.
@@ -138,7 +138,7 @@ Use this Slack app manifest to create the app quickly (adjust the name/command i
 }
 ```
 
-If you enable `commands.native`, add one `slash_commands` entry per command you want to expose (matching the `/help` list).
+If you enable native commands, add one `slash_commands` entry per command you want to expose (matching the `/help` list). Override with `slack.commands.native`.
 
 ## Scopes (current vs optional)
 Slack's Conversations API is type-scoped: you only need the scopes for the
@@ -257,7 +257,7 @@ For fine-grained control, use these tags in agent responses:
 - DMs share the `main` session (like WhatsApp/Telegram).
 - Channels map to `agent:<agentId>:slack:channel:<channelId>` sessions.
 - Slash commands use `agent:<agentId>:slack:slash:<userId>` sessions (prefix configurable via `slack.slashCommand.sessionPrefix`).
-- Native command registration is controlled by `commands.native`; text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
+- Native command registration uses `commands.native` (global default `"auto"` → Slack off) and can be overridden per-workspace with `slack.commands.native`. Text commands require standalone `/...` messages and can be disabled with `commands.text: false`. Slack slash commands are managed in the Slack app and are not removed automatically. Use `commands.useAccessGroups: false` to bypass access-group checks for commands.
 - Full command list + config: [Slash commands](/tools/slash-commands)
 
 ## DM security (pairing)

@@ -24,7 +24,7 @@ They run immediately, are stripped before the model sees the message, and the re
 ```json5
 {
   commands: {
-    native: false,
+    native: "auto",
     text: true,
     config: false,
     debug: false,
@@ -36,9 +36,10 @@ They run immediately, are stripped before the model sees the message, and the re
 
 - `commands.text` (default `true`) enables parsing `/...` in chat messages.
   - On surfaces without native commands (WhatsApp/WebChat/Signal/iMessage/MS Teams), text commands still work even if you set this to `false`.
-- `commands.native` (default `false`) registers native commands on Discord/Slack/Telegram.
-  - `false` clears previously registered commands on Discord/Telegram at startup.
-  - Slack commands are managed in the Slack app and are not removed automatically.
+- `commands.native` (default `"auto"`) registers native commands.
+  - Auto: on for Discord/Telegram; off for Slack (until you add slash commands); ignored for providers without native support.
+  - Set `discord.commands.native`, `telegram.commands.native`, or `slack.commands.native` to override per provider (bool or `"auto"`).
+  - `false` clears previously registered commands on Discord/Telegram at startup. Slack commands are managed in the Slack app and are not removed automatically.
 - `commands.config` (default `false`) enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug` (default `false`) enables `/debug` (runtime-only overrides).
 - `commands.useAccessGroups` (default `true`) enforces allowlists/policies for commands.
