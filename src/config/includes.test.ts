@@ -100,6 +100,15 @@ describe("resolveConfigIncludes", () => {
     expect(resolve(obj, files)).toEqual({ a: 1, b: 99 });
   });
 
+  it("throws when sibling keys are used with non-object includes", () => {
+    const files = { "/config/list.json": ["a", "b"] };
+    const obj = { $include: "./list.json", extra: true };
+    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
+    expect(() => resolve(obj, files)).toThrow(
+      /Sibling keys require included content to be an object/,
+    );
+  });
+
   it("resolves nested includes", () => {
     const files = {
       "/config/level1.json": { nested: { $include: "./level2.json" } },
@@ -123,10 +132,12 @@ describe("resolveConfigIncludes", () => {
       parseJson: JSON.parse,
     };
     const obj = { $include: "./bad.json" };
-    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
-      .toThrow(ConfigIncludeError);
-    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
-      .toThrow(/Failed to parse include file/);
+    expect(() =>
+      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
+    ).toThrow(ConfigIncludeError);
+    expect(() =>
+      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
+    ).toThrow(/Failed to parse include file/);
   });
 
   it("throws CircularIncludeError for circular includes", () => {
@@ -143,10 +154,12 @@ describe("resolveConfigIncludes", () => {
       parseJson: JSON.parse,
     };
     const obj = { $include: "./a.json" };
-    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
-      .toThrow(CircularIncludeError);
-    expect(() => resolveConfigIncludes(obj, "/config/clawdbot.json", resolver))
-      .toThrow(/Circular include detected/);
+    expect(() =>
+      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
+    ).toThrow(CircularIncludeError);
+    expect(() =>
+      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
+    ).toThrow(/Circular include detected/);
   });
 
   it("throws ConfigIncludeError for invalid $include value type", () => {
@@ -185,7 +198,9 @@ describe("resolveConfigIncludes", () => {
   it("resolves parent directory references", () => {
     const files = { "/shared/common.json": { shared: true } };
     const obj = { $include: "../../shared/common.json" };
-    expect(resolve(obj, files, "/config/sub/clawdbot.json")).toEqual({ shared: true });
+    expect(resolve(obj, files, "/config/sub/clawdbot.json")).toEqual({
+      shared: true,
+    });
   });
 });
 
@@ -194,14 +209,25 @@ describe("real-world config patterns", () => {
     const files = {
       "/config/clients/mueller.json": {
         agents: [
-          { id: "mueller-screenshot", workspace: "~/clients/mueller/screenshot" },
-          { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
+          {
+            id: "mueller-screenshot",
+            workspace: "~/clients/mueller/screenshot",
+          },
+          {
+            id: "mueller-transcribe",
+            workspace: "~/clients/mueller/transcribe",
+          },
         ],
-        broadcast: { "group-mueller": ["mueller-screenshot", "mueller-transcribe"] },
+        broadcast: {
+          "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
+        },
       },
       "/config/clients/schmidt.json": {
         agents: [
-          { id: "schmidt-screenshot", workspace: "~/clients/schmidt/screenshot" },
+          {
+            id: "schmidt-screenshot",
+            workspace: "~/clients/schmidt/screenshot",
+          },
         ],
         broadcast: { "group-schmidt": ["schmidt-screenshot"] },
       },

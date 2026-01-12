@@ -73,9 +73,8 @@ export function deepMerge(target: unknown, source: unknown): unknown {
   if (isPlainObject(target) && isPlainObject(source)) {
     const result: Record<string, unknown> = { ...target };
     for (const key of Object.keys(source)) {
-      result[key] = key in result
-        ? deepMerge(result[key], source[key])
-        : source[key];
+      result[key] =
+        key in result ? deepMerge(result[key], source[key]) : source[key];
     }
     return result;
   }
@@ -130,6 +129,13 @@ class IncludeProcessor {
       return included;
     }
 
+    if (!isPlainObject(included)) {
+      throw new ConfigIncludeError(
+        "Sibling keys require included content to be an object",
+        typeof includeValue === "string" ? includeValue : INCLUDE_KEY,
+      );
+    }
+
     // Merge included content with sibling keys
     const rest: Record<string, unknown> = {};
     for (const key of otherKeys) {
@@ -163,7 +169,7 @@ class IncludeProcessor {
 
   private loadFile(includePath: string): unknown {
     const resolvedPath = this.resolvePath(includePath);
-    
+
     this.checkCircular(resolvedPath);
     this.checkDepth(includePath);
 
@@ -207,7 +213,11 @@ class IncludeProcessor {
     }
   }
 
-  private parseFile(includePath: string, resolvedPath: string, raw: string): unknown {
+  private parseFile(
+    includePath: string,
+    resolvedPath: string,
+    raw: string,
+  ): unknown {
     try {
       return this.resolver.parseJson(raw);
     } catch (err) {
