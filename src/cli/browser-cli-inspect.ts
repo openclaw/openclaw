@@ -59,6 +59,7 @@ export function registerBrowserInspectCommands(
     .option("--compact", "Role snapshot: compact output", false)
     .option("--depth <n>", "Role snapshot: max depth", (v: string) => Number(v))
     .option("--selector <sel>", "Role snapshot: scope to CSS selector")
+    .option("--frame <sel>", "Role snapshot: scope to an iframe selector")
     .option("--out <path>", "Write snapshot to a file")
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
@@ -74,6 +75,7 @@ export function registerBrowserInspectCommands(
           compact: Boolean(opts.compact) || undefined,
           depth: Number.isFinite(opts.depth) ? opts.depth : undefined,
           selector: opts.selector?.trim() || undefined,
+          frame: opts.frame?.trim() || undefined,
           profile,
         });
 
