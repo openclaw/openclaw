@@ -951,13 +951,18 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       );
     }
 
-    for (const command of nativeCommands) {
-      bot.command(command.name, async (ctx) => {
-        const msg = ctx.message;
-        if (!msg) return;
-        if (shouldSkipUpdate(ctx)) return;
-        const chatId = msg.chat.id;
-        const isGroup =
+    if (typeof bot.command !== "function") {
+      runtime.info?.(
+        "telegram: bot.command not available on api mock; skipping native command handlers",
+      );
+    } else {
+      for (const command of nativeCommands) {
+        bot.command(command.name, async (ctx) => {
+          const msg = ctx.message;
+          if (!msg) return;
+          if (shouldSkipUpdate(ctx)) return;
+          const chatId = msg.chat.id;
+          const isGroup =
           msg.chat.type === "group" || msg.chat.type === "supergroup";
         const messageThreadId = (msg as { message_thread_id?: number })
           .message_thread_id;
@@ -1138,7 +1143,8 @@ export function createTelegramBot(opts: TelegramBotOptions) {
           textLimit,
           messageThreadId,
         });
-      });
+        });
+      }
     }
   } else if (nativeDisabledExplicit) {
     bot.api.setMyCommands([]).catch((err) => {
