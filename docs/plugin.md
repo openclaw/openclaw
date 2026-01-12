@@ -86,12 +86,43 @@ Fields:
 
 Config changes **require a gateway restart**.
 
+## Control UI (schema + labels)
+
+The Control UI uses `config.schema` (JSON Schema + `uiHints`) to render better forms.
+
+Clawdbot augments `uiHints` at runtime based on discovered plugins:
+
+- Adds per-plugin labels for `plugins.entries.<id>` / `.enabled` / `.config`
+- Merges optional plugin-provided config field hints under:
+  `plugins.entries.<id>.config.<field>`
+
+If you want your plugin config fields to show good labels/placeholders (and mark secrets as sensitive),
+provide `configSchema.uiHints`.
+
+Example:
+
+```ts
+export default {
+  id: "my-plugin",
+  configSchema: {
+    parse: (v) => v,
+    uiHints: {
+      "apiKey": { label: "API Key", sensitive: true },
+      "region": { label: "Region", placeholder: "us-east-1" },
+    },
+  },
+  register(api) {},
+};
+```
+
 ## CLI
 
 ```bash
 clawdbot plugins list
 clawdbot plugins info <id>
-clawdbot plugins install <path>
+clawdbot plugins install <path>              # add a local file/dir to plugins.load.paths
+clawdbot plugins install ./plugin.tgz        # install from a local tarball
+clawdbot plugins install @clawdbot/voice-call # install from npm
 clawdbot plugins enable <id>
 clawdbot plugins disable <id>
 clawdbot plugins doctor
@@ -171,6 +202,20 @@ Plugins can ship a skill in the repo (`skills/<name>/SKILL.md`).
 Enable it with `plugins.entries.<id>.enabled` (or other config gates) and ensure
 it’s present in your workspace/managed skills locations.
 
+## Distribution (npm)
+
+Recommended packaging:
+
+- Main package: `clawdbot` (this repo)
+- Plugins: separate npm packages under `@clawdbot/*` (example: `@clawdbot/voice-call`)
+
+Publishing contract:
+
+- Plugin `package.json` must include `clawdbot.extensions` with one or more entry files.
+- Entry files can be `.js` or `.ts` (jiti loads TS at runtime).
+- `clawdbot plugins install <npm-spec>` uses `npm pack`, extracts into `~/.clawdbot/extensions/<id>/`, and enables it in config.
+- Config key stability: scoped packages are normalized to the **unscoped** id for `plugins.entries.*`.
+
 ## Example plugin: Voice Call
 
 This repo includes a voice‑call plugin (Twilio or log fallback):
@@ -183,7 +228,7 @@ This repo includes a voice‑call plugin (Twilio or log fallback):
 - Config (twilio): `provider: "twilio"` + `twilio.accountSid/authToken/from` (optional `statusCallbackUrl`, `twimlUrl`)
 - Config (dev): `provider: "log"` (no network)
 
-See `extensions/voice-call/README.md` for setup and usage.
+See [Voice Call](/plugins/voice-call) and `extensions/voice-call/README.md` for setup and usage.
 
 ## Safety notes
 
@@ -192,3 +237,10 @@ Plugins run in-process with the Gateway. Treat them as trusted code:
 - Only install plugins you trust.
 - Prefer `plugins.allow` allowlists.
 - Restart the Gateway after changes.
+
+## Testing plugins
+
+Plugins can (and should) ship tests:
+
+- In-repo plugins can keep Vitest tests under `src/**` (example: `src/plugins/voice-call.plugin.test.ts`).
+- Separately published plugins should run their own CI (lint/build/test) and validate `clawdbot.extensions` points at the built entrypoint (`dist/index.js`).

@@ -182,7 +182,7 @@ Manage extensions and their config:
 
 - `clawdbot plugins list` — discover plugins (use `--json` for machine output).
 - `clawdbot plugins info <id>` — show details for a plugin.
-- `clawdbot plugins install <path>` — add a plugin path to `plugins.load.paths`.
+- `clawdbot plugins install <path|.tgz|npm-spec>` — install a plugin (or add a plugin path to `plugins.load.paths`).
 - `clawdbot plugins enable <id>` / `disable <id>` — toggle `plugins.entries.<id>.enabled`.
 - `clawdbot plugins doctor` — report plugin load errors.
 
