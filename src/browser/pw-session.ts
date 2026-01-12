@@ -63,6 +63,7 @@ type PageState = {
   nextRequestId: number;
   armIdUpload: number;
   armIdDialog: number;
+  armIdDownload: number;
   /**
    * Role-based refs from the last role snapshot (e.g. e1/e2).
    * These refs are NOT Playwright's `aria-ref` values.
@@ -103,6 +104,7 @@ export function ensurePageState(page: Page): PageState {
     nextRequestId: 0,
     armIdUpload: 0,
     armIdDialog: 0,
+    armIdDownload: 0,
   };
   pageStates.set(page, state);
 

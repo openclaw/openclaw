@@ -79,6 +79,12 @@ export type BrowserActResponse = {
   result?: unknown;
 };
 
+export type BrowserDownloadPayload = {
+  url: string;
+  suggestedFilename: string;
+  path: string;
+};
+
 export async function browserNavigate(
   baseUrl: string,
   opts: { url: string; targetId?: string; profile?: string },
@@ -151,6 +157,60 @@ export async function browserArmFileChooser(
       timeoutMs: 20000,
     },
   );
+}
+
+export async function browserWaitForDownload(
+  baseUrl: string,
+  opts: {
+    path?: string;
+    targetId?: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<{ ok: true; targetId: string; download: BrowserDownloadPayload }> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<{
+    ok: true;
+    targetId: string;
+    download: BrowserDownloadPayload;
+  }>(`${baseUrl}/wait/download${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    }),
+    timeoutMs: 20000,
+  });
+}
+
+export async function browserDownload(
+  baseUrl: string,
+  opts: {
+    ref: string;
+    path: string;
+    targetId?: string;
+    timeoutMs?: number;
+    profile?: string;
+  },
+): Promise<{ ok: true; targetId: string; download: BrowserDownloadPayload }> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<{
+    ok: true;
+    targetId: string;
+    download: BrowserDownloadPayload;
+  }>(`${baseUrl}/download${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      ref: opts.ref,
+      path: opts.path,
+      timeoutMs: opts.timeoutMs,
+    }),
+    timeoutMs: 20000,
+  });
 }
 
 export async function browserAct(

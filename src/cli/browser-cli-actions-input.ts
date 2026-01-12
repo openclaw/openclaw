@@ -4,7 +4,9 @@ import {
   browserAct,
   browserArmDialog,
   browserArmFileChooser,
+  browserDownload,
   browserNavigate,
+  browserWaitForDownload,
 } from "../browser/client-actions.js";
 import type { BrowserFormField } from "../browser/client-actions-core.js";
 import { danger } from "../globals.js";
@@ -368,6 +370,76 @@ export function registerBrowserActionInputCommands(
           return;
         }
         defaultRuntime.log(`upload armed for ${paths.length} file(s)`);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("waitfordownload")
+    .description("Wait for the next download (and save it)")
+    .argument("[path]", "Save path (default: /tmp/clawdbot/downloads/...)")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the next download (default: 120000)",
+      (v: string) => Number(v),
+    )
+    .action(async (outPath: string | undefined, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      try {
+        const result = await browserWaitForDownload(baseUrl, {
+          path: outPath?.trim() || undefined,
+          targetId: opts.targetId?.trim() || undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs)
+            ? opts.timeoutMs
+            : undefined,
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log(`downloaded: ${result.download.path}`);
+      } catch (err) {
+        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  browser
+    .command("download")
+    .description("Click a ref and save the resulting download")
+    .argument("<ref>", "Ref id from snapshot to click")
+    .argument("<path>", "Save path")
+    .option("--target-id <id>", "CDP target id (or unique prefix)")
+    .option(
+      "--timeout-ms <ms>",
+      "How long to wait for the download to start (default: 120000)",
+      (v: string) => Number(v),
+    )
+    .action(async (ref: string, outPath: string, opts, cmd) => {
+      const parent = parentOpts(cmd);
+      const baseUrl = resolveBrowserControlUrl(parent?.url);
+      const profile = parent?.browserProfile;
+      try {
+        const result = await browserDownload(baseUrl, {
+          ref,
+          path: outPath,
+          targetId: opts.targetId?.trim() || undefined,
+          timeoutMs: Number.isFinite(opts.timeoutMs)
+            ? opts.timeoutMs
+            : undefined,
+          profile,
+        });
+        if (parent?.json) {
+          defaultRuntime.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        defaultRuntime.log(`downloaded: ${result.download.path}`);
       } catch (err) {
         defaultRuntime.error(danger(String(err)));
         defaultRuntime.exit(1);

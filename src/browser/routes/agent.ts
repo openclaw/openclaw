@@ -481,6 +481,82 @@ export function registerBrowserAgentRoutes(
     }
   });
 
+  app.post("/wait/download", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const out = toStringOrEmpty(body.path) || undefined;
+    const timeoutMs = toNumber(body.timeoutMs);
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "wait for download");
+      if (!pw) return;
+      const result = await pw.waitForDownloadViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        path: out,
+        timeoutMs: timeoutMs ?? undefined,
+      });
+      res.json({ ok: true, targetId: tab.targetId, download: result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/download", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const ref = toStringOrEmpty(body.ref);
+    const out = toStringOrEmpty(body.path);
+    const timeoutMs = toNumber(body.timeoutMs);
+    if (!ref) return jsonError(res, 400, "ref is required");
+    if (!out) return jsonError(res, 400, "path is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "download");
+      if (!pw) return;
+      const result = await pw.downloadViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        ref,
+        path: out,
+        timeoutMs: timeoutMs ?? undefined,
+      });
+      res.json({ ok: true, targetId: tab.targetId, download: result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/response/body", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const url = toStringOrEmpty(body.url);
+    const timeoutMs = toNumber(body.timeoutMs);
+    const maxChars = toNumber(body.maxChars);
+    if (!url) return jsonError(res, 400, "url is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "response body");
+      if (!pw) return;
+      const result = await pw.responseBodyViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        url,
+        timeoutMs: timeoutMs ?? undefined,
+        maxChars: maxChars ?? undefined,
+      });
+      res.json({ ok: true, targetId: tab.targetId, response: result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
   app.get("/console", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;

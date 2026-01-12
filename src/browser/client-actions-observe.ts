@@ -138,3 +138,47 @@ export async function browserHighlight(
     },
   );
 }
+
+export async function browserResponseBody(
+  baseUrl: string,
+  opts: {
+    url: string;
+    targetId?: string;
+    timeoutMs?: number;
+    maxChars?: number;
+    profile?: string;
+  },
+): Promise<{
+  ok: true;
+  targetId: string;
+  response: {
+    url: string;
+    status?: number;
+    headers?: Record<string, string>;
+    body: string;
+    truncated?: boolean;
+  };
+}> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson<{
+    ok: true;
+    targetId: string;
+    response: {
+      url: string;
+      status?: number;
+      headers?: Record<string, string>;
+      body: string;
+      truncated?: boolean;
+    };
+  }>(`${baseUrl}/response/body${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      targetId: opts.targetId,
+      url: opts.url,
+      timeoutMs: opts.timeoutMs,
+      maxChars: opts.maxChars,
+    }),
+    timeoutMs: 20000,
+  });
+}

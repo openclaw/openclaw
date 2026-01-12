@@ -1,3 +1,7 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+
 import type { CDPSession, Page } from "playwright-core";
 import { devices as playwrightDevices } from "playwright-core";
 import type { BrowserFormField } from "./client-actions-core.js";
@@ -20,6 +24,7 @@ import {
 
 let nextUploadArmId = 0;
 let nextDialogArmId = 0;
+let nextDownloadArmId = 0;
 
 function requireRef(value: unknown): string {
   const raw = typeof value === "string" ? value.trim() : "";
@@ -27,6 +32,71 @@ function requireRef(value: unknown): string {
   const ref = roleRef ?? (raw.startsWith("@") ? raw.slice(1) : raw);
   if (!ref) throw new Error("ref is required");
   return ref;
+}
+
+function buildTempDownloadPath(fileName: string): string {
+  const id = crypto.randomUUID();
+  const safeName = fileName.trim() ? fileName.trim() : "download.bin";
+  return path.join("/tmp/clawdbot/downloads", `${id}-${safeName}`);
+}
+
+function normalizeTimeoutMs(timeoutMs: number | undefined, fallback: number) {
+  return Math.max(500, Math.min(120_000, timeoutMs ?? fallback));
+}
+
+function createPageDownloadWaiter(page: Page, timeoutMs: number) {
+  let done = false;
+  let timer: NodeJS.Timeout | undefined;
+  let handler: ((download: unknown) => void) | undefined;
+
+  const cleanup = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+    if (handler) {
+      page.off("download", handler as never);
+      handler = undefined;
+    }
+  };
+
+  const promise = new Promise<unknown>((resolve, reject) => {
+    handler = (download: unknown) => {
+      if (done) return;
+      done = true;
+      cleanup();
+      resolve(download);
+    };
+
+    page.on("download", handler as never);
+    timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error("Timeout waiting for download"));
+    }, timeoutMs);
+  });
+
+  return {
+    promise,
+    cancel: () => {
+      if (done) return;
+      done = true;
+      cleanup();
+    },
+  };
+}
+
+function matchUrlPattern(pattern: string, url: string): boolean {
+  const p = pattern.trim();
+  if (!p) return false;
+  if (p === url) return true;
+  if (p.includes("*")) {
+    const escaped = p.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    const regex = new RegExp(
+      `^${escaped.replace(/\*\*/g, ".*").replace(/\*/g, ".*")}$`,
+    );
+    return regex.test(url);
+  }
+  return url.includes(p);
 }
 
 function toAIFriendlyError(error: unknown, selector: string): Error {
@@ -883,7 +953,7 @@ export async function armDialogViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
-  const timeout = Math.max(500, Math.min(120_000, opts.timeoutMs ?? 120_000));
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
 
   state.armIdDialog = nextDialogArmId += 1;
   const armId = state.armIdDialog;
@@ -898,6 +968,196 @@ export async function armDialogViaPlaywright(opts: {
     .catch(() => {
       // Ignore timeouts; the dialog may never appear.
     });
+}
+
+export async function waitForDownloadViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  path?: string;
+  timeoutMs?: number;
+}): Promise<{
+  url: string;
+  suggestedFilename: string;
+  path: string;
+}> {
+  const page = await getPageForTargetId(opts);
+  const state = ensurePageState(page);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+
+  state.armIdDownload = nextDownloadArmId += 1;
+  const armId = state.armIdDownload;
+
+  const waiter = createPageDownloadWaiter(page, timeout);
+  try {
+    const download = (await waiter.promise) as {
+      url?: () => string;
+      suggestedFilename?: () => string;
+      saveAs?: (outPath: string) => Promise<void>;
+    };
+    if (state.armIdDownload !== armId) {
+      throw new Error("Download was superseded by another waiter");
+    }
+    const suggested = download.suggestedFilename?.() || "download.bin";
+    const outPath = opts.path?.trim() || buildTempDownloadPath(suggested);
+    await fs.mkdir(path.dirname(outPath), { recursive: true });
+    await download.saveAs?.(outPath);
+    return {
+      url: download.url?.() || "",
+      suggestedFilename: suggested,
+      path: path.resolve(outPath),
+    };
+  } catch (err) {
+    waiter.cancel();
+    throw err;
+  }
+}
+
+export async function downloadViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  ref: string;
+  path: string;
+  timeoutMs?: number;
+}): Promise<{
+  url: string;
+  suggestedFilename: string;
+  path: string;
+}> {
+  const page = await getPageForTargetId(opts);
+  const state = ensurePageState(page);
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 120_000);
+
+  const ref = requireRef(opts.ref);
+  const outPath = String(opts.path ?? "").trim();
+  if (!outPath) throw new Error("path is required");
+
+  state.armIdDownload = nextDownloadArmId += 1;
+  const armId = state.armIdDownload;
+
+  const waiter = createPageDownloadWaiter(page, timeout);
+  try {
+    const locator = refLocator(page, ref);
+    try {
+      await locator.click({ timeout });
+    } catch (err) {
+      throw toAIFriendlyError(err, ref);
+    }
+
+    const download = (await waiter.promise) as {
+      url?: () => string;
+      suggestedFilename?: () => string;
+      saveAs?: (outPath: string) => Promise<void>;
+    };
+    if (state.armIdDownload !== armId) {
+      throw new Error("Download was superseded by another waiter");
+    }
+    const suggested = download.suggestedFilename?.() || "download.bin";
+    await fs.mkdir(path.dirname(outPath), { recursive: true });
+    await download.saveAs?.(outPath);
+    return {
+      url: download.url?.() || "",
+      suggestedFilename: suggested,
+      path: path.resolve(outPath),
+    };
+  } catch (err) {
+    waiter.cancel();
+    throw err;
+  }
+}
+
+export async function responseBodyViaPlaywright(opts: {
+  cdpUrl: string;
+  targetId?: string;
+  url: string;
+  timeoutMs?: number;
+  maxChars?: number;
+}): Promise<{
+  url: string;
+  status?: number;
+  headers?: Record<string, string>;
+  body: string;
+  truncated?: boolean;
+}> {
+  const pattern = String(opts.url ?? "").trim();
+  if (!pattern) throw new Error("url is required");
+  const maxChars =
+    typeof opts.maxChars === "number" && Number.isFinite(opts.maxChars)
+      ? Math.max(1, Math.min(5_000_000, Math.floor(opts.maxChars)))
+      : 200_000;
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
+
+  const page = await getPageForTargetId(opts);
+  ensurePageState(page);
+
+  const promise = new Promise<unknown>((resolve, reject) => {
+    let done = false;
+    let timer: NodeJS.Timeout | undefined;
+    let handler: ((resp: unknown) => void) | undefined;
+
+    const cleanup = () => {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+      if (handler) page.off("response", handler as never);
+    };
+
+    handler = (resp: unknown) => {
+      if (done) return;
+      const r = resp as { url?: () => string };
+      const u = r.url?.() || "";
+      if (!matchUrlPattern(pattern, u)) return;
+      done = true;
+      cleanup();
+      resolve(resp);
+    };
+
+    page.on("response", handler as never);
+    timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(
+        new Error(
+          `Response not found for url pattern "${pattern}". Run 'clawdbot browser requests' to inspect recent network activity.`,
+        ),
+      );
+    }, timeout);
+  });
+
+  const resp = (await promise) as {
+    url?: () => string;
+    status?: () => number;
+    headers?: () => Record<string, string>;
+    body?: () => Promise<Buffer>;
+    text?: () => Promise<string>;
+  };
+
+  const url = resp.url?.() || "";
+  const status = resp.status?.();
+  const headers = resp.headers?.();
+
+  let bodyText = "";
+  try {
+    if (typeof resp.text === "function") {
+      bodyText = await resp.text();
+    } else if (typeof resp.body === "function") {
+      const buf = await resp.body();
+      bodyText = new TextDecoder("utf-8").decode(buf);
+    }
+  } catch (err) {
+    throw new Error(
+      `Failed to read response body for "${url}": ${String(err)}`,
+    );
+  }
+
+  const trimmed =
+    bodyText.length > maxChars ? bodyText.slice(0, maxChars) : bodyText;
+  return {
+    url,
+    status,
+    headers,
+    body: trimmed,
+    truncated: bodyText.length > maxChars ? true : undefined,
+  };
 }
 
 export async function navigateViaPlaywright(opts: {
@@ -930,7 +1190,7 @@ export async function waitForViaPlaywright(opts: {
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
-  const timeout = Math.max(500, Math.min(120_000, opts.timeoutMs ?? 20_000));
+  const timeout = normalizeTimeoutMs(opts.timeoutMs, 20_000);
 
   if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
     await page.waitForTimeout(Math.max(0, opts.timeMs));
