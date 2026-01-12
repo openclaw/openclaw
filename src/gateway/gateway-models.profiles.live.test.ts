@@ -240,18 +240,30 @@ function buildLiveGatewayConfig(params: {
 }): ClawdbotConfig {
   const lmstudioProvider = params.cfg.models?.providers?.lmstudio;
   const baseProviders = params.cfg.models?.providers ?? {};
-  const nextProviders = {
-    ...baseProviders,
-    ...(lmstudioProvider
-      ? {
-          lmstudio: {
-            ...lmstudioProvider,
-            api: "openai-completions",
-          },
-        }
-      : {}),
-    ...(params.providerOverrides ?? {}),
-  };
+  const nextProviders = params.providerOverrides
+    ? {
+        ...baseProviders,
+        ...(lmstudioProvider
+          ? {
+              lmstudio: {
+                ...lmstudioProvider,
+                api: "openai-completions",
+              },
+            }
+          : {}),
+        ...params.providerOverrides,
+      }
+    : {
+        ...baseProviders,
+        ...(lmstudioProvider
+          ? {
+              lmstudio: {
+                ...lmstudioProvider,
+                api: "openai-completions",
+              },
+            }
+          : {}),
+      };
   const providers =
     Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
   return {

@@ -458,6 +458,7 @@ describe("discord tool result dispatch", () => {
       session: { store: "/tmp/clawdbot-sessions.json" },
       discord: {
         dm: { enabled: true, policy: "open" },
+        groupPolicy: "open",
         guilds: { "*": { requireMention: true } },
       },
       messages: {
@@ -550,6 +551,7 @@ describe("discord tool result dispatch", () => {
       messages: { responsePrefix: "PFX" },
       discord: {
         dm: { enabled: true, policy: "open" },
+        groupPolicy: "open",
         guilds: { "*": { requireMention: false } },
       },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
@@ -655,6 +657,7 @@ describe("discord tool result dispatch", () => {
       session: { store: "/tmp/clawdbot-sessions.json" },
       discord: {
         dm: { enabled: true, policy: "open" },
+        groupPolicy: "open",
         guilds: { "*": { requireMention: false } },
       },
       routing: { allowFrom: [] },
@@ -764,6 +767,7 @@ describe("discord tool result dispatch", () => {
       messages: { responsePrefix: "PFX" },
       discord: {
         dm: { enabled: true, policy: "open" },
+        groupPolicy: "open",
         guilds: { "*": { requireMention: false } },
       },
       bindings: [
