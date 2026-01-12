@@ -192,7 +192,7 @@ Offline-friendly alternatives (in increasing complexity):
 - SuCo (research-grade; attractive if there’s a solid implementation you can embed)
 
 Open question:
-- what’s the **best** offline embedding model for “personal assistant memory” on your machines (MacBook + Castle)?
+- what’s the **best** offline embedding model for “personal assistant memory” on your machines (laptop + desktop)?
   - if you already have Ollama: embed with a local model; otherwise ship a small embedding model in the toolchain.
 
 ## Smallest useful pilot

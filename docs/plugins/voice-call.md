@@ -22,6 +22,12 @@ Quick mental model:
 - Configure under `plugins.entries.voice-call.config`
 - Use `clawdbot voicecall …` or the `voice_call` tool
 
+## Where it runs (local vs remote)
+
+The Voice Call plugin runs **inside the Gateway process**.
+
+If you use a remote Gateway, install/configure the plugin on the **machine running the Gateway**, then restart the Gateway to load it.
+
 ## Install
 
 ### Option A: install from npm (recommended)
