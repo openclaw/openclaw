@@ -336,7 +336,6 @@ async function runImagePrompt(params: {
       const message = (await complete(model, context, {
         apiKey: apiKeyInfo.apiKey,
         maxTokens: 512,
-        temperature: 0,
       })) as AssistantMessage;
       return {
         message,
