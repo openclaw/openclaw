@@ -344,14 +344,17 @@ actor PortGuardian {
 
     private func isExpected(_ listener: Listener, port: Int, mode: AppState.ConnectionMode) -> Bool {
         let cmd = listener.command.lowercased()
-        let expectedCommands = ["node", "clawdbot", "tsx", "pnpm", "bun"]
+        let full = listener.fullCommand.lowercased()
         switch mode {
         case .remote:
             // Remote mode expects an SSH tunnel for the gateway WebSocket port.
             if port == GatewayEnvironment.gatewayPort() { return cmd.contains("ssh") }
             return false
         case .local:
-            return expectedCommands.contains { cmd.contains($0) }
+            if !cmd.contains("clawdbot") { return false }
+            if full.contains("gateway-daemon") { return true }
+            // If args are unavailable, treat a clawdbot listener as expected.
+            return full == cmd
         case .unconfigured:
             return false
         }
