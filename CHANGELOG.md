@@ -1,5 +1,10 @@
 # Changelog
 
+# 2026.1.12-1
+
+### Changes
+- Heartbeat: raise default `ackMaxChars` to 300 so any `HEARTBEAT_OK` replies with short padding stay internal (fewer noisy heartbeat posts on providers).
+
 ## 2026.1.11-5
 
 ### Fixes

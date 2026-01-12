@@ -3,7 +3,7 @@ import { HEARTBEAT_TOKEN } from "./tokens.js";
 export const HEARTBEAT_PROMPT =
   "Consider outstanding tasks and HEARTBEAT.md guidance from the workspace context (if present). Checkup sometimes on your human during (user local) day time.";
 export const DEFAULT_HEARTBEAT_EVERY = "30m";
-export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 30;
+export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
 
 export function resolveHeartbeatPrompt(raw?: string): string {
   const trimmed = typeof raw === "string" ? raw.trim() : "";

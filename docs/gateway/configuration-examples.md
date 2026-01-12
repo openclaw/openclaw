@@ -239,7 +239,7 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
         target: "last",
         to: "+15555550123",
         prompt: "HEARTBEAT",
-        ackMaxChars: 30
+        ackMaxChars: 300
       },
       sandbox: {
         mode: "non-main",
