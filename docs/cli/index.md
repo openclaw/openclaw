@@ -221,7 +221,7 @@ Options:
 - `--non-interactive`
 - `--mode <local|remote>`
 - `--flow <quickstart|advanced>`
-- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|zai-api-key|apiKey|minimax-cloud|minimax-api|minimax|opencode-zen|skip>`
+- `--auth-choice <setup-token|claude-cli|token|openai-codex|openai-api-key|codex-cli|antigravity|gemini-api-key|zai-api-key|apiKey|minimax-api|opencode-zen|skip>`
 - `--token-provider <id>` (non-interactive; used with `--auth-choice token`)
 - `--token <token>` (non-interactive; used with `--auth-choice token`)
 - `--token-profile-id <id>` (non-interactive; default: `<provider>:manual`)

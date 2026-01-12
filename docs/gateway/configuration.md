@@ -1807,9 +1807,9 @@ Notes:
 - Responses API enables clean reasoning/output separation; WhatsApp sees only final text.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio context length differs.
 
-### MiniMax API (platform.minimax.io)
+### MiniMax M2.1
 
-Use MiniMax's Anthropic-compatible API directly without LM Studio:
+Use MiniMax M2.1 directly without LM Studio:
 
 ```json5
 {
@@ -1833,25 +1833,7 @@ Use MiniMax's Anthropic-compatible API directly without LM Studio:
             name: "MiniMax M2.1",
             reasoning: false,
             input: ["text"],
-            // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
-            contextWindow: 200000,
-            maxTokens: 8192
-          },
-          {
-            id: "MiniMax-M2.1-lightning",
-            name: "MiniMax M2.1 Lightning",
-            reasoning: false,
-            input: ["text"],
-            cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
-            contextWindow: 200000,
-            maxTokens: 8192
-          },
-          {
-            id: "MiniMax-M2",
-            name: "MiniMax M2",
-            reasoning: true,
-            input: ["text"],
+            // Pricing: update in models.json if you need exact cost tracking.
             cost: { input: 15, output: 60, cacheRead: 2, cacheWrite: 10 },
             contextWindow: 200000,
             maxTokens: 8192
@@ -1864,9 +1846,9 @@ Use MiniMax's Anthropic-compatible API directly without LM Studio:
 ```
 
 Notes:
-- Set `MINIMAX_API_KEY` environment variable or use `clawdbot onboard --auth-choice minimax-cloud`
-- Available models: `MiniMax-M2.1` (default), `MiniMax-M2.1-lightning` (~100 tps), `MiniMax-M2` (reasoning)
-- Pricing is a placeholder; MiniMax doesn't publish public rates. Override in `models.json` for accurate cost tracking.
+- Set `MINIMAX_API_KEY` environment variable or use `clawdbot onboard --auth-choice minimax-api`.
+- Available model: `MiniMax-M2.1` (default).
+- Update pricing in `models.json` if you need exact cost tracking.
 
 Notes:
 - Supported APIs: `openai-completions`, `openai-responses`, `anthropic-messages`,
