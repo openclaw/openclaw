@@ -8,6 +8,7 @@ import {
 } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
+import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
 import {
   derivePromptTokens,
   normalizeUsage,
@@ -248,14 +249,22 @@ export function buildStatusMessage(args: StatusArgs): string {
   const runtime = (() => {
     const sandboxMode = args.agent?.sandbox?.mode ?? "off";
     if (sandboxMode === "off") return { label: "direct" };
-    const sessionScope = args.sessionScope ?? "per-sender";
-    const mainKey = resolveMainSessionKey({
-      session: { scope: sessionScope },
-    });
     const sessionKey = args.sessionKey?.trim();
-    const sandboxed = sessionKey
-      ? sandboxMode === "all" || sessionKey !== mainKey.trim()
-      : false;
+    const sandboxed = (() => {
+      if (!sessionKey) return false;
+      if (sandboxMode === "all") return true;
+      if (args.config) {
+        return resolveSandboxRuntimeStatus({
+          cfg: args.config,
+          sessionKey,
+        }).sandboxed;
+      }
+      const sessionScope = args.sessionScope ?? "per-sender";
+      const mainKey = resolveMainSessionKey({
+        session: { scope: sessionScope },
+      });
+      return sessionKey !== mainKey.trim();
+    })();
     const runtime = sandboxed ? "docker" : sessionKey ? "direct" : "unknown";
     return {
       label: `${runtime}/${sandboxMode}`,

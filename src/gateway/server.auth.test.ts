@@ -131,6 +131,13 @@ describe("gateway server auth/connect", () => {
     { timeout: 15000 },
     async () => {
       const { server, ws } = await startServerWithClient();
+      const closeInfoPromise = new Promise<{ code: number; reason: string }>(
+        (resolve) => {
+          ws.once("close", (code, reason) =>
+            resolve({ code, reason: reason.toString() }),
+          );
+        },
+      );
 
       ws.send(
         JSON.stringify({
@@ -164,18 +171,7 @@ describe("gateway server auth/connect", () => {
         "invalid connect params",
       );
 
-      const closeInfo = await new Promise<{ code: number; reason: string }>(
-        (resolve, reject) => {
-          const timer = setTimeout(
-            () => reject(new Error("close timeout")),
-            3000,
-          );
-          ws.once("close", (code, reason) => {
-            clearTimeout(timer);
-            resolve({ code, reason: reason.toString() });
-          });
-        },
-      );
+      const closeInfo = await closeInfoPromise;
       expect(closeInfo.code).toBe(1008);
       expect(closeInfo.reason).toContain("invalid connect params");
 

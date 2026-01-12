@@ -101,7 +101,7 @@ describe("queue followups", () => {
       const secondText = Array.isArray(second) ? second[0]?.text : second?.text;
       expect(secondText).toBe("main");
 
-      await vi.runAllTimersAsync();
+      await vi.advanceTimersByTimeAsync(500);
       await Promise.resolve();
 
       expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(2);
