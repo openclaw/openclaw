@@ -2446,7 +2446,11 @@ export function resolveDiscordShouldRequireMention(params: {
 }): boolean {
   if (!params.isGuildMessage) return false;
   if (params.isThread && params.channelConfig?.autoThread) return false;
-  return params.channelConfig?.requireMention ?? params.guildInfo?.requireMention ?? true;
+  return (
+    params.channelConfig?.requireMention ??
+    params.guildInfo?.requireMention ??
+    true
+  );
 }
 
 export function isDiscordGroupAllowedByPolicy(params: {

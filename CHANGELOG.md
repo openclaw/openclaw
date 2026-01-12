@@ -6,7 +6,7 @@
 - Subagents: add config to set default sub-agent model (`agents.defaults.subagents.model` + per-agent override); still overridden by `sessions_spawn.model`.
 
 ### Fixes
-- Tools/Models: MiniMax vision now uses the Coding Plan VLM endpoint (`/v1/coding_plan/vlm`) so the `image` tool works with MiniMax keys.
+- Tools/Models: MiniMax vision now uses the Coding Plan VLM endpoint (`/v1/coding_plan/vlm`) so the `image` tool works with MiniMax keys (also accepts `@/path/to/file.png`-style inputs).
 - Gateway/macOS: reduce noisy loopback WS “closed before connect” logs during tests.
 
 ## 2026.1.12-1

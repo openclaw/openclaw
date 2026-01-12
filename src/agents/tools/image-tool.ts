@@ -440,8 +440,11 @@ export function createImageTool(options?: {
         args && typeof args === "object"
           ? (args as Record<string, unknown>)
           : {};
-      const imageRaw =
+      const imageRawInput =
         typeof record.image === "string" ? record.image.trim() : "";
+      const imageRaw = imageRawInput.startsWith("@")
+        ? imageRawInput.slice(1).trim()
+        : imageRawInput;
       if (!imageRaw) throw new Error("image required");
       const promptRaw =
         typeof record.prompt === "string" && record.prompt.trim()
