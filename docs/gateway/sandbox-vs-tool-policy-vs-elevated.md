@@ -79,8 +79,6 @@ Available groups:
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
 
-Legacy shorthand: `memory` expands to `group:memory`.
-
 ## Elevated: exec-only “run on host”
 
 Elevated does **not** grant extra tools; it only affects `exec`.

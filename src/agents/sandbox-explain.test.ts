@@ -65,7 +65,7 @@ describe("sandbox explain helpers", () => {
     ]);
   });
 
-  it("supports legacy 'memory' shorthand and deny wins after expansion", () => {
+  it("denies still win after group expansion", () => {
     const cfg: ClawdbotConfig = {
       agents: {
         defaults: {
@@ -75,7 +75,7 @@ describe("sandbox explain helpers", () => {
       tools: {
         sandbox: {
           tools: {
-            allow: ["memory"],
+            allow: ["group:memory"],
             deny: ["memory_get"],
           },
         },

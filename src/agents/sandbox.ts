@@ -269,9 +269,6 @@ function expandToolGroupEntry(entry: string): string[] {
   if (!raw) return [];
   const lower = raw.toLowerCase();
 
-  // Back-compat shorthand: "memory" => "group:memory"
-  if (lower === "memory") return TOOL_GROUPS["group:memory"];
-
   const group = TOOL_GROUPS[lower];
   if (group) return group;
   return [raw];

@@ -182,8 +182,6 @@ Sandbox tool policy supports `group:*` entries that expand to multiple concrete 
 - `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
 - `group:memory`: `memory_search`, `memory_get`
 
-Legacy shorthand: `memory` expands to `group:memory`.
-
 ### Elevated Mode
 `tools.elevated` is the global baseline (sender-based allowlist). `agents.list[].tools.elevated` can further restrict elevated for specific agents (both must allow).
 
