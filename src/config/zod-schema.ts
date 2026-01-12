@@ -867,6 +867,48 @@ const AgentToolsSchema = z
   })
   .optional();
 
+const MemorySearchSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    provider: z.union([z.literal("openai"), z.literal("local")]).optional(),
+    fallback: z.union([z.literal("openai"), z.literal("none")]).optional(),
+    model: z.string().optional(),
+    local: z
+      .object({
+        modelPath: z.string().optional(),
+        modelCacheDir: z.string().optional(),
+      })
+      .optional(),
+    store: z
+      .object({
+        driver: z.literal("sqlite").optional(),
+        path: z.string().optional(),
+      })
+      .optional(),
+    chunking: z
+      .object({
+        tokens: z.number().int().positive().optional(),
+        overlap: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
+    sync: z
+      .object({
+        onSessionStart: z.boolean().optional(),
+        onSearch: z.boolean().optional(),
+        watch: z.boolean().optional(),
+        watchDebounceMs: z.number().int().nonnegative().optional(),
+        intervalMinutes: z.number().int().nonnegative().optional(),
+      })
+      .optional(),
+    query: z
+      .object({
+        maxResults: z.number().int().positive().optional(),
+        minScore: z.number().min(0).max(1).optional(),
+      })
+      .optional(),
+  })
+  .optional();
+
 const AgentEntrySchema = z.object({
   id: z.string(),
   default: z.boolean().optional(),
@@ -874,6 +916,7 @@ const AgentEntrySchema = z.object({
   workspace: z.string().optional(),
   agentDir: z.string().optional(),
   model: z.string().optional(),
+  memorySearch: MemorySearchSchema,
   humanDelay: HumanDelaySchema.optional(),
   identity: IdentitySchema,
   groupChat: GroupChatSchema,
@@ -1098,6 +1141,7 @@ const AgentDefaultsSchema = z
     userTimezone: z.string().optional(),
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
+    memorySearch: MemorySearchSchema,
     contextPruning: z
       .object({
         mode: z

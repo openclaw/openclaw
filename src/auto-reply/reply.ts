@@ -40,7 +40,6 @@ import {
 import { normalizeMainKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { INTERNAL_MESSAGE_PROVIDER } from "../utils/message-provider.js";
-import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveCommandAuthorization } from "./command-auth.js";
 import { hasControlCommand } from "./command-detection.js";
 import {
@@ -493,6 +492,15 @@ export async function getReplyFromConfig(
     modelAliases: configuredAliases,
     allowStatusDirective,
   });
+  const hasInlineStatus =
+    parsedDirectives.hasStatusDirective &&
+    parsedDirectives.cleaned.trim().length > 0;
+  if (hasInlineStatus) {
+    parsedDirectives = {
+      ...parsedDirectives,
+      hasStatusDirective: false,
+    };
+  }
   if (
     isGroup &&
     ctx.WasMentioned !== true &&
@@ -522,7 +530,6 @@ export async function getReplyFromConfig(
     if (noMentions.trim().length > 0) {
       const directiveOnlyCheck = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
-        allowStatusDirective,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
         const allowInlineStatus =
@@ -698,11 +705,10 @@ export async function getReplyFromConfig(
     ? undefined
     : directives.rawModelDirective;
 
+  const inlineStatusRequested =
+    hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
+
   if (!command.isAuthorizedSender) {
-    // Treat slash tokens as plain text for unauthorized senders.
-    cleanedBody = existingBody;
-    sessionCtx.Body = cleanedBody;
-    sessionCtx.BodyStripped = cleanedBody;
     directives = {
       ...directives,
       hasThinkDirective: false,
@@ -863,11 +869,7 @@ export async function getReplyFromConfig(
       cfg,
       agentId,
       isGroup,
-    }) &&
-    directives.hasStatusDirective &&
-    allowTextCommands &&
-    command.isAuthorizedSender &&
-    command.commandBodyNormalized !== "/status";
+    }) && inlineStatusRequested;
   if (handleInlineStatus) {
     const inlineStatusReply = await buildStatusReply({
       cfg,
@@ -1158,7 +1160,6 @@ export async function getReplyFromConfig(
     resolvedQueue.mode === "collect" ||
     resolvedQueue.mode === "steer-backlog";
   const authProfileId = sessionEntry?.authProfileOverride;
-
   const followupRun = {
     prompt: queuedBody,
     messageId: sessionCtx.MessageSid,
@@ -1197,7 +1198,7 @@ export async function getReplyFromConfig(
       ownerNumbers:
         command.ownerList.length > 0 ? command.ownerList : undefined,
       extraSystemPrompt: extraSystemPrompt || undefined,
-      ...(isReasoningTagProvider(provider) ? { enforceFinalTag: true } : {}),
+      ...(provider === "ollama" ? { enforceFinalTag: true } : {}),
     },
   };
 

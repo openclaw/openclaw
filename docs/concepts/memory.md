@@ -67,3 +67,38 @@ Details:
 
 For the full compaction lifecycle, see
 [Session management + compaction](/reference/session-management-compaction).
+
+## Vector memory search
+
+Clawdbot can build a small vector index over `MEMORY.md` and `memory/*.md` so
+semantic queries can find related notes even when wording differs.
+
+Defaults:
+- Enabled by default.
+- Watches memory files for changes (debounced).
+- Uses remote embeddings (OpenAI) unless configured for local.
+- Local mode uses node-llama-cpp and may require `pnpm approve-builds`.
+
+Config example:
+
+```json5
+agents: {
+  defaults: {
+    memorySearch: {
+      provider: "openai",
+      model: "text-embedding-3-small",
+      fallback: "openai",
+      sync: { watch: true }
+    }
+  }
+}
+```
+
+Tools:
+- `memory_search` — returns snippets with file + line ranges.
+- `memory_get` — read memory file content by path.
+
+Local mode:
+- Set `agents.defaults.memorySearch.provider = "local"`.
+- Provide `agents.defaults.memorySearch.local.modelPath` (GGUF or `hf:` URI).
+- Optional: set `agents.defaults.memorySearch.fallback = "none"` to avoid remote fallback.

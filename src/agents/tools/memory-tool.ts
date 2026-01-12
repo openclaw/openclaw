@@ -1,0 +1,101 @@
+import { Type } from "@sinclair/typebox";
+
+import type { ClawdbotConfig } from "../../config/config.js";
+import { getMemorySearchManager } from "../../memory/index.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
+import { resolveMemorySearchConfig } from "../memory-search.js";
+import type { AnyAgentTool } from "./common.js";
+import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+
+const MemorySearchSchema = Type.Object({
+  query: Type.String(),
+  maxResults: Type.Optional(Type.Number()),
+  minScore: Type.Optional(Type.Number()),
+});
+
+const MemoryGetSchema = Type.Object({
+  path: Type.String(),
+  from: Type.Optional(Type.Number()),
+  lines: Type.Optional(Type.Number()),
+});
+
+export function createMemorySearchTool(options: {
+  config?: ClawdbotConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg) return null;
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  if (!resolveMemorySearchConfig(cfg, agentId)) return null;
+  return {
+    label: "Memory Search",
+    name: "memory_search",
+    description:
+      "Search agent memory files (MEMORY.md + memory/*.md) using semantic vectors.",
+    parameters: MemorySearchSchema,
+    execute: async (_toolCallId, params) => {
+      const query = readStringParam(params, "query", { required: true });
+      const maxResults = readNumberParam(params, "maxResults");
+      const minScore = readNumberParam(params, "minScore");
+      const { manager, error } = await getMemorySearchManager({
+        cfg,
+        agentId,
+      });
+      if (!manager) {
+        return jsonResult({ results: [], disabled: true, error });
+      }
+      const results = await manager.search(query, {
+        maxResults,
+        minScore,
+        sessionKey: options.agentSessionKey,
+      });
+      const status = manager.status();
+      return jsonResult({
+        results,
+        provider: status.provider,
+        model: status.model,
+        fallback: status.fallback,
+      });
+    },
+  };
+}
+
+export function createMemoryGetTool(options: {
+  config?: ClawdbotConfig;
+  agentSessionKey?: string;
+}): AnyAgentTool | null {
+  const cfg = options.config;
+  if (!cfg) return null;
+  const agentId = resolveSessionAgentId({
+    sessionKey: options.agentSessionKey,
+    config: cfg,
+  });
+  if (!resolveMemorySearchConfig(cfg, agentId)) return null;
+  return {
+    label: "Memory Get",
+    name: "memory_get",
+    description: "Read a memory file by path (workspace-relative).",
+    parameters: MemoryGetSchema,
+    execute: async (_toolCallId, params) => {
+      const relPath = readStringParam(params, "path", { required: true });
+      const from = readNumberParam(params, "from", { integer: true });
+      const lines = readNumberParam(params, "lines", { integer: true });
+      const { manager, error } = await getMemorySearchManager({
+        cfg,
+        agentId,
+      });
+      if (!manager) {
+        return jsonResult({ path: relPath, text: "", disabled: true, error });
+      }
+      const result = await manager.readFile({
+        relPath,
+        from: from ?? undefined,
+        lines: lines ?? undefined,
+      });
+      return jsonResult(result);
+    },
+  };
+}

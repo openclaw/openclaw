@@ -70,6 +70,10 @@ clawdbot [--dev] [--profile <name>] <command>
     enable
     disable
     doctor
+  memory
+    status
+    index
+    search
   message
   agent
   agents
@@ -187,6 +191,14 @@ Manage extensions and their config:
 - `clawdbot plugins doctor` — report plugin load errors.
 
 Most plugin changes require a gateway restart. See [/plugin](/plugin).
+
+## Memory
+
+Vector search over `MEMORY.md` + `memory/*.md`:
+
+- `clawdbot memory status` — show index stats.
+- `clawdbot memory index` — reindex memory files.
+- `clawdbot memory search "<query>"` — semantic search over memory.
 
 ## Chat slash commands
 

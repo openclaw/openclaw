@@ -222,6 +222,16 @@
       "title": "Session Status",
       "detailKeys": ["sessionKey", "model"]
     },
+    "memory_search": {
+      "emoji": "🧠",
+      "title": "Memory Search",
+      "detailKeys": ["query"]
+    },
+    "memory_get": {
+      "emoji": "📓",
+      "title": "Memory Get",
+      "detailKeys": ["path", "from", "lines"]
+    },
     "whatsapp_login": {
       "emoji": "🟢",
       "title": "WhatsApp Login",

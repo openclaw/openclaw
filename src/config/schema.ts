@@ -115,6 +115,23 @@ const FIELD_LABELS: Record<string, string> = {
   "gateway.reload.mode": "Config Reload Mode",
   "gateway.reload.debounceMs": "Config Reload Debounce (ms)",
   "agents.defaults.workspace": "Workspace",
+  "agents.defaults.memorySearch": "Memory Search",
+  "agents.defaults.memorySearch.enabled": "Enable Memory Search",
+  "agents.defaults.memorySearch.provider": "Memory Search Provider",
+  "agents.defaults.memorySearch.model": "Memory Search Model",
+  "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
+  "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
+  "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
+  "agents.defaults.memorySearch.chunking.tokens": "Memory Chunk Tokens",
+  "agents.defaults.memorySearch.chunking.overlap":
+    "Memory Chunk Overlap Tokens",
+  "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
+  "agents.defaults.memorySearch.sync.onSearch": "Index on Search (Lazy)",
+  "agents.defaults.memorySearch.sync.watch": "Watch Memory Files",
+  "agents.defaults.memorySearch.sync.watchDebounceMs":
+    "Memory Watch Debounce (ms)",
+  "agents.defaults.memorySearch.query.maxResults": "Memory Search Max Results",
+  "agents.defaults.memorySearch.query.minScore": "Memory Search Min Score",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
   "auth.cooldowns.billingBackoffHours": "Billing Backoff (hours)",
@@ -215,6 +232,20 @@ const FIELD_HELP: Record<string, string> = {
     "Failure window (hours) for backoff counters (default: 24).",
   "agents.defaults.models":
     "Configured model catalog (keys are full provider/model IDs).",
+  "agents.defaults.memorySearch":
+    "Vector search over MEMORY.md and memory/*.md (per-agent overrides supported).",
+  "agents.defaults.memorySearch.provider":
+    'Embedding provider ("openai" or "local").',
+  "agents.defaults.memorySearch.local.modelPath":
+    "Local GGUF model path or hf: URI (node-llama-cpp).",
+  "agents.defaults.memorySearch.fallback":
+    'Fallback to OpenAI when local embeddings fail ("openai" or "none").',
+  "agents.defaults.memorySearch.store.path":
+    "SQLite index path (default: ~/.clawdbot/memory/{agentId}.sqlite).",
+  "agents.defaults.memorySearch.sync.onSearch":
+    "Lazy sync: reindex on first search after a change.",
+  "agents.defaults.memorySearch.sync.watch":
+    "Watch memory files for changes (chokidar).",
   "plugins.enabled": "Enable plugin/extension loading (default: true).",
   "plugins.allow":
     "Optional allowlist of plugin ids; when set, only listed plugins load.",

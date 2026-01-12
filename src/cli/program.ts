@@ -50,6 +50,7 @@ import { registerDocsCli } from "./docs-cli.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 import { registerHooksCli } from "./hooks-cli.js";
 import { registerLogsCli } from "./logs-cli.js";
+import { registerMemoryCli } from "./memory-cli.js";
 import { registerModelsCli } from "./models-cli.js";
 import { registerNodesCli } from "./nodes-cli.js";
 import { registerPairingCli } from "./pairing-cli.js";
@@ -1213,6 +1214,7 @@ ${theme.muted("Docs:")} ${formatDocsLink(
   registerDaemonCli(program);
   registerGatewayCli(program);
   registerLogsCli(program);
+  registerMemoryCli(program);
   registerModelsCli(program);
   registerNodesCli(program);
   registerSandboxCli(program);

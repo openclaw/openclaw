@@ -996,6 +996,47 @@ export type AgentToolsConfig = {
   };
 };
 
+export type MemorySearchConfig = {
+  /** Enable vector memory search (default: true). */
+  enabled?: boolean;
+  /** Embedding provider mode. */
+  provider?: "openai" | "local";
+  /** Fallback behavior when local embeddings fail. */
+  fallback?: "openai" | "none";
+  /** Embedding model id (remote) or alias (local). */
+  model?: string;
+  /** Local embedding settings (node-llama-cpp). */
+  local?: {
+    /** GGUF model path or hf: URI. */
+    modelPath?: string;
+    /** Optional cache directory for local models. */
+    modelCacheDir?: string;
+  };
+  /** Index storage configuration. */
+  store?: {
+    driver?: "sqlite";
+    path?: string;
+  };
+  /** Chunking configuration. */
+  chunking?: {
+    tokens?: number;
+    overlap?: number;
+  };
+  /** Sync behavior. */
+  sync?: {
+    onSessionStart?: boolean;
+    onSearch?: boolean;
+    watch?: boolean;
+    watchDebounceMs?: number;
+    intervalMinutes?: number;
+  };
+  /** Query behavior. */
+  query?: {
+    maxResults?: number;
+    minScore?: number;
+  };
+};
+
 export type ToolsConfig = {
   allow?: string[];
   deny?: string[];
@@ -1070,6 +1111,7 @@ export type AgentConfig = {
   workspace?: string;
   agentDir?: string;
   model?: string;
+  memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
   identity?: IdentityConfig;
@@ -1534,6 +1576,8 @@ export type AgentDefaultsConfig = {
   contextPruning?: AgentContextPruningConfig;
   /** Compaction tuning and pre-compaction memory flush behavior. */
   compaction?: AgentCompactionConfig;
+  /** Vector memory search configuration (per-agent overrides supported). */
+  memorySearch?: MemorySearchConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
   /** Default verbose level when no /verbose directive is present. */
