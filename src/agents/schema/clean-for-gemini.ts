@@ -74,9 +74,7 @@ const TYPE_UNION_IGNORED_KEYS = new Set([
   "default",
 ]);
 
-function tryFlattenTypeUnion(
-  variants: unknown[],
-): { type: string } | null {
+function tryFlattenTypeUnion(variants: unknown[]): { type: string } | null {
   if (variants.length === 0) return null;
 
   const types = new Set<string>();
