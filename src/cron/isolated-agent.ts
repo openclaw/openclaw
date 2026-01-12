@@ -251,10 +251,11 @@ export async function runCronIsolatedAgentTurn(params: {
   const agentId = agentConfigOverride
     ? (normalizedRequested ?? defaultAgentId)
     : defaultAgentId;
-  const agentCfg: AgentDefaultsConfig = {
-    ...(params.cfg.agents?.defaults ?? {}),
-    ...(agentOverrideRest as Partial<AgentDefaultsConfig>),
-  };
+  const agentCfg: AgentDefaultsConfig = Object.assign(
+    {},
+    params.cfg.agents?.defaults,
+    agentOverrideRest as Partial<AgentDefaultsConfig>,
+  );
   if (typeof overrideModel === "string") {
     agentCfg.model = { primary: overrideModel };
   } else if (overrideModel) {
@@ -262,7 +263,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
   const cfgWithAgentDefaults: ClawdbotConfig = {
     ...params.cfg,
-    agents: { ...(params.cfg.agents ?? {}), defaults: agentCfg },
+    agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };
 
   const baseSessionKey = (
