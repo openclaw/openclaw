@@ -31,10 +31,10 @@ These files live under the workspace (`agents.defaults.workspace`, default
 
 ## Automatic memory flush (pre-compaction ping)
 
-When a session is **close to auto-compaction**, Clawdbot triggers a **silent
+When a session is **close to auto-compaction**, Clawdbot triggers a **silent,
 agentic turn** that reminds the model to write durable memory **before** the
-context is compacted. The default prompt encourages the model to respond with
-`NO_REPLY` when there's nothing to store, so the user never sees this turn.
+context is compacted. The default prompts explicitly say the model *may reply*,
+but usually `NO_REPLY` is the correct response so the user never sees this turn.
 
 This is controlled by `agents.defaults.compaction.memoryFlush`:
 
@@ -60,6 +60,7 @@ Details:
 - **Soft threshold**: flush triggers when the session token estimate crosses
   `contextWindow - reserveTokensFloor - softThresholdTokens`.
 - **Silent** by default: prompts include `NO_REPLY` so nothing is delivered.
+- **Two prompts**: a user prompt plus a system prompt append the reminder.
 - **One flush per compaction cycle** (tracked in `sessions.json`).
 - **Workspace must be writable**: if the session runs sandboxed with
   `workspaceAccess: "ro"` or `"none"`, the flush is skipped.
