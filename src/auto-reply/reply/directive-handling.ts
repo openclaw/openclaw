@@ -464,7 +464,11 @@ export type InlineDirectives = {
 
 export function parseInlineDirectives(
   body: string,
-  options?: { modelAliases?: string[]; disableElevated?: boolean },
+  options?: {
+    modelAliases?: string[];
+    disableElevated?: boolean;
+    allowStatusDirective?: boolean;
+  },
 ): InlineDirectives {
   const {
     cleaned: thinkCleaned,
@@ -497,8 +501,11 @@ export function parseInlineDirectives(
         hasDirective: false,
       }
     : extractElevatedDirective(reasoningCleaned);
+  const allowStatusDirective = options?.allowStatusDirective !== false;
   const { cleaned: statusCleaned, hasDirective: hasStatusDirective } =
-    extractStatusDirective(elevatedCleaned);
+    allowStatusDirective
+      ? extractStatusDirective(elevatedCleaned)
+      : { cleaned: elevatedCleaned, hasDirective: false };
   const {
     cleaned: modelCleaned,
     rawModel,

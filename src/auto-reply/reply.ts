@@ -435,6 +435,20 @@ export async function getReplyFromConfig(
     sessionCtx.BodyStripped ??
     sessionCtx.Body ??
     "";
+  const command = buildCommandContext({
+    ctx,
+    cfg,
+    agentId,
+    sessionKey,
+    isGroup,
+    triggerBodyNormalized,
+    commandAuthorized,
+  });
+  const allowTextCommands = shouldHandleTextCommands({
+    cfg,
+    surface: command.surface,
+    commandSource: ctx.CommandSource,
+  });
   const clearInlineDirectives = (cleaned: string): InlineDirectives => ({
     cleaned,
     hasThinkDirective: false,
@@ -475,6 +489,7 @@ export async function getReplyFromConfig(
     .filter((alias) => !reservedCommands.has(alias.toLowerCase()));
   let parsedDirectives = parseInlineDirectives(commandSource, {
     modelAliases: configuredAliases,
+    allowStatusDirective: command.isAuthorizedSender,
   });
   if (
     isGroup &&
@@ -506,9 +521,19 @@ export async function getReplyFromConfig(
     if (noMentions.trim().length > 0) {
       const directiveOnlyCheck = parseInlineDirectives(noMentions, {
         modelAliases: configuredAliases,
+        allowStatusDirective: command.isAuthorizedSender,
       });
       if (directiveOnlyCheck.cleaned.trim().length > 0) {
-        parsedDirectives = clearInlineDirectives(parsedDirectives.cleaned);
+        const allowInlineStatus =
+          parsedDirectives.hasStatusDirective &&
+          allowTextCommands &&
+          command.isAuthorizedSender;
+        parsedDirectives = allowInlineStatus
+          ? {
+              ...clearInlineDirectives(parsedDirectives.cleaned),
+              hasStatusDirective: true,
+            }
+          : clearInlineDirectives(parsedDirectives.cleaned);
       }
     }
   }
@@ -530,6 +555,7 @@ export async function getReplyFromConfig(
     if (!sessionCtx.CommandBody && !sessionCtx.RawBody) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
+        allowStatusDirective: command.isAuthorizedSender,
       }).cleaned;
     }
 
@@ -537,6 +563,7 @@ export async function getReplyFromConfig(
     if (markerIndex < 0) {
       return parseInlineDirectives(existingBody, {
         modelAliases: configuredAliases,
+        allowStatusDirective: command.isAuthorizedSender,
       }).cleaned;
     }
 
@@ -549,6 +576,7 @@ export async function getReplyFromConfig(
     );
     const cleanedTail = parseInlineDirectives(tail, {
       modelAliases: configuredAliases,
+      allowStatusDirective: command.isAuthorizedSender,
     }).cleaned;
     return `${head}${cleanedTail}`;
   })();
@@ -669,20 +697,6 @@ export async function getReplyFromConfig(
     ? undefined
     : directives.rawModelDirective;
 
-  const command = buildCommandContext({
-    ctx,
-    cfg,
-    agentId,
-    sessionKey,
-    isGroup,
-    triggerBodyNormalized,
-    commandAuthorized,
-  });
-  const allowTextCommands = shouldHandleTextCommands({
-    cfg,
-    surface: command.surface,
-    commandSource: ctx.CommandSource,
-  });
   if (!command.isAuthorizedSender) {
     directives = {
       ...directives,
