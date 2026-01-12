@@ -91,8 +91,9 @@ Notes:
 - Profile names: lowercase alphanumeric + hyphens only (max 64 chars).
 - Port range: 18800-18899 (~100 profiles max).
 - Remote profiles are attach-only (no start/stop/reset).
-- `snapshot` defaults to `ai`; use `aria` for the accessibility tree.
-- `act` requires `ref` from `snapshot --format ai`; use `evaluate` for rare CSS selector needs.
+- `snapshot` defaults to `ai` when Playwright is installed; use `aria` for the accessibility tree.
+- `snapshot` also supports role-snapshot options (`interactive`, `compact`, `depth`, `selector`) which return refs like `e12`.
+- `act` requires `ref` from `snapshot` (numeric `12` from AI snapshots, or `e12` from role snapshots); use `evaluate` for rare CSS selector needs.
 - Avoid `act` → `wait` by default; use it only in exceptional cases (no reliable UI state to wait on).
 - `upload` can optionally pass a `ref` to auto-click after arming.
 - `upload` also supports `inputRef` (aria ref) or `element` (CSS selector) to set `<input type="file">` directly.

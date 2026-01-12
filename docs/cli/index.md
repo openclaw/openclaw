@@ -746,7 +746,7 @@ Manage:
 
 Inspect:
 - `browser screenshot [targetId] [--full-page] [--ref <ref>] [--element <selector>] [--type png|jpeg]`
-- `browser snapshot [--format aria|ai] [--target-id <id>] [--limit <n>] [--out <path>]`
+- `browser snapshot [--format aria|ai] [--target-id <id>] [--limit <n>] [--interactive] [--compact] [--depth <n>] [--selector <sel>] [--out <path>]`
 
 Actions:
 - `browser navigate <url> [--target-id <id>]`

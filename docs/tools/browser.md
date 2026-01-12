@@ -156,7 +156,7 @@ All endpoints accept `?profile=<name>`.
 
 ### Playwright requirement
 
-Some features (navigate/act/ai snapshot, element screenshots, PDF) require
+Some features (navigate/act/AI snapshot/role snapshot, element screenshots, PDF) require
 Playwright. If Playwright isn’t installed, those endpoints return a clear 501
 error. ARIA snapshots and basic screenshots still work.
 
@@ -189,8 +189,11 @@ Inspection:
 - `clawdbot browser screenshot`
 - `clawdbot browser screenshot --full-page`
 - `clawdbot browser screenshot --ref 12`
+- `clawdbot browser screenshot --ref e12`
 - `clawdbot browser snapshot`
 - `clawdbot browser snapshot --format aria --limit 200`
+- `clawdbot browser snapshot --interactive --compact --depth 6`
+- `clawdbot browser snapshot --selector "#main" --interactive`
 - `clawdbot browser console --level error`
 - `clawdbot browser pdf`
 
@@ -198,6 +201,7 @@ Actions:
 - `clawdbot browser navigate https://example.com`
 - `clawdbot browser resize 1280 720`
 - `clawdbot browser click 12 --double`
+- `clawdbot browser click e12 --double`
 - `clawdbot browser type 23 "hello" --submit`
 - `clawdbot browser press Enter`
 - `clawdbot browser hover 44`
@@ -213,10 +217,13 @@ Notes:
 - `upload` and `dialog` are **arming** calls; run them before the click/press
   that triggers the chooser/dialog.
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
-- `snapshot` defaults to `ai` when available; use `--format aria` for the
-  accessibility tree.
-- `click`/`type` require a `ref` from `snapshot` (CSS selectors are intentionally
-  not supported for actions).
+- `snapshot`:
+  - `--format ai` (default when Playwright is installed): returns an AI snapshot with numeric refs (`aria-ref="<n>"`).
+  - `--format aria`: returns the accessibility tree (no refs; inspection only).
+  - Role snapshot options (`--interactive`, `--compact`, `--depth`, `--selector`) force a role-based snapshot with refs like `ref=e12`.
+  - `--interactive` outputs a flat, easy-to-pick list of interactive elements (best for driving actions).
+- `click`/`type`/etc require a `ref` from `snapshot` (either numeric `12` or role ref `e12`).
+  CSS selectors are intentionally not supported for actions.
 
 ## Security & privacy
 
