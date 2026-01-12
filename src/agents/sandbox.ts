@@ -172,6 +172,7 @@ const DEFAULT_TOOL_ALLOW = [
   "write",
   "edit",
   "apply_patch",
+  "image",
   "sessions_list",
   "sessions_history",
   "sessions_send",

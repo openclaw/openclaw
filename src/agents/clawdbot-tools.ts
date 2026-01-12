@@ -31,6 +31,7 @@ export function createClawdbotTools(options?: {
   agentProvider?: GatewayMessageProvider;
   agentAccountId?: string;
   agentDir?: string;
+  sandboxRoot?: string;
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: ClawdbotConfig;
@@ -46,6 +47,7 @@ export function createClawdbotTools(options?: {
   const imageTool = createImageTool({
     config: options?.config,
     agentDir: options?.agentDir,
+    sandboxRoot: options?.sandboxRoot,
   });
   const memorySearchTool = createMemorySearchTool({
     config: options?.config,

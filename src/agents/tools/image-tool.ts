@@ -24,6 +24,7 @@ import { runWithImageModelFallback } from "../model-fallback.js";
 import { parseModelRef } from "../model-selection.js";
 import { ensureClawdbotModelsJson } from "../models-config.js";
 import { extractAssistantText } from "../pi-embedded-utils.js";
+import { assertSandboxPath } from "../sandbox-paths.js";
 import type { AnyAgentTool } from "./common.js";
 
 const DEFAULT_PROMPT = "Describe the image.";
@@ -296,6 +297,7 @@ async function runImagePrompt(params: {
 export function createImageTool(options?: {
   config?: ClawdbotConfig;
   agentDir?: string;
+  sandboxRoot?: string;
 }): AnyAgentTool | null {
   const agentDir = options?.agentDir;
   if (!agentDir?.trim()) {
@@ -337,9 +339,23 @@ export function createImageTool(options?: {
         typeof record.maxBytesMb === "number" ? record.maxBytesMb : undefined;
       const maxBytes = pickMaxBytes(options?.config, maxBytesMb);
 
-      const resolvedImage = imageRaw.startsWith("~")
-        ? resolveUserPath(imageRaw)
-        : imageRaw;
+      const sandboxRoot = options?.sandboxRoot?.trim();
+      const isUrl = /^https?:\/\//i.test(imageRaw);
+      if (sandboxRoot && isUrl) {
+        throw new Error("Sandboxed image tool does not allow remote URLs.");
+      }
+
+      const resolvedImage = sandboxRoot
+        ? (
+            await assertSandboxPath({
+              filePath: imageRaw,
+              cwd: sandboxRoot,
+              root: sandboxRoot,
+            })
+          ).resolved
+        : imageRaw.startsWith("~")
+          ? resolveUserPath(imageRaw)
+          : imageRaw;
       const media = await loadWebMedia(resolvedImage, maxBytes);
       if (media.kind !== "image") {
         throw new Error(`Unsupported media type: ${media.kind}`);

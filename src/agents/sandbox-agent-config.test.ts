@@ -486,4 +486,22 @@ describe("Agent-specific sandbox config", () => {
     const sandbox = resolveSandboxConfigForAgent(cfg, "main");
     expect(sandbox.tools.allow).toContain("session_status");
   });
+
+  it("includes image in default sandbox allowlist", async () => {
+    const { resolveSandboxConfigForAgent } = await import("./sandbox.js");
+
+    const cfg: ClawdbotConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            scope: "agent",
+          },
+        },
+      },
+    };
+
+    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+    expect(sandbox.tools.allow).toContain("image");
+  });
 });

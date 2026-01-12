@@ -104,4 +104,31 @@ describe("image tool implicit imageModel config", () => {
       primary: "openai/gpt-5-mini",
     });
   });
+
+  it("sandboxes image paths like the read tool", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "clawdbot-image-sandbox-"),
+    );
+    const agentDir = path.join(stateDir, "agent");
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(sandboxRoot, { recursive: true });
+    await fs.writeFile(path.join(sandboxRoot, "img.png"), "fake", "utf8");
+
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const cfg: ClawdbotConfig = {
+      agents: { defaults: { model: { primary: "minimax/MiniMax-M2.1" } } },
+    };
+    const tool = createImageTool({ config: cfg, agentDir, sandboxRoot });
+    expect(tool).not.toBeNull();
+    if (!tool) throw new Error("expected image tool");
+
+    await expect(
+      tool.execute("t1", { image: "https://example.com/a.png" }),
+    ).rejects.toThrow(/Sandboxed image tool does not allow remote URLs/i);
+
+    await expect(
+      tool.execute("t2", { image: "../escape.png" }),
+    ).rejects.toThrow(/escapes sandbox root/i);
+  });
 });
