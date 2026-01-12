@@ -25,7 +25,11 @@ import {
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 import { readLastGatewayErrorLine } from "../daemon/diagnostics.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolvePreferredNodePath,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
@@ -621,6 +625,16 @@ export async function doctorCommand(
               runtime: daemonRuntime,
               nodePath,
             });
+          if (daemonRuntime === "node") {
+            const systemNode = await resolveSystemNodeInfo({
+              env: process.env,
+            });
+            const warning = renderSystemNodeWarning(
+              systemNode,
+              programArguments[0],
+            );
+            if (warning) note(warning, "Gateway runtime");
+          }
           const environment = buildServiceEnvironment({
             env: process.env,
             port,

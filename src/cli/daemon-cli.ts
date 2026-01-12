@@ -32,7 +32,11 @@ import {
 import { resolveGatewayLogPaths } from "../daemon/launchd.js";
 import { findLegacyGatewayServices } from "../daemon/legacy.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
-import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
+import {
+  renderSystemNodeWarning,
+  resolvePreferredNodePath,
+  resolveSystemNodeInfo,
+} from "../daemon/runtime-paths.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { ServiceConfigAudit } from "../daemon/service-audit.js";
 import { auditGatewayServiceConfig } from "../daemon/service-audit.js";
@@ -923,6 +927,11 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       runtime: runtimeRaw,
       nodePath,
     });
+  if (runtimeRaw === "node") {
+    const systemNode = await resolveSystemNodeInfo({ env: process.env });
+    const warning = renderSystemNodeWarning(systemNode, programArguments[0]);
+    if (warning) defaultRuntime.log(warning);
+  }
   const environment = buildServiceEnvironment({
     env: process.env,
     port,
