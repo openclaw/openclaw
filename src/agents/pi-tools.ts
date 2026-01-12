@@ -440,8 +440,14 @@ const CLAUDE_PARAM_GROUPS = {
   write: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
   edit: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    { keys: ["oldText", "old_string"], label: "oldText (oldText or old_string)" },
-    { keys: ["newText", "new_string"], label: "newText (newText or new_string)" },
+    {
+      keys: ["oldText", "old_string"],
+      label: "oldText (oldText or old_string)",
+    },
+    {
+      keys: ["newText", "new_string"],
+      label: "newText (newText or new_string)",
+    },
   ],
 } as const;
 

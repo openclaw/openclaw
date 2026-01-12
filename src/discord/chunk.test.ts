@@ -90,7 +90,8 @@ describe("chunkDiscordText", () => {
   });
 
   it("keeps reasoning italics balanced when chunks split by char limit", () => {
-    const longLine = "This is a very long reasoning line that forces char splits.";
+    const longLine =
+      "This is a very long reasoning line that forces char splits.";
     const body = Array.from({ length: 5 }, () => longLine).join("\n");
     const text = `Reasoning:\n_${body}_`;
 

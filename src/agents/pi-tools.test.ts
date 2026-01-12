@@ -1,10 +1,9 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
-import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ClawdbotConfig } from "../config/config.js";
 import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
@@ -412,9 +411,9 @@ describe("createClawdbotCodingTools", () => {
         undefined,
       );
 
-      await expect(
-        wrapped.execute("tool-2", { content: "x" }),
-      ).rejects.toThrow(/Missing required parameter/);
+      await expect(wrapped.execute("tool-2", { content: "x" })).rejects.toThrow(
+        /Missing required parameter/,
+      );
       await expect(
         wrapped.execute("tool-3", { file_path: "   ", content: "x" }),
       ).rejects.toThrow(/Missing required parameter/);
