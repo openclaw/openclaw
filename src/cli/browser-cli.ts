@@ -31,8 +31,8 @@ export function registerBrowserCli(program: Command) {
       "after",
       () =>
         `\nExamples:\n  ${[...browserCoreExamples, ...browserActionExamples].join("\n  ")}\n\n${theme.muted("Docs:")} ${formatDocsLink(
-          "/browser",
-          "docs.clawd.bot/browser",
+          "/tools/browser",
+          "docs.clawd.bot/tools/browser",
         )}\n`,
     )
     .action(() => {
