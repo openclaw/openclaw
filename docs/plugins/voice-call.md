@@ -28,6 +28,23 @@ The Voice Call plugin runs **inside the Gateway process**.
 
 If you use a remote Gateway, install/configure the plugin on the **machine running the Gateway**, then restart the Gateway to load it.
 
+## Twilio setup (getting the credentials)
+
+You’ll need:
+- **Account SID** (`AC...`)
+- **Auth Token** (treat like a password)
+- A Twilio **Voice-capable phone number** to use as `from` (E.164, like `+15551234567`)
+
+Steps:
+1) Create/sign in to Twilio: `https://www.twilio.com/`
+2) Open the Twilio Console: `https://console.twilio.com/`
+3) Find your **Account SID** + **Auth Token** (typically on the Console dashboard / Account settings).
+4) Buy (or select) a Twilio phone number with **Voice** capability:
+   - Console → Phone Numbers → Manage → Buy a number
+5) (Trial accounts) You may need to verify the destination `to` numbers before Twilio allows outbound calling.
+
+Tip: keep `twilio.authToken` out of git; store it in `~/.clawdbot/clawdbot.json` or your Control UI config, not in repo files.
+
 ## Install
 
 ### Option A: install from npm (recommended)

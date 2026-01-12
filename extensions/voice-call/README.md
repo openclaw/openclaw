@@ -62,6 +62,15 @@ Dev fallback (no network):
 { provider: "log" }
 ```
 
+## Twilio credentials (quick notes)
+
+You’ll need a Twilio account, your **Account SID**, your **Auth Token**, and a Twilio **Voice-capable** phone number to use as `from`.
+
+- Signup: `https://www.twilio.com/`
+- Console: `https://console.twilio.com/`
+
+Full setup guide: `https://docs.clawd.bot/plugins/voice-call`
+
 ## CLI
 
 ```bash
