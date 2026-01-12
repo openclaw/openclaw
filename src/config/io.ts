@@ -22,10 +22,7 @@ import {
   applySessionDefaults,
   applyTalkApiKey,
 } from "./defaults.js";
-import {
-  ConfigIncludeError,
-  resolveConfigIncludes,
-} from "./includes.js";
+import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { resolveConfigPath, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";

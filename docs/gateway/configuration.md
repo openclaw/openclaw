@@ -124,6 +124,7 @@ Split your config into multiple files using the `$include` directive. This is us
 - **Single file**: Replaces the object containing `$include`
 - **Array of files**: Deep-merges files in order (later files override earlier ones)
 - **With sibling keys**: Sibling keys are merged after includes (override included values)
+- **Sibling keys + arrays/primitives**: Not supported (included content must be an object)
 
 ```json5
 // Sibling keys override included values
