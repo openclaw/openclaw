@@ -3,6 +3,8 @@
 ## 2026.1.11
 
 ### Changes
+- CLI: simplify configure section selection (single-select with optional add-more).
+- Onboarding/CLI: group model/auth choice by provider and label Z.AI as GLM 4.7.
 - Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, and config schema + Control UI labels (uiHints).
 - Plugins: add `clawdbot plugins install` (path/tgz/npm), plus `list|info|enable|disable|doctor` UX.
 - Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.
