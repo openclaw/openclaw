@@ -75,6 +75,7 @@
 - Agents: skip pre-compaction memory flush when the session workspace is read-only.
 - Auto-reply: allow inline `/status` for allowlisted senders (stripped before the model); unauthorized senders see it as plain text.
 - Auto-reply: include config-only allowlisted models in `/model` even when the catalog is partial.
+- Auto-reply: allow fuzzy `/model` matches (e.g. `/model kimi` or `/model moonshot/kimi`) when unambiguous.
 - Auto-reply: ignore inline `/status` directives unless the message is directive-only.
 - CLI/Configure: enter the selected section immediately, then return to the section picker.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.

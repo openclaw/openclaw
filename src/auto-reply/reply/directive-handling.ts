@@ -960,9 +960,21 @@ export async function handleDirectiveOnly(params: {
         defaultModel,
       });
       const pickerCatalog: ModelPickerCatalogEntry[] = (() => {
-        if (allowedModelCatalog.length > 0) return allowedModelCatalog;
         const keys = new Set<string>();
         const out: ModelPickerCatalogEntry[] = [];
+
+        const push = (entry: ModelPickerCatalogEntry) => {
+          const provider = normalizeProviderId(entry.provider);
+          const id = String(entry.id ?? "").trim();
+          if (!provider || !id) return;
+          const key = modelKey(provider, id);
+          if (keys.has(key)) return;
+          keys.add(key);
+          out.push({ provider, id, name: entry.name });
+        };
+
+        for (const entry of allowedModelCatalog) push(entry);
+
         for (const rawKey of Object.keys(
           params.cfg.agents?.defaults?.models ?? {},
         )) {
@@ -972,19 +984,14 @@ export async function handleDirectiveOnly(params: {
             aliasIndex,
           });
           if (!resolved) continue;
-          const key = modelKey(resolved.ref.provider, resolved.ref.model);
-          if (keys.has(key)) continue;
-          keys.add(key);
-          out.push({
+          push({
             provider: resolved.ref.provider,
             id: resolved.ref.model,
             name: resolved.ref.model,
           });
         }
-        if (out.length === 0 && resolvedDefault.model) {
-          const key = modelKey(resolvedDefault.provider, resolvedDefault.model);
-          keys.add(key);
-          out.push({
+        if (resolvedDefault.model) {
+          push({
             provider: resolvedDefault.provider,
             id: resolvedDefault.model,
             name: resolvedDefault.model,

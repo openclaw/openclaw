@@ -62,6 +62,41 @@ describe("buildAllowedModelSet", () => {
       true,
     );
   });
+
+  it("allows explicit custom providers from models.providers", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "moonshot/kimi-k2-0905-preview": { alias: "kimi" },
+          },
+        },
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            apiKey: "x",
+            api: "openai-completions",
+            models: [{ id: "kimi-k2-0905-preview", name: "Kimi" }],
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const allowed = buildAllowedModelSet({
+      cfg,
+      catalog: [],
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+    });
+
+    expect(allowed.allowAny).toBe(false);
+    expect(
+      allowed.allowedKeys.has(modelKey("moonshot", "kimi-k2-0905-preview")),
+    ).toBe(true);
+  });
 });
 
 describe("parseModelRef", () => {
