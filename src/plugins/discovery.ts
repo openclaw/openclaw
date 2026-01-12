@@ -61,10 +61,17 @@ function deriveIdHint(params: {
   hasMultipleExtensions: boolean;
 }): string {
   const base = path.basename(params.filePath, path.extname(params.filePath));
-  const packageName = params.packageName?.trim();
-  if (!packageName) return base;
-  if (!params.hasMultipleExtensions) return packageName;
-  return `${packageName}/${base}`;
+  const rawPackageName = params.packageName?.trim();
+  if (!rawPackageName) return base;
+
+  // Prefer the unscoped name so config keys stay stable even when the npm
+  // package is scoped (example: @clawdbot/voice-call -> voice-call).
+  const unscoped = rawPackageName.includes("/")
+    ? (rawPackageName.split("/").pop() ?? rawPackageName)
+    : rawPackageName;
+
+  if (!params.hasMultipleExtensions) return unscoped;
+  return `${unscoped}/${base}`;
 }
 
 function addCandidate(params: {

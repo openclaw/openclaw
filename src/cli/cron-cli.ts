@@ -1,17 +1,14 @@
 import type { Command } from "commander";
 import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
-import { listProviderPlugins } from "../providers/plugins/index.js";
+import { PROVIDER_IDS } from "../providers/registry.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
 import type { GatewayRpcOpts } from "./gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "./gateway-rpc.js";
 
-const CRON_PROVIDER_OPTIONS = [
-  "last",
-  ...listProviderPlugins().map((plugin) => plugin.id),
-].join("|");
+const CRON_PROVIDER_OPTIONS = ["last", ...PROVIDER_IDS].join("|");
 
 async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
   try {

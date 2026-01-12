@@ -14,6 +14,7 @@ import type {
   ClawdbotPluginConfigSchema,
   ClawdbotPluginDefinition,
   ClawdbotPluginModule,
+  PluginConfigUiHint,
   PluginDiagnostic,
   PluginLogger,
 } from "./types.js";
@@ -208,6 +209,7 @@ function createPluginRecord(params: {
     cliCommands: [],
     services: [],
     configSchema: params.configSchema,
+    configUiHints: undefined,
   };
 }
 
@@ -307,6 +309,18 @@ export function loadClawdbotPlugins(
     record.description = definition?.description ?? record.description;
     record.version = definition?.version ?? record.version;
     record.configSchema = Boolean(definition?.configSchema);
+    record.configUiHints =
+      definition?.configSchema &&
+      typeof definition.configSchema === "object" &&
+      (definition.configSchema as { uiHints?: unknown }).uiHints &&
+      typeof (definition.configSchema as { uiHints?: unknown }).uiHints ===
+        "object" &&
+      !Array.isArray((definition.configSchema as { uiHints?: unknown }).uiHints)
+        ? ((definition.configSchema as { uiHints?: unknown }).uiHints as Record<
+            string,
+            PluginConfigUiHint
+          >)
+        : undefined;
 
     const validatedConfig = validatePluginConfig({
       schema: definition?.configSchema,

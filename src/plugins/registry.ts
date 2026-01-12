@@ -10,6 +10,7 @@ import type {
   ClawdbotPluginService,
   ClawdbotPluginToolContext,
   ClawdbotPluginToolFactory,
+  PluginConfigUiHint,
   PluginDiagnostic,
   PluginLogger,
   PluginOrigin,
@@ -51,6 +52,7 @@ export type PluginRecord = {
   cliCommands: string[];
   services: string[];
   configSchema: boolean;
+  configUiHints?: Record<string, PluginConfigUiHint>;
 };
 
 export type PluginRegistry = {

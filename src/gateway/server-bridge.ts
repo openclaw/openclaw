@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
 import {
@@ -33,6 +37,7 @@ import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "../infra/voicewake.js";
+import { loadClawdbotPlugins } from "../plugins/loader.js";
 import { clearCommandLane } from "../process/command-queue.js";
 import { normalizeProviderId } from "../providers/plugins/index.js";
 import { normalizeMainKey } from "../routing/session-key.js";
@@ -203,7 +208,29 @@ export function createBridgeHandlers(ctx: BridgeHandlersContext) {
               },
             };
           }
-          const schema = buildConfigSchema();
+          const cfg = loadConfig();
+          const workspaceDir = resolveAgentWorkspaceDir(
+            cfg,
+            resolveDefaultAgentId(cfg),
+          );
+          const pluginRegistry = loadClawdbotPlugins({
+            config: cfg,
+            workspaceDir,
+            logger: {
+              info: () => {},
+              warn: () => {},
+              error: () => {},
+              debug: () => {},
+            },
+          });
+          const schema = buildConfigSchema({
+            plugins: pluginRegistry.plugins.map((plugin) => ({
+              id: plugin.id,
+              name: plugin.name,
+              description: plugin.description,
+              configUiHints: plugin.configUiHints,
+            })),
+          });
           return { ok: true, payloadJSON: JSON.stringify(schema) };
         }
         case "config.set": {

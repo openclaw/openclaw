@@ -1,10 +1,23 @@
-# Voice Call Plugin
+# @clawdbot/voice-call
 
-Twilio-backed outbound voice calls (with a log-only fallback for dev).
+Official Voice Call plugin for **Clawdbot**.
+
+- Provider: **Twilio** (real outbound calls)
+- Dev fallback: `log` (no network)
+
+Docs: `https://docs.clawd.bot/plugins/voice-call`
 
 ## Install (local dev)
 
-Option 1: copy into your global extensions folder:
+### Option A: install via Clawdbot (recommended)
+
+```bash
+clawdbot plugins install @clawdbot/voice-call
+```
+
+Restart the Gateway afterwards.
+
+### Option B: copy into your global extensions folder (dev)
 
 ```bash
 mkdir -p ~/.clawdbot/extensions
@@ -12,13 +25,13 @@ cp -R extensions/voice-call ~/.clawdbot/extensions/voice-call
 cd ~/.clawdbot/extensions/voice-call && pnpm install
 ```
 
-Option 2: add via config:
+### Option C: add via config (custom path)
 
 ```json5
 {
   plugins: {
-    load: { paths: ["/absolute/path/to/extensions/voice-call"] },
-    entries: { "voice-call": { enabled: true } }
+    load: { paths: ["/absolute/path/to/voice-call/index.ts"] },
+    entries: { "voice-call": { enabled: true, config: { provider: "log" } } }
   }
 }
 ```

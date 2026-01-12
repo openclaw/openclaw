@@ -67,6 +67,35 @@ const voiceCallConfigSchema = {
     }
     return { provider: "log" };
   },
+  uiHints: {
+    provider: {
+      label: "Provider",
+      help: 'Use "twilio" for real calls or "log" for dev/no-network.',
+    },
+    "twilio.accountSid": {
+      label: "Twilio Account SID",
+      placeholder: "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    },
+    "twilio.authToken": {
+      label: "Twilio Auth Token",
+      sensitive: true,
+      placeholder: "••••••••••••••••",
+    },
+    "twilio.from": {
+      label: "Twilio From (E.164)",
+      placeholder: "+15551234567",
+    },
+    "twilio.statusCallbackUrl": {
+      label: "Status Callback URL",
+      placeholder: "https://example.com/twilio-status",
+      advanced: true,
+    },
+    "twilio.twimlUrl": {
+      label: "TwiML URL",
+      placeholder: "https://example.com/twiml",
+      advanced: true,
+    },
+  },
 };
 
 const escapeXml = (input: string): string =>

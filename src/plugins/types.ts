@@ -11,6 +11,14 @@ export type PluginLogger = {
   error: (message: string) => void;
 };
 
+export type PluginConfigUiHint = {
+  label?: string;
+  help?: string;
+  advanced?: boolean;
+  sensitive?: boolean;
+  placeholder?: string;
+};
+
 export type PluginConfigValidation =
   | { ok: true; value?: unknown }
   | { ok: false; errors: string[] };
@@ -25,6 +33,7 @@ export type ClawdbotPluginConfigSchema = {
   };
   parse?: (value: unknown) => unknown;
   validate?: (value: unknown) => PluginConfigValidation;
+  uiHints?: Record<string, PluginConfigUiHint>;
 };
 
 export type ClawdbotPluginToolContext = {

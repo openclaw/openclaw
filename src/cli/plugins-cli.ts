@@ -1,8 +1,13 @@
 import fs from "node:fs";
+import path from "node:path";
 import chalk from "chalk";
 import type { Command } from "commander";
 
 import { loadConfig, writeConfigFile } from "../config/config.js";
+import {
+  installPluginFromArchive,
+  installPluginFromNpmSpec,
+} from "../plugins/install.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { buildPluginStatusReport } from "../plugins/status.js";
 import { defaultRuntime } from "../runtime.js";
@@ -202,29 +207,110 @@ export function registerPluginsCli(program: Command) {
 
   plugins
     .command("install")
-    .description("Add a plugin path to clawdbot.json")
-    .argument("<path>", "Path to a plugin file or directory")
-    .action(async (rawPath: string) => {
-      const resolved = resolveUserPath(rawPath);
-      if (!fs.existsSync(resolved)) {
+    .description("Install a plugin (path, archive, or npm spec)")
+    .argument("<path-or-spec>", "Path (.ts/.js/.tgz) or an npm package spec")
+    .action(async (raw: string) => {
+      const resolved = resolveUserPath(raw);
+      const cfg = loadConfig();
+
+      if (fs.existsSync(resolved)) {
+        const ext = path.extname(resolved).toLowerCase();
+        if (ext === ".tgz" || resolved.endsWith(".tar.gz")) {
+          const result = await installPluginFromArchive({
+            archivePath: resolved,
+            logger: {
+              info: (msg) => defaultRuntime.log(msg),
+              warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+            },
+          });
+          if (!result.ok) {
+            defaultRuntime.error(result.error);
+            process.exit(1);
+          }
+
+          const next = {
+            ...cfg,
+            plugins: {
+              ...cfg.plugins,
+              entries: {
+                ...cfg.plugins?.entries,
+                [result.pluginId]: {
+                  ...(cfg.plugins?.entries?.[result.pluginId] as
+                    | object
+                    | undefined),
+                  enabled: true,
+                },
+              },
+            },
+          };
+          await writeConfigFile(next);
+          defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
+          defaultRuntime.log(`Restart the gateway to load plugins.`);
+          return;
+        }
+
+        const existing = cfg.plugins?.load?.paths ?? [];
+        const merged = Array.from(new Set([...existing, resolved]));
+        const next = {
+          ...cfg,
+          plugins: {
+            ...cfg.plugins,
+            load: {
+              ...cfg.plugins?.load,
+              paths: merged,
+            },
+          },
+        };
+        await writeConfigFile(next);
+        defaultRuntime.log(`Added plugin path: ${resolved}`);
+        defaultRuntime.log(`Restart the gateway to load plugins.`);
+        return;
+      }
+
+      const looksLikePath =
+        raw.startsWith(".") ||
+        raw.startsWith("~") ||
+        path.isAbsolute(raw) ||
+        raw.endsWith(".ts") ||
+        raw.endsWith(".js") ||
+        raw.endsWith(".mjs") ||
+        raw.endsWith(".cjs") ||
+        raw.endsWith(".tgz") ||
+        raw.endsWith(".tar.gz");
+      if (looksLikePath) {
         defaultRuntime.error(`Path not found: ${resolved}`);
         process.exit(1);
       }
-      const cfg = loadConfig();
-      const existing = cfg.plugins?.load?.paths ?? [];
-      const merged = Array.from(new Set([...existing, resolved]));
+
+      const result = await installPluginFromNpmSpec({
+        spec: raw,
+        logger: {
+          info: (msg) => defaultRuntime.log(msg),
+          warn: (msg) => defaultRuntime.log(chalk.yellow(msg)),
+        },
+      });
+      if (!result.ok) {
+        defaultRuntime.error(result.error);
+        process.exit(1);
+      }
+
       const next = {
         ...cfg,
         plugins: {
           ...cfg.plugins,
-          load: {
-            ...cfg.plugins?.load,
-            paths: merged,
+          entries: {
+            ...cfg.plugins?.entries,
+            [result.pluginId]: {
+              ...(cfg.plugins?.entries?.[result.pluginId] as
+                | object
+                | undefined),
+              enabled: true,
+            },
           },
         },
       };
       await writeConfigFile(next);
-      defaultRuntime.log(`Added plugin path: ${resolved}`);
+      defaultRuntime.log(`Installed plugin: ${result.pluginId}`);
       defaultRuntime.log(`Restart the gateway to load plugins.`);
     });
 

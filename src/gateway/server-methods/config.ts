@@ -1,5 +1,10 @@
 import {
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../../agents/agent-scope.js";
+import {
   CONFIG_PATH_CLAWDBOT,
+  loadConfig,
   parseConfigJson5,
   readConfigFileSnapshot,
   validateConfigObject,
@@ -12,6 +17,7 @@ import {
   type RestartSentinelPayload,
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
+import { loadClawdbotPlugins } from "../../plugins/loader.js";
 import {
   ErrorCodes,
   errorShape,
@@ -51,7 +57,29 @@ export const configHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const schema = buildConfigSchema();
+    const cfg = loadConfig();
+    const workspaceDir = resolveAgentWorkspaceDir(
+      cfg,
+      resolveDefaultAgentId(cfg),
+    );
+    const pluginRegistry = loadClawdbotPlugins({
+      config: cfg,
+      workspaceDir,
+      logger: {
+        info: () => {},
+        warn: () => {},
+        error: () => {},
+        debug: () => {},
+      },
+    });
+    const schema = buildConfigSchema({
+      plugins: pluginRegistry.plugins.map((plugin) => ({
+        id: plugin.id,
+        name: plugin.name,
+        description: plugin.description,
+        configUiHints: plugin.configUiHints,
+      })),
+    });
     respond(true, schema, undefined);
   },
   "config.set": async ({ params, respond }) => {
