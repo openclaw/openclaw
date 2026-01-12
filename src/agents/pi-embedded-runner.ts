@@ -43,6 +43,7 @@ import {
   enqueueCommandInLane,
 } from "../process/command-queue.js";
 import { normalizeMessageProvider } from "../utils/message-provider.js";
+import { isReasoningTagProvider } from "../utils/provider-utils.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -1141,7 +1142,7 @@ export async function compactEmbeddedPiSession(params: {
           sandbox,
           params.bashElevated,
         );
-        const reasoningTagHint = provider === "ollama";
+        const reasoningTagHint = isReasoningTagProvider(provider);
         const userTimezone = resolveUserTimezone(
           params.config?.agents?.defaults?.userTimezone,
         );
@@ -1547,7 +1548,7 @@ export async function runEmbeddedPiAgent(params: {
             sandbox,
             params.bashElevated,
           );
-          const reasoningTagHint = provider === "ollama";
+          const reasoningTagHint = isReasoningTagProvider(provider);
           const userTimezone = resolveUserTimezone(
             params.config?.agents?.defaults?.userTimezone,
           );
