@@ -124,6 +124,41 @@ Bun is supported for faster TypeScript execution, but **WhatsApp requires Node**
 
 Yes, via **multi‑agent routing**. Bind each sender’s WhatsApp **DM** (peer `kind: "dm"`, sender E.164 like `+15551234567`) to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`whatsapp.dmPolicy` / `whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/providers/whatsapp).
 
+### Can I run a "fast chat" agent and an "Opus for coding" agent?
+
+Yes. Create two agents with different default models, then bind inbound routes to each agent (by provider account or by specific peers). Example: WhatsApp routes to a fast daily chat agent, Telegram routes to an Opus coding agent:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "chat",
+        name: "Everyday",
+        workspace: "~/clawd-chat",
+        model: "anthropic/claude-sonnet-4-5"
+      },
+      {
+        id: "opus",
+        name: "Deep Work",
+        workspace: "~/clawd-opus",
+        model: "anthropic/claude-opus-4-5"
+      }
+    ]
+  },
+  bindings: [
+    { agentId: "chat", match: { provider: "whatsapp", accountId: "personal" } },
+    { agentId: "opus", match: { provider: "telegram", accountId: "primary" } }
+  ]
+}
+```
+
+Notes:
+- If you only have one account for a provider, you can omit `accountId`.
+- For the same provider, route a specific DM or group to the Opus agent using `match.peer`, and leave the provider-level binding pointing at the chat agent.
+
+See [Multi-Agent Routing](/concepts/multi-agent), [Models](/concepts/models), and [Configuration](/gateway/configuration).
+
 ### Does Homebrew work on Linux?
 
 Yes. Homebrew supports Linux (Linuxbrew). Quick setup:
