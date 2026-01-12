@@ -107,6 +107,7 @@ export type SandboxDockerConfig = {
   apparmorProfile?: string;
   dns?: string[];
   extraHosts?: string[];
+  binds?: string[];
 };
 
 export type SandboxPruneConfig = {
@@ -325,6 +326,8 @@ export function resolveSandboxDockerConfig(params: {
     ? { ...globalDocker?.ulimits, ...agentDocker.ulimits }
     : globalDocker?.ulimits;
 
+  const binds = [...(globalDocker?.binds ?? []), ...(agentDocker?.binds ?? [])];
+
   return {
     image: agentDocker?.image ?? globalDocker?.image ?? DEFAULT_SANDBOX_IMAGE,
     containerPrefix:
@@ -352,6 +355,7 @@ export function resolveSandboxDockerConfig(params: {
       agentDocker?.apparmorProfile ?? globalDocker?.apparmorProfile,
     dns: agentDocker?.dns ?? globalDocker?.dns,
     extraHosts: agentDocker?.extraHosts ?? globalDocker?.extraHosts,
+    binds: binds.length ? binds : undefined,
   };
 }
 
@@ -1050,6 +1054,11 @@ async function createSandboxContainer(params: {
       "-v",
       `${params.agentWorkspaceDir}:${SANDBOX_AGENT_WORKSPACE_MOUNT}${agentMountSuffix}`,
     );
+  }
+  if (cfg.binds?.length) {
+    for (const bind of cfg.binds) {
+      args.push("-v", bind);
+    }
   }
   args.push(cfg.image, "sleep", "infinity");
 
