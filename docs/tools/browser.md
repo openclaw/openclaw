@@ -221,6 +221,7 @@ Notes:
 ## Security & privacy
 
 - The clawd browser profile may contain logged-in sessions; treat it as sensitive.
+- For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep control URLs loopback-only unless you intentionally expose the server.
 - Remote CDP endpoints are powerful; tunnel and protect them.
 
