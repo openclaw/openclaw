@@ -1397,6 +1397,15 @@ export async function startGatewayServer(
       );
       close();
     });
+    const isNoisySwiftPmHelperClose = (
+      userAgent: string | undefined,
+      remote: string | undefined,
+    ) =>
+      Boolean(
+        userAgent?.toLowerCase().includes("swiftpm-testing-helper") &&
+          isLoopbackAddress(remote),
+      );
+
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
       const closeContext = {
@@ -1413,7 +1422,10 @@ export async function startGatewayServer(
         ...closeMeta,
       };
       if (!client) {
-        logWsControl.warn(
+        const logFn = isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr)
+          ? logWsControl.debug
+          : logWsControl.warn;
+        logFn(
           `closed before connect conn=${connId} remote=${remoteAddr ?? "?"} fwd=${forwardedFor ?? "n/a"} origin=${requestOrigin ?? "n/a"} host=${requestHost ?? "n/a"} ua=${requestUserAgent ?? "n/a"} code=${code ?? "n/a"} reason=${reason?.toString() || "n/a"}`,
           closeContext,
         );
