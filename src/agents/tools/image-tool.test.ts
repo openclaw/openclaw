@@ -150,3 +150,101 @@ describe("image tool data URL support", () => {
     ).toThrow(/Unsupported data URL type/i);
   });
 });
+
+describe("image tool response validation", () => {
+  it("rejects image-model responses with no final text", () => {
+    expect(() =>
+      __testing.coerceImageAssistantText({
+        provider: "openai",
+        model: "gpt-5-mini",
+        message: {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5-mini",
+          stopReason: "stop",
+          timestamp: Date.now(),
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          content: [{ type: "thinking", thinking: "hmm" }],
+        },
+      }),
+    ).toThrow(/returned no text/i);
+  });
+
+  it("surfaces provider errors from image-model responses", () => {
+    expect(() =>
+      __testing.coerceImageAssistantText({
+        provider: "openai",
+        model: "gpt-5-mini",
+        message: {
+          role: "assistant",
+          api: "openai-responses",
+          provider: "openai",
+          model: "gpt-5-mini",
+          stopReason: "error",
+          errorMessage: "boom",
+          timestamp: Date.now(),
+          usage: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            totalTokens: 0,
+            cost: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+          content: [],
+        },
+      }),
+    ).toThrow(/boom/i);
+  });
+
+  it("returns trimmed text from image-model responses", () => {
+    const text = __testing.coerceImageAssistantText({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      message: {
+        role: "assistant",
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "claude-opus-4-5",
+        stopReason: "stop",
+        timestamp: Date.now(),
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
+        },
+        content: [{ type: "text", text: "  hello  " }],
+      },
+    });
+    expect(text).toBe("hello");
+  });
+});

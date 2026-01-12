@@ -53,7 +53,34 @@ function decodeDataUrl(dataUrl: string): {
 
 export const __testing = {
   decodeDataUrl,
+  coerceImageAssistantText,
 } as const;
+
+function coerceImageAssistantText(params: {
+  message: AssistantMessage;
+  provider: string;
+  model: string;
+}): string {
+  const stop = params.message.stopReason;
+  const errorMessage = params.message.errorMessage?.trim();
+  if (stop === "error" || stop === "aborted") {
+    throw new Error(
+      errorMessage
+        ? `Image model failed (${params.provider}/${params.model}): ${errorMessage}`
+        : `Image model failed (${params.provider}/${params.model})`,
+    );
+  }
+  if (errorMessage) {
+    throw new Error(
+      `Image model failed (${params.provider}/${params.model}): ${errorMessage}`,
+    );
+  }
+  const text = extractAssistantText(params.message);
+  if (text.trim()) return text.trim();
+  throw new Error(
+    `Image model returned no text (${params.provider}/${params.model}).`,
+  );
+}
 
 function coerceImageModelConfig(cfg?: ClawdbotConfig): ImageModelConfig {
   const imageModel = cfg?.agents?.defaults?.imageModel as
@@ -259,7 +286,12 @@ async function runImagePrompt(params: {
   prompt: string;
   base64: string;
   mimeType: string;
-}): Promise<{ text: string; provider: string; model: string }> {
+}): Promise<{
+  text: string;
+  provider: string;
+  model: string;
+  attempts: Array<{ provider: string; model: string; error: string }>;
+}> {
   const effectiveCfg: ClawdbotConfig | undefined = params.cfg
     ? {
         ...params.cfg,
@@ -306,15 +338,28 @@ async function runImagePrompt(params: {
         maxTokens: 512,
         temperature: 0,
       })) as AssistantMessage;
-      return message;
+      return {
+        message,
+        provider: model.provider,
+        model: model.id,
+      };
     },
   });
 
-  const text = extractAssistantText(result.result);
+  const text = coerceImageAssistantText({
+    message: result.result.message,
+    provider: result.result.provider,
+    model: result.result.model,
+  });
   return {
-    text: text || "(no text returned)",
+    text,
     provider: result.provider,
     model: result.model,
+    attempts: result.attempts.map((attempt) => ({
+      provider: attempt.provider,
+      model: attempt.model,
+      error: attempt.error,
+    })),
   };
 }
 
@@ -421,6 +466,7 @@ export function createImageTool(options?: {
         details: {
           model: `${result.provider}/${result.model}`,
           image: resolvedImage,
+          attempts: result.attempts,
         },
       };
     },
