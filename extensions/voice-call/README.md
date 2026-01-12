@@ -6,6 +6,7 @@ Official Voice Call plugin for **Clawdbot**.
 - Dev fallback: `log` (no network)
 
 Docs: `https://docs.clawd.bot/plugins/voice-call`
+Plugin system: `https://docs.clawd.bot/plugin`
 
 ## Install (local dev)
 

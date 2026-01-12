@@ -9,11 +9,18 @@ read_when:
 
 Outbound voice calls for Clawdbot via a plugin.
 
+If you’re new to plugins, start with [Plugins](/plugin): what they are, where
+they live on disk, and how install/config works.
+
 Current providers:
 - `twilio` (real calls)
 - `log` (dev fallback; no network)
 
-If you haven’t read the general plugin docs yet, start with [Plugins](/plugin).
+Quick mental model:
+- Install plugin
+- Restart Gateway
+- Configure under `plugins.entries.voice-call.config`
+- Use `clawdbot voicecall …` or the `voice_call` tool
 
 ## Install
 
@@ -27,7 +34,25 @@ This downloads the package, extracts it into `~/.clawdbot/extensions/`, and enab
 
 Restart the Gateway afterwards.
 
-### Option B: install from a local folder (dev)
+### Option B: install from a local folder (dev, no copying)
+
+This keeps the plugin in-place (great for iterating locally) and adds the folder
+to `plugins.load.paths`.
+
+```bash
+clawdbot plugins install /absolute/path/to/voice-call
+```
+
+If your plugin has dependencies, install them in that folder (so it has a
+`node_modules`):
+
+```bash
+cd /absolute/path/to/voice-call && pnpm install
+```
+
+Restart the Gateway afterwards.
+
+### Option C: copy into the global extensions folder (dev)
 
 ```bash
 mkdir -p ~/.clawdbot/extensions

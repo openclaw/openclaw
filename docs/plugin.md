@@ -6,6 +6,33 @@ read_when:
 ---
 # Plugins (Extensions)
 
+## Quick start (new to plugins?)
+
+A plugin is just a **small code module** that extends Clawdbot with extra
+features (commands, tools, and Gateway RPC).
+
+Most of the time, you’ll use plugins when you want a feature that’s not built
+into core Clawdbot yet (or you want to keep optional features out of your main
+install).
+
+Fast path:
+
+1) See what’s already loaded:
+
+```bash
+clawdbot plugins list
+```
+
+2) Install an official plugin (example: Voice Call):
+
+```bash
+clawdbot plugins install @clawdbot/voice-call
+```
+
+3) Restart the Gateway, then configure under `plugins.entries.<id>.config`.
+
+See [Voice Call](/plugins/voice-call) for a concrete example plugin.
+
 Clawdbot plugins are **TypeScript modules** loaded at runtime via jiti. They can
 register:
 
