@@ -976,6 +976,11 @@ export async function getReplyFromConfig(
       command: inlineCommandContext,
       agentId,
       directives,
+      elevated: {
+        enabled: elevatedEnabled,
+        allowed: elevatedAllowed,
+        failures: elevatedFailures,
+      },
       sessionEntry,
       sessionStore,
       sessionKey,
@@ -1033,6 +1038,11 @@ export async function getReplyFromConfig(
     command,
     agentId,
     directives,
+    elevated: {
+      enabled: elevatedEnabled,
+      allowed: elevatedAllowed,
+      failures: elevatedFailures,
+    },
     sessionEntry,
     sessionStore,
     sessionKey,
