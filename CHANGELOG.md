@@ -9,6 +9,7 @@
 - Agents: automatic pre-compaction memory flush turn to store durable memories before compaction.
 
 ### Changes
+- macOS: add wizard debug CLI and share wizard parsing helpers.
 - CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.
 - CLI: configure section selection now loops until Continue.
 - Docs: explain MiniMax vs MiniMax Lightning (speed vs cost) and restore LM Studio example.
@@ -52,6 +53,7 @@
 - Installer UX: add `--install-method git|npm` and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).
 
 ### Fixes
+- macOS: start + await local gateway before onboarding wizard begins.
 - Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible `/anthropic` endpoint by default (keep `minimax-api` as a legacy alias).
 - Agents/Browser: cap Playwright AI snapshots for tool calls (maxChars); CLI snapshots remain full. (#763) — thanks @thesash.
 - Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.
