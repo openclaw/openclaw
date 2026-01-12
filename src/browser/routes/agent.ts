@@ -560,17 +560,30 @@ export function registerBrowserAgentRoutes(
           : (await getPwAiModule())
             ? "ai"
             : "aria";
-    const limit =
+    const limitRaw =
       typeof req.query.limit === "string" ? Number(req.query.limit) : undefined;
+    const maxCharsRaw =
+      typeof req.query.maxChars === "string"
+        ? Number(req.query.maxChars)
+        : undefined;
+    const limit = Number.isFinite(limitRaw) ? limitRaw : undefined;
+    const maxChars = Number.isFinite(maxCharsRaw) ? maxCharsRaw : undefined;
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
       if (format === "ai") {
         const pw = await requirePwAi(res, "ai snapshot");
         if (!pw) return;
+        const resolvedMaxChars =
+          typeof maxChars === "number" && maxChars > 0
+            ? maxChars
+            : typeof limit === "number" && limit > 0
+              ? limit
+              : undefined;
         const snap = await pw.snapshotAiViaPlaywright({
           cdpUrl: profileCtx.profile.cdpUrl,
           targetId: tab.targetId,
+          ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
         });
         return res.json({
           ok: true,

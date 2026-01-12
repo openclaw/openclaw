@@ -92,6 +92,28 @@ describe("pw-ai", () => {
     expect(p2.session.detach).toHaveBeenCalledTimes(1);
   });
 
+  it("truncates oversized snapshots", async () => {
+    const { chromium } = await import("playwright-core");
+    const longSnapshot = "A".repeat(20);
+    const p1 = createPage({ targetId: "T1", snapshotFull: longSnapshot });
+    const browser = createBrowser([p1.page]);
+
+    (
+      chromium.connectOverCDP as unknown as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(browser);
+
+    const mod = await importModule();
+    const res = await mod.snapshotAiViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      maxChars: 10,
+    });
+
+    expect(res.truncated).toBe(true);
+    expect(res.snapshot.startsWith("AAAAAAAAAA")).toBe(true);
+    expect(res.snapshot).toContain("TRUNCATED");
+  });
+
   it("clicks a ref using aria-ref locator", async () => {
     const { chromium } = await import("playwright-core");
     const p1 = createPage({ targetId: "T1" });

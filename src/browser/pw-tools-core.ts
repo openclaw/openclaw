@@ -10,6 +10,8 @@ import {
 let nextUploadArmId = 0;
 let nextDialogArmId = 0;
 
+const MAX_SNAPSHOT_CHARS = 80_000;
+
 function requireRef(value: unknown): string {
   const ref = typeof value === "string" ? value.trim() : "";
   if (!ref) throw new Error("ref is required");
@@ -20,7 +22,8 @@ export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   timeoutMs?: number;
-}): Promise<{ snapshot: string }> {
+  maxChars?: number;
+}): Promise<{ snapshot: string; truncated?: boolean }> {
   const page = await getPageForTargetId({
     cdpUrl: opts.cdpUrl,
     targetId: opts.targetId,
@@ -41,7 +44,18 @@ export async function snapshotAiViaPlaywright(opts: {
     ),
     track: "response",
   });
-  return { snapshot: String(result?.full ?? "") };
+  const maxChars = opts.maxChars;
+  const limit =
+    typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0
+      ? Math.floor(maxChars)
+      : MAX_SNAPSHOT_CHARS;
+  let snapshot = String(result?.full ?? "");
+  let truncated = false;
+  if (snapshot.length > limit) {
+    snapshot = `${snapshot.slice(0, limit)}\n\n[...TRUNCATED - page too large]`;
+    truncated = true;
+  }
+  return truncated ? { snapshot, truncated } : { snapshot };
 }
 
 export async function clickViaPlaywright(opts: {

@@ -117,6 +117,7 @@ const BrowserToolSchema = Type.Object({
   targetUrl: Type.Optional(Type.String()),
   targetId: Type.Optional(Type.String()),
   limit: Type.Optional(Type.Number()),
+  maxChars: Type.Optional(Type.Number()),
   format: Type.Optional(Type.Union([Type.Literal("aria"), Type.Literal("ai")])),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
@@ -323,10 +324,16 @@ export function createBrowserTool(opts?: {
             typeof params.limit === "number" && Number.isFinite(params.limit)
               ? params.limit
               : undefined;
+          const maxChars =
+            typeof params.maxChars === "number" &&
+            Number.isFinite(params.maxChars)
+              ? params.maxChars
+              : undefined;
           const snapshot = await browserSnapshot(baseUrl, {
             format,
             targetId,
             limit,
+            maxChars,
             profile,
           });
           if (snapshot.format === "ai") {
