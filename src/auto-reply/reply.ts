@@ -866,7 +866,8 @@ export async function getReplyFromConfig(
     }) &&
     directives.hasStatusDirective &&
     allowTextCommands &&
-    command.isAuthorizedSender;
+    command.isAuthorizedSender &&
+    command.commandBodyNormalized !== "/status";
   if (handleInlineStatus) {
     const inlineStatusReply = await buildStatusReply({
       cfg,

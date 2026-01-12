@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.11-5
+
+### Fixes
+- Auto-reply: prevent duplicate /status replies (including /usage alias) and add tests for inline + standalone cases.
+
 ## 2026.1.11-4
 
 ### Fixes

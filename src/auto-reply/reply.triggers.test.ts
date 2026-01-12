@@ -131,6 +131,92 @@ describe("trigger handling", () => {
     });
   });
 
+  it("emits /status once (no duplicate inline + final)", async () => {
+    await withTempHome(async (home) => {
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1000",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+      expect(blockReplies.length).toBe(0);
+      expect(replies.length).toBe(1);
+      expect(String(replies[0]?.text ?? "")).toContain("Model:");
+    });
+  });
+
+  it("emits /usage once (alias of /status)", async () => {
+    await withTempHome(async (home) => {
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "/usage",
+          From: "+1000",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+      expect(blockReplies.length).toBe(0);
+      expect(replies.length).toBe(1);
+      expect(String(replies[0]?.text ?? "")).toContain("Model:");
+    });
+  });
+
+  it("sends one inline status and still returns agent reply for mixed text", async () => {
+    await withTempHome(async (home) => {
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "agent says hi" }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+      const blockReplies: Array<{ text?: string }> = [];
+      const res = await getReplyFromConfig(
+        {
+          Body: "here we go /status now",
+          From: "+1002",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1002",
+        },
+        {
+          onBlockReply: async (payload) => {
+            blockReplies.push(payload);
+          },
+        },
+        makeCfg(home),
+      );
+      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
+      expect(blockReplies.length).toBe(1);
+      expect(String(blockReplies[0]?.text ?? "")).toContain("Model:");
+      expect(replies.length).toBe(1);
+      expect(replies[0]?.text).toBe("agent says hi");
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).not.toContain("/status");
+    });
+  });
+
   it("aborts even with timestamp prefix", async () => {
     await withTempHome(async (home) => {
       const res = await getReplyFromConfig(
