@@ -24,6 +24,11 @@ const pwMocks = vi.hoisted(() => ({
   clickViaPlaywright: vi.fn(async () => {}),
   closePageViaPlaywright: vi.fn(async () => {}),
   closePlaywrightBrowserConnection: vi.fn(async () => {}),
+  downloadViaPlaywright: vi.fn(async () => ({
+    url: "https://example.com/report.pdf",
+    suggestedFilename: "report.pdf",
+    path: "/tmp/report.pdf",
+  })),
   dragViaPlaywright: vi.fn(async () => {}),
   evaluateViaPlaywright: vi.fn(async () => "ok"),
   fillFormViaPlaywright: vi.fn(async () => {}),
@@ -32,6 +37,12 @@ const pwMocks = vi.hoisted(() => ({
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
   pressKeyViaPlaywright: vi.fn(async () => {}),
+  responseBodyViaPlaywright: vi.fn(async () => ({
+    url: "https://example.com/api/data",
+    status: 200,
+    headers: { "content-type": "application/json" },
+    body: '{"ok":true}',
+  })),
   resizeViewportViaPlaywright: vi.fn(async () => {}),
   selectOptionViaPlaywright: vi.fn(async () => {}),
   setInputFilesViaPlaywright: vi.fn(async () => {}),
@@ -40,6 +51,11 @@ const pwMocks = vi.hoisted(() => ({
     buffer: Buffer.from("png"),
   })),
   typeViaPlaywright: vi.fn(async () => {}),
+  waitForDownloadViaPlaywright: vi.fn(async () => ({
+    url: "https://example.com/report.pdf",
+    suggestedFilename: "report.pdf",
+    path: "/tmp/report.pdf",
+  })),
   waitForViaPlaywright: vi.fn(async () => {}),
 }));
 
@@ -556,6 +572,51 @@ describe("browser control server", () => {
       accept: true,
       promptText: undefined,
       timeoutMs: 5678,
+    });
+
+    const waitDownload = await realFetch(`${base}/wait/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "/tmp/report.pdf", timeoutMs: 1111 }),
+    }).then((r) => r.json());
+    expect(waitDownload).toMatchObject({ ok: true });
+    expect(pwMocks.waitForDownloadViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+      path: "/tmp/report.pdf",
+      timeoutMs: 1111,
+    });
+
+    const download = await realFetch(`${base}/download`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ref: "e12", path: "/tmp/report.pdf" }),
+    }).then((r) => r.json());
+    expect(download).toMatchObject({ ok: true });
+    expect(pwMocks.downloadViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "e12",
+      path: "/tmp/report.pdf",
+      timeoutMs: undefined,
+    });
+
+    const responseBody = await realFetch(`${base}/response/body`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: "**/api/data",
+        timeoutMs: 2222,
+        maxChars: 10,
+      }),
+    }).then((r) => r.json());
+    expect(responseBody).toMatchObject({ ok: true });
+    expect(pwMocks.responseBodyViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+      url: "**/api/data",
+      timeoutMs: 2222,
+      maxChars: 10,
     });
 
     const consoleRes = (await realFetch(`${base}/console?level=error`).then(

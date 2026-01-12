@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let currentPage: Record<string, unknown> | null = null;
 let currentRefLocator: Record<string, unknown> | null = null;
-let pageState: { console: unknown[]; armIdUpload: number; armIdDialog: number };
+let pageState: {
+  console: unknown[];
+  armIdUpload: number;
+  armIdDialog: number;
+  armIdDownload: number;
+};
 
 const sessionMocks = vi.hoisted(() => ({
   getPageForTargetId: vi.fn(async () => {
@@ -26,7 +31,12 @@ describe("pw-tools-core", () => {
   beforeEach(() => {
     currentPage = null;
     currentRefLocator = null;
-    pageState = { console: [], armIdUpload: 0, armIdDialog: 0 };
+    pageState = {
+      console: [],
+      armIdUpload: 0,
+      armIdDialog: 0,
+      armIdDownload: 0,
+    };
     for (const fn of Object.values(sessionMocks)) fn.mockClear();
   });
 
@@ -277,6 +287,113 @@ describe("pw-tools-core", () => {
     expect(waitForFunction).toHaveBeenCalledWith("window.ready===true", {
       timeout: 1234,
     });
+  });
+
+  it("waits for the next download and saves it", async () => {
+    let downloadHandler: ((download: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") downloadHandler = handler;
+    });
+    const off = vi.fn();
+
+    const saveAs = vi.fn(async () => {});
+    const download = {
+      url: () => "https://example.com/file.bin",
+      suggestedFilename: () => "file.bin",
+      saveAs,
+    };
+
+    currentPage = { on, off };
+
+    const mod = await importModule();
+    const p = mod.waitForDownloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      path: "/tmp/file.bin",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    expect(downloadHandler).toBeDefined();
+    downloadHandler?.(download);
+
+    const res = await p;
+    expect(saveAs).toHaveBeenCalledWith("/tmp/file.bin");
+    expect(res.path).toBe("/tmp/file.bin");
+  });
+
+  it("clicks a ref and saves the resulting download", async () => {
+    let downloadHandler: ((download: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (download: unknown) => void) => {
+      if (event === "download") downloadHandler = handler;
+    });
+    const off = vi.fn();
+
+    const click = vi.fn(async () => {});
+    currentRefLocator = { click };
+
+    const saveAs = vi.fn(async () => {});
+    const download = {
+      url: () => "https://example.com/report.pdf",
+      suggestedFilename: () => "report.pdf",
+      saveAs,
+    };
+
+    currentPage = { on, off };
+
+    const mod = await importModule();
+    const p = mod.downloadViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "e12",
+      path: "/tmp/report.pdf",
+      timeoutMs: 1000,
+    });
+
+    await Promise.resolve();
+    expect(downloadHandler).toBeDefined();
+    expect(click).toHaveBeenCalledWith({ timeout: 1000 });
+
+    downloadHandler?.(download);
+
+    const res = await p;
+    expect(saveAs).toHaveBeenCalledWith("/tmp/report.pdf");
+    expect(res.path).toBe("/tmp/report.pdf");
+  });
+
+  it("waits for a matching response and returns its body", async () => {
+    let responseHandler: ((resp: unknown) => void) | undefined;
+    const on = vi.fn((event: string, handler: (resp: unknown) => void) => {
+      if (event === "response") responseHandler = handler;
+    });
+    const off = vi.fn();
+    currentPage = { on, off };
+
+    const resp = {
+      url: () => "https://example.com/api/data",
+      status: () => 200,
+      headers: () => ({ "content-type": "application/json" }),
+      text: async () => '{"ok":true,"value":123}',
+    };
+
+    const mod = await importModule();
+    const p = mod.responseBodyViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      url: "**/api/data",
+      timeoutMs: 1000,
+      maxChars: 10,
+    });
+
+    await Promise.resolve();
+    expect(responseHandler).toBeDefined();
+    responseHandler?.(resp);
+
+    const res = await p;
+    expect(res.url).toBe("https://example.com/api/data");
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('{"ok":true');
+    expect(res.truncated).toBe(true);
   });
 
   it("rewrites strict mode violations into snapshot hints", async () => {
