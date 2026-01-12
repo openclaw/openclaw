@@ -153,9 +153,9 @@ export function registerChannelsCli(program: Command) {
 
   channels
     .command("login")
-    .description("Link a channel account (WhatsApp Web only)")
+    .description("Link a channel account (WhatsApp Web, Matrix verification)")
     .option("--channel <channel>", "Channel alias (default: whatsapp)")
-    .option("--account <id>", "WhatsApp account id (accountId)")
+    .option("--account <id>", "Account id (accountId)")
     .option("--verbose", "Verbose connection logs", false)
     .action(async (opts) => {
       try {

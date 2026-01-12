@@ -4,6 +4,7 @@ import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import { resolveMatrixDeviceIdFromWhoami } from "../../../matrix/client.js";
+import { runMatrixVerificationFlow } from "../../../matrix/login.js";
 import type {
   ChannelOnboardingAdapter,
   ChannelOnboardingDmPolicy,
@@ -120,7 +121,7 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 2 : 0,
     };
   },
-  configure: async ({ cfg, prompter }) => {
+  configure: async ({ cfg, prompter, runtime }) => {
     const configValues = resolveMatrixConfigValues(cfg);
     const envValues = resolveMatrixEnvValues();
     const hasConfigCreds = hasMatrixCredentials(configValues);
@@ -306,6 +307,37 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
         ...next,
         matrix: matrixConfig,
       };
+    }
+
+    if (matrixConfig.encryption === true) {
+      const wantsVerify = await prompter.confirm({
+        message: "Verify Matrix device now (SAS)?",
+        initialValue: true,
+      });
+
+      if (wantsVerify) {
+        try {
+          await runMatrixVerificationFlow({
+            cfg: next,
+            runtime,
+            prompter,
+            showSkipNote: false,
+            skipConfirm: true,
+            allowReverify: false,
+          });
+        } catch (err) {
+          runtime.error(`Matrix verification failed: ${String(err)}`);
+          await prompter.note(
+            `Docs: ${formatDocsLink("/matrix", "matrix")}`,
+            "Matrix verification",
+          );
+        }
+      } else {
+        await prompter.note(
+          "Run `clawdbot providers login --provider matrix` later to verify.",
+          "Matrix verification",
+        );
+      }
     }
 
     return { cfg: next, accountId: DEFAULT_ACCOUNT_ID };
