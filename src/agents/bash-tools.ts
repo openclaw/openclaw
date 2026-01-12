@@ -265,15 +265,17 @@ export function createBashTool(
             {
               cwd: workdir,
               env: process.env,
-              detached: true,
+              detached: process.platform !== "win32",
               stdio: ["pipe", "pipe", "pipe"],
+              windowsHide: true,
             },
           )
         : spawn(shell, [...shellArgs, params.command], {
             cwd: workdir,
             env,
-            detached: true,
+            detached: process.platform !== "win32",
             stdio: ["pipe", "pipe", "pipe"],
+            windowsHide: true,
           });
 
       const session = {

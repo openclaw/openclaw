@@ -9,11 +9,12 @@ import {
 import { sanitizeBinaryOutput } from "./shell-utils.js";
 
 const isWin = process.platform === "win32";
-const shortDelayCmd = isWin ? "ping -n 2 127.0.0.1 > nul" : "sleep 0.05";
-const yieldDelayCmd = isWin ? "ping -n 3 127.0.0.1 > nul" : "sleep 0.2";
-const longDelayCmd = isWin ? "ping -n 4 127.0.0.1 > nul" : "sleep 2";
-const joinCommands = (commands: string[]) =>
-  commands.join(isWin ? " & " : "; ");
+// PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
+const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 50" : "sleep 0.05";
+const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 200" : "sleep 0.2";
+const longDelayCmd = isWin ? "Start-Sleep -Seconds 2" : "sleep 2";
+// Both PowerShell and bash use ; for command separation
+const joinCommands = (commands: string[]) => commands.join("; ");
 const echoAfterDelay = (message: string) =>
   joinCommands([shortDelayCmd, `echo ${message}`]);
 const echoLines = (lines: string[]) =>
