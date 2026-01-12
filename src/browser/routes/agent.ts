@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 
 import type express from "express";
@@ -141,7 +143,7 @@ export function registerBrowserAgentRoutes(
     const body = readBody(req);
     const kind = toStringOrEmpty(body.kind) as ActKind;
     const targetId = toStringOrEmpty(body.targetId) || undefined;
-    if (Object.hasOwn(body, "selector")) {
+    if (Object.hasOwn(body, "selector") && kind !== "wait") {
       return jsonError(res, 400, SELECTOR_UNSUPPORTED_MESSAGE);
     }
 
@@ -172,6 +174,7 @@ export function registerBrowserAgentRoutes(
           const ref = toStringOrEmpty(body.ref);
           if (!ref) return jsonError(res, 400, "ref is required");
           const doubleClick = toBoolean(body.doubleClick) ?? false;
+          const timeoutMs = toNumber(body.timeoutMs);
           const buttonRaw = toStringOrEmpty(body.button) || "";
           const button = buttonRaw ? parseClickButton(buttonRaw) : undefined;
           if (buttonRaw && !button)
@@ -205,6 +208,7 @@ export function registerBrowserAgentRoutes(
           };
           if (button) clickRequest.button = button;
           if (modifiers) clickRequest.modifiers = modifiers;
+          if (timeoutMs) clickRequest.timeoutMs = timeoutMs;
           await pw.clickViaPlaywright(clickRequest);
           return res.json({ ok: true, targetId: tab.targetId, url: tab.url });
         }
@@ -216,6 +220,7 @@ export function registerBrowserAgentRoutes(
           const text = body.text;
           const submit = toBoolean(body.submit) ?? false;
           const slowly = toBoolean(body.slowly) ?? false;
+          const timeoutMs = toNumber(body.timeoutMs);
           const typeRequest: Parameters<typeof pw.typeViaPlaywright>[0] = {
             cdpUrl,
             targetId: tab.targetId,
@@ -224,23 +229,32 @@ export function registerBrowserAgentRoutes(
             submit,
             slowly,
           };
+          if (timeoutMs) typeRequest.timeoutMs = timeoutMs;
           await pw.typeViaPlaywright(typeRequest);
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "press": {
           const key = toStringOrEmpty(body.key);
           if (!key) return jsonError(res, 400, "key is required");
+          const delayMs = toNumber(body.delayMs);
           await pw.pressKeyViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             key,
+            delayMs: delayMs ?? undefined,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "hover": {
           const ref = toStringOrEmpty(body.ref);
           if (!ref) return jsonError(res, 400, "ref is required");
-          await pw.hoverViaPlaywright({ cdpUrl, targetId: tab.targetId, ref });
+          const timeoutMs = toNumber(body.timeoutMs);
+          await pw.hoverViaPlaywright({
+            cdpUrl,
+            targetId: tab.targetId,
+            ref,
+            timeoutMs: timeoutMs ?? undefined,
+          });
           return res.json({ ok: true, targetId: tab.targetId });
         }
         case "drag": {
@@ -248,11 +262,13 @@ export function registerBrowserAgentRoutes(
           const endRef = toStringOrEmpty(body.endRef);
           if (!startRef || !endRef)
             return jsonError(res, 400, "startRef and endRef are required");
+          const timeoutMs = toNumber(body.timeoutMs);
           await pw.dragViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             startRef,
             endRef,
+            timeoutMs: timeoutMs ?? undefined,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -261,11 +277,13 @@ export function registerBrowserAgentRoutes(
           const values = toStringArray(body.values);
           if (!ref || !values?.length)
             return jsonError(res, 400, "ref and values are required");
+          const timeoutMs = toNumber(body.timeoutMs);
           await pw.selectOptionViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             ref,
             values,
+            timeoutMs: timeoutMs ?? undefined,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -290,10 +308,12 @@ export function registerBrowserAgentRoutes(
             })
             .filter((field): field is BrowserFormField => field !== null);
           if (!fields.length) return jsonError(res, 400, "fields are required");
+          const timeoutMs = toNumber(body.timeoutMs);
           await pw.fillFormViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             fields,
+            timeoutMs: timeoutMs ?? undefined,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -314,12 +334,43 @@ export function registerBrowserAgentRoutes(
           const timeMs = toNumber(body.timeMs);
           const text = toStringOrEmpty(body.text) || undefined;
           const textGone = toStringOrEmpty(body.textGone) || undefined;
+          const selector = toStringOrEmpty(body.selector) || undefined;
+          const url = toStringOrEmpty(body.url) || undefined;
+          const loadStateRaw = toStringOrEmpty(body.loadState);
+          const loadState =
+            loadStateRaw === "load" ||
+            loadStateRaw === "domcontentloaded" ||
+            loadStateRaw === "networkidle"
+              ? (loadStateRaw as "load" | "domcontentloaded" | "networkidle")
+              : undefined;
+          const fn = toStringOrEmpty(body.fn) || undefined;
+          const timeoutMs = toNumber(body.timeoutMs) ?? undefined;
+          if (
+            timeMs === undefined &&
+            !text &&
+            !textGone &&
+            !selector &&
+            !url &&
+            !loadState &&
+            !fn
+          ) {
+            return jsonError(
+              res,
+              400,
+              "wait requires at least one of: timeMs, text, textGone, selector, url, loadState, fn",
+            );
+          }
           await pw.waitForViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
             timeMs,
             text,
             textGone,
+            selector,
+            url,
+            loadState,
+            fn,
+            timeoutMs,
           });
           return res.json({ ok: true, targetId: tab.targetId });
         }
@@ -452,6 +503,494 @@ export function registerBrowserAgentRoutes(
     }
   });
 
+  app.get("/errors", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const targetId =
+      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const clear = toBoolean(req.query.clear) ?? false;
+
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const pw = await requirePwAi(res, "page errors");
+      if (!pw) return;
+      const result = await pw.getPageErrorsViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        clear,
+      });
+      res.json({ ok: true, targetId: tab.targetId, ...result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.get("/requests", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const targetId =
+      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const filter = typeof req.query.filter === "string" ? req.query.filter : "";
+    const clear = toBoolean(req.query.clear) ?? false;
+
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const pw = await requirePwAi(res, "network requests");
+      if (!pw) return;
+      const result = await pw.getNetworkRequestsViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        filter: filter.trim() || undefined,
+        clear,
+      });
+      res.json({ ok: true, targetId: tab.targetId, ...result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/trace/start", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const screenshots = toBoolean(body.screenshots) ?? undefined;
+    const snapshots = toBoolean(body.snapshots) ?? undefined;
+    const sources = toBoolean(body.sources) ?? undefined;
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "trace start");
+      if (!pw) return;
+      await pw.traceStartViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        screenshots,
+        snapshots,
+        sources,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/trace/stop", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const out = toStringOrEmpty(body.path) || "";
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "trace stop");
+      if (!pw) return;
+      const id = crypto.randomUUID();
+      const dir = "/tmp/clawdbot";
+      await fs.mkdir(dir, { recursive: true });
+      const tracePath = out.trim() || path.join(dir, `browser-trace-${id}.zip`);
+      await pw.traceStopViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        path: tracePath,
+      });
+      res.json({
+        ok: true,
+        targetId: tab.targetId,
+        path: path.resolve(tracePath),
+      });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/highlight", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const ref = toStringOrEmpty(body.ref);
+    if (!ref) return jsonError(res, 400, "ref is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "highlight");
+      if (!pw) return;
+      await pw.highlightViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        ref,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.get("/cookies", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const targetId =
+      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const pw = await requirePwAi(res, "cookies");
+      if (!pw) return;
+      const result = await pw.cookiesGetViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+      });
+      res.json({ ok: true, targetId: tab.targetId, ...result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/cookies/set", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const cookie =
+      body.cookie &&
+      typeof body.cookie === "object" &&
+      !Array.isArray(body.cookie)
+        ? (body.cookie as Record<string, unknown>)
+        : null;
+    if (!cookie) return jsonError(res, 400, "cookie is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "cookies set");
+      if (!pw) return;
+      await pw.cookiesSetViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        cookie: {
+          name: toStringOrEmpty(cookie.name),
+          value: toStringOrEmpty(cookie.value),
+          url: toStringOrEmpty(cookie.url) || undefined,
+          domain: toStringOrEmpty(cookie.domain) || undefined,
+          path: toStringOrEmpty(cookie.path) || undefined,
+          expires: toNumber(cookie.expires) ?? undefined,
+          httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
+          secure: toBoolean(cookie.secure) ?? undefined,
+          sameSite:
+            cookie.sameSite === "Lax" ||
+            cookie.sameSite === "None" ||
+            cookie.sameSite === "Strict"
+              ? (cookie.sameSite as "Lax" | "None" | "Strict")
+              : undefined,
+        },
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/cookies/clear", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "cookies clear");
+      if (!pw) return;
+      await pw.cookiesClearViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.get("/storage/:kind", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const kind = toStringOrEmpty(req.params.kind);
+    if (kind !== "local" && kind !== "session")
+      return jsonError(res, 400, "kind must be local|session");
+    const targetId =
+      typeof req.query.targetId === "string" ? req.query.targetId.trim() : "";
+    const key = typeof req.query.key === "string" ? req.query.key : "";
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
+      const pw = await requirePwAi(res, "storage get");
+      if (!pw) return;
+      const result = await pw.storageGetViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        kind,
+        key: key.trim() || undefined,
+      });
+      res.json({ ok: true, targetId: tab.targetId, ...result });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/storage/:kind/set", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const kind = toStringOrEmpty(req.params.kind);
+    if (kind !== "local" && kind !== "session")
+      return jsonError(res, 400, "kind must be local|session");
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const key = toStringOrEmpty(body.key);
+    if (!key) return jsonError(res, 400, "key is required");
+    const value = typeof body.value === "string" ? body.value : "";
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "storage set");
+      if (!pw) return;
+      await pw.storageSetViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        kind,
+        key,
+        value,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/storage/:kind/clear", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const kind = toStringOrEmpty(req.params.kind);
+    if (kind !== "local" && kind !== "session")
+      return jsonError(res, 400, "kind must be local|session");
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "storage clear");
+      if (!pw) return;
+      await pw.storageClearViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        kind,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/offline", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const offline = toBoolean(body.offline);
+    if (offline === undefined)
+      return jsonError(res, 400, "offline is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "offline");
+      if (!pw) return;
+      await pw.setOfflineViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        offline,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/headers", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const headers =
+      body.headers &&
+      typeof body.headers === "object" &&
+      !Array.isArray(body.headers)
+        ? (body.headers as Record<string, unknown>)
+        : null;
+    if (!headers) return jsonError(res, 400, "headers is required");
+    const parsed: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) {
+      if (typeof v === "string") parsed[k] = v;
+    }
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "headers");
+      if (!pw) return;
+      await pw.setExtraHTTPHeadersViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        headers: parsed,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/credentials", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const clear = toBoolean(body.clear) ?? false;
+    const username = toStringOrEmpty(body.username) || undefined;
+    const password =
+      typeof body.password === "string" ? body.password : undefined;
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "http credentials");
+      if (!pw) return;
+      await pw.setHttpCredentialsViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        username,
+        password,
+        clear,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/geolocation", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const clear = toBoolean(body.clear) ?? false;
+    const latitude = toNumber(body.latitude);
+    const longitude = toNumber(body.longitude);
+    const accuracy = toNumber(body.accuracy) ?? undefined;
+    const origin = toStringOrEmpty(body.origin) || undefined;
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "geolocation");
+      if (!pw) return;
+      await pw.setGeolocationViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        latitude,
+        longitude,
+        accuracy,
+        origin,
+        clear,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/media", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const schemeRaw = toStringOrEmpty(body.colorScheme);
+    const colorScheme =
+      schemeRaw === "dark" ||
+      schemeRaw === "light" ||
+      schemeRaw === "no-preference"
+        ? (schemeRaw as "dark" | "light" | "no-preference")
+        : schemeRaw === "none"
+          ? null
+          : undefined;
+    if (colorScheme === undefined)
+      return jsonError(
+        res,
+        400,
+        "colorScheme must be dark|light|no-preference|none",
+      );
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "media emulation");
+      if (!pw) return;
+      await pw.emulateMediaViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        colorScheme,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/timezone", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const timezoneId = toStringOrEmpty(body.timezoneId);
+    if (!timezoneId) return jsonError(res, 400, "timezoneId is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "timezone");
+      if (!pw) return;
+      await pw.setTimezoneViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        timezoneId,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/locale", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const locale = toStringOrEmpty(body.locale);
+    if (!locale) return jsonError(res, 400, "locale is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "locale");
+      if (!pw) return;
+      await pw.setLocaleViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        locale,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
+  app.post("/set/device", async (req, res) => {
+    const profileCtx = resolveProfileContext(req, res, ctx);
+    if (!profileCtx) return;
+    const body = readBody(req);
+    const targetId = toStringOrEmpty(body.targetId) || undefined;
+    const name = toStringOrEmpty(body.name);
+    if (!name) return jsonError(res, 400, "name is required");
+    try {
+      const tab = await profileCtx.ensureTabAvailable(targetId);
+      const pw = await requirePwAi(res, "device emulation");
+      if (!pw) return;
+      await pw.setDeviceViaPlaywright({
+        cdpUrl: profileCtx.profile.cdpUrl,
+        targetId: tab.targetId,
+        name,
+      });
+      res.json({ ok: true, targetId: tab.targetId });
+    } catch (err) {
+      handleRouteError(ctx, res, err);
+    }
+  });
+
   app.post("/pdf", async (req, res) => {
     const profileCtx = resolveProfileContext(req, res, ctx);
     if (!profileCtx) return;
@@ -577,6 +1116,7 @@ export function registerBrowserAgentRoutes(
     const compact = toBoolean(req.query.compact);
     const depth = toNumber(req.query.depth);
     const selector = toStringOrEmpty(req.query.selector);
+    const frameSelector = toStringOrEmpty(req.query.frame);
 
     try {
       const tab = await profileCtx.ensureTabAvailable(targetId || undefined);
@@ -587,13 +1127,15 @@ export function registerBrowserAgentRoutes(
           interactive === true ||
           compact === true ||
           depth !== undefined ||
-          Boolean(selector.trim());
+          Boolean(selector.trim()) ||
+          Boolean(frameSelector.trim());
 
         const snap = wantsRoleSnapshot
           ? await pw.snapshotRoleViaPlaywright({
               cdpUrl: profileCtx.profile.cdpUrl,
               targetId: tab.targetId,
               selector: selector.trim() || undefined,
+              frameSelector: frameSelector.trim() || undefined,
               options: {
                 interactive: interactive ?? undefined,
                 compact: compact ?? undefined,
@@ -613,6 +1155,7 @@ export function registerBrowserAgentRoutes(
                     cdpUrl: profileCtx.profile.cdpUrl,
                     targetId: tab.targetId,
                     selector: selector.trim() || undefined,
+                    frameSelector: frameSelector.trim() || undefined,
                     options: {
                       interactive: interactive ?? undefined,
                       compact: compact ?? undefined,

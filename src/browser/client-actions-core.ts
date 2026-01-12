@@ -23,6 +23,7 @@ export type BrowserActRequest =
       doubleClick?: boolean;
       button?: string;
       modifiers?: string[];
+      timeoutMs?: number;
     }
   | {
       kind: "type";
@@ -31,15 +32,29 @@ export type BrowserActRequest =
       targetId?: string;
       submit?: boolean;
       slowly?: boolean;
+      timeoutMs?: number;
     }
-  | { kind: "press"; key: string; targetId?: string }
-  | { kind: "hover"; ref: string; targetId?: string }
-  | { kind: "drag"; startRef: string; endRef: string; targetId?: string }
-  | { kind: "select"; ref: string; values: string[]; targetId?: string }
+  | { kind: "press"; key: string; targetId?: string; delayMs?: number }
+  | { kind: "hover"; ref: string; targetId?: string; timeoutMs?: number }
+  | {
+      kind: "drag";
+      startRef: string;
+      endRef: string;
+      targetId?: string;
+      timeoutMs?: number;
+    }
+  | {
+      kind: "select";
+      ref: string;
+      values: string[];
+      targetId?: string;
+      timeoutMs?: number;
+    }
   | {
       kind: "fill";
       fields: BrowserFormField[];
       targetId?: string;
+      timeoutMs?: number;
     }
   | { kind: "resize"; width: number; height: number; targetId?: string }
   | {
@@ -47,7 +62,12 @@ export type BrowserActRequest =
       timeMs?: number;
       text?: string;
       textGone?: string;
+      selector?: string;
+      url?: string;
+      loadState?: "load" | "domcontentloaded" | "networkidle";
+      fn?: string;
       targetId?: string;
+      timeoutMs?: number;
     }
   | { kind: "evaluate"; fn: string; ref?: string; targetId?: string }
   | { kind: "close"; targetId?: string };

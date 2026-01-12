@@ -125,6 +125,7 @@ const BrowserToolSchema = Type.Object({
   compact: Type.Optional(Type.Boolean()),
   depth: Type.Optional(Type.Number()),
   selector: Type.Optional(Type.String()),
+  frame: Type.Optional(Type.String()),
   fullPage: Type.Optional(Type.Boolean()),
   ref: Type.Optional(Type.String()),
   element: Type.Optional(Type.String()),
@@ -354,16 +355,18 @@ export function createBrowserTool(opts?: {
             typeof params.selector === "string"
               ? params.selector.trim()
               : undefined;
+          const frame =
+            typeof params.frame === "string" ? params.frame.trim() : undefined;
           const snapshot = await browserSnapshot(baseUrl, {
             format,
             targetId,
             limit,
             ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
-            ...(resolvedMaxChars ? { maxChars: resolvedMaxChars } : {}),
             interactive,
             compact,
             depth,
             selector,
+            frame,
             profile,
           });
           if (snapshot.format === "ai") {

@@ -3,6 +3,8 @@ import type {
   BrowserContext,
   ConsoleMessage,
   Page,
+  Request,
+  Response,
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,6 +15,24 @@ export type BrowserConsoleMessage = {
   text: string;
   timestamp: string;
   location?: { url?: string; lineNumber?: number; columnNumber?: number };
+};
+
+export type BrowserPageError = {
+  message: string;
+  name?: string;
+  stack?: string;
+  timestamp: string;
+};
+
+export type BrowserNetworkRequest = {
+  id: string;
+  timestamp: string;
+  method: string;
+  url: string;
+  resourceType?: string;
+  status?: number;
+  ok?: boolean;
+  failureText?: string;
 };
 
 type SnapshotForAIResult = { full: string; incremental?: string };
@@ -37,6 +57,10 @@ type ConnectedBrowser = {
 
 type PageState = {
   console: BrowserConsoleMessage[];
+  errors: BrowserPageError[];
+  requests: BrowserNetworkRequest[];
+  requestIds: WeakMap<Request, string>;
+  nextRequestId: number;
   armIdUpload: number;
   armIdDialog: number;
   /**
@@ -44,13 +68,21 @@ type PageState = {
    * These refs are NOT Playwright's `aria-ref` values.
    */
   roleRefs?: Record<string, { role: string; name?: string; nth?: number }>;
+  roleRefsFrameSelector?: string;
+};
+
+type ContextState = {
+  traceActive: boolean;
 };
 
 const pageStates = new WeakMap<Page, PageState>();
+const contextStates = new WeakMap<BrowserContext, ContextState>();
 const observedContexts = new WeakSet<BrowserContext>();
 const observedPages = new WeakSet<Page>();
 
 const MAX_CONSOLE_MESSAGES = 500;
+const MAX_PAGE_ERRORS = 200;
+const MAX_NETWORK_REQUESTS = 500;
 
 let cached: ConnectedBrowser | null = null;
 let connecting: Promise<ConnectedBrowser> | null = null;
@@ -65,6 +97,10 @@ export function ensurePageState(page: Page): PageState {
 
   const state: PageState = {
     console: [],
+    errors: [],
+    requests: [],
+    requestIds: new WeakMap(),
+    nextRequestId: 0,
     armIdUpload: 0,
     armIdDialog: 0,
   };
@@ -82,6 +118,59 @@ export function ensurePageState(page: Page): PageState {
       state.console.push(entry);
       if (state.console.length > MAX_CONSOLE_MESSAGES) state.console.shift();
     });
+    page.on("pageerror", (err: Error) => {
+      state.errors.push({
+        message: err?.message ? String(err.message) : String(err),
+        name: err?.name ? String(err.name) : undefined,
+        stack: err?.stack ? String(err.stack) : undefined,
+        timestamp: new Date().toISOString(),
+      });
+      if (state.errors.length > MAX_PAGE_ERRORS) state.errors.shift();
+    });
+    page.on("request", (req: Request) => {
+      state.nextRequestId += 1;
+      const id = `r${state.nextRequestId}`;
+      state.requestIds.set(req, id);
+      state.requests.push({
+        id,
+        timestamp: new Date().toISOString(),
+        method: req.method(),
+        url: req.url(),
+        resourceType: req.resourceType(),
+      });
+      if (state.requests.length > MAX_NETWORK_REQUESTS) state.requests.shift();
+    });
+    page.on("response", (resp: Response) => {
+      const req = resp.request();
+      const id = state.requestIds.get(req);
+      if (!id) return;
+      let rec: BrowserNetworkRequest | undefined;
+      for (let i = state.requests.length - 1; i >= 0; i -= 1) {
+        const candidate = state.requests[i];
+        if (candidate && candidate.id === id) {
+          rec = candidate;
+          break;
+        }
+      }
+      if (!rec) return;
+      rec.status = resp.status();
+      rec.ok = resp.ok();
+    });
+    page.on("requestfailed", (req: Request) => {
+      const id = state.requestIds.get(req);
+      if (!id) return;
+      let rec: BrowserNetworkRequest | undefined;
+      for (let i = state.requests.length - 1; i >= 0; i -= 1) {
+        const candidate = state.requests[i];
+        if (candidate && candidate.id === id) {
+          rec = candidate;
+          break;
+        }
+      }
+      if (!rec) return;
+      rec.failureText = req.failure()?.errorText;
+      rec.ok = false;
+    });
     page.on("close", () => {
       pageStates.delete(page);
       observedPages.delete(page);
@@ -94,9 +183,18 @@ export function ensurePageState(page: Page): PageState {
 function observeContext(context: BrowserContext) {
   if (observedContexts.has(context)) return;
   observedContexts.add(context);
+  ensureContextState(context);
 
   for (const page of context.pages()) ensurePageState(page);
   context.on("page", (page) => ensurePageState(page));
+}
+
+export function ensureContextState(context: BrowserContext): ContextState {
+  const existing = contextStates.get(context);
+  if (existing) return existing;
+  const state: ContextState = { traceActive: false };
+  contextStates.set(context, state);
+  return state;
 }
 
 function observeBrowser(browser: Browser) {
@@ -208,9 +306,18 @@ export function refLocator(page: Page, ref: string) {
         `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
       );
     }
+    const scope = state?.roleRefsFrameSelector
+      ? page.frameLocator(state.roleRefsFrameSelector)
+      : page;
+    const locAny = scope as unknown as {
+      getByRole: (
+        role: never,
+        opts?: { name?: string; exact?: boolean },
+      ) => ReturnType<Page["getByRole"]>;
+    };
     const locator = info.name
-      ? page.getByRole(info.role as never, { name: info.name, exact: true })
-      : page.getByRole(info.role as never);
+      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
+      : locAny.getByRole(info.role as never);
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
   }
 

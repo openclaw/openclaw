@@ -12,3 +12,5 @@ export type BrowserActionPathResult = {
   targetId: string;
   url?: string;
 };
+
+export type BrowserActionTargetOk = { ok: true; targetId: string };

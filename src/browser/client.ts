@@ -72,6 +72,13 @@ export type SnapshotResult =
       url: string;
       snapshot: string;
       truncated?: boolean;
+      refs?: Record<string, { role: string; name?: string; nth?: number }>;
+      stats?: {
+        lines: number;
+        chars: number;
+        refs: number;
+        interactive: number;
+      };
     };
 
 export function resolveBrowserControlUrl(overrideUrl?: string) {
@@ -243,6 +250,26 @@ export async function browserCloseTab(
   );
 }
 
+export async function browserTabAction(
+  baseUrl: string,
+  opts: {
+    action: "list" | "new" | "close" | "select";
+    index?: number;
+    profile?: string;
+  },
+): Promise<unknown> {
+  const q = buildProfileQuery(opts.profile);
+  return await fetchBrowserJson(`${baseUrl}/tabs/action${q}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      action: opts.action,
+      index: opts.index,
+    }),
+    timeoutMs: 10_000,
+  });
+}
+
 export async function browserSnapshot(
   baseUrl: string,
   opts: {
@@ -254,6 +281,7 @@ export async function browserSnapshot(
     compact?: boolean;
     depth?: number;
     selector?: string;
+    frame?: string;
     profile?: string;
   },
 ): Promise<SnapshotResult> {
@@ -270,6 +298,7 @@ export async function browserSnapshot(
   if (typeof opts.depth === "number" && Number.isFinite(opts.depth))
     q.set("depth", String(opts.depth));
   if (opts.selector?.trim()) q.set("selector", opts.selector.trim());
+  if (opts.frame?.trim()) q.set("frame", opts.frame.trim());
   if (opts.profile) q.set("profile", opts.profile);
   return await fetchBrowserJson<SnapshotResult>(
     `${baseUrl}/snapshot?${q.toString()}`,

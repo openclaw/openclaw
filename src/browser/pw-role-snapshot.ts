@@ -7,6 +7,13 @@ export type RoleRef = {
 
 export type RoleRefMap = Record<string, RoleRef>;
 
+export type RoleSnapshotStats = {
+  lines: number;
+  chars: number;
+  refs: number;
+  interactive: number;
+};
+
 export type RoleSnapshotOptions = {
   /** Only include interactive elements (buttons, links, inputs, etc.). */
   interactive?: boolean;
@@ -69,6 +76,21 @@ const STRUCTURAL_ROLES = new Set([
   "presentation",
   "none",
 ]);
+
+export function getRoleSnapshotStats(
+  snapshot: string,
+  refs: RoleRefMap,
+): RoleSnapshotStats {
+  const interactive = Object.values(refs).filter((r) =>
+    INTERACTIVE_ROLES.has(r.role),
+  ).length;
+  return {
+    lines: snapshot.split("\n").length,
+    chars: snapshot.length,
+    refs: Object.keys(refs).length,
+    interactive,
+  };
+}
 
 function getIndentLevel(line: string): number {
   const match = line.match(/^(\s*)/);
