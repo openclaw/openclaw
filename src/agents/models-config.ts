@@ -5,11 +5,44 @@ import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
+type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function normalizeGoogleModelId(id: string): string {
+  if (id === "gemini-3-pro") return "gemini-3-pro-preview";
+  if (id === "gemini-3-flash") return "gemini-3-flash-preview";
+  return id;
+}
+
+function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
+  let mutated = false;
+  const models = provider.models.map((model) => {
+    const nextId = normalizeGoogleModelId(model.id);
+    if (nextId === model.id) return model;
+    mutated = true;
+    return { ...model, id: nextId };
+  });
+  return mutated ? { ...provider, models } : provider;
+}
+
+function normalizeProviders(
+  providers: ModelsConfig["providers"],
+): ModelsConfig["providers"] {
+  if (!providers) return providers;
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    const normalized =
+      key === "google" ? normalizeGoogleProvider(provider) : provider;
+    if (normalized !== provider) mutated = true;
+    next[key] = normalized;
+  }
+  return mutated ? next : providers;
 }
 
 async function readJson(pathname: string): Promise<unknown> {
@@ -53,7 +86,8 @@ export async function ensureClawdbotModelsJson(
     }
   }
 
-  const next = `${JSON.stringify({ providers: mergedProviders }, null, 2)}\n`;
+  const normalizedProviders = normalizeProviders(mergedProviders);
+  const next = `${JSON.stringify({ providers: normalizedProviders }, null, 2)}\n`;
   try {
     existingRaw = await fs.readFile(targetPath, "utf8");
   } catch {

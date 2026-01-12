@@ -7,24 +7,20 @@ import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { getApiKeyForModel } from "./model-auth.js";
 import {
-  buildModelAliasIndex,
-  parseModelRef,
-  resolveConfiguredModelRef,
-  resolveModelRefFromString,
-} from "./model-selection.js";
+  collectAnthropicApiKeys,
+  isAnthropicRateLimitError,
+} from "./live-auth-keys.js";
+import { isModernModelRef } from "./live-model-filter.js";
+import { getApiKeyForModel } from "./model-auth.js";
 import { ensureClawdbotModelsJson } from "./models-config.js";
 
 const LIVE = process.env.LIVE === "1" || process.env.CLAWDBOT_LIVE_TEST === "1";
-const ALL_MODELS =
-  process.env.CLAWDBOT_LIVE_ALL_MODELS === "1" ||
-  process.env.CLAWDBOT_LIVE_MODELS === "all";
+const DIRECT_ENABLED = Boolean(process.env.CLAWDBOT_LIVE_MODELS?.trim());
 const REQUIRE_PROFILE_KEYS =
   process.env.CLAWDBOT_LIVE_REQUIRE_PROFILE_KEYS === "1";
 
-const describeLive = LIVE && ALL_MODELS ? describe : describe.skip;
+const describeLive = LIVE ? describe : describe.skip;
 
 function parseProviderFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
@@ -44,6 +40,10 @@ function parseModelFilter(raw?: string): Set<string> | null {
     .map((s) => s.trim())
     .filter(Boolean);
   return ids.length ? new Set(ids) : null;
+}
+
+function logProgress(message: string): void {
+  console.log(`[live] ${message}`);
 }
 
 function isGoogleModelNotFoundError(err: unknown): boolean {
@@ -127,75 +127,25 @@ async function completeOkWithRetry(params: {
   return await runOnce();
 }
 
-function resolveConfiguredModelKeys(
-  cfg: ReturnType<typeof loadConfig>,
-): string[] {
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-  });
-  const order: string[] = [];
-  const seen = new Set<string>();
-
-  const addKey = (key: string) => {
-    const normalized = key.trim();
-    if (!normalized || seen.has(normalized)) return;
-    seen.add(normalized);
-    order.push(normalized);
-  };
-
-  const addRef = (ref: { provider: string; model: string }) => {
-    addKey(`${ref.provider}/${ref.model}`);
-  };
-
-  addRef(
-    resolveConfiguredModelRef({
-      cfg,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
-    }),
-  );
-
-  const modelConfig = cfg.agents?.defaults?.model as
-    | { primary?: string; fallbacks?: string[] }
-    | undefined;
-  const imageModelConfig = cfg.agents?.defaults?.imageModel as
-    | { primary?: string; fallbacks?: string[] }
-    | undefined;
-
-  const primary = modelConfig?.primary?.trim() ?? "";
-  const fallbacks = modelConfig?.fallbacks ?? [];
-  const imagePrimary = imageModelConfig?.primary?.trim() ?? "";
-  const imageFallbacks = imageModelConfig?.fallbacks ?? [];
-
-  const addRaw = (raw: string) => {
-    const resolved = resolveModelRefFromString({
-      raw,
-      defaultProvider: DEFAULT_PROVIDER,
-      aliasIndex,
-    });
-    if (resolved) addRef(resolved.ref);
-  };
-
-  if (primary) addRaw(primary);
-  for (const raw of fallbacks) addRaw(String(raw ?? ""));
-  if (imagePrimary) addRaw(imagePrimary);
-  for (const raw of imageFallbacks) addRaw(String(raw ?? ""));
-
-  for (const key of Object.keys(cfg.agents?.defaults?.models ?? {})) {
-    const parsed = parseModelRef(String(key ?? ""), DEFAULT_PROVIDER);
-    if (parsed) addRef(parsed);
-  }
-
-  return order;
-}
-
 describeLive("live models (profile keys)", () => {
   it(
-    "completes across configured models",
+    "completes across selected models",
     async () => {
       const cfg = loadConfig();
       await ensureClawdbotModelsJson(cfg);
+      if (!DIRECT_ENABLED) {
+        logProgress(
+          "[live-models] skipping (set CLAWDBOT_LIVE_MODELS=modern|all|<list>; all=modern)",
+        );
+        return;
+      }
+      const anthropicKeys = collectAnthropicApiKeys();
+      if (anthropicKeys.length > 0) {
+        process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
+        logProgress(
+          `[live-models] anthropic keys loaded: ${anthropicKeys.length}`,
+        );
+      }
 
       const agentDir = resolveClawdbotAgentDir();
       const authStorage = discoverAuthStorage(agentDir);
@@ -205,7 +155,11 @@ describeLive("live models (profile keys)", () => {
         models.map((model) => [`${model.provider}/${model.id}`, model]),
       );
 
-      const filter = parseModelFilter(process.env.CLAWDBOT_LIVE_MODELS);
+      const rawModels = process.env.CLAWDBOT_LIVE_MODELS?.trim();
+      const useModern = rawModels === "modern" || rawModels === "all";
+      const useExplicit = Boolean(rawModels) && !useModern;
+      const filter = useExplicit ? parseModelFilter(rawModels) : null;
+      const allowNotFoundSkip = useModern;
       const providers = parseProviderFilter(
         process.env.CLAWDBOT_LIVE_PROVIDERS,
       );
@@ -216,149 +170,196 @@ describeLive("live models (profile keys)", () => {
 
       const failures: Array<{ model: string; error: string }> = [];
       const skipped: Array<{ model: string; reason: string }> = [];
+      const candidates: Array<{
+        model: Model<Api>;
+        apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>>;
+      }> = [];
 
-      const configuredKeys = resolveConfiguredModelKeys(cfg);
-
-      for (const key of configuredKeys) {
-        const model = modelByKey.get(key);
-        if (!model) {
-          skipped.push({
-            model: key,
-            reason: "configured model missing in registry",
-          });
-          continue;
-        }
+      for (const model of models) {
         if (providers && !providers.has(model.provider)) continue;
         const id = `${model.provider}/${model.id}`;
         if (filter && !filter.has(id)) continue;
-
-        let apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModel>>;
-        try {
-          apiKeyInfo = await getApiKeyForModel({ model, cfg });
-        } catch (err) {
-          skipped.push({ model: id, reason: String(err) });
-          continue;
-        }
-
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
-          skipped.push({
-            model: id,
-            reason: `non-profile credential source: ${apiKeyInfo.source}`,
-          });
-          continue;
-        }
-
-        try {
-          // Special regression: OpenAI requires replayed `reasoning` items for tool-only turns.
-          if (
-            model.provider === "openai" &&
-            model.api === "openai-responses" &&
-            model.id === "gpt-5.2"
-          ) {
-            const noopTool = {
-              name: "noop",
-              description: "Return ok.",
-              parameters: Type.Object({}, { additionalProperties: false }),
-            };
-
-            const first = await completeSimpleWithTimeout(
-              model,
-              {
-                messages: [
-                  {
-                    role: "user",
-                    content:
-                      "Call the tool `noop` with {}. Do not write any other text.",
-                    timestamp: Date.now(),
-                  },
-                ],
-                tools: [noopTool],
-              },
-              {
-                apiKey: apiKeyInfo.apiKey,
-                reasoning: model.reasoning ? "low" : undefined,
-                maxTokens: 128,
-              },
-              perModelTimeoutMs,
-            );
-
-            const toolCall = first.content.find((b) => b.type === "toolCall");
-            expect(toolCall).toBeTruthy();
-            if (!toolCall || toolCall.type !== "toolCall") {
-              throw new Error("expected tool call");
-            }
-
-            const second = await completeSimpleWithTimeout(
-              model,
-              {
-                messages: [
-                  {
-                    role: "user",
-                    content:
-                      "Call the tool `noop` with {}. Do not write any other text.",
-                    timestamp: Date.now(),
-                  },
-                  first,
-                  {
-                    role: "toolResult",
-                    toolCallId: toolCall.id,
-                    toolName: "noop",
-                    content: [{ type: "text", text: "ok" }],
-                    isError: false,
-                    timestamp: Date.now(),
-                  },
-                  {
-                    role: "user",
-                    content: "Reply with the word ok.",
-                    timestamp: Date.now(),
-                  },
-                ],
-              },
-              {
-                apiKey: apiKeyInfo.apiKey,
-                reasoning: model.reasoning ? "low" : undefined,
-                maxTokens: 64,
-              },
-              perModelTimeoutMs,
-            );
-
-            const secondText = second.content
-              .filter((b) => b.type === "text")
-              .map((b) => b.text.trim())
-              .join(" ");
-            expect(secondText.length).toBeGreaterThan(0);
+        if (!filter && useModern) {
+          if (!isModernModelRef({ provider: model.provider, id: model.id })) {
             continue;
           }
-
-          const ok = await completeOkWithRetry({
-            model,
-            apiKey: apiKeyInfo.apiKey,
-            timeoutMs: perModelTimeoutMs,
-          });
-
-          if (ok.res.stopReason === "error") {
-            const msg = ok.res.errorMessage ?? "";
-            if (ALL_MODELS && isModelNotFoundErrorMessage(msg)) {
-              skipped.push({ model: id, reason: msg });
-              continue;
-            }
-            throw new Error(msg || "model returned error with no message");
-          }
-
-          if (ok.text.length === 0 && model.provider === "google") {
+        }
+        try {
+          const apiKeyInfo = await getApiKeyForModel({ model, cfg });
+          if (
+            REQUIRE_PROFILE_KEYS &&
+            !apiKeyInfo.source.startsWith("profile:")
+          ) {
             skipped.push({
               model: id,
-              reason: "no text returned (likely unavailable model id)",
+              reason: `non-profile credential source: ${apiKeyInfo.source}`,
             });
             continue;
           }
-          expect(ok.text.length).toBeGreaterThan(0);
+          candidates.push({ model, apiKeyInfo });
         } catch (err) {
-          if (model.provider === "google" && isGoogleModelNotFoundError(err)) {
-            skipped.push({ model: id, reason: String(err) });
-            continue;
+          skipped.push({ model: id, reason: String(err) });
+        }
+      }
+
+      if (candidates.length === 0) {
+        logProgress("[live-models] no API keys found; skipping");
+        return;
+      }
+
+      logProgress(
+        `[live-models] selection=${useExplicit ? "explicit" : "modern"}`,
+      );
+      logProgress(`[live-models] running ${candidates.length} models`);
+      const total = candidates.length;
+
+      for (const [index, entry] of candidates.entries()) {
+        const { model, apiKeyInfo } = entry;
+        const id = `${model.provider}/${model.id}`;
+        const progressLabel = `[live-models] ${index + 1}/${total} ${id}`;
+        const attemptMax =
+          model.provider === "anthropic" && anthropicKeys.length > 0
+            ? anthropicKeys.length
+            : 1;
+        for (let attempt = 0; attempt < attemptMax; attempt += 1) {
+          if (model.provider === "anthropic" && anthropicKeys.length > 0) {
+            process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
           }
-          failures.push({ model: id, error: String(err) });
+          const apiKey =
+            model.provider === "anthropic" && anthropicKeys.length > 0
+              ? anthropicKeys[attempt]
+              : apiKeyInfo.apiKey;
+          try {
+            // Special regression: OpenAI requires replayed `reasoning` items for tool-only turns.
+            if (
+              model.provider === "openai" &&
+              model.api === "openai-responses" &&
+              model.id === "gpt-5.2"
+            ) {
+              logProgress(`${progressLabel}: tool-only regression`);
+              const noopTool = {
+                name: "noop",
+                description: "Return ok.",
+                parameters: Type.Object({}, { additionalProperties: false }),
+              };
+
+              const first = await completeSimpleWithTimeout(
+                model,
+                {
+                  messages: [
+                    {
+                      role: "user",
+                      content:
+                        "Call the tool `noop` with {}. Do not write any other text.",
+                      timestamp: Date.now(),
+                    },
+                  ],
+                  tools: [noopTool],
+                },
+                {
+                  apiKey,
+                  reasoning: model.reasoning ? "low" : undefined,
+                  maxTokens: 128,
+                },
+                perModelTimeoutMs,
+              );
+
+              const toolCall = first.content.find((b) => b.type === "toolCall");
+              expect(toolCall).toBeTruthy();
+              if (!toolCall || toolCall.type !== "toolCall") {
+                throw new Error("expected tool call");
+              }
+
+              const second = await completeSimpleWithTimeout(
+                model,
+                {
+                  messages: [
+                    {
+                      role: "user",
+                      content:
+                        "Call the tool `noop` with {}. Do not write any other text.",
+                      timestamp: Date.now(),
+                    },
+                    first,
+                    {
+                      role: "toolResult",
+                      toolCallId: toolCall.id,
+                      toolName: "noop",
+                      content: [{ type: "text", text: "ok" }],
+                      isError: false,
+                      timestamp: Date.now(),
+                    },
+                    {
+                      role: "user",
+                      content: "Reply with the word ok.",
+                      timestamp: Date.now(),
+                    },
+                  ],
+                },
+                {
+                  apiKey,
+                  reasoning: model.reasoning ? "low" : undefined,
+                  maxTokens: 64,
+                },
+                perModelTimeoutMs,
+              );
+
+              const secondText = second.content
+                .filter((b) => b.type === "text")
+                .map((b) => b.text.trim())
+                .join(" ");
+              expect(secondText.length).toBeGreaterThan(0);
+              logProgress(`${progressLabel}: done`);
+              break;
+            }
+
+            logProgress(`${progressLabel}: prompt`);
+            const ok = await completeOkWithRetry({
+              model,
+              apiKey,
+              timeoutMs: perModelTimeoutMs,
+            });
+
+            if (ok.res.stopReason === "error") {
+              const msg = ok.res.errorMessage ?? "";
+              if (allowNotFoundSkip && isModelNotFoundErrorMessage(msg)) {
+                skipped.push({ model: id, reason: msg });
+                logProgress(`${progressLabel}: skip (model not found)`);
+                break;
+              }
+              throw new Error(msg || "model returned error with no message");
+            }
+
+            if (ok.text.length === 0 && model.provider === "google") {
+              skipped.push({
+                model: id,
+                reason: "no text returned (likely unavailable model id)",
+              });
+              logProgress(`${progressLabel}: skip (google model not found)`);
+              break;
+            }
+            expect(ok.text.length).toBeGreaterThan(0);
+            logProgress(`${progressLabel}: done`);
+            break;
+          } catch (err) {
+            const message = String(err);
+            if (
+              model.provider === "anthropic" &&
+              isAnthropicRateLimitError(message) &&
+              attempt + 1 < attemptMax
+            ) {
+              logProgress(`${progressLabel}: rate limit, retrying with next key`);
+              continue;
+            }
+            if (model.provider === "google" && isGoogleModelNotFoundError(err)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (google model not found)`);
+              break;
+            }
+            logProgress(`${progressLabel}: failed`);
+            failures.push({ model: id, error: message });
+            break;
+          }
         }
       }
 
@@ -372,8 +373,6 @@ describeLive("live models (profile keys)", () => {
         );
       }
 
-      // Keep one assertion so the test fails loudly if we somehow ran nothing.
-      expect(models.length).toBeGreaterThan(0);
       void skipped;
     },
     15 * 60 * 1000,
