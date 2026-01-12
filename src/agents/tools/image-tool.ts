@@ -31,6 +31,30 @@ const DEFAULT_PROMPT = "Describe the image.";
 
 type ImageModelConfig = { primary?: string; fallbacks?: string[] };
 
+function decodeDataUrl(dataUrl: string): {
+  buffer: Buffer;
+  mimeType: string;
+  kind: "image";
+} {
+  const trimmed = dataUrl.trim();
+  const match = /^data:([^;,]+);base64,([a-z0-9+/=\r\n]+)$/i.exec(trimmed);
+  if (!match) throw new Error("Invalid data URL (expected base64 data: URL).");
+  const mimeType = (match[1] ?? "").trim().toLowerCase();
+  if (!mimeType.startsWith("image/")) {
+    throw new Error(`Unsupported data URL type: ${mimeType || "unknown"}`);
+  }
+  const b64 = (match[2] ?? "").trim();
+  const buffer = Buffer.from(b64, "base64");
+  if (buffer.length === 0) {
+    throw new Error("Invalid data URL: empty payload.");
+  }
+  return { buffer, mimeType, kind: "image" };
+}
+
+export const __testing = {
+  decodeDataUrl,
+} as const;
+
 function coerceImageModelConfig(cfg?: ClawdbotConfig): ImageModelConfig {
   const imageModel = cfg?.agents?.defaults?.imageModel as
     | { primary?: string; fallbacks?: string[] }
@@ -349,18 +373,31 @@ export function createImageTool(options?: {
         throw new Error("Sandboxed image tool does not allow remote URLs.");
       }
 
-      const resolvedImage = sandboxRoot
-        ? (
-            await assertSandboxPath({
-              filePath: imageRaw,
-              cwd: sandboxRoot,
-              root: sandboxRoot,
-            })
-          ).resolved
-        : imageRaw.startsWith("~")
-          ? resolveUserPath(imageRaw)
-          : imageRaw;
-      const media = await loadWebMedia(resolvedImage, maxBytes);
+      const isDataUrl = /^data:/i.test(imageRaw);
+      const resolvedImage = (() => {
+        if (sandboxRoot) return imageRaw;
+        if (imageRaw.startsWith("~")) return resolveUserPath(imageRaw);
+        return imageRaw;
+      })();
+      const resolvedPath = isDataUrl
+        ? null
+        : sandboxRoot
+          ? (
+              await assertSandboxPath({
+                filePath: resolvedImage.startsWith("file://")
+                  ? resolvedImage.slice("file://".length)
+                  : resolvedImage,
+                cwd: sandboxRoot,
+                root: sandboxRoot,
+              })
+            ).resolved
+          : resolvedImage.startsWith("file://")
+            ? resolvedImage.slice("file://".length)
+            : resolvedImage;
+
+      const media = isDataUrl
+        ? decodeDataUrl(resolvedImage)
+        : await loadWebMedia(resolvedPath ?? resolvedImage, maxBytes);
       if (media.kind !== "image") {
         throw new Error(`Unsupported media type: ${media.kind}`);
       }

@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ClawdbotConfig } from "../../config/config.js";
 import {
+  __testing,
   createImageTool,
   resolveImageModelConfigForTool,
 } from "./image-tool.js";
@@ -130,5 +131,22 @@ describe("image tool implicit imageModel config", () => {
     await expect(
       tool.execute("t2", { image: "../escape.png" }),
     ).rejects.toThrow(/escapes sandbox root/i);
+  });
+});
+
+describe("image tool data URL support", () => {
+  it("decodes base64 image data URLs", () => {
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    const out = __testing.decodeDataUrl(`data:image/png;base64,${pngB64}`);
+    expect(out.kind).toBe("image");
+    expect(out.mimeType).toBe("image/png");
+    expect(out.buffer.length).toBeGreaterThan(0);
+  });
+
+  it("rejects non-image data URLs", () => {
+    expect(() =>
+      __testing.decodeDataUrl("data:text/plain;base64,SGVsbG8="),
+    ).toThrow(/Unsupported data URL type/i);
   });
 });
