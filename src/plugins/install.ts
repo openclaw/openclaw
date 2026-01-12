@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as tar from "tar";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 
@@ -85,6 +86,27 @@ async function ensureClawdbotExtensions(manifest: PackageManifest) {
   return list;
 }
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  label: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+}
+
 export async function installPluginFromArchive(params: {
   archivePath: string;
   extensionsDir?: string;
@@ -109,15 +131,14 @@ export async function installPluginFromArchive(params: {
   await fs.mkdir(extractDir, { recursive: true });
 
   logger.info?.(`Extracting ${archivePath}…`);
-  const tarRes = await runCommandWithTimeout(
-    ["tar", "-xzf", archivePath, "-C", extractDir],
-    { timeoutMs },
-  );
-  if (tarRes.code !== 0) {
-    return {
-      ok: false,
-      error: `failed to extract archive: ${tarRes.stderr.trim() || tarRes.stdout.trim()}`,
-    };
+  try {
+    await withTimeout(
+      tar.x({ file: archivePath, cwd: extractDir }),
+      timeoutMs,
+      "extract archive",
+    );
+  } catch (err) {
+    return { ok: false, error: `failed to extract archive: ${String(err)}` };
   }
 
   let packageDir = "";
