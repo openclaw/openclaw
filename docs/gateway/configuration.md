@@ -1368,6 +1368,40 @@ Example (adaptive tuned):
 
 See [/concepts/session-pruning](/concepts/session-pruning) for behavior details.
 
+#### `agents.defaults.compaction` (reserve headroom + memory flush)
+
+`agents.defaults.compaction.reserveTokensFloor` enforces a minimum `reserveTokens`
+value for Pi compaction (default: `20000`). Set it to `0` to disable the floor.
+
+`agents.defaults.compaction.memoryFlush` runs a **silent** agentic turn before
+auto-compaction, instructing the model to store durable memories on disk (e.g.
+`memory/YYYY-MM-DD.md`). It triggers when the session token estimate crosses a
+soft threshold below the compaction limit.
+
+Defaults:
+- `memoryFlush.enabled`: `true`
+- `memoryFlush.softThresholdTokens`: `4000`
+- `memoryFlush.prompt` / `memoryFlush.systemPrompt`: built-in defaults with `NO_REPLY`
+
+Example (tuned):
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        reserveTokensFloor: 24000,
+        memoryFlush: {
+          enabled: true,
+          softThresholdTokens: 6000,
+          systemPrompt: "Session nearing compaction. Store durable memories now.",
+          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply with NO_REPLY if nothing to store."
+        }
+      }
+    }
+  }
+}
+```
+
 Block streaming:
 - `agents.defaults.blockStreamingDefault`: `"on"`/`"off"` (default off).
 - Provider overrides: `*.blockStreaming` (and per-account variants) to force block streaming on/off.

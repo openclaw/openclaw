@@ -99,6 +99,8 @@ These are the standard files Clawdbot expects inside the workspace:
   - Curated long-term memory.
   - Only load in the main, private session (not shared/group contexts).
 
+See [Memory](/concepts/memory) for the workflow and automatic memory flush.
+
 - `skills/` (optional)
   - Workspace-specific skills.
   - Overrides managed/bundled skills when names collide.

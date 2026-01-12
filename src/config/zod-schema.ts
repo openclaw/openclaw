@@ -1130,6 +1130,19 @@ const AgentDefaultsSchema = z
           .optional(),
       })
       .optional(),
+    compaction: z
+      .object({
+        reserveTokensFloor: z.number().int().nonnegative().optional(),
+        memoryFlush: z
+          .object({
+            enabled: z.boolean().optional(),
+            softThresholdTokens: z.number().int().nonnegative().optional(),
+            prompt: z.string().optional(),
+            systemPrompt: z.string().optional(),
+          })
+          .optional(),
+      })
+      .optional(),
     thinkingDefault: z
       .union([
         z.literal("off"),

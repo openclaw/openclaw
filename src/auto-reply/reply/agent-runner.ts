@@ -54,6 +54,11 @@ import {
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import {
+  resolveMemoryFlushContextWindowTokens,
+  resolveMemoryFlushSettings,
+  shouldRunMemoryFlush,
+} from "./memory-flush.js";
+import {
   enqueueFollowupRun,
   type FollowupRun,
   type QueueSettings,
@@ -335,6 +340,122 @@ export async function runReplyAgent(params: {
     }
     typing.cleanup();
     return undefined;
+  }
+
+  const memoryFlushSettings = resolveMemoryFlushSettings(cfg);
+  const shouldFlushMemory =
+    memoryFlushSettings &&
+    !isHeartbeat &&
+    !isCliProvider(followupRun.run.provider, cfg) &&
+    shouldRunMemoryFlush({
+      entry:
+        activeSessionEntry ??
+        (sessionKey ? activeSessionStore?.[sessionKey] : undefined),
+      contextWindowTokens: resolveMemoryFlushContextWindowTokens({
+        modelId: followupRun.run.model ?? defaultModel,
+        agentCfgContextTokens,
+      }),
+      reserveTokensFloor: memoryFlushSettings.reserveTokensFloor,
+      softThresholdTokens: memoryFlushSettings.softThresholdTokens,
+    });
+  if (shouldFlushMemory) {
+    const flushRunId = crypto.randomUUID();
+    if (sessionKey) {
+      registerAgentRunContext(flushRunId, {
+        sessionKey,
+        verboseLevel: resolvedVerboseLevel,
+      });
+    }
+    let memoryCompactionCompleted = false;
+    const flushSystemPrompt = [
+      followupRun.run.extraSystemPrompt,
+      memoryFlushSettings.systemPrompt,
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    try {
+      await runWithModelFallback({
+        cfg: followupRun.run.config,
+        provider: followupRun.run.provider,
+        model: followupRun.run.model,
+        run: (provider, model) =>
+          runEmbeddedPiAgent({
+            sessionId: followupRun.run.sessionId,
+            sessionKey,
+            messageProvider:
+              sessionCtx.Provider?.trim().toLowerCase() || undefined,
+            agentAccountId: sessionCtx.AccountId,
+            // Provider threading context for tool auto-injection
+            ...buildThreadingToolContext({
+              sessionCtx,
+              config: followupRun.run.config,
+              hasRepliedRef: opts?.hasRepliedRef,
+            }),
+            sessionFile: followupRun.run.sessionFile,
+            workspaceDir: followupRun.run.workspaceDir,
+            agentDir: followupRun.run.agentDir,
+            config: followupRun.run.config,
+            skillsSnapshot: followupRun.run.skillsSnapshot,
+            prompt: memoryFlushSettings.prompt,
+            extraSystemPrompt: flushSystemPrompt,
+            ownerNumbers: followupRun.run.ownerNumbers,
+            enforceFinalTag: followupRun.run.enforceFinalTag,
+            provider,
+            model,
+            authProfileId: followupRun.run.authProfileId,
+            thinkLevel: followupRun.run.thinkLevel,
+            verboseLevel: followupRun.run.verboseLevel,
+            reasoningLevel: followupRun.run.reasoningLevel,
+            bashElevated: followupRun.run.bashElevated,
+            timeoutMs: followupRun.run.timeoutMs,
+            runId: flushRunId,
+            onAgentEvent: (evt) => {
+              if (evt.stream === "compaction") {
+                const phase =
+                  typeof evt.data.phase === "string" ? evt.data.phase : "";
+                const willRetry = Boolean(evt.data.willRetry);
+                if (phase === "end" && !willRetry) {
+                  memoryCompactionCompleted = true;
+                }
+              }
+            },
+          }),
+      });
+      let memoryFlushCompactionCount =
+        activeSessionEntry?.compactionCount ??
+        (sessionKey ? activeSessionStore?.[sessionKey]?.compactionCount : 0) ??
+        0;
+      if (memoryCompactionCompleted) {
+        const nextCount = await incrementCompactionCount({
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey,
+          storePath,
+        });
+        if (typeof nextCount === "number") {
+          memoryFlushCompactionCount = nextCount;
+        }
+      }
+      if (storePath && sessionKey) {
+        try {
+          const updatedEntry = await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              memoryFlushAt: Date.now(),
+              memoryFlushCompactionCount,
+            }),
+          });
+          if (updatedEntry) {
+            activeSessionEntry = updatedEntry;
+          }
+        } catch (err) {
+          logVerbose(`failed to persist memory flush metadata: ${String(err)}`);
+        }
+      }
+    } catch (err) {
+      logVerbose(`memory flush run failed: ${String(err)}`);
+    }
   }
 
   const runFollowupTurn = createFollowupRunner({

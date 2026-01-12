@@ -34,6 +34,7 @@ Use these hubs to discover every page, including deep dives and reference docs t
 - [Architecture](/concepts/architecture)
 - [Agent runtime](/concepts/agent)
 - [Agent workspace](/concepts/agent-workspace)
+- [Memory](/concepts/memory)
 - [Agent loop](/concepts/agent-loop)
 - [Streaming + chunking](/concepts/streaming)
 - [Multi-agent routing](/concepts/multi-agent)

@@ -1523,6 +1523,8 @@ export type AgentDefaultsConfig = {
   cliBackends?: Record<string, CliBackendConfig>;
   /** Opt-in: prune old tool results from the LLM context to reduce token usage. */
   contextPruning?: AgentContextPruningConfig;
+  /** Compaction tuning and pre-compaction memory flush behavior. */
+  compaction?: AgentCompactionConfig;
   /** Default thinking level when no /think directive is present. */
   thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high";
   /** Default verbose level when no /verbose directive is present. */
@@ -1622,6 +1624,24 @@ export type AgentDefaultsConfig = {
     /** Auto-prune sandbox containers. */
     prune?: SandboxPruneSettings;
   };
+};
+
+export type AgentCompactionConfig = {
+  /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
+  reserveTokensFloor?: number;
+  /** Pre-compaction memory flush (agentic turn). Default: enabled. */
+  memoryFlush?: AgentCompactionMemoryFlushConfig;
+};
+
+export type AgentCompactionMemoryFlushConfig = {
+  /** Enable the pre-compaction memory flush (default: true). */
+  enabled?: boolean;
+  /** Run the memory flush when context is within this many tokens of the compaction threshold. */
+  softThresholdTokens?: number;
+  /** User prompt used for the memory flush turn (NO_REPLY is enforced if missing). */
+  prompt?: string;
+  /** System prompt appended for the memory flush turn. */
+  systemPrompt?: string;
 };
 
 export type ClawdbotConfig = {

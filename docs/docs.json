@@ -608,6 +608,7 @@
           "token-use",
           "concepts/oauth",
           "concepts/agent-workspace",
+          "concepts/memory",
           "concepts/multi-agent",
           "concepts/compaction",
           "concepts/session",

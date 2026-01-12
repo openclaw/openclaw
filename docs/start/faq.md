@@ -197,6 +197,15 @@ ClawdHub installs into `./skills` under your current directory; Clawdbot treats 
 
 Yes. See [Sandboxing](/gateway/sandboxing). For Docker-specific setup (full gateway in Docker or sandbox images), see [Docker](/install/docker).
 
+### How does memory work?
+
+Clawdbot memory is just Markdown files in the agent workspace:
+- Daily notes in `memory/YYYY-MM-DD.md`
+- Curated long-term notes in `MEMORY.md` (main/private sessions only)
+
+Clawdbot also runs a **silent pre-compaction memory flush** to remind the model
+to write durable notes before auto-compaction. See [Memory](/concepts/memory).
+
 ## Where things live on disk
 
 ### Where does Clawdbot store its data?

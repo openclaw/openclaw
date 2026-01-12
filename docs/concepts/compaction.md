@@ -22,6 +22,9 @@ You’ll see:
 - `🧹 Auto-compaction complete` in verbose mode
 - `/status` showing `🧹 Compactions: <count>`
 
+Before compaction, Clawdbot can run a **silent memory flush** turn to store
+durable notes to disk. See [Memory](/concepts/memory) for details and config.
+
 ## Manual compaction
 Use `/compact` (optionally with instructions) to force a compaction pass:
 ```
