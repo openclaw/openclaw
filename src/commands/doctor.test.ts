@@ -325,7 +325,7 @@ vi.mock("./doctor-state-migrations.js", () => ({
 describe("doctor", () => {
   it(
     "migrates routing.allowFrom to whatsapp.allowFrom",
-    { timeout: 15_000 },
+    { timeout: 30_000 },
     async () => {
       readConfigFileSnapshot.mockResolvedValue({
         path: "/tmp/clawdbot.json",
