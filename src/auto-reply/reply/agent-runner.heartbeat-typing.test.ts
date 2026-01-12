@@ -47,9 +47,18 @@ vi.mock("./queue.js", async () => {
 import { runReplyAgent } from "./agent-runner.js";
 
 type EmbeddedPiAgentParams = {
-  onPartialReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onBlockReply?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
-  onToolResult?: (payload: { text?: string; mediaUrls?: string[] }) => Promise<void> | void;
+  onPartialReply?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => Promise<void> | void;
+  onBlockReply?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => Promise<void> | void;
+  onToolResult?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+  }) => Promise<void> | void;
 };
 
 function createMinimalRun(params?: {
@@ -277,7 +286,13 @@ describe("runReplyAgent typing (heartbeat)", () => {
     await run();
 
     expect(typing.startTypingOnText).toHaveBeenCalledWith("chunk");
-    expect(onBlockReply).toHaveBeenCalledWith({ text: "chunk", mediaUrls: [] });
+    expect(onBlockReply).toHaveBeenCalled();
+    const [blockPayload, blockOpts] = onBlockReply.mock.calls[0] ?? [];
+    expect(blockPayload).toMatchObject({ text: "chunk", audioAsVoice: false });
+    expect(blockOpts).toMatchObject({
+      abortSignal: expect.any(AbortSignal),
+      timeoutMs: expect.any(Number),
+    });
   });
 
   it("signals typing on tool results", async () => {

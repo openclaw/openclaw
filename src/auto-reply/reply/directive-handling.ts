@@ -629,14 +629,14 @@ export async function applyInlineDirectivesFastLane(params: {
   provider: string;
   model: string;
   initialModelLabel: string;
-	  formatModelSwitchEvent: (label: string, alias?: string) => string;
-	  agentCfg?: NonNullable<ClawdbotConfig["agents"]>["defaults"];
-	  modelState: {
-	    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
-	    allowedModelKeys: Set<string>;
-	    allowedModelCatalog: Awaited<
-	      ReturnType<
-	        typeof import("../../agents/model-catalog.js").loadModelCatalog
+  formatModelSwitchEvent: (label: string, alias?: string) => string;
+  agentCfg?: NonNullable<ClawdbotConfig["agents"]>["defaults"];
+  modelState: {
+    resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+    allowedModelKeys: Set<string>;
+    allowedModelCatalog: Awaited<
+      ReturnType<
+        typeof import("../../agents/model-catalog.js").loadModelCatalog
       >
     >;
     resetModelOverride: boolean;
