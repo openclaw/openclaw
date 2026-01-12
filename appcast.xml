@@ -3,6 +3,129 @@
     <channel>
         <title>Clawdbot</title>
         <item>
+            <title>2026.1.11</title>
+            <pubDate>Mon, 12 Jan 2026 09:37:49 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>5205</sparkle:version>
+            <sparkle:shortVersionString>2026.1.11</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.11</h2>
+<h3>Highlights</h3>
+<ul>
+<li>Plugins are now first-class: loader + CLI management, plus the new Voice Call plugin.</li>
+<li>Config: modular <code>$include</code> support for split config files. (#731) — thanks @pasogott.</li>
+<li>Agents/Pi: reserve compaction headroom so pre-compaction memory writes can run before auto-compaction.</li>
+<li>Agents: automatic pre-compaction memory flush turn to store durable memories before compaction.</li>
+</ul>
+<h3>Changes</h3>
+<ul>
+<li>Deps: update pi-agent-core/pi-ai/pi-coding-agent/pi-tui and refresh the pi-ai patch.</li>
+<li>Dev: bump @types/node.</li>
+<li>macOS: add wizard debug CLI and share wizard parsing helpers.</li>
+<li>CLI/Onboarding: simplify MiniMax auth choice to a single M2.1 option.</li>
+<li>CLI: configure section selection now loops until Continue.</li>
+<li>Docs: explain MiniMax vs MiniMax Lightning (speed vs cost) and restore LM Studio example.</li>
+<li>Docs: add Cerebras GLM 4.6/4.7 config example (OpenAI-compatible endpoint).</li>
+<li>Onboarding/CLI: group model/auth choice by provider and label Z.AI as GLM 4.7.</li>
+<li>Onboarding/Docs: add Moonshot AI (Kimi K2) auth choice + config example.</li>
+<li>CLI/Onboarding: prompt to reuse detected API keys for Moonshot/MiniMax/Z.AI/Gemini/Anthropic/OpenCode.</li>
+<li>CLI/Onboarding: move MiniMax to the top of the provider list.</li>
+<li>CLI/Onboarding: add MiniMax M2.1 Lightning auth choice.</li>
+<li>CLI/Onboarding: show key previews when reusing detected API keys.</li>
+<li>Auto-reply: add compact <code>/model</code> picker (models + available providers) and show provider endpoints in <code>/model status</code>.</li>
+<li>Control UI: add Config tab model presets (MiniMax M2.1, GLM 4.7, Kimi) for one-click setup.</li>
+<li>Plugins: add extension loader (tools/RPC/CLI/services), discovery paths, and config schema + Control UI labels (uiHints).</li>
+<li>Plugins: add <code>clawdbot plugins install</code> (path/tgz/npm), plus <code>list|info|enable|disable|doctor</code> UX.</li>
+<li>Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.</li>
+<li>Docs: add plugins doc + cross-links from tools/skills/gateway config.</li>
+<li>Docs: clarify memory flush behavior + writable workspace requirement in Memory/Session/FAQ.</li>
+<li>Docs: add beginner-friendly plugin quick start + expand Voice Call plugin docs.</li>
+<li>Tests: add Docker plugin loader + tgz-install smoke test.</li>
+<li>Tests: extend Docker plugin E2E to cover installing from local folders (<code>plugins.load.paths</code>) and <code>file:</code> npm specs.</li>
+<li>Tests: add coverage for pre-compaction memory flush settings (including read-only/CLI skips).</li>
+<li>Tests: modernize live model smoke selection for current releases and enforce tools/images/thinking-high coverage. (#769) — thanks @steipete.</li>
+<li>Agents/Tools: add <code>apply_patch</code> tool for multi-file edits (experimental; gated by tools.exec.applyPatch; OpenAI-only).</li>
+<li>Agents/Tools: rename the bash tool to exec (config alias maintained). (#748) — thanks @myfunc.</li>
+<li>Agents: add pre-compaction memory flush config (<code>agents.defaults.compaction.*</code>) with a soft threshold + system prompt.</li>
+<li>Config: add <code>$include</code> directive for modular config files. (#731) — thanks @pasogott.</li>
+<li>Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.</li>
+<li>macOS: prompt to install the global <code>clawdbot</code> CLI when missing in local mode; install via <code>clawd.bot/install-cli.sh</code> (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.</li>
+<li>Docs: add gog calendar event color IDs from <code>gog calendar colors</code>. (#715) — thanks @mjrussell.</li>
+<li>Cron/CLI: add <code>--model</code> flag to cron add/edit commands. (#711) — thanks @mjrussell.</li>
+<li>Cron/CLI: trim model overrides on cron edits and document main-session guidance. (#711) — thanks @mjrussell.</li>
+<li>Skills: bundle <code>skill-creator</code> to guide creating and packaging skills.</li>
+<li>Providers: add per-DM history limit overrides (<code>dmHistoryLimit</code>) with provider-level config. (#728) — thanks @pkrmf.</li>
+<li>Discord: expose channel/category management actions in the message tool. (#730) — thanks @NicholasSpisak.</li>
+<li>Docs: rename README “macOS app” section to “Apps”. (#733) — thanks @AbhisekBasu1.</li>
+<li>Gateway: require <code>client.id</code> in WebSocket connect params; use <code>client.instanceId</code> for presence de-dupe; update docs/tests.</li>
+<li>macOS: remove the attach-only gateway setting; local mode now always manages launchd while still attaching to an existing gateway if present.</li>
+</ul>
+<h3>Installer</h3>
+<ul>
+<li>Postinstall: replace <code>git apply</code> with builtin JS patcher (works npm/pnpm/bun; no git dependency) plus regression tests.</li>
+<li>Postinstall: skip pnpm patch fallback when the new patcher is active.</li>
+<li>Installer tests: add root+non-root docker smokes, CI workflow to fetch clawd.bot scripts and run install sh/cli with onboarding skipped.</li>
+<li>Installer UX: support <code>CLAWDBOT_NO_ONBOARD=1</code> for non-interactive installs; fix npm prefix on Linux and auto-install git.</li>
+<li>Installer UX: add <code>install.sh --help</code> with flags/env and git install hint.</li>
+<li>Installer UX: add <code>--install-method git|npm</code> and auto-detect source checkouts (prompt to update git checkout vs migrate to npm).</li>
+</ul>
+<h3>Fixes</h3>
+<ul>
+<li>Control UI: flatten nav into a single horizontal scroll row on tablet/mobile (and always show collapsed group items). (#771) — thanks @carlulsoe.</li>
+<li>macOS: start + await local gateway before onboarding wizard begins.</li>
+<li>macOS: cancel onboarding wizard on close, recover if the gateway drops the session, and time out stalled gateway connects.</li>
+<li>macOS: wizard debug CLI now surfaces error status instead of exiting as complete.</li>
+<li>Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible <code>/anthropic</code> endpoint by default (keep <code>minimax-api</code> as a legacy alias).</li>
+<li>Agents/Browser: cap Playwright AI snapshots for tool calls (maxChars); CLI snapshots remain full. (#763) — thanks @thesash.</li>
+<li>Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.</li>
+<li>CLI: fix guardCancel typing for configure prompts. (#769) — thanks @steipete.</li>
+<li>Providers: default groupPolicy to allowlist across providers and warn in doctor when groups are open.</li>
+<li>MS Teams: add groupPolicy/groupAllowFrom gating for group chats and warn when groups are open.</li>
+<li>Providers: strip tool call/result ids from Gemini CLI payloads to avoid API 400s. (#756)</li>
+<li>Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging; preserve close codes.</li>
+<li>Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.</li>
+<li>Gateway: tighten gateway listener detection.</li>
+<li>Control UI: hide onboarding chat when configured and guard the mobile chat sidebar overlay.</li>
+<li>Auth: read Codex keychain credentials and make the lookup platform-aware.</li>
+<li>macOS/Release: avoid bundling dist artifacts in relay builds and generate appcasts from zip-only sources.</li>
+<li>Doctor: surface plugin diagnostics in the report.</li>
+<li>Plugins: treat <code>plugins.load.paths</code> directory entries as package roots when they contain <code>package.json</code> + <code>clawdbot.extensions</code>; load plugin packages from config dirs; extract archives without system tar.</li>
+<li>Config: expand <code>~</code> in <code>CLAWDBOT_CONFIG_PATH</code> and common path-like config fields (including <code>plugins.load.paths</code>); guard invalid <code>$include</code> paths. (#731) — thanks @pasogott.</li>
+<li>Agents: stop pre-creating session transcripts so first user messages persist in JSONL history.</li>
+<li>Agents: skip pre-compaction memory flush when the session workspace is read-only.</li>
+<li>Auto-reply: allow inline <code>/status</code> for allowlisted senders (stripped before the model); unauthorized senders see it as plain text.</li>
+<li>Auto-reply: include config-only allowlisted models in <code>/model</code> even when the catalog is partial.</li>
+<li>Auto-reply: allow fuzzy <code>/model</code> matches (e.g. <code>/model kimi</code> or <code>/model moonshot/kimi</code>) when unambiguous.</li>
+<li>Auto-reply: ignore inline <code>/status</code> directives unless the message is directive-only.</li>
+<li>CLI/Configure: enter the selected section immediately, then return to the section picker.</li>
+<li>CLI/Configure: apply the chosen auth model as default (skip the extra picker) and refresh the model catalog for new providers.</li>
+<li>Auto-reply: align <code>/think</code> default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.</li>
+<li>Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.</li>
+<li>Auto-reply: allow sender fallback for command authorization when <code>SenderId</code> is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.</li>
+<li>Heartbeat: refresh prompt text for updated defaults.</li>
+<li>Agents/Tools: use PowerShell on Windows to capture system utility output. (#748) — thanks @myfunc.</li>
+<li>Agents/Tools: normalize Claude Code-style read/write/edit params (file_path/old_string/new_string) and keep sandbox guards in place. (#768) — thanks @hsrvc.</li>
+<li>Docker: tolerate unset optional env vars in docker-setup.sh under strict mode. (#725) — thanks @petradonka.</li>
+<li>CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.</li>
+<li>Agents: treat message tool errors as failures so fallback replies still send; require <code>to</code> + <code>message</code> for <code>action=send</code>. (#717) — thanks @theglove44.</li>
+<li>Agents: preserve reasoning items on tool-only turns.</li>
+<li>Agents: enforce <code><final></code> gating for reasoning-tag providers to prevent tag/reasoning leaks. (#754) — thanks @mcinteerj.</li>
+<li>Agents/Subagents: wait for completion before announcing, align wait timeout with run timeout, and make announce prompts more emphatic.</li>
+<li>Agents: route subagent transcripts to the target agent sessions directory and add regression coverage. (#708) — thanks @xMikeMickelson.</li>
+<li>Agents/Tools: preserve action enums when flattening tool schemas. (#708) — thanks @xMikeMickelson.</li>
+<li>Gateway/Agents: canonicalize main session aliases for store writes and add regression coverage. (#709) — thanks @xMikeMickelson.</li>
+<li>Agents: reset sessions and retry when auto-compaction overflows instead of crashing the gateway.</li>
+<li>Providers/Telegram: normalize command mentions for consistent parsing. (#729) — thanks @obviyus.</li>
+<li>Providers: skip DM history limit handling for non-DM sessions. (#728) — thanks @pkrmf.</li>
+<li>Sandbox: fix non-main mode incorrectly sandboxing the main DM session and align <code>/status</code> runtime reporting with effective sandbox state.</li>
+<li>Sandbox/Gateway: treat <code>agent:<id>:main</code> as a main-session alias when <code>session.mainKey</code> is customized (backwards compatible).</li>
+<li>Auto-reply: fast-path allowlisted slash commands (inline <code>/help</code>/<code>/commands</code>/<code>/status</code>/<code>/whoami</code> stripped before model).</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.11/Clawdbot-2026.1.11.zip" length="19860746" type="application/octet-stream" sparkle:edSignature="zmN6RovfpvPNm7PPYKDQ2c8nUtlq4k1+S6c3fvZwEHFRwKOxjhQtaW0phriDJwcqfguU3ibAQd/cpRtP4LYdCQ=="/>
+        </item>
+        <item>
             <title>2026.1.10</title>
             <pubDate>Sun, 11 Jan 2026 10:26:34 +0000</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
