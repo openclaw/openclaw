@@ -65,6 +65,7 @@
 - Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.
 - CLI: fix guardCancel typing for configure prompts. (#769) — thanks @steipete.
 - Providers: default groupPolicy to allowlist across providers and warn in doctor when groups are open.
+- MS Teams: add groupPolicy/groupAllowFrom gating for group chats and warn when groups are open.
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging; preserve close codes.
 - Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.
 - Gateway: tighten gateway listener detection.

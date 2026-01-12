@@ -763,6 +763,15 @@ export type MSTeamsConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for DM senders (AAD object IDs or UPNs). */
   allowFrom?: Array<string>;
+  /** Optional allowlist for group/channel senders (AAD object IDs or UPNs). */
+  groupAllowFrom?: Array<string>;
+  /**
+   * Controls how group/channel messages are handled:
+   * - "open": groups bypass allowFrom; mention-gating applies
+   * - "disabled": block all group messages
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Merge streamed block replies before sending. */
