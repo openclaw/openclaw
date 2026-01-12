@@ -25,6 +25,18 @@ function getRepoRoot() {
   return path.resolve(here, "..");
 }
 
+function ensureExecutable(targetPath) {
+  if (process.platform === "win32") return;
+  if (!fs.existsSync(targetPath)) return;
+  try {
+    const mode = fs.statSync(targetPath).mode & 0o777;
+    if (mode & 0o100) return;
+    fs.chmodSync(targetPath, 0o755);
+  } catch (err) {
+    console.warn(`[postinstall] chmod failed: ${err}`);
+  }
+}
+
 function extractPackageName(key) {
   if (key.startsWith("@")) {
     const idx = key.indexOf("@", 1);
@@ -212,6 +224,8 @@ function applyPatchFile({ patchPath, targetDir }) {
 function main() {
   const repoRoot = getRepoRoot();
   process.chdir(repoRoot);
+
+  ensureExecutable(path.join(repoRoot, "dist", "entry.js"));
 
   if (!shouldApplyPnpmPatchedDependenciesFallback()) {
     return;

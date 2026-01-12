@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.1.11-2
+
+### Fixes
+- Installer: ensure the CLI entrypoint is executable after npm installs.
+- Packaging: include `dist/plugins/` in the npm package to avoid missing module errors.
+
 ## 2026.1.11-1
 
 ### Fixes
