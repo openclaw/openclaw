@@ -12,6 +12,7 @@ import {
   resolveDiscordReplyTarget,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
+  sanitizeDiscordThreadName,
   shouldEmitDiscordReactionNotification,
 } from "./monitor.js";
 
@@ -323,6 +324,21 @@ describe("discord reply target selection", () => {
         hasReplied: true,
       }),
     ).toBe("123");
+  });
+});
+
+describe("discord autoThread name sanitization", () => {
+  it("strips mentions and collapses whitespace", () => {
+    const name = sanitizeDiscordThreadName(
+      "  <@123>  <@&456> <#789>  Help   here  ",
+      "msg-1",
+    );
+    expect(name).toBe("Help here");
+  });
+
+  it("falls back to thread + id when empty after cleaning", () => {
+    const name = sanitizeDiscordThreadName("   <@123>", "abc");
+    expect(name).toBe("Thread abc");
   });
 });
 
