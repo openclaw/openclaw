@@ -24,14 +24,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: clawdbot/clawd.bot
-          path: ../clawd.bot
+          path: installer-site
 
       - name: Install pnpm deps (minimal)
         run: pnpm install --ignore-scripts --frozen-lockfile
 
       - name: Run installer docker tests
         env:
-          CLAWDBOT_INSTALL_URL: file://$GITHUB_WORKSPACE/../clawd.bot/public/install.sh
-          CLAWDBOT_INSTALL_CLI_URL: file://$GITHUB_WORKSPACE/../clawd.bot/public/install-cli.sh
+          CLAWDBOT_INSTALL_URL: file://$GITHUB_WORKSPACE/installer-site/public/install.sh
+          CLAWDBOT_INSTALL_CLI_URL: file://$GITHUB_WORKSPACE/installer-site/public/install-cli.sh
           CLAWDBOT_NO_ONBOARD: "1"
         run: pnpm test:install:e2e
