@@ -243,7 +243,11 @@ describe("models config", () => {
         const parsed = JSON.parse(raw) as {
           providers: Record<
             string,
-            { baseUrl?: string; apiKey?: string; models?: Array<{ id: string }> }
+            {
+              baseUrl?: string;
+              apiKey?: string;
+              models?: Array<{ id: string }>;
+            }
           >;
         };
         expect(parsed.providers.minimax?.baseUrl).toBe(
