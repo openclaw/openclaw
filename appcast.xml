@@ -3,6 +3,23 @@
     <channel>
         <title>Clawdbot</title>
         <item>
+            <title>2026.1.11-2</title>
+            <pubDate>Mon, 12 Jan 2026 10:25:53 +0000</pubDate>
+            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
+            <sparkle:version>5210</sparkle:version>
+            <sparkle:shortVersionString>2026.1.11-2</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
+            <description><![CDATA[<h2>Clawdbot 2026.1.11-2</h2>
+<h3>Fixes</h3>
+<ul>
+<li>Installer: ensure the CLI entrypoint is executable after npm installs.</li>
+<li>Packaging: include <code>dist/plugins/</code> in the npm package to avoid missing module errors.</li>
+</ul>
+<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
+]]></description>
+            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.11-2/Clawdbot-2026.1.11-2.zip" length="19860732" type="application/octet-stream" sparkle:edSignature="0UG+d9v3Qf5F9vs/KozUB404WpHjFBQRVoRuhwtzF8kpU7jJmmGlQzh1c61E+LMN4fHcljpxIwHHrvvIfRyrCw=="/>
+        </item>
+        <item>
             <title>2026.1.11-1</title>
             <pubDate>Mon, 12 Jan 2026 09:53:46 +0000</pubDate>
             <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
@@ -140,106 +157,6 @@
 <p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
 ]]></description>
             <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.11/Clawdbot-2026.1.11.zip" length="19860746" type="application/octet-stream" sparkle:edSignature="zmN6RovfpvPNm7PPYKDQ2c8nUtlq4k1+S6c3fvZwEHFRwKOxjhQtaW0phriDJwcqfguU3ibAQd/cpRtP4LYdCQ=="/>
-        </item>
-        <item>
-            <title>2026.1.10</title>
-            <pubDate>Sun, 11 Jan 2026 10:26:34 +0000</pubDate>
-            <link>https://raw.githubusercontent.com/clawdbot/clawdbot/main/appcast.xml</link>
-            <sparkle:version>4946</sparkle:version>
-            <sparkle:shortVersionString>2026.1.10</sparkle:shortVersionString>
-            <sparkle:minimumSystemVersion>15.0</sparkle:minimumSystemVersion>
-            <description><![CDATA[<h2>Clawdbot 2026.1.10</h2>
-<h3>Highlights</h3>
-<ul>
-<li>CLI: <code>clawdbot status</code> now table-based + shows OS/update/gateway/daemon/agents/sessions; <code>status --all</code> adds a full read-only debug report (tables, log tails, Tailscale summary, and scan progress via OSC-9 + spinner).</li>
-<li>CLI Backends: add Codex CLI fallback with resume support (text output) and JSONL parsing for new runs, plus a live CLI resume probe.</li>
-<li>CLI: add <code>clawdbot update</code> (safe-ish git checkout update) + <code>--update</code> shorthand. (#673) — thanks @fm1randa.</li>
-<li>Gateway: add OpenAI-compatible <code>/v1/chat/completions</code> HTTP endpoint (auth, SSE streaming, per-agent routing). (#680) — thanks @steipete.</li>
-</ul>
-<h3>Changes</h3>
-<ul>
-<li>Onboarding/Models: add first-class Z.AI (GLM) auth choice (<code>zai-api-key</code>) + <code>--zai-api-key</code> flag.</li>
-<li>CLI/Onboarding: add OpenRouter API key auth option in configure/onboard. (#703) — thanks @mteam88.</li>
-<li>Agents: add human-delay pacing between block replies (modes: off/natural/custom, per-agent configurable). (#446) — thanks @tony-freedomology.</li>
-<li>Agents/Browser: add <code>browser.target</code> (sandbox/host/custom) with sandbox host-control gating via <code>agents.defaults.sandbox.browser.allowHostControl</code>, allowlists for custom control URLs/hosts/ports, and expand browser tool docs (remote control, profiles, internals).</li>
-<li>Onboarding/Models: add catalog-backed default model picker to onboarding + configure. (#611) — thanks @jonasjancarik.</li>
-<li>Agents/OpenCode Zen: update fallback models + defaults, keep legacy alias mappings. (#669) — thanks @magimetal.</li>
-<li>Providers: unify group history context wrappers across providers with per-provider/per-account <code>historyLimit</code> overrides (fallback to <code>messages.groupChat.historyLimit</code>). Set <code>0</code> to disable. (#672) — thanks @steipete.</li>
-<li>Gateway/Heartbeat: optionally deliver heartbeat <code>Reasoning:</code> output (<code>agents.defaults.heartbeat.includeReasoning</code>). (#690)</li>
-<li>Docker: allow optional home volume + extra bind mounts in <code>docker-setup.sh</code>. (#679) — thanks @gabriel-trigo.</li>
-</ul>
-<h3>Fixes</h3>
-<ul>
-<li>CLI/Status: expand tables to full terminal width; clarify provider setup vs runtime warnings; richer per-provider detail; token previews in <code>status</code> while keeping <code>status --all</code> redacted; add troubleshooting link footer; keep log tails pasteable; show gateway auth used when reachable; surface provider runtime errors (Signal/iMessage/Slack); harden <code>tailscale status --json</code> parsing; make <code>status --all</code> scan progress determinate; and replace the footer with a 3-line “Next steps” recommendation (share/debug/probe).</li>
-<li>CLI/Gateway: clarify that <code>clawdbot gateway status</code> reports RPC health (connect + RPC) and shows RPC failures separately from connect failures.</li>
-<li>CLI/Update: gate progress spinner on stdout TTY and align clean-check step label. (#701) — thanks @bjesuiter.</li>
-<li>Telegram: add <code>/whoami</code> + <code>/id</code> commands to reveal sender id for allowlists; allow <code>@username</code> and prefixed ids in <code>allowFrom</code> prompts (with stability warning).</li>
-<li>Control UI: stop auto-writing <code>telegram.groups["*"]</code> and warn/confirm before enabling wildcard groups.</li>
-<li>WhatsApp: send ack reactions only for handled messages and ignore legacy <code>messages.ackReaction</code> (doctor copies to <code>whatsapp.ackReaction</code>). (#629) — thanks @pasogott.</li>
-<li>Sandbox/Skills: mirror skills into sandbox workspaces for read-only mounts so SKILL.md stays accessible.</li>
-<li>Terminal/Table: ANSI-safe wrapping to prevent table clipping/color loss; add regression coverage.</li>
-<li>Docker: allow optional apt packages during image build and document the build arg. (#697) — thanks @gabriel-trigo.</li>
-<li>Gateway/Heartbeat: deliver reasoning even when the main heartbeat reply is <code>HEARTBEAT_OK</code>. (#694) — thanks @antons.</li>
-<li>macOS: clear unsigned launchd overrides on signed restarts and warn via doctor when attach-only/disable markers are set. (#695) — thanks @jeffersonwarrior.</li>
-<li>Agents: enforce single-writer session locks and drop orphan tool results to prevent tool-call ID failures (MiniMax/Anthropic-compatible APIs).</li>
-<li>Docs: make <code>clawdbot status</code> the first diagnostic step, clarify <code>status --deep</code> behavior, and document <code>/whoami</code> + <code>/id</code>.</li>
-<li>Docs/Testing: clarify live tool+image probes and how to list your testable <code>provider/model</code> ids.</li>
-<li>Tests/Live: make gateway bash+read probes resilient to provider formatting while still validating real tool calls.</li>
-<li>WhatsApp: detect @lid mentions in groups using authDir reverse mapping + resolve self JID E.164 for mention gating. (#692) — thanks @peschee.</li>
-<li>Gateway/Auth: default to token auth on loopback during onboarding, add doctor token generation flow, and tighten audio transcription config to Whisper-only.</li>
-<li>Providers: dedupe inbound messages across providers to avoid duplicate LLM runs on redeliveries/reconnects. (#689) — thanks @adam91holt.</li>
-<li>Agents: strip <code><thought></code>/<code><antthinking></code> tags from hidden reasoning output and cover tag variants in tests. (#688) — thanks @theglove44.</li>
-<li>macOS: save model picker selections as normalized provider/model IDs and keep manual entries aligned. (#683) — thanks @benithors.</li>
-<li>Agents: recognize "usage limit" errors as rate limits for failover. (#687) — thanks @evalexpr.</li>
-<li>CLI: avoid success message when daemon restart is skipped. (#685) — thanks @carlulsoe.</li>
-<li>Commands: disable <code>/config</code> + <code>/debug</code> by default; gate via <code>commands.config</code>/<code>commands.debug</code> and hide from native registration/help output.</li>
-<li>Agents/System: clarify that sub-agents remain sandboxed and cannot use elevated host access.</li>
-<li>Gateway: disable the OpenAI-compatible <code>/v1/chat/completions</code> endpoint by default; enable via <code>gateway.http.endpoints.chatCompletions.enabled=true</code>.</li>
-<li>macOS: stabilize bridge tunnels, guard invoke senders on disconnect, and drain stdout/stderr to avoid deadlocks. (#676) — thanks @ngutman.</li>
-<li>Agents/System: clarify sandboxed runtime in system prompt and surface elevated availability when sandboxed.</li>
-<li>Auto-reply: prefer <code>RawBody</code> for command/directive parsing (WhatsApp + Discord) and prevent fallback runs from clobbering concurrent session updates. (#643) — thanks @mcinteerj.</li>
-<li>WhatsApp: fix group reactions by preserving message IDs and sender JIDs in history; normalize participant phone numbers to JIDs in outbound reactions. (#640) — thanks @mcinteerj.</li>
-<li>WhatsApp: expose group participant IDs to the model so reactions can target the right sender.</li>
-<li>Cron: <code>wakeMode: "now"</code> waits for heartbeat completion (and retries when the main lane is busy). (#666) — thanks @roshanasingh4.</li>
-<li>Agents/OpenAI: fix Responses tool-only → follow-up turn handling (avoid standalone <code>reasoning</code> items that trigger 400 “required following item”) and replay reasoning items in Responses/Codex Responses history for tool-call-only turns.</li>
-<li>Sandbox: add <code>clawdbot sandbox explain</code> (effective policy inspector + fix-it keys); improve “sandbox jail” tool-policy/elevated errors with actionable config key paths; link to docs.</li>
-<li>Hooks/Gmail: keep Tailscale serve path at <code>/</code> while preserving the public path. (#668) — thanks @antons.</li>
-<li>Hooks/Gmail: allow Tailscale target URLs to preserve internal serve paths.</li>
-<li>Auth: update Claude Code keychain credentials in-place during refresh sync; share JSON file helpers; add CLI fallback coverage.</li>
-<li>Auth: throttle external CLI credential syncs (Claude/Codex), reduce Keychain reads, and skip sync when cached credentials are still fresh.</li>
-<li>CLI: respect <code>CLAWDBOT_STATE_DIR</code> for node pairing + voice wake settings storage. (#664) — thanks @azade-c.</li>
-<li>Onboarding/Gateway: persist non-interactive gateway token auth in config; add WS wizard + gateway tool-calling regression coverage.</li>
-<li>Gateway/Control UI: make <code>chat.send</code> non-blocking, wire Stop to <code>chat.abort</code>, and treat <code>/stop</code> as an out-of-band abort. (#653)</li>
-<li>Gateway/Control UI: allow <code>chat.abort</code> without <code>runId</code> (abort active runs), suppress post-abort chat streaming, and prune stuck chat runs. (#653)</li>
-<li>Gateway/Control UI: sniff image attachments for chat.send, drop non-images, and log mismatches. (#670) — thanks @cristip73.</li>
-<li>macOS: force <code>restart-mac.sh --sign</code> to require identities and keep bundled Node signed for relay verification. (#580) — thanks @jeffersonwarrior.</li>
-<li>Gateway/Agent: accept image attachments on <code>agent</code> (multimodal message) and add live gateway image probe (<code>CLAWDBOT_LIVE_GATEWAY_IMAGE_PROBE=1</code>).</li>
-<li>CLI: <code>clawdbot sessions</code> now includes <code>elev:*</code> + <code>usage:*</code> flags in the table output.</li>
-<li>CLI/Pairing: accept positional provider for <code>pairing list|approve</code> (npm-run compatible); update docs/bot hints.</li>
-<li>Branding: normalize user-facing “ClawdBot”/“CLAWDBOT” → “Clawdbot” (CLI, status, docs).</li>
-<li>Auto-reply: fix native <code>/model</code> not updating the actual chat session (Telegram/Slack/Discord). (#646)</li>
-<li>Doctor: offer to run <code>clawdbot update</code> first on git installs (keeps doctor output aligned with latest).</li>
-<li>Doctor: avoid false legacy workspace warning when install dir is <code>~/clawdbot</code>. (#660)</li>
-<li>iMessage: fix reasoning persistence across DMs; avoid partial/duplicate replies when reasoning is enabled. (#655) — thanks @antons.</li>
-<li>Models/Auth: allow MiniMax API configs without <code>models.providers.minimax.apiKey</code> (auth profiles / <code>MINIMAX_API_KEY</code>). (#656) — thanks @mneves75.</li>
-<li>Agents: avoid duplicate replies when the message tool sends. (#659) — thanks @mickahouan.</li>
-<li>Agents: harden Cloud Code Assist tool ID sanitization (toolUse/toolCall/toolResult) and scrub extra JSON Schema constraints. (#665) — thanks @sebslight.</li>
-<li>Agents: sanitize tool results + Cloud Code Assist tool IDs at context-build time (prevents mid-run strict-provider request rejects).</li>
-<li>Agents/Tools: resolve workspace-relative Read/Write/Edit paths; align bash default cwd. (#642) — thanks @mukhtharcm.</li>
-<li>Discord: include forwarded message snapshots in agent session context. (#667) — thanks @rubyrunsstuff.</li>
-<li>Telegram: add <code>telegram.draftChunk</code> to tune draft streaming chunking for <code>streamMode: "block"</code>. (#667) — thanks @rubyrunsstuff.</li>
-<li>Tests/Agents: add regression coverage for workspace tool path resolution and bash cwd defaults.</li>
-<li>iOS/Android: enable stricter concurrency/lint checks; fix Swift 6 strict concurrency issues + Android lint errors (ExifInterface, obsolete SDK check). (#662) — thanks @KristijanJovanovski.</li>
-<li>iOS/macOS: share <code>AsyncTimeout</code>, require explicit <code>bridgeStableID</code> on connect, and harden tool display defaults (avoids missing-resource label fallbacks).</li>
-<li>Telegram: serialize media-group processing to avoid missed albums under load.</li>
-<li>Signal: handle <code>dataMessage.reaction</code> events (signal-cli SSE) to avoid broken attachment errors. (#637) — thanks @neist.</li>
-<li>Docs: showcase entries for ParentPay, R2 Upload, iOS TestFlight, and Oura Health. (#650) — thanks @henrino3.</li>
-<li>Agents: repair session transcripts by dropping duplicate tool results across the whole history (unblocks Anthropic-compatible APIs after retries).</li>
-<li>Tests/Live: reset the gateway session between model runs to avoid cross-provider transcript incompatibilities (notably OpenAI Responses reasoning replay rules).</li>
-</ul>
-<p><a href="https://github.com/clawdbot/clawdbot/blob/main/CHANGELOG.md">View full changelog</a></p>
-]]></description>
-            <enclosure url="https://github.com/clawdbot/clawdbot/releases/download/v2026.1.10/Clawdbot-2026.1.10.zip" length="199586798" type="application/octet-stream" sparkle:edSignature="Ntb22WL4b0Hu3Ntqm1iqnD+5bUqqa36iSQ8vbT/50C5FnL5IjF4GoHWrfanJ58JhBCQ4eKdK+K0U4OBZiSzZBw=="/>
         </item>
     </channel>
 </rss>
