@@ -23,8 +23,9 @@
 - Sandbox: support tool-policy groups in `tools.sandbox.tools` (e.g. `group:memory`, `group:fs`) to reduce config churn.
 
 ### Fixes
+- Models/MiniMax: strip malformed tool invocation XML (`<invoke>...</invoke>` and `</minimax:tool_call>`) from assistant text to prevent tool call leaks into user messages.
 - Tools/Models: MiniMax vision now uses the Coding Plan VLM endpoint (`/v1/coding_plan/vlm`) so the `image` tool works with MiniMax keys (also accepts `@/path/to/file.png`-style inputs).
-- Gateway/macOS: reduce noisy loopback WS “closed before connect” logs during tests.
+- Gateway/macOS: reduce noisy loopback WS "closed before connect" logs during tests.
 - Auto-reply: resolve ambiguous `/model` fuzzy matches by picking the best candidate instead of erroring.
 
 ## 2026.1.12-1
