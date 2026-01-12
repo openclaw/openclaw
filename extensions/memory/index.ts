@@ -24,14 +24,6 @@ type MemoryConfig = {
 	};
 	dbPath?: string;
 	autoCapture?: boolean;
-	scope?: {
-		main?: "full" | "read-only" | "disabled";
-		groups?: "full" | "read-only" | "disabled";
-	};
-	retention?: {
-		defaultDays?: number;
-		importanceThreshold?: number;
-	};
 };
 
 type MemoryEntry = {
@@ -81,14 +73,6 @@ const memoryConfigSchema = {
 					? cfg.dbPath
 					: join(homedir(), ".clawdbot", "memory", "lancedb"),
 			autoCapture: cfg.autoCapture !== false,
-			scope: {
-				main: "full",
-				groups: "read-only",
-			},
-			retention: {
-				defaultDays: 90,
-				importanceThreshold: 0.9,
-			},
 		};
 	},
 	uiHints: {
@@ -260,17 +244,6 @@ class Embeddings {
 			input: text,
 		});
 		return response.data[0].embedding;
-	}
-
-	async embedBatch(texts: string[]): Promise<number[][]> {
-		if (texts.length === 0) return [];
-		const response = await this.client.embeddings.create({
-			model: this.model,
-			input: texts,
-		});
-		return response.data
-			.sort((a, b) => a.index - b.index)
-			.map((d) => d.embedding);
 	}
 }
 
@@ -535,8 +508,7 @@ const memoryPlugin = {
 				memory
 					.command("list")
 					.description("List memories")
-					.option("--limit <n>", "Max results", "10")
-					.action(async (opts) => {
+					.action(async () => {
 						const count = await db.count();
 						console.log(`Total memories: ${count}`);
 					});
