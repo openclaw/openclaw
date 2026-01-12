@@ -36,6 +36,7 @@ import { isCacheEnabled, resolveCacheTtlMs } from "../config/cache-utils.js";
 import type { ClawdbotConfig } from "../config/config.js";
 import { resolveProviderCapabilities } from "../config/provider-capabilities.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
+import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../logging.js";
 import {
   type enqueueCommand,
@@ -85,6 +86,7 @@ import {
   formatAssistantErrorText,
   isAuthAssistantError,
   isCloudCodeAssistFormatError,
+  isCompactionFailureError,
   isContextOverflowError,
   isFailoverAssistantError,
   isFailoverErrorMessage,
@@ -407,6 +409,13 @@ type EmbeddedPiQueueHandle = {
 
 const log = createSubsystemLogger("agent/embedded");
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
+
+registerUnhandledRejectionHandler((reason) => {
+  const message = describeUnknownError(reason);
+  if (!isCompactionFailureError(message)) return false;
+  log.error(`Auto-compaction failed (unhandled): ${message}`);
+  return true;
+});
 
 type CustomEntryLike = { type?: unknown; customType?: unknown };
 
