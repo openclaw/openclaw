@@ -80,7 +80,7 @@ Override via config:
         // deny wins
         deny: ["gateway", "cron"],
         // if allow is set, it becomes allow-only (deny still wins)
-        // allow: ["read", "bash", "process"]
+        // allow: ["read", "exec", "process"]
       }
     }
   }

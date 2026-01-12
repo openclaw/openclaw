@@ -259,9 +259,9 @@ Save to `~/.clawdbot/clawdbot.json` and you can DM the bot from that number.
   },
 
   tools: {
-    allow: ["bash", "process", "read", "write", "edit"],
+    allow: ["exec", "process", "read", "write", "edit"],
     deny: ["browser", "canvas"],
-    bash: {
+    exec: {
       backgroundMs: 10000,
       timeoutSec: 1800,
       cleanupMs: 1800000

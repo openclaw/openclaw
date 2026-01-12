@@ -48,7 +48,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
         },
         "tools": {
           "allow": ["read"],
-          "deny": ["bash", "write", "edit", "process", "browser"]
+          "deny": ["exec", "write", "edit", "process", "browser"]
         }
       }
     ]
@@ -95,7 +95,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
           "workspaceRoot": "/tmp/work-sandboxes"
         },
         "tools": {
-          "allow": ["read", "write", "bash"],
+          "allow": ["read", "write", "exec"],
           "deny": ["browser", "gateway", "discord"]
         }
       }
@@ -134,7 +134,7 @@ For debugging “why is this blocked?”, see [Sandbox vs Tool Policy vs Elevate
         },
         "tools": {
           "allow": ["read"],
-          "deny": ["bash", "write", "edit"]
+          "deny": ["exec", "write", "edit"]
         }
       }
     ]
@@ -177,7 +177,7 @@ If `agents.list[].tools.sandbox.tools` is set, it replaces `tools.sandbox.tools`
 `tools.elevated` is the global baseline (sender-based allowlist). `agents.list[].tools.elevated` can further restrict elevated for specific agents (both must allow).
 
 Mitigation patterns:
-- Deny `bash` for untrusted agents (`agents.list[].tools.deny: ["bash"]`)
+- Deny `exec` for untrusted agents (`agents.list[].tools.deny: ["exec"]`)
 - Avoid allowlisting senders that route to restricted agents
 - Disable elevated globally (`tools.elevated.enabled: false`) if you only want sandboxed execution
 - Disable elevated per agent (`agents.list[].tools.elevated.enabled: false`) for sensitive profiles
@@ -200,7 +200,7 @@ Mitigation patterns:
   "tools": {
     "sandbox": {
       "tools": {
-        "allow": ["read", "write", "bash"],
+        "allow": ["read", "write", "exec"],
         "deny": []
       }
     }
@@ -235,7 +235,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 {
   "tools": {
     "allow": ["read"],
-    "deny": ["bash", "write", "edit", "process"]
+    "deny": ["exec", "write", "edit", "process"]
   }
 }
 ```
@@ -244,7 +244,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 ```json
 {
   "tools": {
-    "allow": ["read", "bash", "process"],
+    "allow": ["read", "exec", "process"],
     "deny": ["write", "edit", "browser", "gateway"]
   }
 }
@@ -255,7 +255,7 @@ Legacy `agent.*` configs are migrated by `clawdbot doctor`; prefer `agents.defau
 {
   "tools": {
     "allow": ["sessions_list", "sessions_send", "sessions_history", "session_status"],
-    "deny": ["bash", "write", "edit", "read", "browser"]
+    "deny": ["exec", "write", "edit", "read", "browser"]
   }
 }
 ```
@@ -276,12 +276,12 @@ sandbox, set `agents.list[].sandbox.mode: "off"`.
 After configuring multi-agent sandbox and tools:
 
 1. **Check agent resolution:**
-   ```bash
+   ```exec
    clawdbot agents list --bindings
    ```
 
 2. **Verify sandbox containers:**
-   ```bash
+   ```exec
    docker ps --filter "label=clawdbot.sandbox=1"
    ```
 
@@ -290,7 +290,7 @@ After configuring multi-agent sandbox and tools:
    - Verify the agent cannot use denied tools
 
 4. **Monitor logs:**
-   ```bash
+   ```exec
    tail -f "${CLAWDBOT_STATE_DIR:-$HOME/.clawdbot}/logs/gateway.log" | grep -E "routing|sandbox|tools"
    ```
 

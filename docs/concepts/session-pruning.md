@@ -93,7 +93,7 @@ Restrict pruning to specific tools:
   agent: {
     contextPruning: {
       mode: "adaptive",
-      tools: { allow: ["bash", "read"], deny: ["*image*"] }
+      tools: { allow: ["exec", "read"], deny: ["*image*"] }
     }
   }
 }

@@ -905,6 +905,13 @@ const ToolsSchema = z
         allowFrom: ElevatedAllowFromSchema,
       })
       .optional(),
+    exec: z
+      .object({
+        backgroundMs: z.number().int().positive().optional(),
+        timeoutSec: z.number().int().positive().optional(),
+        cleanupMs: z.number().int().positive().optional(),
+      })
+      .optional(),
     bash: z
       .object({
         backgroundMs: z.number().int().positive().optional(),

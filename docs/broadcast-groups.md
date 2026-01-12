@@ -180,7 +180,7 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
 Session: agent:alfred:whatsapp:group:120363403215116621@g.us
 History: [user message, alfred's previous responses]
 Workspace: /Users/pascal/clawd-alfred/
-Tools: read, write, bash
+Tools: read, write, exec
 ```
 
 **Bärbel's context:**
@@ -230,10 +230,10 @@ Give agents only the tools they need:
 {
   "agents": {
     "reviewer": {
-      "tools": { "allow": ["read", "bash"] }  // Read-only
+      "tools": { "allow": ["read", "exec"] }  // Read-only
     },
     "fixer": {
-      "tools": { "allow": ["read", "write", "edit", "bash"] }  // Read-write
+      "tools": { "allow": ["read", "write", "edit", "exec"] }  // Read-write
     }
   }
 }
@@ -330,8 +330,8 @@ tail -f ~/.clawdbot/logs/gateway.log | grep broadcast
   "agents": {
     "list": [
       { "id": "code-formatter", "workspace": "~/agents/formatter", "tools": { "allow": ["read", "write"] } },
-      { "id": "security-scanner", "workspace": "~/agents/security", "tools": { "allow": ["read", "bash"] } },
-      { "id": "test-coverage", "workspace": "~/agents/testing", "tools": { "allow": ["read", "bash"] } },
+      { "id": "security-scanner", "workspace": "~/agents/security", "tools": { "allow": ["read", "exec"] } },
+      { "id": "test-coverage", "workspace": "~/agents/testing", "tools": { "allow": ["read", "exec"] } },
       { "id": "docs-checker", "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
     ]
   }

@@ -163,7 +163,7 @@ const DEFAULT_SANDBOX_WORKDIR = "/workspace";
 const DEFAULT_SANDBOX_IDLE_HOURS = 24;
 const DEFAULT_SANDBOX_MAX_AGE_DAYS = 7;
 const DEFAULT_TOOL_ALLOW = [
-  "bash",
+  "exec",
   "process",
   "read",
   "write",
