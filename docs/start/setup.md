@@ -12,7 +12,7 @@ Last updated: 2026-01-01
 ## TL;DR
 - **Tailoring lives outside the repo:** `~/clawd` (workspace) + `~/.clawdbot/clawdbot.json` (config).
 - **Stable workflow:** install the macOS app; let it run the bundled Gateway.
-- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then point the macOS app at it using **Debug Settings → Gateway → Attach only**.
+- **Bleeding edge workflow:** run the Gateway yourself via `pnpm gateway:watch`, then let the macOS app attach in Local mode.
 
 ## Prereqs (from source)
 - Node `>=22`
@@ -84,9 +84,7 @@ pnpm gateway:watch
 In **Clawdbot.app**:
 
 - Connection Mode: **Local**
-- Settings → **Debug Settings** → **Gateway** → enable **Attach only**
-
-This makes the app **only connect to an already-running gateway** and **never spawn** its own.
+The app will attach to the running gateway on the configured port.
 
 ### 3) Verify
 
@@ -98,7 +96,6 @@ pnpm clawdbot health
 ```
 
 ### Common footguns
-- **Attach only enabled, but nothing is running:** app shows “Attach-only enabled; no gateway to attach”.
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Credentials: `~/.clawdbot/credentials/`
@@ -129,4 +126,4 @@ user service (no lingering needed). See [Gateway runbook](/gateway) for the syst
 - [Gateway configuration](/gateway/configuration) (config schema + examples)
 - [Discord](/providers/discord) and [Telegram](/providers/telegram) (reply tags + replyToMode settings)
 - [Clawdbot assistant setup](/start/clawd)
-- [macOS app](/platforms/macos) (gateway lifecycle + “Attach only”)
+- [macOS app](/platforms/macos) (gateway lifecycle)

@@ -772,7 +772,7 @@ struct DebugSettings: View {
     }
 
     private var canRestartGateway: Bool {
-        self.state.connectionMode == .local && !self.state.attachExistingGatewayOnly
+        self.state.connectionMode == .local
     }
 
     private func configURL() -> URL {

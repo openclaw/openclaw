@@ -7,9 +7,8 @@ enum GatewayAutostartPolicy {
 
     static func shouldEnsureLaunchAgent(
         mode: AppState.ConnectionMode,
-        paused: Bool,
-        attachExistingOnly: Bool) -> Bool
+        paused: Bool) -> Bool
     {
-        self.shouldStartGateway(mode: mode, paused: paused) && !attachExistingOnly
+        self.shouldStartGateway(mode: mode, paused: paused)
     }
 }

@@ -182,14 +182,6 @@ final class AppState {
         }
     }
 
-    var attachExistingGatewayOnly: Bool {
-        didSet {
-            self.ifNotPreview {
-                UserDefaults.standard.set(self.attachExistingGatewayOnly, forKey: attachExistingGatewayOnlyKey)
-            }
-        }
-    }
-
     var remoteTarget: String {
         didSet {
             self.ifNotPreview { UserDefaults.standard.set(self.remoteTarget, forKey: remoteTargetKey) }
@@ -302,8 +294,6 @@ final class AppState {
         self.canvasEnabled = UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
         self.peekabooBridgeEnabled = UserDefaults.standard
             .object(forKey: peekabooBridgeEnabledKey) as? Bool ?? true
-        self.attachExistingGatewayOnly = UserDefaults.standard.bool(forKey: attachExistingGatewayOnlyKey)
-
         if !self.isPreview {
             Task.detached(priority: .utility) { [weak self] in
                 let current = await LaunchAgentManager.status()
@@ -604,7 +594,6 @@ extension AppState {
         state.remoteIdentity = "~/.ssh/id_ed25519"
         state.remoteProjectRoot = "~/Projects/clawdbot"
         state.remoteCliPath = ""
-        state.attachExistingGatewayOnly = false
         return state
     }
 }
@@ -624,9 +613,6 @@ enum AppStateStore {
         UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
     }
 
-    static var attachExistingGatewayOnly: Bool {
-        UserDefaults.standard.bool(forKey: attachExistingGatewayOnlyKey)
-    }
 }
 
 @MainActor
