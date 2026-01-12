@@ -68,6 +68,27 @@ import {
 } from "./openai-codex-model-default.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL } from "./opencode-zen-model-default.js";
 
+const DEFAULT_KEY_PREVIEW = { head: 4, tail: 4 };
+
+function formatApiKeyPreview(
+  raw: string,
+  opts: { head?: number; tail?: number } = {},
+): string {
+  const trimmed = raw.trim();
+  if (!trimmed) return "…";
+  const head = opts.head ?? DEFAULT_KEY_PREVIEW.head;
+  const tail = opts.tail ?? DEFAULT_KEY_PREVIEW.tail;
+  if (trimmed.length <= head + tail) {
+    const shortHead = Math.min(2, trimmed.length);
+    const shortTail = Math.min(2, trimmed.length - shortHead);
+    if (shortTail <= 0) {
+      return `${trimmed.slice(0, shortHead)}…`;
+    }
+    return `${trimmed.slice(0, shortHead)}…${trimmed.slice(-shortTail)}`;
+  }
+  return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
+}
+
 export async function warnIfModelConfigLooksOff(
   config: ClawdbotConfig,
   prompter: WizardPrompter,
@@ -339,7 +360,7 @@ export async function applyAuthChoice(params: {
     const envKey = resolveEnvApiKey("openai");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENAI_API_KEY (${envKey.source})?`,
+        message: `Use existing OPENAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -406,7 +427,7 @@ export async function applyAuthChoice(params: {
       const envKey = resolveEnvApiKey("openrouter");
       if (envKey) {
         const useExisting = await params.prompter.confirm({
-          message: `Use existing OPENROUTER_API_KEY (${envKey.source})?`,
+          message: `Use existing OPENROUTER_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
           initialValue: true,
         });
         if (useExisting) {
@@ -448,7 +469,7 @@ export async function applyAuthChoice(params: {
     const envKey = resolveEnvApiKey("moonshot");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing MOONSHOT_API_KEY (${envKey.source})?`,
+        message: `Use existing MOONSHOT_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -691,7 +712,7 @@ export async function applyAuthChoice(params: {
     const envKey = resolveEnvApiKey("google");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing GEMINI_API_KEY (${envKey.source})?`,
+        message: `Use existing GEMINI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -729,7 +750,7 @@ export async function applyAuthChoice(params: {
     const envKey = resolveEnvApiKey("zai");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing ZAI_API_KEY (${envKey.source})?`,
+        message: `Use existing ZAI_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -782,7 +803,7 @@ export async function applyAuthChoice(params: {
     const envKey = process.env.ANTHROPIC_API_KEY?.trim();
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: "Use existing ANTHROPIC_API_KEY (env)?",
+        message: `Use existing ANTHROPIC_API_KEY (env, ${formatApiKeyPreview(envKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -804,14 +825,18 @@ export async function applyAuthChoice(params: {
     });
   } else if (
     params.authChoice === "minimax-cloud" ||
-    params.authChoice === "minimax-api"
+    params.authChoice === "minimax-api" ||
+    params.authChoice === "minimax-api-lightning"
   ) {
-    const modelId = "MiniMax-M2.1";
+    const modelId =
+      params.authChoice === "minimax-api-lightning"
+        ? "MiniMax-M2.1-lightning"
+        : "MiniMax-M2.1";
     let hasCredential = false;
     const envKey = resolveEnvApiKey("minimax");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing MINIMAX_API_KEY (${envKey.source})?`,
+        message: `Use existing MINIMAX_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -860,7 +885,7 @@ export async function applyAuthChoice(params: {
     const envKey = resolveEnvApiKey("opencode");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENCODE_API_KEY (${envKey.source})?`,
+        message: `Use existing OPENCODE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -923,6 +948,7 @@ export function resolvePreferredProviderForAuthChoice(
       return "google-antigravity";
     case "minimax-cloud":
     case "minimax-api":
+    case "minimax-api-lightning":
       return "minimax";
     case "minimax":
       return "lmstudio";
