@@ -50,6 +50,7 @@ import {
   createReplyDispatcher,
   createReplyDispatcherWithTyping,
 } from "../auto-reply/reply/reply-dispatcher.js";
+import { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
@@ -350,6 +351,21 @@ export function resolveDiscordReplyTarget(opts: {
   return opts.hasReplied ? undefined : replyToId;
 }
 
+export function sanitizeDiscordThreadName(
+  rawName: string,
+  fallbackId: string,
+): string {
+  const cleanedName = rawName
+    .replace(/<@!?\d+>/g, "") // user mentions
+    .replace(/<@&\d+>/g, "") // role mentions
+    .replace(/<#\d+>/g, "") // channel mentions
+    .replace(/\s+/g, " ")
+    .trim();
+  const baseSource = cleanedName || `Thread ${fallbackId}`;
+  const base = truncateUtf16Safe(baseSource, 80);
+  return truncateUtf16Safe(base, 100) || `Thread ${fallbackId}`;
+}
+
 function summarizeAllowList(list?: Array<string | number>) {
   if (!list || list.length === 0) return "any";
   const sample = list.slice(0, 4).map((entry) => String(entry));
@@ -456,6 +472,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       publicKey: "a",
       token,
       autoDeploy: nativeEnabled,
+      eventQueue: {
+        // Auto-threading (create thread + generate reply + post) can exceed the default
+        // 30s listener timeout in some environments.
+        listenerTimeout: 120_000,
+      },
     },
     {
       commands,
@@ -1184,21 +1205,15 @@ export function createDiscordMessageHandler(params: {
         runtime.error?.(danger("discord: missing reply target"));
         return;
       }
-
       const originalReplyTarget = replyTarget;
 
       let deliverTarget = replyTarget;
       if (isGuildMessage && channelConfig?.autoThread && !threadChannel) {
         try {
-          const rawName = baseText || combinedBody || "Thread";
-          const cleanedName = rawName
-            .replace(/<@!?\d+>/g, "") // user mentions
-            .replace(/<@&\d+>/g, "") // role mentions
-            .replace(/<#\d+>/g, "") // channel mentions
-            .replace(/\s+/g, " ")
-            .trim();
-          const base = truncateUtf16Safe(cleanedName || "Thread", 80);
-          const threadName = truncateUtf16Safe(base, 100) || `Thread ${message.id}`;
+          const threadName = sanitizeDiscordThreadName(
+            baseText || combinedBody || "Thread",
+            message.id,
+          );
 
           const created = (await client.rest.post(
             `${Routes.channelMessage(message.channelId, message.id)}/threads`,
@@ -1213,7 +1228,6 @@ export function createDiscordMessageHandler(params: {
           const createdId = created?.id ? String(created.id) : "";
           if (createdId) {
             deliverTarget = `channel:${createdId}`;
-            // When autoThread is enabled, *always* reply in the created thread.
             replyTarget = deliverTarget;
           }
         } catch (err) {
@@ -1222,6 +1236,14 @@ export function createDiscordMessageHandler(params: {
           );
         }
       }
+
+      const replyReference = createReplyReferencePlanner({
+        replyToMode:
+          deliverTarget !== originalReplyTarget ? "off" : replyToMode,
+        existingId: threadChannel ? message.id : undefined,
+        startId: message.id,
+        allowReference: deliverTarget === originalReplyTarget,
+      });
 
       if (isDirectMessage) {
         const sessionCfg = cfg.session;
@@ -1254,21 +1276,20 @@ export function createDiscordMessageHandler(params: {
             .responsePrefix,
           humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
           deliver: async (payload) => {
+            const replyToId = replyReference.use();
             await deliverDiscordReply({
               replies: [payload],
-              target: replyTarget,
+              target: deliverTarget,
               token,
               accountId,
               rest: client.rest,
               runtime,
-              // The original message is in the parent channel; never try to reply-reference it
-              // when posting inside the newly-created thread.
-              replyToMode:
-                deliverTarget !== originalReplyTarget ? "off" : replyToMode,
+              replyToId,
               textLimit,
               maxLinesPerMessage: discordConfig?.maxLinesPerMessage,
             });
             didSendReply = true;
+            replyReference.markSent();
           },
           onError: (err, info) => {
             runtime.error?.(
@@ -1893,7 +1914,7 @@ async function deliverDiscordReply(params: {
   runtime: RuntimeEnv;
   textLimit: number;
   maxLinesPerMessage?: number;
-  replyToMode: ReplyToMode;
+  replyToId?: string;
 }) {
   const chunkLimit = Math.min(params.textLimit, 2000);
   for (const payload of params.replies) {
@@ -1901,8 +1922,10 @@ async function deliverDiscordReply(params: {
       payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) continue;
+    const replyTo = params.replyToId?.trim() || undefined;
 
     if (mediaList.length === 0) {
+      let isFirstChunk = true;
       for (const chunk of chunkDiscordText(text, {
         maxChars: chunkLimit,
         maxLines: params.maxLinesPerMessage,
@@ -1913,7 +1936,9 @@ async function deliverDiscordReply(params: {
           token: params.token,
           rest: params.rest,
           accountId: params.accountId,
+          replyTo: isFirstChunk ? replyTo : undefined,
         });
+        isFirstChunk = false;
       }
       continue;
     }
@@ -1925,6 +1950,7 @@ async function deliverDiscordReply(params: {
       rest: params.rest,
       mediaUrl: firstMedia,
       accountId: params.accountId,
+      replyTo,
     });
     for (const extra of mediaList.slice(1)) {
       await sendMessageDiscord(params.target, "", {

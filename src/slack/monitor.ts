@@ -35,6 +35,7 @@ import {
   matchesMentionPatterns,
 } from "../auto-reply/reply/mentions.js";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
+import { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
 import { getReplyFromConfig } from "../auto-reply/reply.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -1135,6 +1136,12 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     // Shared mutable ref for tracking if a reply was sent (used by both
     // auto-reply path and tool path for "first" threading mode).
     const hasRepliedRef = { value: false };
+    const replyReference = createReplyReferencePlanner({
+      replyToMode,
+      existingId: incomingThreadTs,
+      startId: messageTs,
+      hasReplied: hasRepliedRef.value,
+    });
     const onReplyStart = async () => {
       didSetStatus = true;
       await setSlackThreadStatus({
@@ -1150,12 +1157,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
           .responsePrefix,
         humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload) => {
-          const effectiveThreadTs = resolveSlackThreadTs({
-            replyToMode,
-            incomingThreadTs,
-            messageTs,
-            hasReplied: hasRepliedRef.value,
-          });
+          const replyThreadTs = replyReference.use();
           await deliverReplies({
             replies: [payload],
             target: replyTarget,
@@ -1163,10 +1165,11 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
             accountId: account.accountId,
             runtime,
             textLimit,
-            replyThreadTs: effectiveThreadTs,
+            replyThreadTs,
           });
           didSendReply = true;
-          hasRepliedRef.value = true;
+          replyReference.markSent();
+          hasRepliedRef.value = replyReference.hasReplied();
         },
         onError: (err, info) => {
           runtime.error?.(
@@ -2071,19 +2074,13 @@ export function resolveSlackThreadTs(params: {
   messageTs: string | undefined;
   hasReplied: boolean;
 }): string | undefined {
-  const { replyToMode, incomingThreadTs, messageTs, hasReplied } = params;
-  if (incomingThreadTs) return incomingThreadTs;
-  if (!messageTs) return undefined;
-  if (replyToMode === "all") {
-    // All replies go to thread
-    return messageTs;
-  }
-  if (replyToMode === "first") {
-    // "first": only first reply goes to thread
-    return hasReplied ? undefined : messageTs;
-  }
-  // "off": never start a thread
-  return undefined;
+  const planner = createReplyReferencePlanner({
+    replyToMode: params.replyToMode,
+    existingId: params.incomingThreadTs,
+    startId: params.messageTs,
+    hasReplied: params.hasReplied,
+  });
+  return planner.use();
 }
 
 async function deliverSlackSlashReplies(params: {
