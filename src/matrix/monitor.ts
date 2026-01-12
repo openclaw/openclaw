@@ -624,7 +624,7 @@ export async function monitorMatrixProvider(
                       `Pairing code: ${code}`,
                       "",
                       "Ask the bot owner to approve with:",
-                      "clawdbot pairing approve --provider matrix <code>",
+                      "clawdbot pairing approve matrix <code>",
                     ].join("\n"),
                     { client },
                   );

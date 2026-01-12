@@ -172,11 +172,9 @@ const requireOpenAllowFrom = (params: {
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
-  allowEmpty?: boolean;
 }) => {
   if (params.policy !== "open") return;
   const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.length === 0 && params.allowEmpty) return;
   if (allow.includes("*")) return;
   params.ctx.addIssue({
     code: z.ZodIssueCode.custom,
@@ -202,7 +200,6 @@ const QueueModeBySurfaceSchema = z
     telegram: QueueModeSchema.optional(),
     discord: QueueModeSchema.optional(),
     slack: QueueModeSchema.optional(),
-    matrix: QueueModeSchema.optional(),
     signal: QueueModeSchema.optional(),
     imessage: QueueModeSchema.optional(),
     msteams: QueueModeSchema.optional(),
@@ -559,7 +556,6 @@ const MatrixConfigSchema = z.object({
   dm: MatrixDmSchema.optional().default({ policy: "pairing" }),
   rooms: z.record(z.string(), MatrixRoomSchema.optional()).optional(),
 });
-
 const SignalAccountSchemaBase = z.object({
   name: z.string().optional(),
   capabilities: z.array(z.string()).optional(),
@@ -941,7 +937,6 @@ const HeartbeatSchema = z
         z.literal("discord"),
         z.literal("slack"),
         z.literal("msteams"),
-        z.literal("matrix"),
         z.literal("signal"),
         z.literal("imessage"),
         z.literal("none"),
@@ -1299,7 +1294,6 @@ const HookMappingSchema = z
         z.literal("telegram"),
         z.literal("discord"),
         z.literal("slack"),
-        z.literal("matrix"),
         z.literal("signal"),
         z.literal("imessage"),
         z.literal("msteams"),
@@ -1685,6 +1679,7 @@ export const ClawdbotSchema = z
       .optional(),
     matrix: MatrixConfigSchema.optional(),
     channels: ChannelsSchema,
+
     bridge: z
       .object({
         enabled: z.boolean().optional(),

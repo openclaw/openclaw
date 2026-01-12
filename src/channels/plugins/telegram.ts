@@ -247,7 +247,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
         : undefined;
       const result = await send(to, text, {
         verbose: false,
-        messageThreadId: threadId ?? undefined,
+        messageThreadId: typeof threadId === "number" ? threadId : undefined,
         replyToMessageId: resolvedReplyToMessageId,
         accountId: accountId ?? undefined,
       });
@@ -272,7 +272,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount> = {
       const result = await send(to, text, {
         verbose: false,
         mediaUrl,
-        messageThreadId: threadId ?? undefined,
+        messageThreadId: typeof threadId === "number" ? threadId : undefined,
         replyToMessageId: resolvedReplyToMessageId,
         accountId: accountId ?? undefined,
       });

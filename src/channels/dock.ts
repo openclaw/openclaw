@@ -240,6 +240,31 @@ const DOCKS: Record<ChannelId, ChannelDock> = {
       },
     },
   },
+  matrix: {
+    id: "matrix",
+    capabilities: {
+      chatTypes: ["direct", "group"],
+      reactions: true,
+      media: true,
+      polls: true,
+    },
+    outbound: { textChunkLimit: 4000 },
+    streaming: {
+      blockStreamingCoalesceDefaults: { minChars: 1500, idleMs: 1000 },
+    },
+    config: {
+      resolveAllowFrom: ({ cfg }) => cfg.matrix?.dm?.allowFrom ?? [],
+      formatAllowFrom: ({ allowFrom }) =>
+        allowFrom
+          .map((entry) => String(entry).trim())
+          .filter(Boolean)
+          .map((entry) => entry.replace(/^matrix:/i, ""))
+          .filter(Boolean),
+    },
+    threading: {
+      resolveReplyToMode: ({ cfg }) => cfg.matrix?.replyToMode ?? "first",
+    },
+  },
   signal: {
     id: "signal",
     capabilities: {

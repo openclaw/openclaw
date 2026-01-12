@@ -5,9 +5,9 @@ export { sendMessageMatrix, sendPollMatrix } from "./send.js";
 export {
   formatSasForDisplay,
   getDeviceVerificationStatus,
-  waitForVerificationRequest,
   type SasEmoji,
   type SasShowData,
   type VerificationOpts,
   type VerificationResult,
+  waitForVerificationRequest,
 } from "./verification.js";

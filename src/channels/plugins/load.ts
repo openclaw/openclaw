@@ -11,6 +11,7 @@ const LOADERS: Record<ChannelId, PluginLoader> = {
   whatsapp: async () => (await import("./whatsapp.js")).whatsappPlugin,
   discord: async () => (await import("./discord.js")).discordPlugin,
   slack: async () => (await import("./slack.js")).slackPlugin,
+  matrix: async () => (await import("./matrix.js")).matrixPlugin,
   signal: async () => (await import("./signal.js")).signalPlugin,
   imessage: async () => (await import("./imessage.js")).imessagePlugin,
   msteams: async () => (await import("./msteams.js")).msteamsPlugin,

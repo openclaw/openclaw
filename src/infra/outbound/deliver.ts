@@ -5,6 +5,7 @@ import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
 import type { ClawdbotConfig } from "../../config/config.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
+import type { sendMessageMatrix } from "../../matrix/send.js";
 import type { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
 import type { sendMessageTelegram } from "../../telegram/send.js";
@@ -23,6 +24,7 @@ export type OutboundSendDeps = {
   sendSlack?: typeof sendMessageSlack;
   sendSignal?: typeof sendMessageSignal;
   sendIMessage?: typeof sendMessageIMessage;
+  sendMatrix?: typeof sendMessageMatrix;
   sendMSTeams?: (
     to: string,
     text: string,
@@ -68,7 +70,7 @@ async function createChannelHandler(params: {
   to: string;
   accountId?: string;
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: number | string | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): Promise<ChannelHandler> {
@@ -100,7 +102,7 @@ function createPluginHandler(params: {
   to: string;
   accountId?: string;
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: number | string | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
 }): ChannelHandler | null {
@@ -145,7 +147,7 @@ export async function deliverOutboundPayloads(params: {
   accountId?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
-  threadId?: number | null;
+  threadId?: number | string | null;
   deps?: OutboundSendDeps;
   gifPlayback?: boolean;
   abortSignal?: AbortSignal;

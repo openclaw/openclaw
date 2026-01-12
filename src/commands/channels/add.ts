@@ -23,6 +23,10 @@ export type ChannelsAddOptions = {
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -124,6 +128,10 @@ export async function channelsAddCommand(
       tokenFile: opts.tokenFile,
       botToken: opts.botToken,
       appToken: opts.appToken,
+      homeserver: opts.homeserver,
+      userId: opts.userId,
+      accessToken: opts.accessToken,
+      password: opts.password,
       signalNumber: opts.signalNumber,
       cliPath: opts.cliPath,
       dbPath: opts.dbPath,
@@ -151,6 +159,10 @@ export async function channelsAddCommand(
     tokenFile: opts.tokenFile,
     botToken: opts.botToken,
     appToken: opts.appToken,
+    homeserver: opts.homeserver,
+    userId: opts.userId,
+    accessToken: opts.accessToken,
+    password: opts.password,
     signalNumber: opts.signalNumber,
     cliPath: opts.cliPath,
     dbPath: opts.dbPath,

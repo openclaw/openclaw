@@ -27,8 +27,8 @@ export type RouteReplyParams = {
   sessionKey?: string;
   /** Provider account id (multi-account). */
   accountId?: string;
-  /** Telegram message thread id (forum topics). */
-  threadId?: number;
+  /** Telegram message thread id (forum topics) or Matrix reply thread (event id). */
+  threadId?: number | string;
   /** Config for provider-specific settings. */
   cfg: ClawdbotConfig;
   /** Optional abort signal for cooperative cancellation. */

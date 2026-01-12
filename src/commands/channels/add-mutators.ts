@@ -31,6 +31,10 @@ export function applyChannelAccountConfig(params: {
   tokenFile?: string;
   botToken?: string;
   appToken?: string;
+  homeserver?: string;
+  userId?: string;
+  accessToken?: string;
+  password?: string;
   signalNumber?: string;
   cliPath?: string;
   dbPath?: string;
@@ -52,6 +56,10 @@ export function applyChannelAccountConfig(params: {
     tokenFile: params.tokenFile,
     botToken: params.botToken,
     appToken: params.appToken,
+    homeserver: params.homeserver,
+    userId: params.userId,
+    accessToken: params.accessToken,
+    password: params.password,
     signalNumber: params.signalNumber,
     cliPath: params.cliPath,
     dbPath: params.dbPath,

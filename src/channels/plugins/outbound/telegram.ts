@@ -27,7 +27,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     const replyToMessageId = parseReplyToMessageId(replyToId);
     const result = await send(to, text, {
       verbose: false,
-      messageThreadId: threadId ?? undefined,
+      messageThreadId: typeof threadId === "number" ? threadId : undefined,
       replyToMessageId,
       accountId: accountId ?? undefined,
     });
@@ -47,7 +47,7 @@ export const telegramOutbound: ChannelOutboundAdapter = {
     const result = await send(to, text, {
       verbose: false,
       mediaUrl,
-      messageThreadId: threadId ?? undefined,
+      messageThreadId: typeof threadId === "number" ? threadId : undefined,
       replyToMessageId,
       accountId: accountId ?? undefined,
     });

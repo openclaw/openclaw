@@ -5,6 +5,7 @@
  * can be verified against a user's main session without manual key exchange.
  */
 import type { MatrixClient } from "matrix-js-sdk";
+import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type {
   EmojiMapping,
   GeneratedSas,
@@ -13,7 +14,6 @@ import type {
   Verifier,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerifierEvent } from "matrix-js-sdk/lib/crypto-api/verification.js";
-import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 
 import type { RuntimeEnv } from "../runtime.js";
 

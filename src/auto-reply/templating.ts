@@ -53,8 +53,8 @@ export type MsgContext = {
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
-  /** Telegram forum topic thread ID. */
-  MessageThreadId?: number;
+  /** Telegram forum topic or Matrix reply thread ID. */
+  MessageThreadId?: number | string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
   /**

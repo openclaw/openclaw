@@ -101,17 +101,10 @@ export type WebConfig = {
   reconnect?: WebReconnectConfig;
 };
 
-export type AgentElevatedAllowFromConfig = {
-  whatsapp?: string[];
-  telegram?: Array<string | number>;
-  discord?: Array<string | number>;
-  slack?: Array<string | number>;
-  signal?: Array<string | number>;
-  imessage?: Array<string | number>;
-  matrix?: Array<string | number>;
-  msteams?: Array<string | number>;
-  webchat?: Array<string | number>;
-};
+// Provider docking: allowlists keyed by provider id (and internal "webchat").
+export type AgentElevatedAllowFromConfig = Partial<
+  Record<string, Array<string | number>>
+>;
 
 export type IdentityConfig = {
   name?: string;
@@ -147,13 +140,17 @@ export type WhatsAppConfig = {
   groupAllowFrom?: string[];
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "open": groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Maximum media file size in MB. Default: 50. */
@@ -207,6 +204,10 @@ export type WhatsAppAccountConfig = {
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
   mediaMaxMb?: number;
   blockStreaming?: boolean;
@@ -297,7 +298,6 @@ export type HookMappingConfig = {
     | "telegram"
     | "discord"
     | "slack"
-    | "matrix"
     | "signal"
     | "imessage"
     | "msteams";
@@ -382,13 +382,17 @@ export type TelegramAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, only mention-gating applies
+   * - "open": groups bypass allowFrom, only mention-gating applies
    * - "disabled": block all group messages entirely
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Disable block streaming for this account. */
@@ -517,7 +521,7 @@ export type DiscordAccountConfig = {
   allowBots?: boolean;
   /**
    * Controls how guild channel messages are handled:
-   * - "open" (default): guild channels bypass allowlists; mention-gating applies
+   * - "open": guild channels bypass allowlists; mention-gating applies
    * - "disabled": block all guild channel messages
    * - "allowlist": only allow channels present in discord.guilds.*.channels
    */
@@ -536,6 +540,10 @@ export type DiscordAccountConfig = {
   maxLinesPerMessage?: number;
   mediaMaxMb?: number;
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Retry policy for outbound Discord API calls. */
   retry?: OutboundRetryConfig;
   /** Per-action tool gating (default: true for all). */
@@ -627,13 +635,17 @@ export type SlackAccountConfig = {
   allowBots?: boolean;
   /**
    * Controls how channel messages are handled:
-   * - "open" (default): channels bypass allowlists; mention-gating applies
+   * - "open": channels bypass allowlists; mention-gating applies
    * - "disabled": block all channel messages
    * - "allowlist": only allow channels present in channels.slack.channels
    */
   groupPolicy?: GroupPolicy;
   /** Max channel messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   textChunkLimit?: number;
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
@@ -657,28 +669,18 @@ export type SlackConfig = {
 } & SlackAccountConfig;
 
 export type MatrixDmConfig = {
-  /** If false, ignore all incoming Matrix DMs. Default: true. */
   enabled?: boolean;
-  /** Direct message access policy (default: pairing). */
   policy?: DmPolicy;
-  /** Allowlist for DM senders (Matrix user IDs). */
   allowFrom?: Array<string | number>;
 };
 
 export type MatrixRoomConfig = {
-  /** If false, disable the bot in this room. (Alias for allow: false.) */
   enabled?: boolean;
-  /** Legacy room allow toggle; prefer enabled. */
   allow?: boolean;
-  /** Require mentioning the bot to trigger replies. */
   requireMention?: boolean;
-  /** Reply to all messages without needing a mention. */
   autoReply?: boolean;
-  /** Allowlist of users that can invoke the bot in this room. */
   users?: Array<string | number>;
-  /** Optional skill filter for this room. */
   skills?: string[];
-  /** Optional system prompt for this room. */
   systemPrompt?: string;
 };
 
@@ -691,47 +693,25 @@ export type MatrixActionConfig = {
 };
 
 export type MatrixConfig = {
-  /** If false, do not start the Matrix provider. Default: true. */
   enabled?: boolean;
-  /** Matrix homeserver base URL (e.g. https://matrix.org). */
   homeserver?: string;
-  /** Matrix user ID (e.g. @clawdbot:matrix.org). */
   userId?: string;
-  /** Access token (preferred). */
   accessToken?: string;
-  /** Password login (optional; generates access token at runtime). */
   password?: string;
-  /** Optional device name override. */
+  deviceId?: string;
   deviceName?: string;
-  /** Optional store path for sync state. */
   storePath?: string;
-  /** Optional store path for crypto state. */
   cryptoStorePath?: string;
-  /** Enable end-to-end encryption (default: false). */
   encryption?: boolean;
-  /** Auto-join room invites (always|allowlist|off). Default: always. */
   autoJoin?: "always" | "allowlist" | "off";
-  /** Room allowlist for auto-join when autoJoin=allowlist. */
   autoJoinAllowlist?: string[];
-  /**
-   * Controls how room messages are handled:
-   * - "open": rooms bypass allowlists; mention-gating applies
-   * - "disabled": block all room messages
-   * - "allowlist": only allow rooms present in matrix.rooms
-   */
   groupPolicy?: GroupPolicy;
-  /** Require allowlists for rooms + DMs unless explicitly disabled. */
   allowlistOnly?: boolean;
-  /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   mediaMaxMb?: number;
-  /** Control reply threading when reply tags are present (off|first|all). */
   replyToMode?: ReplyToMode;
-  /** Thread reply behavior (off|inbound|always). Default: inbound. */
   threadReplies?: "off" | "inbound" | "always";
-  /** Initial sync limit (events per room). */
   initialSyncLimit?: number;
-  /** Per-action tool gating (default: true for all). */
   actions?: MatrixActionConfig;
   dm?: MatrixDmConfig;
   rooms?: Record<string, MatrixRoomConfig>;
@@ -767,13 +747,17 @@ export type SignalAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom, no extra gating
+   * - "open": groups bypass allowFrom, no extra gating
    * - "disabled": block all group messages
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   blockStreaming?: boolean;
@@ -836,6 +820,15 @@ export type MSTeamsConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for DM senders (AAD object IDs or UPNs). */
   allowFrom?: Array<string>;
+  /** Optional allowlist for group/channel senders (AAD object IDs or UPNs). */
+  groupAllowFrom?: Array<string>;
+  /**
+   * Controls how group/channel messages are handled:
+   * - "open": groups bypass allowFrom; mention-gating applies
+   * - "disabled": block all group messages
+   * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
+   */
+  groupPolicy?: GroupPolicy;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Merge streamed block replies before sending. */
@@ -849,6 +842,10 @@ export type MSTeamsConfig = {
   requireMention?: boolean;
   /** Max group/channel messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Default reply style: "thread" replies to the message, "top-level" posts a new message. */
   replyStyle?: MSTeamsReplyStyle;
   /** Per-team config. Key is team ID (from the /team/ URL path segment). */
@@ -888,13 +885,17 @@ export type IMessageAccountConfig = {
   groupAllowFrom?: Array<string | number>;
   /**
    * Controls how group messages are handled:
-   * - "open" (default): groups bypass allowFrom; mention-gating applies
+   * - "open": groups bypass allowFrom; mention-gating applies
    * - "disabled": block all group messages entirely
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
+  /** Max DM turns to keep as history context. */
+  dmHistoryLimit?: number;
+  /** Per-DM config overrides keyed by user ID. */
+  dms?: Record<string, DmConfig>;
   /** Include attachments + reactions in watch payloads. */
   includeAttachments?: boolean;
   /** Max outbound media size in MB. */
@@ -932,7 +933,6 @@ export type QueueModeByProvider = {
   telegram?: QueueMode;
   discord?: QueueMode;
   slack?: QueueMode;
-  matrix?: QueueMode;
   signal?: QueueMode;
   imessage?: QueueMode;
   msteams?: QueueMode;
@@ -1035,6 +1035,10 @@ export type GroupChatConfig = {
   historyLimit?: number;
 };
 
+export type DmConfig = {
+  historyLimit?: number;
+};
+
 export type QueueConfig = {
   mode?: QueueMode;
   byChannel?: QueueModeByProvider;
@@ -1050,7 +1054,7 @@ export type AgentToolsConfig = {
   profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
-  /** Per-agent elevated bash gate (can only further restrict global tools.elevated). */
+  /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
     enabled?: boolean;
@@ -1129,14 +1133,33 @@ export type ToolsConfig = {
     /** Allowlist of agent ids or patterns (implementation-defined). */
     allow?: string[];
   };
-  /** Elevated bash permissions for the host machine. */
+  /** Elevated exec permissions for the host machine. */
   elevated?: {
     /** Enable or disable elevated mode (default: true). */
     enabled?: boolean;
     /** Approved senders for /elevated (per-provider allowlists). */
     allowFrom?: AgentElevatedAllowFromConfig;
   };
-  /** Bash tool defaults. */
+  /** Exec tool defaults. */
+  exec?: {
+    /** Default time (ms) before an exec command auto-backgrounds. */
+    backgroundMs?: number;
+    /** Default timeout (seconds) before auto-killing exec commands. */
+    timeoutSec?: number;
+    /** How long to keep finished sessions in memory (ms). */
+    cleanupMs?: number;
+    /** apply_patch subtool configuration (experimental). */
+    applyPatch?: {
+      /** Enable apply_patch for OpenAI models (default: false). */
+      enabled?: boolean;
+      /**
+       * Optional allowlist of model ids that can use apply_patch.
+       * Accepts either raw ids (e.g. "gpt-5.2") or full ids (e.g. "openai/gpt-5.2").
+       */
+      allowModels?: string[];
+    };
+  };
+  /** @deprecated Use tools.exec. */
   bash?: {
     /** Default time (ms) before a bash command auto-backgrounds. */
     backgroundMs?: number;
@@ -1469,6 +1492,27 @@ export type SkillsConfig = {
   entries?: Record<string, SkillConfig>;
 };
 
+export type PluginEntryConfig = {
+  enabled?: boolean;
+  config?: Record<string, unknown>;
+};
+
+export type PluginsLoadConfig = {
+  /** Additional plugin/extension paths to load. */
+  paths?: string[];
+};
+
+export type PluginsConfig = {
+  /** Enable or disable plugin loading. */
+  enabled?: boolean;
+  /** Optional plugin allowlist (plugin ids). */
+  allow?: string[];
+  /** Optional plugin denylist (plugin ids). */
+  deny?: string[];
+  load?: PluginsLoadConfig;
+  entries?: Record<string, PluginEntryConfig>;
+};
+
 export type ModelApi =
   | "openai-completions"
   | "openai-responses"
@@ -1682,14 +1726,13 @@ export type AgentDefaultsConfig = {
     every?: string;
     /** Heartbeat model override (provider/model). */
     model?: string;
-    /** Delivery target (last|whatsapp|telegram|discord|slack|matrix|msteams|signal|imessage|none). */
+    /** Delivery target (last|whatsapp|telegram|discord|slack|msteams|signal|imessage|none). */
     target?:
       | "last"
       | "whatsapp"
       | "telegram"
       | "discord"
       | "slack"
-      | "matrix"
       | "msteams"
       | "signal"
       | "imessage"
