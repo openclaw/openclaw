@@ -221,6 +221,27 @@ Notes:
 - If you have multiple accounts for a provider, add `accountId` to the binding (for example `{ provider: "whatsapp", accountId: "personal" }`).
 - To route a single DM/group to Opus while keeping the rest on chat, add a `match.peer` binding for that peer; peer matches always win over provider-wide rules.
 
+## Example: same provider, one peer to Opus
+
+Keep WhatsApp on the fast agent, but route one DM to Opus:
+
+```json5
+{
+  agents: {
+    list: [
+      { id: "chat", name: "Everyday", workspace: "~/clawd-chat", model: "anthropic/claude-sonnet-4-5" },
+      { id: "opus", name: "Deep Work", workspace: "~/clawd-opus", model: "anthropic/claude-opus-4-5" }
+    ]
+  },
+  bindings: [
+    { agentId: "opus", match: { provider: "whatsapp", peer: { kind: "dm", id: "+15551234567" } } },
+    { agentId: "chat", match: { provider: "whatsapp" } }
+  ]
+}
+```
+
+Peer bindings always win, so keep them above the provider-wide rule.
+
 ## Per-Agent Sandbox and Tool Configuration
 
 Starting with v2026.1.6, each agent can have its own sandbox and tool restrictions:
