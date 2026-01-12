@@ -1,3 +1,4 @@
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let currentPage: Record<string, unknown> | null = null;
@@ -306,10 +307,11 @@ describe("pw-tools-core", () => {
     currentPage = { on, off };
 
     const mod = await importModule();
+    const targetPath = path.resolve("/tmp/file.bin");
     const p = mod.waitForDownloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
-      path: "/tmp/file.bin",
+      path: targetPath,
       timeoutMs: 1000,
     });
 
@@ -318,8 +320,8 @@ describe("pw-tools-core", () => {
     downloadHandler?.(download);
 
     const res = await p;
-    expect(saveAs).toHaveBeenCalledWith("/tmp/file.bin");
-    expect(res.path).toBe("/tmp/file.bin");
+    expect(saveAs).toHaveBeenCalledWith(targetPath);
+    expect(res.path).toBe(targetPath);
   });
 
   it("clicks a ref and saves the resulting download", async () => {
@@ -342,11 +344,12 @@ describe("pw-tools-core", () => {
     currentPage = { on, off };
 
     const mod = await importModule();
+    const targetPath = path.resolve("/tmp/report.pdf");
     const p = mod.downloadViaPlaywright({
       cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
       ref: "e12",
-      path: "/tmp/report.pdf",
+      path: targetPath,
       timeoutMs: 1000,
     });
 
@@ -357,8 +360,8 @@ describe("pw-tools-core", () => {
     downloadHandler?.(download);
 
     const res = await p;
-    expect(saveAs).toHaveBeenCalledWith("/tmp/report.pdf");
-    expect(res.path).toBe("/tmp/report.pdf");
+    expect(saveAs).toHaveBeenCalledWith(targetPath);
+    expect(res.path).toBe(targetPath);
   });
 
   it("waits for a matching response and returns its body", async () => {

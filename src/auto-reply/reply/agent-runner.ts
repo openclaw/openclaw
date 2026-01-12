@@ -669,20 +669,17 @@ export async function runReplyAgent(params: {
               runId,
               blockReplyBreak: resolvedBlockStreamingBreak,
               blockReplyChunking,
-              onPartialReply:
-                allowPartialStream
-                  ? async (payload) => {
-                      const textForTyping = await handlePartialForTyping(
-                        payload,
-                      );
-                      if (!opts?.onPartialReply || textForTyping === undefined)
-                        return;
-                      await opts.onPartialReply({
-                        text: textForTyping,
-                        mediaUrls: payload.mediaUrls,
-                      });
-                    }
-                  : undefined,
+              onPartialReply: allowPartialStream
+                ? async (payload) => {
+                    const textForTyping = await handlePartialForTyping(payload);
+                    if (!opts?.onPartialReply || textForTyping === undefined)
+                      return;
+                    await opts.onPartialReply({
+                      text: textForTyping,
+                      mediaUrls: payload.mediaUrls,
+                    });
+                  }
+                : undefined,
               onReasoningStream:
                 typingSignals.shouldStartOnReasoning || opts?.onReasoningStream
                   ? async (payload) => {
