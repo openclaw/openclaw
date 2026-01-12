@@ -7,7 +7,9 @@
 - Plugins: add `clawdbot plugins install` (path/tgz/npm), plus `list|info|enable|disable|doctor` UX.
 - Plugins: voice-call plugin now real (Twilio/log), adds start/status RPC/CLI/tool + tests.
 - Docs: add plugins doc + cross-links from tools/skills/gateway config.
+- Docs: add beginner-friendly plugin quick start + expand Voice Call plugin docs.
 - Tests: add Docker plugin loader + tgz-install smoke test.
+- Tests: extend Docker plugin E2E to cover installing from local folders (`plugins.load.paths`) and `file:` npm specs.
 - Config: add `$include` directive for modular config files. (#731) — thanks @pasogott.
 - Build: set pnpm minimum release age to 2880 minutes (2 days). (#718) — thanks @dan-dr.
 - macOS: prompt to install the global `clawdbot` CLI when missing in local mode; install via `clawd.bot/install-cli.sh` (no onboarding) and use external launchd/CLI instead of the embedded gateway runtime.
@@ -27,6 +29,7 @@
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging.
 - Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.
 - Doctor: surface plugin diagnostics in the report.
+- Plugins: treat `plugins.load.paths` directory entries as package roots when they contain `package.json` + `clawdbot.extensions`.
 - Docker: tolerate unset optional env vars in docker-setup.sh under strict mode. (#725) — thanks @petradonka.
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
 - Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
