@@ -67,4 +67,64 @@ describe("chunkDiscordText", () => {
       expect(hasBalancedFences(chunk)).toBe(true);
     }
   });
+
+  it("keeps reasoning italics balanced across chunks", () => {
+    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join(
+      "\n",
+    );
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      // Each chunk should have balanced italics markers (even count).
+      const count = (chunk.match(/_/g) || []).length;
+      expect(count % 2).toBe(0);
+    }
+
+    // Ensure italics reopen on subsequent chunks
+    expect(chunks[0]).toContain("_1. line");
+    // Second chunk should reopen italics at the start
+    expect(chunks[1].trimStart().startsWith("_")).toBe(true);
+  });
+
+  it("keeps reasoning italics balanced when chunks split by char limit", () => {
+    const longLine = "This is a very long reasoning line that forces char splits.";
+    const body = Array.from({ length: 5 }, () => longLine).join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    for (const chunk of chunks) {
+      const underscoreCount = (chunk.match(/_/g) || []).length;
+      expect(underscoreCount % 2).toBe(0);
+    }
+  });
+
+  it("reopens italics while preserving leading whitespace on following chunk", () => {
+    const body = [
+      "1. line",
+      "2. line",
+      "3. line",
+      "4. line",
+      "5. line",
+      "6. line",
+      "7. line",
+      "8. line",
+      "9. line",
+      "10. line",
+      "  11. indented line",
+      "12. line",
+    ].join("\n");
+    const text = `Reasoning:\n_${body}_`;
+
+    const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
+    expect(chunks.length).toBeGreaterThan(1);
+
+    const second = chunks[1];
+    expect(second.startsWith("_")).toBe(true);
+    expect(second).toContain("  11. indented line");
+  });
 });

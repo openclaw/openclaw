@@ -187,5 +187,42 @@ export function chunkDiscordText(
     if (payload.trim().length) chunks.push(payload);
   }
 
-  return chunks;
+  return rebalanceReasoningItalics(text, chunks);
+}
+
+// Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
+// When Discord chunking splits the message, we close italics at the end of
+// each chunk and reopen at the start of the next so every chunk renders
+// consistently.
+function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
+  if (chunks.length <= 1) return chunks;
+
+  const opensWithReasoningItalics =
+    source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
+  if (!opensWithReasoningItalics) return chunks;
+
+  const adjusted = [...chunks];
+  for (let i = 0; i < adjusted.length; i++) {
+    const isLast = i === adjusted.length - 1;
+    const current = adjusted[i];
+
+    // Ensure current chunk closes italics so Discord renders it italicized.
+    const needsClosing = !current.trimEnd().endsWith("_");
+    if (needsClosing) {
+      adjusted[i] = `${current}_`;
+    }
+
+    if (isLast) break;
+
+    // Re-open italics on the next chunk if needed.
+    const next = adjusted[i + 1];
+    const leadingWhitespaceLen = next.length - next.trimStart().length;
+    const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
+    const nextBody = next.slice(leadingWhitespaceLen);
+    if (!nextBody.startsWith("_")) {
+      adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
+    }
+  }
+
+  return adjusted;
 }
