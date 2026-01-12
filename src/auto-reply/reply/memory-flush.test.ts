@@ -56,6 +56,17 @@ describe("shouldRunMemoryFlush", () => {
     ).toBe(false);
   });
 
+  it("skips when entry is missing", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: undefined,
+        contextWindowTokens: 16_000,
+        reserveTokensFloor: 1_000,
+        softThresholdTokens: DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
+      }),
+    ).toBe(false);
+  });
+
   it("skips when under threshold", () => {
     expect(
       shouldRunMemoryFlush({
@@ -65,6 +76,17 @@ describe("shouldRunMemoryFlush", () => {
         softThresholdTokens: 10_000,
       }),
     ).toBe(false);
+  });
+
+  it("triggers at the threshold boundary", () => {
+    expect(
+      shouldRunMemoryFlush({
+        entry: { totalTokens: 85 },
+        contextWindowTokens: 100,
+        reserveTokensFloor: 10,
+        softThresholdTokens: 5,
+      }),
+    ).toBe(true);
   });
 
   it("skips when already flushed for current compaction count", () => {
