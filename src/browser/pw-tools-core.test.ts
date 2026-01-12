@@ -396,6 +396,22 @@ describe("pw-tools-core", () => {
     expect(res.truncated).toBe(true);
   });
 
+  it("scrolls a ref into view (default timeout)", async () => {
+    const scrollIntoViewIfNeeded = vi.fn(async () => {});
+    currentRefLocator = { scrollIntoViewIfNeeded };
+    currentPage = {};
+
+    const mod = await importModule();
+    await mod.scrollIntoViewViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+    });
+
+    expect(sessionMocks.refLocator).toHaveBeenCalledWith(currentPage, "1");
+    expect(scrollIntoViewIfNeeded).toHaveBeenCalledWith({ timeout: 20_000 });
+  });
+
   it("rewrites strict mode violations into snapshot hints", async () => {
     const click = vi.fn(async () => {
       throw new Error(

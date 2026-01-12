@@ -34,6 +34,7 @@ const pwMocks = vi.hoisted(() => ({
   fillFormViaPlaywright: vi.fn(async () => {}),
   getConsoleMessagesViaPlaywright: vi.fn(async () => []),
   hoverViaPlaywright: vi.fn(async () => {}),
+  scrollIntoViewViaPlaywright: vi.fn(async () => {}),
   navigateViaPlaywright: vi.fn(async () => ({ url: "https://example.com" })),
   pdfViaPlaywright: vi.fn(async () => ({ buffer: Buffer.from("pdf") })),
   pressKeyViaPlaywright: vi.fn(async () => {}),
@@ -411,6 +412,18 @@ describe("browser control server", () => {
     }).then((r) => r.json())) as { ok: boolean };
     expect(hover.ok).toBe(true);
     expect(pwMocks.hoverViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: cdpBaseUrl,
+      targetId: "abcd1234",
+      ref: "2",
+    });
+
+    const scroll = (await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "scrollIntoView", ref: "2" }),
+    }).then((r) => r.json())) as { ok: boolean };
+    expect(scroll.ok).toBe(true);
+    expect(pwMocks.scrollIntoViewViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: cdpBaseUrl,
       targetId: "abcd1234",
       ref: "2",
