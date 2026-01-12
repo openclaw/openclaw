@@ -1469,17 +1469,18 @@ export async function startGatewayServer(
         if (!client) {
           // Handshake must be a normal request:
           // { type:"req", method:"connect", params: ConnectParams }.
+          const isRequestFrame = validateRequestFrame(parsed);
           if (
-            !validateRequestFrame(parsed) ||
+            !isRequestFrame ||
             (parsed as RequestFrame).method !== "connect" ||
             !validateConnectParams((parsed as RequestFrame).params)
           ) {
-            const handshakeError = validateRequestFrame(parsed)
+            const handshakeError = isRequestFrame
               ? (parsed as RequestFrame).method === "connect"
                 ? `invalid connect params: ${formatValidationErrors(validateConnectParams.errors)}`
                 : "invalid handshake: first request must be connect"
               : "invalid request frame";
-            if (validateRequestFrame(parsed)) {
+            if (isRequestFrame) {
               const req = parsed as RequestFrame;
               send({
                 type: "res",
@@ -1502,7 +1503,11 @@ export async function startGatewayServer(
             const closeReason = truncateCloseReason(
               handshakeError || "invalid handshake",
             );
-            close(1008, closeReason);
+            if (isRequestFrame) {
+              queueMicrotask(() => close(1008, closeReason));
+            } else {
+              close(1008, closeReason);
+            }
             return;
           }
 
