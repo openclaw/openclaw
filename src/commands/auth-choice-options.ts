@@ -184,7 +184,7 @@ export function buildAuthChoiceOptions(params: {
   options.push({
     value: "minimax-api-lightning",
     label: "MiniMax M2.1 Lightning",
-    hint: "Faster, lower cost",
+    hint: "Faster, higher output cost",
   });
   if (params.includeSkip) {
     options.push({ value: "skip", label: "Skip for now" });
