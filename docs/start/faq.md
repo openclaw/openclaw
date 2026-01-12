@@ -118,7 +118,7 @@ Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI
 
 ### Is a local model OK for casual chats?
 
-Usually no. Clawdbot needs large context + strong safety; small cards truncate. See [/gateway/local-models](/gateway/local-models) for hardware expectations and the LM Studio MiniMax M2.1 setup.
+Usually no. Clawdbot needs large context + strong safety; small cards truncate and leak. If you must, run the **largest** MiniMax M2.1 build you can locally (LM Studio) and see [/gateway/local-models](/gateway/local-models). Smaller/quantized models increase prompt-injection risk — see [Security](/gateway/security).
 
 ### Can I use Bun?
 

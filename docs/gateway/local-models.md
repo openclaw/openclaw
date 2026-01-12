@@ -7,9 +7,9 @@ read_when:
 ---
 # Local models
 
-Local is doable, but Clawdbot expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency.
+Local is doable, but Clawdbot expects large context + strong defenses against prompt injection. Small cards truncate context and leak safety. Aim high: **≥2 maxed-out Mac Studios or equivalent GPU rig (~$30k+)**. A single **24 GB** GPU works only for lighter prompts with higher latency. Use the **largest / full-size model variant you can run**; aggressively quantized or “small” checkpoints raise prompt-injection risk (see [Security](/gateway/security)).
 
-## Recommended: LM Studio + MiniMax M2.1 (Responses API)
+## Recommended: LM Studio + MiniMax M2.1 (Responses API, full-size)
 
 Best current local stack. Load MiniMax M2.1 in LM Studio, enable the local server (default `http://127.0.0.1:1234`), and use Responses API to keep reasoning separate from final text.
 
@@ -50,7 +50,7 @@ Best current local stack. Load MiniMax M2.1 in LM Studio, enable the local serve
 
 **Setup checklist**
 - Install LM Studio: https://lmstudio.ai
-- In LM Studio, download MiniMax M2.1, start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
+- In LM Studio, download the **largest MiniMax M2.1 build available** (avoid “small”/heavily quantized variants), start the server, confirm `http://127.0.0.1:1234/v1/models` lists it.
 - Keep the model loaded; cold-load adds startup latency.
 - Adjust `contextWindow`/`maxTokens` if your LM Studio build differs.
 - For WhatsApp, stick to Responses API so only final text is sent.
