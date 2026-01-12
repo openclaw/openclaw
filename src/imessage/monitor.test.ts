@@ -129,7 +129,10 @@ describe("monitorIMessageProvider", () => {
   it("allows group messages when imessage groups default disables mention gating", async () => {
     config = {
       ...config,
-      imessage: { groups: { "*": { requireMention: false } } },
+      imessage: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();
@@ -159,7 +162,10 @@ describe("monitorIMessageProvider", () => {
     config = {
       ...config,
       messages: { groupChat: { mentionPatterns: [] } },
-      imessage: { groups: { "*": { requireMention: true } } },
+      imessage: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
     };
     const run = monitorIMessageProvider();
     await waitForSubscribe();

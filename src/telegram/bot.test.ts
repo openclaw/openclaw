@@ -407,7 +407,10 @@ describe("createTelegramBot", () => {
     loadConfig.mockReturnValue({
       identity: { name: "Bert" },
       messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
-      telegram: { groups: { "*": { requireMention: true } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -443,7 +446,10 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
-      telegram: { groups: { "*": { requireMention: false } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -489,7 +495,10 @@ describe("createTelegramBot", () => {
         ackReactionScope: "group-mentions",
         groupChat: { mentionPatterns: ["\\bbert\\b"] },
       },
-      telegram: { groups: { "*": { requireMention: true } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -533,7 +542,10 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       messages: { groupChat: { mentionPatterns: ["\\bbert\\b"] } },
-      telegram: { groups: { "*": { requireMention: true } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -565,7 +577,10 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       messages: { groupChat: { mentionPatterns: [] } },
-      telegram: { groups: { "*": { requireMention: true } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -838,7 +853,10 @@ describe("createTelegramBot", () => {
       "utf-8",
     );
     loadConfig.mockReturnValue({
-      telegram: { groups: { "*": { requireMention: true } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
       bindings: [
         {
           agentId: "ops",
@@ -877,6 +895,7 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       telegram: {
+        groupPolicy: "open",
         groups: {
           "*": { requireMention: true },
           "123": { requireMention: false },
@@ -910,6 +929,7 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       telegram: {
+        groupPolicy: "open",
         groups: {
           "*": { requireMention: true },
           "-1001234567890": {
@@ -954,6 +974,7 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
     loadConfig.mockReturnValue({
       telegram: {
+        groupPolicy: "open",
         groups: { "*": { requireMention: false } },
       },
     });
@@ -983,7 +1004,10 @@ describe("createTelegramBot", () => {
     >;
     replySpy.mockReset();
     loadConfig.mockReturnValue({
-      telegram: { groups: { "*": { requireMention: true } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: true } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -1610,7 +1634,10 @@ describe("createTelegramBot", () => {
     replySpy.mockReset();
 
     loadConfig.mockReturnValue({
-      telegram: { groups: { "*": { requireMention: false } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
     });
 
     createTelegramBot({ token: "tok" });
@@ -1658,6 +1685,7 @@ describe("createTelegramBot", () => {
 
     loadConfig.mockReturnValue({
       telegram: {
+        groupPolicy: "open",
         groups: {
           "-1001234567890": {
             requireMention: false,
@@ -1715,7 +1743,10 @@ describe("createTelegramBot", () => {
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
-      telegram: { groups: { "*": { requireMention: false } } },
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
     });
 
     createTelegramBot({ token: "tok" });

@@ -108,7 +108,10 @@ beforeEach(() => {
       ackReaction: "👀",
       ackReactionScope: "group-mentions",
     },
-    slack: { dm: { enabled: true, policy: "open", allowFrom: ["*"] } },
+    slack: {
+      dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+      groupPolicy: "open",
+    },
   };
   sendMock.mockReset().mockResolvedValue(undefined);
   replyMock.mockReset();

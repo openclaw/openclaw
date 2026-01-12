@@ -682,6 +682,7 @@ describe("web monitor inbox", () => {
     mockLoadConfig.mockReturnValue({
       whatsapp: {
         allowFrom: ["+111"], // does not include +777
+        groupPolicy: "open",
       },
       messages: {
         messagePrefix: undefined,
@@ -847,6 +848,7 @@ describe("web monitor inbox", () => {
     mockLoadConfig.mockReturnValue({
       whatsapp: {
         allowFrom: ["+1234"],
+        groupPolicy: "open",
       },
       messages: {
         messagePrefix: undefined,
