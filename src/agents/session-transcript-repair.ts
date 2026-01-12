@@ -60,9 +60,25 @@ function makeMissingToolResult(params: {
   } as Extract<AgentMessage, { role: "toolResult" }>;
 }
 
+export { makeMissingToolResult };
+
 export function sanitizeToolUseResultPairing(
   messages: AgentMessage[],
 ): AgentMessage[] {
+  return repairToolUseResultPairing(messages).messages;
+}
+
+export type ToolUseRepairReport = {
+  messages: AgentMessage[];
+  added: Array<Extract<AgentMessage, { role: "toolResult" }>>;
+  droppedDuplicateCount: number;
+  droppedOrphanCount: number;
+  moved: boolean;
+};
+
+export function repairToolUseResultPairing(
+  messages: AgentMessage[],
+): ToolUseRepairReport {
   // Anthropic (and Cloud Code Assist) reject transcripts where assistant tool calls are not
   // immediately followed by matching tool results. Session files can end up with results
   // displaced (e.g. after user turns) or duplicated. Repair by:
@@ -70,13 +86,22 @@ export function sanitizeToolUseResultPairing(
   // - inserting synthetic error toolResults for missing ids
   // - dropping duplicate toolResults for the same id (anywhere in the transcript)
   const out: AgentMessage[] = [];
+  const added: Array<Extract<AgentMessage, { role: "toolResult" }>> = [];
   const seenToolResultIds = new Set<string>();
+  let droppedDuplicateCount = 0;
+  let droppedOrphanCount = 0;
+  let moved = false;
+  let changed = false;
 
   const pushToolResult = (
     msg: Extract<AgentMessage, { role: "toolResult" }>,
   ) => {
     const id = extractToolResultId(msg);
-    if (id && seenToolResultIds.has(id)) return;
+    if (id && seenToolResultIds.has(id)) {
+      droppedDuplicateCount += 1;
+      changed = true;
+      return;
+    }
     if (id) seenToolResultIds.add(id);
     out.push(msg);
   };
@@ -93,7 +118,12 @@ export function sanitizeToolUseResultPairing(
       // Tool results must only appear directly after the matching assistant tool call turn.
       // Any "free-floating" toolResult entries in session history can make strict providers
       // (Anthropic-compatible APIs, MiniMax, Cloud Code Assist) reject the entire request.
-      if (role !== "toolResult") out.push(msg);
+      if (role !== "toolResult") {
+        out.push(msg);
+      } else {
+        droppedOrphanCount += 1;
+        changed = true;
+      }
       continue;
     }
 
@@ -131,6 +161,8 @@ export function sanitizeToolUseResultPairing(
         const id = extractToolResultId(toolResult);
         if (id && toolCallIds.has(id)) {
           if (seenToolResultIds.has(id)) {
+            droppedDuplicateCount += 1;
+            changed = true;
             continue;
           }
           if (!spanResultsById.has(id)) {
@@ -141,17 +173,34 @@ export function sanitizeToolUseResultPairing(
       }
 
       // Drop tool results that don't match the current assistant tool calls.
-      if (nextRole !== "toolResult") remainder.push(next);
+      if (nextRole !== "toolResult") {
+        remainder.push(next);
+      } else {
+        droppedOrphanCount += 1;
+        changed = true;
+      }
     }
 
     out.push(msg);
 
+    if (spanResultsById.size > 0 && remainder.length > 0) {
+      moved = true;
+      changed = true;
+    }
+
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
-      pushToolResult(
-        existing ??
-          makeMissingToolResult({ toolCallId: call.id, toolName: call.name }),
-      );
+      if (existing) {
+        pushToolResult(existing);
+      } else {
+        const missing = makeMissingToolResult({
+          toolCallId: call.id,
+          toolName: call.name,
+        });
+        added.push(missing);
+        changed = true;
+        pushToolResult(missing);
+      }
     }
 
     for (const rem of remainder) {
@@ -164,5 +213,12 @@ export function sanitizeToolUseResultPairing(
     i = j - 1;
   }
 
-  return out;
+  const changedOrMoved = changed || moved;
+  return {
+    messages: changedOrMoved ? out : messages,
+    added,
+    droppedDuplicateCount,
+    droppedOrphanCount,
+    moved: changedOrMoved,
+  };
 }

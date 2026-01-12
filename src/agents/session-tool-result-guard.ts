@@ -1,0 +1,103 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { SessionManager } from "@mariozechner/pi-coding-agent";
+
+import { makeMissingToolResult } from "./session-transcript-repair.js";
+
+type ToolCall = { id: string; name?: string };
+
+function extractAssistantToolCalls(
+  msg: Extract<AgentMessage, { role: "assistant" }>,
+): ToolCall[] {
+  const content = msg.content;
+  if (!Array.isArray(content)) return [];
+
+  const toolCalls: ToolCall[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") continue;
+    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (typeof rec.id !== "string" || !rec.id) continue;
+    if (
+      rec.type === "toolCall" ||
+      rec.type === "toolUse" ||
+      rec.type === "functionCall"
+    ) {
+      toolCalls.push({
+        id: rec.id,
+        name: typeof rec.name === "string" ? rec.name : undefined,
+      });
+    }
+  }
+  return toolCalls;
+}
+
+function extractToolResultId(
+  msg: Extract<AgentMessage, { role: "toolResult" }>,
+): string | null {
+  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId) return toolCallId;
+  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId) return toolUseId;
+  return null;
+}
+
+export function installSessionToolResultGuard(sessionManager: SessionManager): {
+  flushPendingToolResults: () => void;
+  getPendingIds: () => string[];
+} {
+  const originalAppend = sessionManager.appendMessage.bind(sessionManager);
+  const pending = new Map<string, string | undefined>();
+
+  const flushPendingToolResults = () => {
+    if (pending.size === 0) return;
+    for (const [id, name] of pending.entries()) {
+      originalAppend(makeMissingToolResult({ toolCallId: id, toolName: name }));
+    }
+    pending.clear();
+  };
+
+  const guardedAppend = (message: AgentMessage) => {
+    const role = (message as { role?: unknown }).role;
+
+    if (role === "toolResult") {
+      const id = extractToolResultId(
+        message as Extract<AgentMessage, { role: "toolResult" }>,
+      );
+      if (id) pending.delete(id);
+      return originalAppend(message as never);
+    }
+
+    const toolCalls =
+      role === "assistant"
+        ? extractAssistantToolCalls(
+            message as Extract<AgentMessage, { role: "assistant" }>,
+          )
+        : [];
+
+    // If previous tool calls are still pending, flush before non-tool results.
+    if (pending.size > 0 && (toolCalls.length === 0 || role !== "assistant")) {
+      flushPendingToolResults();
+    }
+    // If new tool calls arrive while older ones are pending, flush the old ones first.
+    if (pending.size > 0 && toolCalls.length > 0) {
+      flushPendingToolResults();
+    }
+
+    const result = originalAppend(message as never);
+
+    if (toolCalls.length > 0) {
+      for (const call of toolCalls) {
+        pending.set(call.id, call.name);
+      }
+    }
+
+    return result;
+  };
+
+  // Monkey-patch appendMessage with our guarded version.
+  sessionManager.appendMessage = guardedAppend as SessionManager["appendMessage"];
+
+  return {
+    flushPendingToolResults,
+    getPendingIds: () => Array.from(pending.keys()),
+  };
+}

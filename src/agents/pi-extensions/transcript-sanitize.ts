@@ -14,15 +14,18 @@ import type {
 } from "@mariozechner/pi-coding-agent";
 
 import { isGoogleModelApi } from "../pi-embedded-helpers.js";
-import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
+import {
+  repairToolUseResultPairing,
+  sanitizeToolUseResultPairing,
+} from "../session-transcript-repair.js";
 import { sanitizeToolCallIdsForCloudCodeAssist } from "../tool-call-id.js";
 
 export default function transcriptSanitizeExtension(api: ExtensionAPI): void {
   api.on("context", (event: ContextEvent, ctx: ExtensionContext) => {
     let next = event.messages as AgentMessage[];
 
-    const repairedTools = sanitizeToolUseResultPairing(next);
-    if (repairedTools !== next) next = repairedTools;
+    const repaired = repairToolUseResultPairing(next);
+    if (repaired.messages !== next) next = repaired.messages;
 
     if (isGoogleModelApi(ctx.model?.api)) {
       const repairedIds = sanitizeToolCallIdsForCloudCodeAssist(next);

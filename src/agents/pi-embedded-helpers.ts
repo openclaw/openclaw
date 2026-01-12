@@ -18,6 +18,10 @@ import {
   sanitizeToolCallIdsForCloudCodeAssist,
 } from "./tool-call-id.js";
 import { sanitizeContentBlocksImages } from "./tool-images.js";
+import {
+  repairToolUseResultPairing,
+  sanitizeToolUseResultPairing,
+} from "./session-transcript-repair.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 export type EmbeddedContextFile = { path: string; content: string };
@@ -98,8 +102,10 @@ export async function sanitizeSessionMessagesImages(
   const sanitizedIds = options?.sanitizeToolCallIds
     ? sanitizeToolCallIdsForCloudCodeAssist(messages)
     : messages;
+  const repaired = repairToolUseResultPairing(sanitizedIds);
+  const base = repaired.messages;
   const out: AgentMessage[] = [];
-  for (const msg of sanitizedIds) {
+  for (const msg of base) {
     if (!msg || typeof msg !== "object") {
       out.push(msg);
       continue;

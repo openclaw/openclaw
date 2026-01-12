@@ -119,6 +119,10 @@ import { createClawdbotCodingTools } from "./pi-tools.js";
 import { resolveSandboxContext } from "./sandbox.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 import {
+  guardSessionManager,
+  type GuardedSessionManager,
+} from "./session-tool-result-guard-wrapper.js";
+import {
   applySkillEnvOverrides,
   applySkillEnvOverridesFromSnapshot,
   loadWorkspaceSkillEntries,
@@ -1227,7 +1231,9 @@ export async function compactEmbeddedPiSession(params: {
         try {
           // Pre-warm session file to bring it into OS page cache
           await prewarmSessionFile(params.sessionFile);
-          const sessionManager = SessionManager.open(params.sessionFile);
+          const sessionManager = guardSessionManager(
+            SessionManager.open(params.sessionFile),
+          );
           trackSessionManagerAccess(params.sessionFile);
           const settingsManager = SettingsManager.create(
             effectiveWorkspace,
@@ -1308,6 +1314,7 @@ export async function compactEmbeddedPiSession(params: {
               },
             };
           } finally {
+            sessionManager.flushPendingToolResults?.();
             session.dispose();
           }
         } finally {
@@ -1665,6 +1672,9 @@ export async function runEmbeddedPiAgent(params: {
             model,
           });
 
+          const toolResultGuard =
+            installSessionToolResultGuard(sessionManager);
+
           const { builtInTools, customTools } = splitSdkTools({
             tools,
             sandboxEnabled: !!sandbox?.enabled,
@@ -1717,6 +1727,7 @@ export async function runEmbeddedPiAgent(params: {
               session.agent.replaceMessages(limited);
             }
           } catch (err) {
+            toolResultGuard.flushPendingToolResults();
             session.dispose();
             await sessionLock.release();
             throw err;
@@ -1748,6 +1759,7 @@ export async function runEmbeddedPiAgent(params: {
               enforceFinalTag: params.enforceFinalTag,
             });
           } catch (err) {
+            toolResultGuard.flushPendingToolResults();
             session.dispose();
             await sessionLock.release();
             throw err;
@@ -1845,6 +1857,7 @@ export async function runEmbeddedPiAgent(params: {
               ACTIVE_EMBEDDED_RUNS.delete(params.sessionId);
               notifyEmbeddedRunEnded(params.sessionId);
             }
+            sessionManager.flushPendingToolResults?.();
             session.dispose();
             await sessionLock.release();
             params.abortSignal?.removeEventListener?.("abort", onAbort);
