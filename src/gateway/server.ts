@@ -45,7 +45,7 @@ import {
 } from "../config/port-defaults.js";
 import {
   loadSessionStore,
-  resolveMainSessionKey,
+  resolveAgentMainSessionKey,
   resolveMainSessionKeyFromConfig,
   resolveStorePath,
 } from "../config/sessions.js";
@@ -119,6 +119,7 @@ import {
   normalizeProviderId,
   type ProviderId,
 } from "../providers/plugins/index.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import {
   isGatewayCliClient,
@@ -782,11 +783,36 @@ export async function startGatewayServer(
     const storePath = resolveCronStorePath(cfg.cron?.store);
     const cronEnabled =
       process.env.CLAWDBOT_SKIP_CRON !== "1" && cfg.cron?.enabled !== false;
+    const resolveCronAgent = (requested?: string | null) => {
+      const runtimeConfig = loadConfig();
+      const normalized =
+        typeof requested === "string" && requested.trim()
+          ? normalizeAgentId(requested)
+          : undefined;
+      const hasAgent =
+        normalized !== undefined &&
+        Array.isArray(runtimeConfig.agents?.list) &&
+        runtimeConfig.agents.list.some(
+          (entry) =>
+            entry &&
+            typeof entry.id === "string" &&
+            normalizeAgentId(entry.id) === normalized,
+        );
+      const agentId = hasAgent
+        ? normalized
+        : resolveDefaultAgentId(runtimeConfig);
+      return { agentId, cfg: runtimeConfig };
+    };
     const cron = new CronService({
       storePath,
       cronEnabled,
-      enqueueSystemEvent: (text) => {
-        enqueueSystemEvent(text, { sessionKey: resolveMainSessionKey(cfg) });
+      enqueueSystemEvent: (text, opts) => {
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
+        const sessionKey = resolveAgentMainSessionKey({
+          cfg: runtimeConfig,
+          agentId,
+        });
+        enqueueSystemEvent(text, { sessionKey });
       },
       requestHeartbeatNow,
       runHeartbeatOnce: async (opts) => {
@@ -798,12 +824,13 @@ export async function startGatewayServer(
         });
       },
       runIsolatedAgentJob: async ({ job, message }) => {
-        const runtimeConfig = loadConfig();
+        const { agentId, cfg: runtimeConfig } = resolveCronAgent(job.agentId);
         return await runCronIsolatedAgentTurn({
           cfg: runtimeConfig,
           deps,
           job,
           message,
+          agentId,
           sessionKey: `cron:${job.id}`,
           lane: "cron",
         });

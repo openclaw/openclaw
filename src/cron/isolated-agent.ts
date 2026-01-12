@@ -1,4 +1,9 @@
 import crypto from "node:crypto";
+import {
+  resolveAgentConfig,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
 import { runCliAgent } from "../agents/cli-runner.js";
 import { getCliSessionId, setCliSessionId } from "../agents/cli-session.js";
 import { lookupContextTokens } from "../agents/context.js";
@@ -21,10 +26,7 @@ import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { buildWorkspaceSkillSnapshot } from "../agents/skills.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import { hasNonzeroUsage } from "../agents/usage.js";
-import {
-  DEFAULT_AGENT_WORKSPACE_DIR,
-  ensureAgentWorkspace,
-} from "../agents/workspace.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
 import {
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
   stripHeartbeatToken,
@@ -35,13 +37,13 @@ import type { ClawdbotConfig } from "../config/config.js";
 import {
   DEFAULT_IDLE_MINUTES,
   loadSessionStore,
-  resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
+  resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
   resolveStorePath,
   type SessionEntry,
   saveSessionStore,
 } from "../config/sessions.js";
+import type { AgentDefaultsConfig } from "../config/types.js";
 import { registerAgentRunContext } from "../infra/agent-events.js";
 import { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 import { resolveMessageProviderSelection } from "../infra/outbound/provider-selection.js";
@@ -52,6 +54,10 @@ import {
 import { normalizeProviderId } from "../providers/plugins/index.js";
 import type { ProviderId } from "../providers/plugins/types.js";
 import { DEFAULT_CHAT_PROVIDER } from "../providers/registry.js";
+import {
+  buildAgentMainSessionKey,
+  normalizeAgentId,
+} from "../routing/session-key.js";
 import {
   INTERNAL_MESSAGE_PROVIDER,
   normalizeMessageProvider,
@@ -113,6 +119,7 @@ function isHeartbeatOnlyResponse(
 
 async function resolveDeliveryTarget(
   cfg: ClawdbotConfig,
+  agentId: string,
   jobPayload: {
     provider?: "last" | ProviderId;
     to?: string;
@@ -134,8 +141,7 @@ async function resolveDeliveryTarget(
       : undefined;
 
   const sessionCfg = cfg.session;
-  const mainSessionKey = resolveMainSessionKey(cfg);
-  const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+  const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const store = loadSessionStore(storePath);
   const main = store[mainSessionKey];
@@ -187,6 +193,7 @@ function resolveCronSession(params: {
   cfg: ClawdbotConfig;
   sessionKey: string;
   nowMs: number;
+  agentId: string;
 }) {
   const sessionCfg = params.cfg.session;
   const idleMinutes = Math.max(
@@ -194,7 +201,9 @@ function resolveCronSession(params: {
     1,
   );
   const idleMs = idleMinutes * 60_000;
-  const storePath = resolveStorePath(sessionCfg?.store);
+  const storePath = resolveStorePath(sessionCfg?.store, {
+    agentId: params.agentId,
+  });
   const store = loadSessionStore(storePath);
   const entry = store[params.sessionKey];
   const fresh = entry && params.nowMs - entry.updatedAt <= idleMs;
@@ -221,10 +230,50 @@ export async function runCronIsolatedAgentTurn(params: {
   job: CronJob;
   message: string;
   sessionKey: string;
+  agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const agentCfg = params.cfg.agents?.defaults;
-  const workspaceDirRaw = agentCfg?.workspace ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  const defaultAgentId = resolveDefaultAgentId(params.cfg);
+  const requestedAgentId =
+    typeof params.agentId === "string" && params.agentId.trim()
+      ? params.agentId
+      : typeof params.job.agentId === "string" && params.job.agentId.trim()
+        ? params.job.agentId
+        : undefined;
+  const normalizedRequested = requestedAgentId
+    ? normalizeAgentId(requestedAgentId)
+    : undefined;
+  const agentConfigOverride = normalizedRequested
+    ? resolveAgentConfig(params.cfg, normalizedRequested)
+    : undefined;
+  const { model: overrideModel, ...agentOverrideRest } =
+    agentConfigOverride ?? {};
+  const agentId = agentConfigOverride
+    ? (normalizedRequested ?? defaultAgentId)
+    : defaultAgentId;
+  const agentCfg: AgentDefaultsConfig = {
+    ...(params.cfg.agents?.defaults ?? {}),
+    ...(agentOverrideRest as Partial<AgentDefaultsConfig>),
+  };
+  if (typeof overrideModel === "string") {
+    agentCfg.model = { primary: overrideModel };
+  } else if (overrideModel) {
+    agentCfg.model = overrideModel;
+  }
+  const cfgWithAgentDefaults: ClawdbotConfig = {
+    ...params.cfg,
+    agents: { ...(params.cfg.agents ?? {}), defaults: agentCfg },
+  };
+
+  const baseSessionKey = (
+    params.sessionKey?.trim() || `cron:${params.job.id}`
+  ).trim();
+  const agentSessionKey = buildAgentMainSessionKey({
+    agentId,
+    mainKey: baseSessionKey,
+  });
+
+  const workspaceDirRaw = resolveAgentWorkspaceDir(params.cfg, agentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap,
@@ -232,7 +281,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const workspaceDir = workspace.dir;
 
   const resolvedDefault = resolveConfiguredModelRef({
-    cfg: params.cfg,
+    cfg: cfgWithAgentDefaults,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -241,12 +290,12 @@ export async function runCronIsolatedAgentTurn(params: {
   let catalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
   const loadCatalog = async () => {
     if (!catalog) {
-      catalog = await loadModelCatalog({ config: params.cfg });
+      catalog = await loadModelCatalog({ config: cfgWithAgentDefaults });
     }
     return catalog;
   };
   // Resolve model - prefer hooks.gmail.model for Gmail hooks.
-  const isGmailHook = params.sessionKey.startsWith("hook:gmail:");
+  const isGmailHook = baseSessionKey.startsWith("hook:gmail:");
   const hooksGmailModelRef = isGmailHook
     ? resolveHooksGmailModel({
         cfg: params.cfg,
@@ -275,7 +324,7 @@ export async function runCronIsolatedAgentTurn(params: {
       return { status: "error", error: "invalid model: expected string" };
     }
     const resolvedOverride = resolveAllowedModelRef({
-      cfg: params.cfg,
+      cfg: cfgWithAgentDefaults,
       catalog: await loadCatalog(),
       raw: modelOverrideRaw,
       defaultProvider: resolvedDefault.provider,
@@ -290,7 +339,8 @@ export async function runCronIsolatedAgentTurn(params: {
   const now = Date.now();
   const cronSession = resolveCronSession({
     cfg: params.cfg,
-    sessionKey: params.sessionKey,
+    sessionKey: agentSessionKey,
+    agentId,
     nowMs: now,
   });
   const isFirstTurnInSession =
@@ -309,7 +359,7 @@ export async function runCronIsolatedAgentTurn(params: {
   let thinkLevel = jobThink ?? hooksGmailThinking ?? thinkOverride;
   if (!thinkLevel) {
     thinkLevel = resolveThinkingDefault({
-      cfg: params.cfg,
+      cfg: cfgWithAgentDefaults,
       provider,
       model,
       catalog: await loadCatalog(),
@@ -317,7 +367,7 @@ export async function runCronIsolatedAgentTurn(params: {
   }
 
   const timeoutMs = resolveAgentTimeoutMs({
-    cfg: params.cfg,
+    cfg: cfgWithAgentDefaults,
     overrideSeconds:
       params.job.payload.kind === "agentTurn"
         ? params.job.payload.timeoutSeconds
@@ -331,16 +381,20 @@ export async function runCronIsolatedAgentTurn(params: {
     params.job.payload.kind === "agentTurn" &&
     params.job.payload.bestEffortDeliver === true;
 
-  const resolvedDelivery = await resolveDeliveryTarget(params.cfg, {
-    provider:
-      params.job.payload.kind === "agentTurn"
-        ? params.job.payload.provider
-        : "last",
-    to:
-      params.job.payload.kind === "agentTurn"
-        ? params.job.payload.to
-        : undefined,
-  });
+  const resolvedDelivery = await resolveDeliveryTarget(
+    cfgWithAgentDefaults,
+    agentId,
+    {
+      provider:
+        params.job.payload.kind === "agentTurn"
+          ? params.job.payload.provider
+          : "last",
+      to:
+        params.job.payload.kind === "agentTurn"
+          ? params.job.payload.to
+          : undefined,
+    },
+  );
 
   const base =
     `[cron:${params.job.id} ${params.job.name}] ${params.message}`.trim();
@@ -350,7 +404,9 @@ export async function runCronIsolatedAgentTurn(params: {
   const needsSkillsSnapshot =
     cronSession.isNewSession || !cronSession.sessionEntry.skillsSnapshot;
   const skillsSnapshot = needsSkillsSnapshot
-    ? buildWorkspaceSkillSnapshot(workspaceDir, { config: params.cfg })
+    ? buildWorkspaceSkillSnapshot(workspaceDir, {
+        config: cfgWithAgentDefaults,
+      })
     : cronSession.sessionEntry.skillsSnapshot;
   if (needsSkillsSnapshot && skillsSnapshot) {
     cronSession.sessionEntry = {
@@ -358,17 +414,17 @@ export async function runCronIsolatedAgentTurn(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    cronSession.store[params.sessionKey] = cronSession.sessionEntry;
+    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
   }
 
   // Persist systemSent before the run, mirroring the inbound auto-reply behavior.
   if (isFirstTurnInSession) {
     cronSession.sessionEntry.systemSent = true;
-    cronSession.store[params.sessionKey] = cronSession.sessionEntry;
+    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
   } else {
-    cronSession.store[params.sessionKey] = cronSession.sessionEntry;
+    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
   }
 
@@ -378,31 +434,32 @@ export async function runCronIsolatedAgentTurn(params: {
   try {
     const sessionFile = resolveSessionTranscriptPath(
       cronSession.sessionEntry.sessionId,
+      agentId,
     );
     const resolvedVerboseLevel =
       (cronSession.sessionEntry.verboseLevel as "on" | "off" | undefined) ??
       (agentCfg?.verboseDefault as "on" | "off" | undefined);
     registerAgentRunContext(cronSession.sessionEntry.sessionId, {
-      sessionKey: params.sessionKey,
+      sessionKey: agentSessionKey,
       verboseLevel: resolvedVerboseLevel,
     });
     const messageProvider = resolvedDelivery.provider;
     const fallbackResult = await runWithModelFallback({
-      cfg: params.cfg,
+      cfg: cfgWithAgentDefaults,
       provider,
       model,
       run: (providerOverride, modelOverride) => {
-        if (isCliProvider(providerOverride, params.cfg)) {
+        if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
           const cliSessionId = getCliSessionId(
             cronSession.sessionEntry,
             providerOverride,
           );
           return runCliAgent({
             sessionId: cronSession.sessionEntry.sessionId,
-            sessionKey: params.sessionKey,
+            sessionKey: agentSessionKey,
             sessionFile,
             workspaceDir,
-            config: params.cfg,
+            config: cfgWithAgentDefaults,
             prompt: commandBody,
             provider: providerOverride,
             model: modelOverride,
@@ -414,11 +471,11 @@ export async function runCronIsolatedAgentTurn(params: {
         }
         return runEmbeddedPiAgent({
           sessionId: cronSession.sessionEntry.sessionId,
-          sessionKey: params.sessionKey,
+          sessionKey: agentSessionKey,
           messageProvider,
           sessionFile,
           workspaceDir,
-          config: params.cfg,
+          config: cfgWithAgentDefaults,
           skillsSnapshot,
           prompt: commandBody,
           lane: params.lane ?? "cron",
@@ -454,7 +511,7 @@ export async function runCronIsolatedAgentTurn(params: {
     cronSession.sessionEntry.modelProvider = providerUsed;
     cronSession.sessionEntry.model = modelUsed;
     cronSession.sessionEntry.contextTokens = contextTokens;
-    if (isCliProvider(providerUsed, params.cfg)) {
+    if (isCliProvider(providerUsed, cfgWithAgentDefaults)) {
       const cliSessionId = runResult.meta.agentMeta?.sessionId?.trim();
       if (cliSessionId) {
         setCliSessionId(cronSession.sessionEntry, providerUsed, cliSessionId);
@@ -470,7 +527,7 @@ export async function runCronIsolatedAgentTurn(params: {
       cronSession.sessionEntry.totalTokens =
         promptTokens > 0 ? promptTokens : (usage.total ?? input);
     }
-    cronSession.store[params.sessionKey] = cronSession.sessionEntry;
+    cronSession.store[agentSessionKey] = cronSession.sessionEntry;
     await saveSessionStore(cronSession.storePath, cronSession.store);
   }
   const firstText = payloads[0]?.text ?? "";
@@ -481,8 +538,7 @@ export async function runCronIsolatedAgentTurn(params: {
   // This allows cron jobs to silently ack when nothing to report but still deliver
   // actual content when there is something to say.
   const ackMaxChars =
-    params.cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
-    DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+    agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
   const skipHeartbeatDelivery =
     delivery && isHeartbeatOnlyResponse(payloads, Math.max(0, ackMaxChars));
 
@@ -505,7 +561,7 @@ export async function runCronIsolatedAgentTurn(params: {
     }
     try {
       await deliverOutboundPayloads({
-        cfg: params.cfg,
+        cfg: cfgWithAgentDefaults,
         provider: resolvedDelivery.provider as Exclude<
           OutboundProvider,
           "none"

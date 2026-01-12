@@ -24,6 +24,38 @@ describe("normalizeCronJobCreate", () => {
     expect("channel" in payload).toBe(false);
   });
 
+  it("normalizes agentId and drops null", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "agent-set",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      agentId: " Ops ",
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.agentId).toBe("Ops");
+
+    const cleared = normalizeCronJobCreate({
+      name: "agent-clear",
+      enabled: true,
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      agentId: null,
+      payload: {
+        kind: "agentTurn",
+        message: "hi",
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(cleared.agentId).toBeNull();
+  });
+
   it("canonicalizes payload.provider casing", () => {
     const normalized = normalizeCronJobCreate({
       name: "legacy provider",

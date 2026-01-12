@@ -120,6 +120,75 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("uses agentId for workspace, session key, and store paths", async () => {
+    await withTempHome(async (home) => {
+      const deps: CliDeps = {
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+      const opsWorkspace = path.join(home, "ops-workspace");
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "ok" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(
+        home,
+        path.join(
+          home,
+          ".clawdbot",
+          "agents",
+          "{agentId}",
+          "sessions",
+          "sessions.json",
+        ),
+        {
+          agents: {
+            defaults: { workspace: path.join(home, "default-workspace") },
+            list: [
+              { id: "main", default: true },
+              { id: "ops", workspace: opsWorkspace },
+            ],
+          },
+        },
+      );
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job: {
+          ...makeJob({
+            kind: "agentTurn",
+            message: "do it",
+            deliver: false,
+            provider: "last",
+          }),
+          agentId: "ops",
+        },
+        message: "do it",
+        sessionKey: "cron:job-ops",
+        agentId: "ops",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+        sessionKey?: string;
+        workspaceDir?: string;
+        sessionFile?: string;
+      };
+      expect(call?.sessionKey).toBe("agent:ops:cron:job-ops");
+      expect(call?.workspaceDir).toBe(opsWorkspace);
+      expect(call?.sessionFile).toContain(path.join("agents", "ops"));
+    });
+  });
+
   it("uses model override when provided", async () => {
     await withTempHome(async (home) => {
       const storePath = await writeSessionStore(home);
