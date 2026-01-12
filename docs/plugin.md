@@ -148,6 +148,7 @@ export default {
 clawdbot plugins list
 clawdbot plugins info <id>
 clawdbot plugins install <path>              # add a local file/dir to plugins.load.paths
+clawdbot plugins install ./extensions/voice-call # relative path ok
 clawdbot plugins install ./plugin.tgz        # install from a local tarball
 clawdbot plugins install @clawdbot/voice-call # install from npm
 clawdbot plugins enable <id>

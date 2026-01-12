@@ -40,8 +40,8 @@ Restart the Gateway afterwards.
 ### Option B: install from a local folder (dev, no copying)
 
 ```bash
-clawdbot plugins install /absolute/path/to/voice-call
-cd /absolute/path/to/voice-call && pnpm install
+clawdbot plugins install ./extensions/voice-call
+cd ./extensions/voice-call && pnpm install
 ```
 
 Restart the Gateway afterwards.
