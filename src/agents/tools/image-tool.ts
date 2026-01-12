@@ -402,7 +402,10 @@ export function createImageTool(options?: {
         throw new Error(`Unsupported media type: ${media.kind}`);
       }
 
-      const mimeType = media.contentType ?? "image/png";
+      const mimeType =
+        ("contentType" in media && media.contentType) ||
+        ("mimeType" in media && media.mimeType) ||
+        "image/png";
       const base64 = media.buffer.toString("base64");
       const result = await runImagePrompt({
         cfg: options?.config,
