@@ -887,7 +887,9 @@ For background processes (from the exec tool), you can ask the agent to run:
 process action:kill sessionId:XXX
 ```
 
-Slash commands only run when the **entire** message is the command (must start with `/`). Inline text like `hello /status` is ignored.
+Slash commands overview: see [Slash commands](/tools/slash-commands).
+
+Most commands must be sent as a **standalone** message that starts with `/`, but a few shortcuts (like `/status`) also work inline for allowlisted senders.
 
 ### Why does it feel like the bot “ignores” rapid‑fire messages?
 
