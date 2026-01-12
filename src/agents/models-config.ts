@@ -3,7 +3,10 @@ import path from "node:path";
 
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
-import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  listProfilesForProvider,
+} from "./auth-profiles.js";
 import { resolveEnvApiKey } from "./model-auth.js";
 
 type ModelsConfig = NonNullable<ClawdbotConfig["models"]>;
