@@ -145,9 +145,14 @@ describe("onboard (non-interactive): lan bind auto-token", () => {
     };
 
     // Other test files mock ../config/config.js. This onboarding flow needs the real
-    // implementation so it can persist the config and then read it back.
-    vi.unmock("../config/config.js");
+    // implementation so it can persist the config and then read it back (Windows CI
+    // otherwise sees a mocked writeConfigFile and the config never lands on disk).
     vi.resetModules();
+    vi.doMock("../config/config.js", async () => {
+      return (await vi.importActual(
+        "../config/config.js",
+      )) as typeof import("../config/config.js");
+    });
 
     const { runNonInteractiveOnboarding } = await import(
       "./onboard-non-interactive.js"
