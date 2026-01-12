@@ -18,3 +18,15 @@ Key references:
 
 Authentication is enforced at the WebSocket handshake via `connect.params.auth`
 (token or password). See `gateway.auth` in [Gateway configuration](/gateway/configuration).
+
+## Fast path (recommended)
+
+- After onboarding, the CLI now auto-opens the dashboard with your token and prints the same tokenized link.
+- Re-open anytime: `clawdbot dashboard` (copies link, opens browser if possible, shows SSH hint if headless).
+- The token stays local (query param only); the UI strips it after first load and saves it in localStorage.
+
+## If you see “unauthorized” / 1008
+
+- Run `clawdbot dashboard` to get a fresh tokenized link.
+- Ensure the gateway is reachable (local: `clawdbot status`; remote: SSH tunnel `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/?token=...`).
+- In the dashboard settings, paste the same token you configured in `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`).
