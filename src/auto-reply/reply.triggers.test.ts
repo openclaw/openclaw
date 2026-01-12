@@ -543,7 +543,6 @@ describe("trigger handling", () => {
         },
         makeCfg(home),
       );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(blockReplies.length).toBe(1);
       expect(blockReplies[0]?.text).toBeTruthy();
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
