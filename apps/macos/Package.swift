@@ -13,6 +13,7 @@ let package = Package(
         .library(name: "ClawdbotDiscovery", targets: ["ClawdbotDiscovery"]),
         .executable(name: "Clawdbot", targets: ["Clawdbot"]),
         .executable(name: "clawdbot-mac-discovery", targets: ["ClawdbotDiscoveryCLI"]),
+        .executable(name: "clawdbot-mac-wizard", targets: ["ClawdbotWizardCLI"]),
     ],
     dependencies: [
         .package(url: "https://github.com/orchetect/MenuBarExtraAccess", exact: "1.2.2"),
@@ -79,6 +80,15 @@ let package = Package(
                 "ClawdbotDiscovery",
             ],
             path: "Sources/ClawdbotDiscoveryCLI",
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency"),
+            ]),
+        .executableTarget(
+            name: "ClawdbotWizardCLI",
+            dependencies: [
+                "ClawdbotProtocol",
+            ],
+            path: "Sources/ClawdbotWizardCLI",
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),
