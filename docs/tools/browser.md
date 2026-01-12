@@ -220,6 +220,7 @@ Actions:
 - `clawdbot browser type 23 "hello" --submit`
 - `clawdbot browser press Enter`
 - `clawdbot browser hover 44`
+- `clawdbot browser scrollintoview e12`
 - `clawdbot browser drag 10 11`
 - `clawdbot browser select 9 OptionA OptionB`
 - `clawdbot browser download e12 /tmp/report.pdf`
