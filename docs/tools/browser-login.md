@@ -13,6 +13,22 @@ When a site requires login, **sign in manually** in the **host** browser profile
 
 Do **not** give the model your credentials. Automated logins often trigger anti‑bot defenses and can lock the account.
 
+## Which Chrome profile is used?
+
+Clawdbot controls a **dedicated Chrome profile** (named `clawd`, orange‑tinted UI). This is separate from your daily browser profile.
+
+Two easy ways to access it:
+
+1) **Ask the agent to open the browser** and then log in yourself.
+2) **Open it via CLI**:
+
+```bash
+clawdbot browser start
+clawdbot browser open https://x.com
+```
+
+If you have multiple profiles, pass `--browser-profile <name>` (the default is `clawd`).
+
 ## X/Twitter: recommended flow
 
 - **Read/search/threads:** use the **bird** CLI skill (no browser, stable).
@@ -47,4 +63,3 @@ clawdbot browser open https://x.com --browser-profile clawd --target host
 ```
 
 Or disable sandboxing for the agent that posts updates.
-
