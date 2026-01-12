@@ -199,7 +199,7 @@ export async function runTui(opts: TuiOptions) {
   let isConnected = false;
   let toolsExpanded = false;
   let showThinking = false;
-  const deliverDefault = opts.deliver ?? true;
+  const deliverDefault = opts.deliver ?? false;
   const autoMessage = opts.message?.trim();
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};

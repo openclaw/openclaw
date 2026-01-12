@@ -796,6 +796,8 @@ export async function runOnboardingWizard(
           token: authMode === "token" ? gatewayToken : undefined,
           password:
             authMode === "password" ? baseConfig.gateway?.auth?.password : "",
+          // Safety: onboarding TUI should not auto-deliver to lastProvider/lastTo.
+          deliver: false,
           message: "Wake up, my friend!",
         });
       }

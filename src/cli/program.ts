@@ -5,12 +5,12 @@ import {
   agentsDeleteCommand,
   agentsListCommand,
 } from "../commands/agents.js";
-import { dashboardCommand } from "../commands/dashboard.js";
 import {
   CONFIGURE_WIZARD_SECTIONS,
   configureCommand,
   configureCommandWithSections,
 } from "../commands/configure.js";
+import { dashboardCommand } from "../commands/dashboard.js";
 import { doctorCommand } from "../commands/doctor.js";
 import { healthCommand } from "../commands/health.js";
 import { messageCommand } from "../commands/message.js";

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { dashboardCommand } from "./dashboard.js";
 
@@ -94,7 +94,10 @@ describe("dashboardCommand", () => {
   it("prints SSH hint when browser cannot open", async () => {
     mockSnapshot("shhhh");
     mocks.copyToClipboard.mockResolvedValue(false);
-    mocks.detectBrowserOpenSupport.mockResolvedValue({ ok: false, reason: "ssh" });
+    mocks.detectBrowserOpenSupport.mockResolvedValue({
+      ok: false,
+      reason: "ssh",
+    });
     mocks.formatControlUiSshHint.mockReturnValue("ssh hint");
 
     await dashboardCommand(runtime);
