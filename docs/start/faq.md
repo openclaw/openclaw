@@ -112,6 +112,10 @@ Clawdbot supports **OpenAI Code (Codex)** via OAuth or by reusing your Codex CLI
 
 Bun is supported for faster TypeScript execution, but **WhatsApp requires Node** in this ecosystem. The wizard lets you pick the runtime; choose **Node** if you use WhatsApp.
 
+### Can multiple people use one WhatsApp number with different Clawdbots?
+
+Yes, via **multi‑agent routing**. Bind each sender’s WhatsApp DM to a different `agentId`, so each person gets their own workspace and session store. Replies still come from the **same WhatsApp account**, and DM access control (`whatsapp.dmPolicy` / `whatsapp.allowFrom`) is global per WhatsApp account. See [Multi-Agent Routing](/concepts/multi-agent) and [WhatsApp](/providers/whatsapp).
+
 ### Does Homebrew work on Linux?
 
 Yes. Homebrew supports Linux (Linuxbrew). Quick setup:
