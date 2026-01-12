@@ -32,7 +32,6 @@ import {
   loadSessionEntry,
   readSessionMessages,
   resolveSessionModelRef,
-  resolveSessionStoreKey,
 } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -223,7 +222,9 @@ export const chatHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const { cfg, storePath, store, entry } = loadSessionEntry(p.sessionKey);
+    const { cfg, storePath, store, entry, canonicalKey } = loadSessionEntry(
+      p.sessionKey,
+    );
     const timeoutMs = resolveAgentTimeoutMs({
       cfg,
       overrideMs: p.timeoutMs,
@@ -307,12 +308,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         clientRunId,
       });
 
-      const storeKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: p.sessionKey,
-      });
       if (store) {
-        store[storeKey] = sessionEntry;
+        store[canonicalKey] = sessionEntry;
         if (storePath) {
           await saveSessionStore(storePath, store);
         }

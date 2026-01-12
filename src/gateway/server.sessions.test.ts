@@ -464,4 +464,38 @@ describe("gateway server sessions", () => {
       "agent:work:main",
     ]);
   });
+
+  test("resolves and patches main alias to default agent main key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sessions-"));
+    const storePath = path.join(dir, "sessions.json");
+    testState.sessionStorePath = storePath;
+    testState.agentsConfig = { list: [{ id: "ops", default: true }] };
+    testState.sessionConfig = { mainKey: "work" };
+
+    await fs.writeFile(storePath, JSON.stringify({}, null, 2), "utf-8");
+
+    const { ws } = await startServerWithClient();
+    const resolved = await rpcReq<{ ok: true; key: string }>(
+      ws,
+      "sessions.resolve",
+      { key: "main" },
+    );
+    expect(resolved.ok).toBe(true);
+    expect(resolved.payload?.key).toBe("agent:ops:work");
+
+    const patched = await rpcReq<{ ok: true; key: string }>(
+      ws,
+      "sessions.patch",
+      { key: "main", thinkingLevel: "medium" },
+    );
+    expect(patched.ok).toBe(true);
+    expect(patched.payload?.key).toBe("agent:ops:work");
+
+    const stored = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+      string,
+      { thinkingLevel?: string }
+    >;
+    expect(stored["agent:ops:work"]?.thinkingLevel).toBe("medium");
+    expect(stored.main).toBeUndefined();
+  });
 });

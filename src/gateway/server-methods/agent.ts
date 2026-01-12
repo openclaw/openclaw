@@ -28,7 +28,7 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { loadSessionEntry, resolveSessionStoreKey } from "../session-utils.js";
+import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -146,7 +146,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
 
     if (requestedSessionKey) {
-      const { cfg, storePath, store, entry } =
+      const { cfg, storePath, store, entry, canonicalKey } =
         loadSessionEntry(requestedSessionKey);
       cfgForAgent = cfg;
       const now = Date.now();
@@ -189,10 +189,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
       resolvedSessionId = sessionId;
-      const canonicalSessionKey = resolveSessionStoreKey({
-        cfg,
-        sessionKey: requestedSessionKey,
-      });
+      const canonicalSessionKey = canonicalKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (store) {
