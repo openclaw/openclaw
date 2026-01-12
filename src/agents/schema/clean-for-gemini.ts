@@ -67,6 +67,60 @@ function tryFlattenLiteralAnyOf(
   return null;
 }
 
+const TYPE_UNION_IGNORED_KEYS = new Set([
+  ...UNSUPPORTED_SCHEMA_KEYWORDS,
+  "description",
+  "title",
+  "default",
+]);
+
+function tryFlattenTypeUnion(
+  variants: unknown[],
+): { type: string } | null {
+  if (variants.length === 0) return null;
+
+  const types = new Set<string>();
+  for (const variant of variants) {
+    if (!variant || typeof variant !== "object" || Array.isArray(variant)) {
+      return null;
+    }
+    const record = variant as Record<string, unknown>;
+    const keys = Object.keys(record).filter(
+      (key) => !TYPE_UNION_IGNORED_KEYS.has(key),
+    );
+    if (keys.length !== 1 || keys[0] !== "type") return null;
+
+    const typeValue = record.type;
+    if (typeof typeValue === "string") {
+      types.add(typeValue);
+      continue;
+    }
+    if (
+      Array.isArray(typeValue) &&
+      typeValue.every((entry) => typeof entry === "string")
+    ) {
+      for (const entry of typeValue) types.add(entry);
+      continue;
+    }
+    return null;
+  }
+
+  if (types.size === 0) return null;
+
+  const pickType = () => {
+    if (types.has("string")) return "string";
+    if (types.has("number")) return "number";
+    if (types.has("integer")) return "number";
+    if (types.has("boolean")) return "boolean";
+    if (types.has("object")) return "object";
+    if (types.has("array")) return "array";
+    const nonNull = Array.from(types).find((value) => value !== "null");
+    return nonNull ?? "string";
+  };
+
+  return { type: pickType() };
+}
+
 type SchemaDefs = Map<string, unknown>;
 
 function extendSchemaDefs(
@@ -166,6 +220,16 @@ function cleanSchemaForGeminiWithDefs(
 
   const hasAnyOf = "anyOf" in obj && Array.isArray(obj.anyOf);
   const hasOneOf = "oneOf" in obj && Array.isArray(obj.oneOf);
+  const cleanedAnyOf = hasAnyOf
+    ? (obj.anyOf as unknown[]).map((variant) =>
+        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+      )
+    : undefined;
+  const cleanedOneOf = hasOneOf
+    ? (obj.oneOf as unknown[]).map((variant) =>
+        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+      )
+    : undefined;
 
   if (hasAnyOf) {
     const flattened = tryFlattenLiteralAnyOf(obj.anyOf as unknown[]);
@@ -174,6 +238,15 @@ function cleanSchemaForGeminiWithDefs(
         type: flattened.type,
         enum: flattened.enum,
       };
+      for (const key of ["description", "title", "default"]) {
+        if (key in obj && obj[key] !== undefined) result[key] = obj[key];
+      }
+      return result;
+    }
+
+    const flattenedTypes = tryFlattenTypeUnion(cleanedAnyOf ?? []);
+    if (flattenedTypes) {
+      const result: Record<string, unknown> = { ...flattenedTypes };
       for (const key of ["description", "title", "default"]) {
         if (key in obj && obj[key] !== undefined) result[key] = obj[key];
       }
@@ -188,6 +261,15 @@ function cleanSchemaForGeminiWithDefs(
         type: flattened.type,
         enum: flattened.enum,
       };
+      for (const key of ["description", "title", "default"]) {
+        if (key in obj && obj[key] !== undefined) result[key] = obj[key];
+      }
+      return result;
+    }
+
+    const flattenedTypes = tryFlattenTypeUnion(cleanedOneOf ?? []);
+    if (flattenedTypes) {
+      const result: Record<string, unknown> = { ...flattenedTypes };
       for (const key of ["description", "title", "default"]) {
         if (key in obj && obj[key] !== undefined) result[key] = obj[key];
       }
@@ -218,13 +300,17 @@ function cleanSchemaForGeminiWithDefs(
     } else if (key === "items" && value && typeof value === "object") {
       cleaned[key] = cleanSchemaForGeminiWithDefs(value, nextDefs, refStack);
     } else if (key === "anyOf" && Array.isArray(value)) {
-      cleaned[key] = value.map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      );
+      cleaned[key] =
+        cleanedAnyOf ??
+        value.map((variant) =>
+          cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+        );
     } else if (key === "oneOf" && Array.isArray(value)) {
-      cleaned[key] = value.map((variant) =>
-        cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
-      );
+      cleaned[key] =
+        cleanedOneOf ??
+        value.map((variant) =>
+          cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),
+        );
     } else if (key === "allOf" && Array.isArray(value)) {
       cleaned[key] = value.map((variant) =>
         cleanSchemaForGeminiWithDefs(variant, nextDefs, refStack),

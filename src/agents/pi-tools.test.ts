@@ -103,6 +103,32 @@ describe("createClawdbotCodingTools", () => {
     });
   });
 
+  it("flattens simple anyOf/oneOf unions into single types", () => {
+    const cleaned = __testing.cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
+        count: { oneOf: [{ type: "string" }, { type: "number" }] },
+      },
+    }) as {
+      properties?: Record<string, unknown>;
+    };
+
+    const parentId = cleaned.properties?.parentId as
+      | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
+      | undefined;
+    expect(parentId?.anyOf).toBeUndefined();
+    expect(parentId?.oneOf).toBeUndefined();
+    expect(parentId?.type).toBe("string");
+
+    const count = cleaned.properties?.count as
+      | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
+      | undefined;
+    expect(count?.anyOf).toBeUndefined();
+    expect(count?.oneOf).toBeUndefined();
+    expect(count?.type).toBe("string");
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
     const toolNames = [
