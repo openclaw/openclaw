@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 
 import sharp from "sharp";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ClawdbotConfig } from "../config/config.js";
 import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
@@ -353,6 +354,71 @@ describe("createClawdbotCodingTools", () => {
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  describe("Claude/Gemini alias support", () => {
+    it("adds Claude-style aliases to schemas without dropping metadata", () => {
+      const base: AgentTool = {
+        name: "write",
+        description: "test",
+        parameters: {
+          type: "object",
+          required: ["path", "content"],
+          properties: {
+            path: { type: "string", description: "Path" },
+            content: { type: "string", description: "Body" },
+          },
+        },
+        execute: vi.fn(),
+      };
+
+      const patched = __testing.patchToolSchemaForClaudeCompatibility(base);
+      const params = patched.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      const props = params.properties ?? {};
+
+      expect(props.file_path).toEqual(props.path);
+      expect(params.required ?? []).not.toContain("path");
+      expect(params.required ?? []).not.toContain("file_path");
+    });
+
+    it("normalizes file_path to path and enforces required groups at runtime", async () => {
+      const execute = vi.fn(async (_id, args) => args);
+      const tool: AgentTool = {
+        name: "write",
+        description: "test",
+        parameters: {
+          type: "object",
+          required: ["path", "content"],
+          properties: {
+            path: { type: "string" },
+            content: { type: "string" },
+          },
+        },
+        execute,
+      };
+
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["path", "file_path"] },
+      ]);
+
+      await wrapped.execute("tool-1", { file_path: "foo.txt", content: "x" });
+      expect(execute).toHaveBeenCalledWith(
+        "tool-1",
+        { path: "foo.txt", content: "x" },
+        undefined,
+        undefined,
+      );
+
+      await expect(
+        wrapped.execute("tool-2", { content: "x" }),
+      ).rejects.toThrow(/Missing required parameter/);
+      await expect(
+        wrapped.execute("tool-3", { file_path: "   ", content: "x" }),
+      ).rejects.toThrow(/Missing required parameter/);
+    });
   });
 
   it("filters tools by sandbox policy", () => {

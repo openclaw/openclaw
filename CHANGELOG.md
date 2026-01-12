@@ -40,6 +40,7 @@
 - Auto-reply: restore 300-char heartbeat ack limit and keep >300 char replies instead of dropping them; adjust long heartbeat test content accordingly.
 - Gateway: `agents.list` now honors explicit `agents.list` config without pulling stray agents from disk; GitHub Copilot CLI auth path uses the updated provider build.
 - Google: apply patched pi-ai `google-gemini-cli` function call handling (strips ids) after upgrading to pi-ai 0.43.0.
+- Tools: allow Gemini/Claude-style aliases (`file_path`, `old_string`, `new_string`) in read/write/edit schemas while still enforcing required params at runtime to avoid validation loops.
 - Auto-reply: elevated/reasoning toggles now enqueue system events so the model sees the mode change immediately.
 - Tools: keep `image` available in sandbox and fail over when image models return empty output (fixes “(no text returned)”).
 - Discord: add per-channel `autoThread` to auto-create threads for top-level messages. (#800) — thanks @davidguttman.

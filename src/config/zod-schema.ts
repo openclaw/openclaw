@@ -241,30 +241,18 @@ const ExecutableTokenSchema = z
   .string()
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
+const ToolsAudioTranscriptionSchema = z
+  .object({
+    args: z.array(z.string()).optional(),
+    timeoutSeconds: z.number().int().positive().optional(),
+  })
+  .optional();
+
 const NativeCommandsSettingSchema = z.union([z.boolean(), z.literal("auto")]);
 
 const ProviderCommandsSchema = z
   .object({
     native: NativeCommandsSettingSchema.optional(),
-  })
-  .optional();
-
-const CommandsSchema = z
-  .object({
-    native: NativeCommandsSettingSchema.optional().default("auto"),
-    text: z.boolean().optional(),
-    config: z.boolean().optional(),
-    debug: z.boolean().optional(),
-    restart: z.boolean().optional(),
-    useAccessGroups: z.boolean().optional(),
-  })
-  .optional()
-  .default({ native: "auto" });
-
-const ToolsAudioTranscriptionSchema = z
-  .object({
-    args: z.array(z.string()).optional(),
-    timeoutSeconds: z.number().int().positive().optional(),
   })
   .optional();
 
@@ -732,6 +720,18 @@ const MessagesSchema = z
   })
   .optional();
 
+const CommandsSchema = z
+  .object({
+    native: NativeCommandsSettingSchema.optional().default("auto"),
+    text: z.boolean().optional(),
+    config: z.boolean().optional(),
+    debug: z.boolean().optional(),
+    restart: z.boolean().optional(),
+    useAccessGroups: z.boolean().optional(),
+  })
+  .optional()
+  .default({ native: "auto" });
+
 const HeartbeatSchema = z
   .object({
     every: z.string().optional(),
@@ -801,7 +801,6 @@ const SandboxDockerSchema = z
     apparmorProfile: z.string().optional(),
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
-    binds: z.array(z.string()).optional(),
   })
   .optional();
 

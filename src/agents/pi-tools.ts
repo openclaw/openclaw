@@ -429,6 +429,96 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   };
 }
 
+type RequiredParamGroup = {
+  keys: string[];
+  allowEmpty?: boolean;
+  label?: string;
+};
+
+const CLAUDE_PARAM_GROUPS = {
+  read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
+  write: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
+  edit: [
+    { keys: ["path", "file_path"], label: "path (path or file_path)" },
+    { keys: ["oldText", "old_string"], label: "oldText (oldText or old_string)" },
+    { keys: ["newText", "new_string"], label: "newText (newText or new_string)" },
+  ],
+} as const;
+
+function patchToolSchemaForClaudeCompatibility(
+  tool: AnyAgentTool,
+): AnyAgentTool {
+  const schema =
+    tool.parameters && typeof tool.parameters === "object"
+      ? (tool.parameters as Record<string, unknown>)
+      : undefined;
+
+  if (!schema || !schema.properties || typeof schema.properties !== "object") {
+    return tool;
+  }
+
+  const properties = { ...(schema.properties as Record<string, unknown>) };
+  const required = Array.isArray(schema.required)
+    ? schema.required.filter((key): key is string => typeof key === "string")
+    : [];
+  let changed = false;
+
+  const aliasPairs: Array<{ original: string; alias: string }> = [
+    { original: "path", alias: "file_path" },
+    { original: "oldText", alias: "old_string" },
+    { original: "newText", alias: "new_string" },
+  ];
+
+  for (const { original, alias } of aliasPairs) {
+    if (!(original in properties)) continue;
+    if (!(alias in properties)) {
+      properties[alias] = properties[original];
+      changed = true;
+    }
+    const idx = required.indexOf(original);
+    if (idx !== -1) {
+      required.splice(idx, 1);
+      changed = true;
+    }
+  }
+
+  if (!changed) return tool;
+
+  return {
+    ...tool,
+    parameters: {
+      ...schema,
+      properties,
+      ...(required.length > 0 ? { required } : {}),
+    },
+  };
+}
+
+function assertRequiredParams(
+  record: Record<string, unknown> | undefined,
+  groups: readonly RequiredParamGroup[],
+  toolName: string,
+): void {
+  if (!record || typeof record !== "object") {
+    throw new Error(`Missing parameters for ${toolName}`);
+  }
+
+  for (const group of groups) {
+    const satisfied = group.keys.some((key) => {
+      if (!(key in record)) return false;
+      const value = record[key];
+      if (typeof value !== "string") return false;
+      if (group.allowEmpty) return true;
+      return value.trim().length > 0;
+    });
+
+    if (!satisfied) {
+      const label = group.label ?? group.keys.join(" or ");
+      throw new Error(`Missing required parameter: ${label}`);
+    }
+  }
+}
+
 function createSandboxedReadTool(root: string) {
   const base = createReadTool(root);
   return wrapSandboxPathGuard(createClawdbotReadTool(base), root);
@@ -436,12 +526,18 @@ function createSandboxedReadTool(root: string) {
 
 function createSandboxedWriteTool(root: string) {
   const base = createWriteTool(root);
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base), root);
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
+    root,
+  );
 }
 
 function createSandboxedEditTool(root: string) {
   const base = createEditTool(root);
-  return wrapSandboxPathGuard(wrapToolParamNormalization(base), root);
+  return wrapSandboxPathGuard(
+    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit),
+    root,
+  );
 }
 // Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
 // Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
@@ -471,26 +567,44 @@ function normalizeToolParams(
 }
 
 // Generic wrapper to normalize parameters for any tool
-function wrapToolParamNormalization(tool: AnyAgentTool): AnyAgentTool {
+function wrapToolParamNormalization(
+  tool: AnyAgentTool,
+  requiredParamGroups?: readonly RequiredParamGroup[],
+): AnyAgentTool {
+  const patched = patchToolSchemaForClaudeCompatibility(tool);
   return {
-    ...tool,
+    ...patched,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const normalized = normalizeToolParams(params);
+      const record =
+        normalized ??
+        (params && typeof params === "object"
+          ? (params as Record<string, unknown>)
+          : undefined);
+      if (requiredParamGroups?.length) {
+        assertRequiredParams(record, requiredParamGroups, tool.name);
+      }
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
     },
   };
 }
 function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
+  const patched = patchToolSchemaForClaudeCompatibility(base);
   return {
-    ...base,
+    ...patched,
     execute: async (toolCallId, params, signal) => {
       const normalized = normalizeToolParams(params);
+      const record =
+        normalized ??
+        (params && typeof params === "object"
+          ? (params as Record<string, unknown>)
+          : undefined);
+      assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
       const result = (await base.execute(
         toolCallId,
         normalized ?? params,
         signal,
       )) as AgentToolResult<unknown>;
-      const record = normalized ?? (params as Record<string, unknown>);
       const filePath =
         typeof record?.path === "string" ? String(record.path) : "<unknown>";
       const normalizedResult = await normalizeReadImageResult(result, filePath);
@@ -501,6 +615,10 @@ function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
 
 export const __testing = {
   cleanToolSchemaForGemini,
+  normalizeToolParams,
+  patchToolSchemaForClaudeCompatibility,
+  wrapToolParamNormalization,
+  assertRequiredParams,
 } as const;
 
 function throwAbortError(): never {
@@ -618,12 +736,22 @@ export function createClawdbotCodingTools(options?: {
     if (tool.name === "write") {
       if (sandboxRoot) return [];
       // Wrap with param normalization for Claude Code compatibility
-      return [wrapToolParamNormalization(createWriteTool(workspaceRoot))];
+      return [
+        wrapToolParamNormalization(
+          createWriteTool(workspaceRoot),
+          CLAUDE_PARAM_GROUPS.write,
+        ),
+      ];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) return [];
       // Wrap with param normalization for Claude Code compatibility
-      return [wrapToolParamNormalization(createEditTool(workspaceRoot))];
+      return [
+        wrapToolParamNormalization(
+          createEditTool(workspaceRoot),
+          CLAUDE_PARAM_GROUPS.edit,
+        ),
+      ];
     }
     return [tool as AnyAgentTool];
   });
