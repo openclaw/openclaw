@@ -1,7 +1,13 @@
 FROM node:22-bookworm-slim
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends \
+RUN set -eux; \
+  for attempt in 1 2 3; do \
+    if apt-get update -o Acquire::Retries=3; then break; fi; \
+    echo "apt-get update failed (attempt ${attempt})" >&2; \
+    if [ "${attempt}" -eq 3 ]; then exit 1; fi; \
+    sleep 3; \
+  done; \
+  apt-get -o Acquire::Retries=3 install -y --no-install-recommends \
     bash \
     ca-certificates \
     curl \
