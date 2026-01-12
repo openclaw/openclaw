@@ -151,40 +151,27 @@ const CONFIGURE_SECTION_OPTIONS: {
   },
 ];
 
-async function promptConfigureSections(
+type ConfigureSectionChoice = WizardSection | "__continue";
+
+async function promptConfigureSection(
   runtime: RuntimeEnv,
-): Promise<WizardSection[]> {
-  const selected: WizardSection[] = [];
-  const continueValue = "__continue";
-
-  while (true) {
-    const choice = guardCancel(
-      await select<string>({
-        message: "Select sections to configure",
-        options: [
-          ...CONFIGURE_SECTION_OPTIONS,
-          {
-            value: continueValue,
-            label: "Continue",
-            hint: selected.length === 0 ? "Skip for now" : "Run selected",
-          },
-        ],
-        initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
-      }),
-      runtime,
-    );
-
-    if (choice === continueValue) {
-      break;
-    }
-
-    const section = choice as WizardSection;
-    if (!selected.includes(section)) {
-      selected.push(section);
-    }
-  }
-
-  return selected;
+  hasSelection: boolean,
+): Promise<ConfigureSectionChoice> {
+  return guardCancel(
+    await select<ConfigureSectionChoice>({
+      message: "Select sections to configure",
+      options: [
+        ...CONFIGURE_SECTION_OPTIONS,
+        {
+          value: "__continue",
+          label: "Continue",
+          hint: hasSelection ? "Done" : "Skip for now",
+        },
+      ],
+      initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
+    }),
+    runtime,
+  );
 }
 
 async function promptGatewayConfig(
@@ -658,136 +645,271 @@ export async function runConfigureWizard(
       return;
     }
 
-    const selected = opts.sections
-      ? opts.sections
-      : await promptConfigureSections(runtime);
-
-    if (!selected || selected.length === 0) {
-      outro("No changes selected.");
-      return;
-    }
-
     let nextConfig = { ...baseConfig };
     let workspaceDir =
       nextConfig.agents?.defaults?.workspace ??
       baseConfig.agents?.defaults?.workspace ??
       DEFAULT_WORKSPACE;
     let gatewayPort = resolveGatewayPort(baseConfig);
-    let gatewayToken: string | undefined;
+    let gatewayToken: string | undefined =
+      nextConfig.gateway?.auth?.token ??
+      baseConfig.gateway?.auth?.token ??
+      process.env.CLAWDBOT_GATEWAY_TOKEN;
 
-    if (selected.includes("workspace")) {
-      const workspaceInput = guardCancel(
-        await text({
-          message: "Workspace directory",
-          initialValue: workspaceDir,
-        }),
-        runtime,
-      );
-      workspaceDir = resolveUserPath(
-        String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE,
-      );
-      nextConfig = {
-        ...nextConfig,
-        agents: {
-          ...nextConfig.agents,
-          defaults: {
-            ...nextConfig.agents?.defaults,
-            workspace: workspaceDir,
-          },
-        },
-      };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime);
-    }
+    const persistConfig = async () => {
+      nextConfig = applyWizardMetadata(nextConfig, {
+        command: opts.command,
+        mode,
+      });
+      await writeConfigFile(nextConfig);
+      runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
+    };
 
-    if (selected.includes("model")) {
-      nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
-    }
-
-    if (selected.includes("gateway")) {
-      const gateway = await promptGatewayConfig(nextConfig, runtime);
-      nextConfig = gateway.config;
-      gatewayPort = gateway.port;
-      gatewayToken = gateway.token;
-    }
-
-    if (selected.includes("providers")) {
-      const providerMode = guardCancel(
-        await select({
-          message: "Providers",
-          options: [
-            {
-              value: "configure",
-              label: "Configure/link",
-              hint: "Add/update providers; disable unselected accounts",
-            },
-            {
-              value: "remove",
-              label: "Remove provider config",
-              hint: "Delete provider tokens/settings from clawdbot.json",
-            },
-          ],
-          initialValue: "configure",
-        }),
-        runtime,
-      ) as ProvidersWizardMode;
-
-      if (providerMode === "configure") {
-        nextConfig = await setupProviders(nextConfig, runtime, prompter, {
-          allowDisable: true,
-          allowSignalInstall: true,
-        });
-      } else {
-        nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+    if (opts.sections) {
+      const selected = opts.sections;
+      if (!selected || selected.length === 0) {
+        outro("No changes selected.");
+        return;
       }
-    }
 
-    if (selected.includes("skills")) {
-      const wsDir = resolveUserPath(workspaceDir);
-      nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
-    }
-
-    nextConfig = applyWizardMetadata(nextConfig, {
-      command: opts.command,
-      mode,
-    });
-    await writeConfigFile(nextConfig);
-    runtime.log(`Updated ${CONFIG_PATH_CLAWDBOT}`);
-
-    if (selected.includes("daemon")) {
-      if (!selected.includes("gateway")) {
-        const portInput = guardCancel(
+      if (selected.includes("workspace")) {
+        const workspaceInput = guardCancel(
           await text({
-            message: "Gateway port for daemon install",
-            initialValue: String(gatewayPort),
-            validate: (value) =>
-              Number.isFinite(Number(value)) ? undefined : "Invalid port",
+            message: "Workspace directory",
+            initialValue: workspaceDir,
           }),
           runtime,
         );
-        gatewayPort = Number.parseInt(String(portInput), 10);
+        workspaceDir = resolveUserPath(
+          String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE,
+        );
+        nextConfig = {
+          ...nextConfig,
+          agents: {
+            ...nextConfig.agents,
+            defaults: {
+              ...nextConfig.agents?.defaults,
+              workspace: workspaceDir,
+            },
+          },
+        };
+        await ensureWorkspaceAndSessions(workspaceDir, runtime);
       }
 
-      await maybeInstallDaemon({
-        runtime,
-        port: gatewayPort,
-        gatewayToken,
-      });
-    }
+      if (selected.includes("model")) {
+        nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
+      }
 
-    if (selected.includes("health")) {
-      await sleep(1000);
-      try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
-      } catch (err) {
-        runtime.error(formatHealthCheckFailure(err));
-        note(
-          [
-            "Docs:",
-            "https://docs.clawd.bot/gateway/health",
-            "https://docs.clawd.bot/gateway/troubleshooting",
-          ].join("\n"),
-          "Health check help",
-        );
+      if (selected.includes("gateway")) {
+        const gateway = await promptGatewayConfig(nextConfig, runtime);
+        nextConfig = gateway.config;
+        gatewayPort = gateway.port;
+        gatewayToken = gateway.token;
+      }
+
+      if (selected.includes("providers")) {
+        const providerMode = guardCancel(
+          await select({
+            message: "Providers",
+            options: [
+              {
+                value: "configure",
+                label: "Configure/link",
+                hint: "Add/update providers; disable unselected accounts",
+              },
+              {
+                value: "remove",
+                label: "Remove provider config",
+                hint: "Delete provider tokens/settings from clawdbot.json",
+              },
+            ],
+            initialValue: "configure",
+          }),
+          runtime,
+        ) as ProvidersWizardMode;
+
+        if (providerMode === "configure") {
+          nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+            allowDisable: true,
+            allowSignalInstall: true,
+          });
+        } else {
+          nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+        }
+      }
+
+      if (selected.includes("skills")) {
+        const wsDir = resolveUserPath(workspaceDir);
+        nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+      }
+
+      await persistConfig();
+
+      if (selected.includes("daemon")) {
+        if (!selected.includes("gateway")) {
+          const portInput = guardCancel(
+            await text({
+              message: "Gateway port for daemon install",
+              initialValue: String(gatewayPort),
+              validate: (value) =>
+                Number.isFinite(Number(value)) ? undefined : "Invalid port",
+            }),
+            runtime,
+          );
+          gatewayPort = Number.parseInt(String(portInput), 10);
+        }
+
+        await maybeInstallDaemon({
+          runtime,
+          port: gatewayPort,
+          gatewayToken,
+        });
+      }
+
+      if (selected.includes("health")) {
+        await sleep(1000);
+        try {
+          await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+        } catch (err) {
+          runtime.error(formatHealthCheckFailure(err));
+          note(
+            [
+              "Docs:",
+              "https://docs.clawd.bot/gateway/health",
+              "https://docs.clawd.bot/gateway/troubleshooting",
+            ].join("\n"),
+            "Health check help",
+          );
+        }
+      }
+    } else {
+      let ranSection = false;
+      let didConfigureGateway = false;
+
+      while (true) {
+        const choice = await promptConfigureSection(runtime, ranSection);
+        if (choice === "__continue") break;
+        ranSection = true;
+
+        if (choice === "workspace") {
+          const workspaceInput = guardCancel(
+            await text({
+              message: "Workspace directory",
+              initialValue: workspaceDir,
+            }),
+            runtime,
+          );
+          workspaceDir = resolveUserPath(
+            String(workspaceInput ?? "").trim() || DEFAULT_WORKSPACE,
+          );
+          nextConfig = {
+            ...nextConfig,
+            agents: {
+              ...nextConfig.agents,
+              defaults: {
+                ...nextConfig.agents?.defaults,
+                workspace: workspaceDir,
+              },
+            },
+          };
+          await ensureWorkspaceAndSessions(workspaceDir, runtime);
+          await persistConfig();
+        }
+
+        if (choice === "model") {
+          nextConfig = await promptAuthConfig(nextConfig, runtime, prompter);
+          await persistConfig();
+        }
+
+        if (choice === "gateway") {
+          const gateway = await promptGatewayConfig(nextConfig, runtime);
+          nextConfig = gateway.config;
+          gatewayPort = gateway.port;
+          gatewayToken = gateway.token;
+          didConfigureGateway = true;
+          await persistConfig();
+        }
+
+        if (choice === "providers") {
+          const providerMode = guardCancel(
+            await select({
+              message: "Providers",
+              options: [
+                {
+                  value: "configure",
+                  label: "Configure/link",
+                  hint: "Add/update providers; disable unselected accounts",
+                },
+                {
+                  value: "remove",
+                  label: "Remove provider config",
+                  hint: "Delete provider tokens/settings from clawdbot.json",
+                },
+              ],
+              initialValue: "configure",
+            }),
+            runtime,
+          ) as ProvidersWizardMode;
+
+          if (providerMode === "configure") {
+            nextConfig = await setupProviders(nextConfig, runtime, prompter, {
+              allowDisable: true,
+              allowSignalInstall: true,
+            });
+          } else {
+            nextConfig = await removeProviderConfigWizard(nextConfig, runtime);
+          }
+          await persistConfig();
+        }
+
+        if (choice === "skills") {
+          const wsDir = resolveUserPath(workspaceDir);
+          nextConfig = await setupSkills(nextConfig, wsDir, runtime, prompter);
+          await persistConfig();
+        }
+
+        if (choice === "daemon") {
+          if (!didConfigureGateway) {
+            const portInput = guardCancel(
+              await text({
+                message: "Gateway port for daemon install",
+                initialValue: String(gatewayPort),
+                validate: (value) =>
+                  Number.isFinite(Number(value)) ? undefined : "Invalid port",
+              }),
+              runtime,
+            );
+            gatewayPort = Number.parseInt(String(portInput), 10);
+          }
+
+          await maybeInstallDaemon({
+            runtime,
+            port: gatewayPort,
+            gatewayToken,
+          });
+        }
+
+        if (choice === "health") {
+          await sleep(1000);
+          try {
+            await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+          } catch (err) {
+            runtime.error(formatHealthCheckFailure(err));
+            note(
+              [
+                "Docs:",
+                "https://docs.clawd.bot/gateway/health",
+                "https://docs.clawd.bot/gateway/troubleshooting",
+              ].join("\n"),
+              "Health check help",
+            );
+          }
+        }
+      }
+
+      if (!ranSection) {
+        outro("No changes selected.");
+        return;
       }
     }
 
