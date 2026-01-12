@@ -69,26 +69,6 @@ Equivalent env vars (useful for automation):
 - `CLAWDBOT_NO_ONBOARD=1`
 - `SHARP_IGNORE_GLOBAL_LIBVIPS=0|1` (default: `1`; avoids `sharp` building against system libvips)
 
-## Install from GitHub (from source)
-
-Use this if you want a source checkout you can edit, or you prefer `clawdbot update`.
-
-```bash
-curl -fsSL https://clawd.bot/install.sh | bash -s -- --install-method git --no-onboard
-```
-
-What it does:
-
-- Clones `https://github.com/clawdbot/clawdbot.git` into `~/clawdbot` (or `--git-dir`)
-- Runs `pnpm install`, `pnpm ui:build` (best-effort), and `pnpm build`
-- Adds a wrapper at `~/.local/bin/clawdbot` pointing at `<checkout>/dist/entry.js`
-
-Update later:
-
-```bash
-clawdbot update --restart
-```
-
 ## Global install (manual)
 
 If you already have Node:
