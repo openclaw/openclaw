@@ -61,6 +61,7 @@
 - Agents: stop pre-creating session transcripts so first user messages persist in JSONL history.
 - Auto-reply: align `/think` default display with model reasoning defaults. (#751) — thanks @gabriel-trigo.
 - Auto-reply: flush block reply buffers on tool boundaries. (#750) — thanks @sebslight.
+- Auto-reply: allow sender fallback for command authorization when `SenderId` is empty (WhatsApp self-chat). (#755) — thanks @juanpablodlc.
 - Heartbeat: refresh prompt text for updated defaults.
 - Agents/Tools: use PowerShell on Windows to capture system utility output. (#748) — thanks @myfunc.
 - Docker: tolerate unset optional env vars in docker-setup.sh under strict mode. (#725) — thanks @petradonka.

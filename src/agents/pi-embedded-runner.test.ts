@@ -726,7 +726,8 @@ describe("runEmbeddedPiAgent", () => {
     const messages = await readSessionMessages(sessionFile);
     const firstUserIndex = messages.findIndex(
       (message) =>
-        message?.role === "user" && textFromContent(message.content) === "hello",
+        message?.role === "user" &&
+        textFromContent(message.content) === "hello",
     );
     const firstAssistantIndex = messages.findIndex(
       (message) => message?.role === "assistant",
@@ -836,7 +837,8 @@ describe("runEmbeddedPiAgent", () => {
     );
     const newUserIndex = messages.findIndex(
       (message) =>
-        message?.role === "user" && textFromContent(message.content) === "hello",
+        message?.role === "user" &&
+        textFromContent(message.content) === "hello",
     );
     const newAssistantIndex = messages.findIndex(
       (message, index) => index > newUserIndex && message?.role === "assistant",
@@ -887,10 +889,12 @@ describe("runEmbeddedPiAgent", () => {
     const messages = await readSessionMessages(sessionFile);
     const firstUserIndex = messages.findIndex(
       (message) =>
-        message?.role === "user" && textFromContent(message.content) === "first",
+        message?.role === "user" &&
+        textFromContent(message.content) === "first",
     );
     const firstAssistantIndex = messages.findIndex(
-      (message, index) => index > firstUserIndex && message?.role === "assistant",
+      (message, index) =>
+        index > firstUserIndex && message?.role === "assistant",
     );
     const secondUserIndex = messages.findIndex(
       (message) =>
