@@ -1680,6 +1680,7 @@ export const ClawdbotSchema = z
       })
       .optional(),
   })
+  .passthrough()
   .superRefine((cfg, ctx) => {
     const agents = cfg.agents?.list ?? [];
     if (agents.length === 0) return;
