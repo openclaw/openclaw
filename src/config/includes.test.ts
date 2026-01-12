@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
@@ -6,6 +8,25 @@ import {
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
+
+const ROOT_DIR = path.parse(process.cwd()).root;
+const CONFIG_DIR = path.join(ROOT_DIR, "config");
+const ETC_CLAWDBOT_DIR = path.join(ROOT_DIR, "etc", "clawdbot");
+const SHARED_DIR = path.join(ROOT_DIR, "shared");
+
+const DEFAULT_BASE_PATH = path.join(CONFIG_DIR, "clawdbot.json");
+
+function configPath(...parts: string[]) {
+  return path.join(CONFIG_DIR, ...parts);
+}
+
+function etcClawdbotPath(...parts: string[]) {
+  return path.join(ETC_CLAWDBOT_DIR, ...parts);
+}
+
+function sharedPath(...parts: string[]) {
+  return path.join(SHARED_DIR, ...parts);
+}
 
 function createMockResolver(files: Record<string, unknown>): IncludeResolver {
   return {
@@ -22,7 +43,7 @@ function createMockResolver(files: Record<string, unknown>): IncludeResolver {
 function resolve(
   obj: unknown,
   files: Record<string, unknown> = {},
-  basePath = "/config/clawdbot.json",
+  basePath = DEFAULT_BASE_PATH,
 ) {
   return resolveConfigIncludes(obj, basePath, createMockResolver(files));
 }
@@ -45,7 +66,7 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("resolves single file $include", () => {
-    const files = { "/config/agents.json": { list: [{ id: "main" }] } };
+    const files = { [configPath("agents.json")]: { list: [{ id: "main" }] } };
     const obj = { agents: { $include: "./agents.json" } };
     expect(resolve(obj, files)).toEqual({
       agents: { list: [{ id: "main" }] },
@@ -53,8 +74,9 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("resolves absolute path $include", () => {
-    const files = { "/etc/clawdbot/agents.json": { list: [{ id: "main" }] } };
-    const obj = { agents: { $include: "/etc/clawdbot/agents.json" } };
+    const absolute = etcClawdbotPath("agents.json");
+    const files = { [absolute]: { list: [{ id: "main" }] } };
+    const obj = { agents: { $include: absolute } };
     expect(resolve(obj, files)).toEqual({
       agents: { list: [{ id: "main" }] },
     });
@@ -62,8 +84,8 @@ describe("resolveConfigIncludes", () => {
 
   it("resolves array $include with deep merge", () => {
     const files = {
-      "/config/a.json": { "group-a": ["agent1"] },
-      "/config/b.json": { "group-b": ["agent2"] },
+      [configPath("a.json")]: { "group-a": ["agent1"] },
+      [configPath("b.json")]: { "group-b": ["agent2"] },
     };
     const obj = { broadcast: { $include: ["./a.json", "./b.json"] } };
     expect(resolve(obj, files)).toEqual({
@@ -76,8 +98,8 @@ describe("resolveConfigIncludes", () => {
 
   it("deep merges overlapping keys in array $include", () => {
     const files = {
-      "/config/a.json": { agents: { defaults: { workspace: "~/a" } } },
-      "/config/b.json": { agents: { list: [{ id: "main" }] } },
+      [configPath("a.json")]: { agents: { defaults: { workspace: "~/a" } } },
+      [configPath("b.json")]: { agents: { list: [{ id: "main" }] } },
     };
     const obj = { $include: ["./a.json", "./b.json"] };
     expect(resolve(obj, files)).toEqual({
@@ -89,19 +111,19 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("merges $include with sibling keys", () => {
-    const files = { "/config/base.json": { a: 1, b: 2 } };
+    const files = { [configPath("base.json")]: { a: 1, b: 2 } };
     const obj = { $include: "./base.json", c: 3 };
     expect(resolve(obj, files)).toEqual({ a: 1, b: 2, c: 3 });
   });
 
   it("sibling keys override included values", () => {
-    const files = { "/config/base.json": { a: 1, b: 2 } };
+    const files = { [configPath("base.json")]: { a: 1, b: 2 } };
     const obj = { $include: "./base.json", b: 99 };
     expect(resolve(obj, files)).toEqual({ a: 1, b: 99 });
   });
 
   it("throws when sibling keys are used with non-object includes", () => {
-    const files = { "/config/list.json": ["a", "b"] };
+    const files = { [configPath("list.json")]: ["a", "b"] };
     const obj = { $include: "./list.json", extra: true };
     expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
     expect(() => resolve(obj, files)).toThrow(
@@ -110,7 +132,7 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("throws when sibling keys are used with primitive includes", () => {
-    const files = { "/config/value.json": "hello" };
+    const files = { [configPath("value.json")]: "hello" };
     const obj = { $include: "./value.json", extra: true };
     expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
     expect(() => resolve(obj, files)).toThrow(
@@ -120,8 +142,8 @@ describe("resolveConfigIncludes", () => {
 
   it("resolves nested includes", () => {
     const files = {
-      "/config/level1.json": { nested: { $include: "./level2.json" } },
-      "/config/level2.json": { deep: "value" },
+      [configPath("level1.json")]: { nested: { $include: "./level2.json" } },
+      [configPath("level2.json")]: { deep: "value" },
     };
     const obj = { $include: "./level1.json" };
     expect(resolve(obj, files)).toEqual({
@@ -142,20 +164,22 @@ describe("resolveConfigIncludes", () => {
     };
     const obj = { $include: "./bad.json" };
     expect(() =>
-      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
+      resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
     ).toThrow(ConfigIncludeError);
     expect(() =>
-      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver),
+      resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
     ).toThrow(/Failed to parse include file/);
   });
 
   it("throws CircularIncludeError for circular includes", () => {
+    const aPath = configPath("a.json");
+    const bPath = configPath("b.json");
     const resolver: IncludeResolver = {
       readFile: (filePath: string) => {
-        if (filePath === "/config/a.json") {
+        if (filePath === aPath) {
           return JSON.stringify({ $include: "./b.json" });
         }
-        if (filePath === "/config/b.json") {
+        if (filePath === bPath) {
           return JSON.stringify({ $include: "./a.json" });
         }
         throw new Error(`Unknown file: ${filePath}`);
@@ -164,21 +188,17 @@ describe("resolveConfigIncludes", () => {
     };
     const obj = { $include: "./a.json" };
     try {
-      resolveConfigIncludes(obj, "/config/clawdbot.json", resolver);
+      resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver);
       throw new Error("expected circular include error");
     } catch (err) {
       expect(err).toBeInstanceOf(CircularIncludeError);
       const circular = err as CircularIncludeError;
       expect(circular.chain).toEqual(
-        expect.arrayContaining([
-          "/config/clawdbot.json",
-          "/config/a.json",
-          "/config/b.json",
-        ]),
+        expect.arrayContaining([DEFAULT_BASE_PATH, aPath, bPath]),
       );
       expect(circular.message).toMatch(/Circular include detected/);
-      expect(circular.message).toMatch(/\/config\/a\.json/);
-      expect(circular.message).toMatch(/\/config\/b\.json/);
+      expect(circular.message).toContain("a.json");
+      expect(circular.message).toContain("b.json");
     }
   });
 
@@ -189,14 +209,14 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("throws ConfigIncludeError for invalid array item type", () => {
-    const files = { "/config/valid.json": { valid: true } };
+    const files = { [configPath("valid.json")]: { valid: true } };
     const obj = { $include: ["./valid.json", 123] };
     expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
     expect(() => resolve(obj, files)).toThrow(/expected string, got number/);
   });
 
   it("throws ConfigIncludeError for null/boolean include items", () => {
-    const files = { "/config/valid.json": { valid: true } };
+    const files = { [configPath("valid.json")]: { valid: true } };
     const cases = [
       { value: null, expected: "object" },
       { value: false, expected: "boolean" },
@@ -213,9 +233,11 @@ describe("resolveConfigIncludes", () => {
   it("respects max depth limit", () => {
     const files: Record<string, unknown> = {};
     for (let i = 0; i < 15; i++) {
-      files[`/config/level${i}.json`] = { $include: `./level${i + 1}.json` };
+      files[configPath(`level${i}.json`)] = {
+        $include: `./level${i + 1}.json`,
+      };
     }
-    files["/config/level15.json"] = { done: true };
+    files[configPath("level15.json")] = { done: true };
 
     const obj = { $include: "./level0.json" };
     expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
@@ -225,18 +247,20 @@ describe("resolveConfigIncludes", () => {
   it("allows depth 10 but rejects depth 11", () => {
     const okFiles: Record<string, unknown> = {};
     for (let i = 0; i < 9; i++) {
-      okFiles[`/config/ok${i}.json`] = { $include: `./ok${i + 1}.json` };
+      okFiles[configPath(`ok${i}.json`)] = { $include: `./ok${i + 1}.json` };
     }
-    okFiles["/config/ok9.json"] = { done: true };
+    okFiles[configPath("ok9.json")] = { done: true };
     expect(resolve({ $include: "./ok0.json" }, okFiles)).toEqual({
       done: true,
     });
 
     const failFiles: Record<string, unknown> = {};
     for (let i = 0; i < 10; i++) {
-      failFiles[`/config/fail${i}.json`] = { $include: `./fail${i + 1}.json` };
+      failFiles[configPath(`fail${i}.json`)] = {
+        $include: `./fail${i + 1}.json`,
+      };
     }
-    failFiles["/config/fail10.json"] = { done: true };
+    failFiles[configPath("fail10.json")] = { done: true };
     expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(
       ConfigIncludeError,
     );
@@ -246,7 +270,9 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("handles relative paths correctly", () => {
-    const files = { "/config/clients/mueller/agents.json": { id: "mueller" } };
+    const files = {
+      [configPath("clients", "mueller", "agents.json")]: { id: "mueller" },
+    };
     const obj = { agent: { $include: "./clients/mueller/agents.json" } };
     expect(resolve(obj, files)).toEqual({
       agent: { id: "mueller" },
@@ -255,8 +281,8 @@ describe("resolveConfigIncludes", () => {
 
   it("applies nested includes before sibling overrides", () => {
     const files = {
-      "/config/base.json": { nested: { $include: "./nested.json" } },
-      "/config/nested.json": { a: 1, b: 2 },
+      [configPath("base.json")]: { nested: { $include: "./nested.json" } },
+      [configPath("nested.json")]: { a: 1, b: 2 },
     };
     const obj = { $include: "./base.json", nested: { b: 9 } };
     expect(resolve(obj, files)).toEqual({
@@ -265,9 +291,9 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("resolves parent directory references", () => {
-    const files = { "/shared/common.json": { shared: true } };
+    const files = { [sharedPath("common.json")]: { shared: true } };
     const obj = { $include: "../../shared/common.json" };
-    expect(resolve(obj, files, "/config/sub/clawdbot.json")).toEqual({
+    expect(resolve(obj, files, configPath("sub", "clawdbot.json"))).toEqual({
       shared: true,
     });
   });
@@ -276,7 +302,7 @@ describe("resolveConfigIncludes", () => {
 describe("real-world config patterns", () => {
   it("supports per-client agent includes", () => {
     const files = {
-      "/config/clients/mueller.json": {
+      [configPath("clients", "mueller.json")]: {
         agents: [
           {
             id: "mueller-screenshot",
@@ -291,7 +317,7 @@ describe("real-world config patterns", () => {
           "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
         },
       },
-      "/config/clients/schmidt.json": {
+      [configPath("clients", "schmidt.json")]: {
         agents: [
           {
             id: "schmidt-screenshot",
@@ -323,11 +349,13 @@ describe("real-world config patterns", () => {
 
   it("supports modular config structure", () => {
     const files = {
-      "/config/gateway.json": { gateway: { port: 18789, bind: "loopback" } },
-      "/config/providers/whatsapp.json": {
+      [configPath("gateway.json")]: {
+        gateway: { port: 18789, bind: "loopback" },
+      },
+      [configPath("providers", "whatsapp.json")]: {
         whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] },
       },
-      "/config/agents/defaults.json": {
+      [configPath("agents", "defaults.json")]: {
         agents: { defaults: { sandbox: { mode: "all" } } },
       },
     };
