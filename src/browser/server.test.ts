@@ -712,6 +712,20 @@ describe("browser control server", () => {
     });
     expect(clickMissingRef.status).toBe(400);
 
+    const scrollMissingRef = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "scrollIntoView" }),
+    });
+    expect(scrollMissingRef.status).toBe(400);
+
+    const scrollSelectorUnsupported = await realFetch(`${base}/act`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "scrollIntoView", selector: "button.save" }),
+    });
+    expect(scrollSelectorUnsupported.status).toBe(400);
+
     const clickBadButton = await realFetch(`${base}/act`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
