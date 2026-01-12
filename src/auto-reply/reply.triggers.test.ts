@@ -520,7 +520,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("handles inline /status and still runs the agent", async () => {
+  it("strips inline /status and still runs the agent", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
@@ -535,6 +535,9 @@ describe("trigger handling", () => {
           Body: "please /status now",
           From: "+1002",
           To: "+2000",
+          Provider: "whatsapp",
+          Surface: "whatsapp",
+          SenderE164: "+1002",
         },
         {
           onBlockReply: async (payload) => {
@@ -543,9 +546,11 @@ describe("trigger handling", () => {
         },
         makeCfg(home),
       );
-      expect(blockReplies.length).toBe(1);
-      expect(blockReplies[0]?.text).toBeTruthy();
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
+      expect(blockReplies.length).toBe(0);
+      const prompt =
+        vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).not.toContain("/status");
     });
   });
 
@@ -712,7 +717,7 @@ describe("trigger handling", () => {
     });
   });
 
-  it("keeps inline /status for unauthorized senders", async () => {
+  it("strips inline /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
         payloads: [{ text: "ok" }],
@@ -749,7 +754,7 @@ describe("trigger handling", () => {
       expect(runEmbeddedPiAgent).toHaveBeenCalled();
       const prompt =
         vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).toContain("/status");
+      expect(prompt).not.toContain("/status");
     });
   });
 
