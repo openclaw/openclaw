@@ -59,7 +59,7 @@
 ### Fixes
 - Control UI: flatten nav into a single horizontal scroll row on tablet/mobile (and always show collapsed group items). (#771) — thanks @carlulsoe.
 - macOS: start + await local gateway before onboarding wizard begins.
-- macOS: cancel onboarding wizard on close and recover if the gateway drops the wizard session.
+- macOS: cancel onboarding wizard on close, recover if the gateway drops the session, and time out stalled gateway connects.
 - Models/Onboarding: configure MiniMax (minimax.io) via Anthropic-compatible `/anthropic` endpoint by default (keep `minimax-api` as a legacy alias).
 - Agents/Browser: cap Playwright AI snapshots for tool calls (maxChars); CLI snapshots remain full. (#763) — thanks @thesash.
 - Models: normalize Gemini 3 Pro/Flash IDs to preview names for live model lookups. (#769) — thanks @steipete.

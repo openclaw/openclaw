@@ -1,3 +1,4 @@
+import ClawdbotKit
 import ClawdbotProtocol
 import Foundation
 import OSLog
@@ -75,6 +76,7 @@ actor GatewayChannelActor {
     private var tickIntervalMs: Double = 30000
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
+    private let connectTimeoutSeconds: Double = 6
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
@@ -163,7 +165,15 @@ actor GatewayChannelActor {
         self.task = self.session.makeWebSocketTask(url: self.url)
         self.task?.resume()
         do {
-            try await self.sendConnect()
+            try await AsyncTimeout.withTimeout(
+                seconds: self.connectTimeoutSeconds,
+                onTimeout: {
+                    NSError(
+                        domain: "Gateway",
+                        code: 1,
+                        userInfo: [NSLocalizedDescriptionKey: "connect timed out"])
+                },
+                operation: { try await self.sendConnect() })
         } catch {
             let wrapped = self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
             self.connected = false
@@ -381,7 +391,11 @@ actor GatewayChannelActor {
         }
     }
 
-    func request(method: String, params: [String: AnyCodable]?, timeoutMs: Double? = nil) async throws -> Data {
+    func request(
+        method: String,
+        params: [String: ClawdbotProtocol.AnyCodable]?,
+        timeoutMs: Double? = nil) async throws -> Data
+    {
         do {
             try await self.connect()
         } catch {
@@ -432,8 +446,8 @@ actor GatewayChannelActor {
         if res.ok == false {
             let code = res.error?["code"]?.value as? String
             let msg = res.error?["message"]?.value as? String
-            let details: [String: AnyCodable] = (res.error ?? [:]).reduce(into: [:]) { acc, pair in
-                acc[pair.key] = AnyCodable(pair.value.value)
+            let details: [String: ClawdbotProtocol.AnyCodable] = (res.error ?? [:]).reduce(into: [:]) { acc, pair in
+                acc[pair.key] = ClawdbotProtocol.AnyCodable(pair.value.value)
             }
             throw GatewayResponseError(method: method, code: code, message: msg, details: details)
         }
