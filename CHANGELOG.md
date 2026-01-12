@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.11-1
+
+### Fixes
+- Installer: include `patches/` in the npm package so postinstall patching works for npm/bun installs.
+
 ## 2026.1.11
 
 ### Highlights
