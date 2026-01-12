@@ -1,11 +1,4 @@
 // @ts-nocheck
-/**
- * Telegram uses message_thread_id=1 internally for the General topic in forum supergroups.
- * User-created topics have IDs based on message_id (typically millions+), so no collision risk.
- * See: https://core.telegram.org/bots/api#sendchataction
- */
-const TELEGRAM_GENERAL_TOPIC_ID = 1;
-
 import { sequentialize } from "@grammyjs/runner";
 import { apiThrottler } from "@grammyjs/transformer-throttler";
 import type { ApiClientOptions, Message } from "grammy";
@@ -78,6 +71,8 @@ import {
   upsertTelegramPairingRequest,
 } from "./pairing-store.js";
 import { resolveTelegramVoiceSend } from "./voice.js";
+
+const TELEGRAM_GENERAL_TOPIC_ID = 1;
 
 const PARSE_ERR_RE =
   /can't parse entities|parse entities|find end of the entity/i;

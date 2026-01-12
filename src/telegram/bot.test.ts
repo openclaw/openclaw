@@ -1676,6 +1676,49 @@ describe("createTelegramBot", () => {
     });
   });
 
+  it("falls back to General topic thread id for typing in forums", async () => {
+    onSpy.mockReset();
+    sendChatActionSpy.mockReset();
+    const replySpy = replyModule.__replySpy as unknown as ReturnType<
+      typeof vi.fn
+    >;
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      telegram: {
+        groupPolicy: "open",
+        groups: { "*": { requireMention: false } },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: {
+          id: -1001234567890,
+          type: "supergroup",
+          title: "Forum Group",
+          is_forum: true,
+        },
+        from: { id: 12345, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "clawdbot_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    expect(sendChatActionSpy).toHaveBeenCalledWith(-1001234567890, "typing", {
+      message_thread_id: 1,
+    });
+  });
+
   it("applies topic skill filters and system prompts", async () => {
     onSpy.mockReset();
     const replySpy = replyModule.__replySpy as unknown as ReturnType<

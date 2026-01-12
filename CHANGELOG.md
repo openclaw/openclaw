@@ -12,6 +12,7 @@
 
 ### Fixes
 - Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
+- Telegram: show typing indicator in General forum topics. (#779) — thanks @azade-c.
 
 ## 2026.1.11
 
