@@ -586,6 +586,89 @@ describe("createClawdbotCodingTools", () => {
     }
   });
 
+  it("accepts Claude Code parameter aliases for read/write/edit", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-alias-"));
+    try {
+      const tools = createClawdbotCodingTools({ workspaceDir: tmpDir });
+      const readTool = tools.find((tool) => tool.name === "read");
+      const writeTool = tools.find((tool) => tool.name === "write");
+      const editTool = tools.find((tool) => tool.name === "edit");
+      expect(readTool).toBeDefined();
+      expect(writeTool).toBeDefined();
+      expect(editTool).toBeDefined();
+
+      const filePath = "alias-test.txt";
+      await writeTool?.execute("tool-alias-1", {
+        file_path: filePath,
+        content: "hello world",
+      });
+
+      await editTool?.execute("tool-alias-2", {
+        file_path: filePath,
+        old_string: "world",
+        new_string: "universe",
+      });
+
+      const result = await readTool?.execute("tool-alias-3", {
+        file_path: filePath,
+      });
+
+      const textBlocks = result?.content?.filter(
+        (block) => block.type === "text",
+      ) as Array<{ text?: string }> | undefined;
+      const combinedText = textBlocks
+        ?.map((block) => block.text ?? "")
+        .join("\n");
+      expect(combinedText).toContain("hello universe");
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("applies sandbox path guards to file_path alias", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-sbx-"));
+    const outsidePath = path.join(os.tmpdir(), "clawdbot-outside.txt");
+    await fs.writeFile(outsidePath, "outside", "utf8");
+    try {
+      const sandbox = {
+        enabled: true,
+        sessionKey: "sandbox:test",
+        workspaceDir: tmpDir,
+        agentWorkspaceDir: path.join(os.tmpdir(), "clawdbot-workspace"),
+        workspaceAccess: "ro",
+        containerName: "clawdbot-sbx-test",
+        containerWorkdir: "/workspace",
+        docker: {
+          image: "clawdbot-sandbox:bookworm-slim",
+          containerPrefix: "clawdbot-sbx-",
+          workdir: "/workspace",
+          readOnlyRoot: true,
+          tmpfs: [],
+          network: "none",
+          user: "1000:1000",
+          capDrop: ["ALL"],
+          env: { LANG: "C.UTF-8" },
+        },
+        tools: {
+          allow: ["read"],
+          deny: [],
+        },
+        browserAllowHostControl: false,
+      };
+
+      const tools = createClawdbotCodingTools({ sandbox });
+      const readTool = tools.find((tool) => tool.name === "read");
+      expect(readTool).toBeDefined();
+
+      await expect(
+        readTool?.execute("tool-sbx-1", { file_path: outsidePath }),
+      ).rejects.toThrow();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+      await fs.rm(outsidePath, { force: true });
+    }
+  });
+
   it("falls back to process.cwd() when workspaceDir not provided", () => {
     const prevCwd = process.cwd();
     const tools = createClawdbotCodingTools();

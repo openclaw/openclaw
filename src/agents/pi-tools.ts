@@ -414,15 +414,17 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, args, signal, onUpdate) => {
+      const normalized = normalizeToolParams(args);
       const record =
-        args && typeof args === "object"
+        normalized ??
+        (args && typeof args === "object"
           ? (args as Record<string, unknown>)
-          : undefined;
+          : undefined);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         await assertSandboxPath({ filePath, cwd: root, root });
       }
-      return tool.execute(toolCallId, args, signal, onUpdate);
+      return tool.execute(toolCallId, normalized ?? args, signal, onUpdate);
     },
   };
 }
@@ -434,31 +436,134 @@ function createSandboxedReadTool(root: string) {
 
 function createSandboxedWriteTool(root: string) {
   const base = createWriteTool(root);
-  return wrapSandboxPathGuard(base as unknown as AnyAgentTool, root);
+  return wrapSandboxPathGuard(wrapToolParamNormalization(base), root);
 }
 
 function createSandboxedEditTool(root: string) {
   const base = createEditTool(root);
-  return wrapSandboxPathGuard(base as unknown as AnyAgentTool, root);
+  return wrapSandboxPathGuard(wrapToolParamNormalization(base), root);
+}
+function createWhatsAppLoginTool(): AnyAgentTool {
+  return {
+    label: "WhatsApp Login",
+    name: "whatsapp_login",
+    description:
+      "Generate a WhatsApp QR code for linking, or wait for the scan to complete.",
+    // NOTE: Using Type.Unsafe for action enum instead of Type.Union([Type.Literal(...)])
+    // because Claude API on Vertex AI rejects nested anyOf schemas as invalid JSON Schema.
+    parameters: Type.Object({
+      action: Type.Unsafe<"start" | "wait">({
+        type: "string",
+        enum: ["start", "wait"],
+      }),
+      timeoutMs: Type.Optional(Type.Number()),
+      force: Type.Optional(Type.Boolean()),
+    }),
+    execute: async (_toolCallId, args) => {
+      const action = (args as { action?: string })?.action ?? "start";
+      if (action === "wait") {
+        const result = await waitForWebLogin({
+          timeoutMs:
+            typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
+              ? (args as { timeoutMs?: number }).timeoutMs
+              : undefined,
+        });
+        return {
+          content: [{ type: "text", text: result.message }],
+          details: { connected: result.connected },
+        };
+      }
+
+      const result = await startWebLoginWithQr({
+        timeoutMs:
+          typeof (args as { timeoutMs?: unknown }).timeoutMs === "number"
+            ? (args as { timeoutMs?: number }).timeoutMs
+            : undefined,
+        force:
+          typeof (args as { force?: unknown }).force === "boolean"
+            ? (args as { force?: boolean }).force
+            : false,
+      });
+
+      if (!result.qrDataUrl) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: result.message,
+            },
+          ],
+          details: { qr: false },
+        };
+      }
+
+      const text = [
+        result.message,
+        "",
+        "Open WhatsApp → Linked Devices and scan:",
+        "",
+        `![whatsapp-qr](${result.qrDataUrl})`,
+      ].join("\n");
+      return {
+        content: [{ type: "text", text }],
+        details: { qr: true },
+      };
+    },
+  };
 }
 
+// Normalize tool parameters from Claude Code conventions to pi-coding-agent conventions.
+// Claude Code uses file_path/old_string/new_string while pi-coding-agent uses path/oldText/newText.
+// This prevents models trained on Claude Code from getting stuck in tool-call loops.
+function normalizeToolParams(
+  params: unknown,
+): Record<string, unknown> | undefined {
+  if (!params || typeof params !== "object") return undefined;
+  const record = params as Record<string, unknown>;
+  const normalized = { ...record };
+  // file_path → path (read, write, edit)
+  if ("file_path" in normalized && !("path" in normalized)) {
+    normalized.path = normalized.file_path;
+    delete normalized.file_path;
+  }
+  // old_string → oldText (edit)
+  if ("old_string" in normalized && !("oldText" in normalized)) {
+    normalized.oldText = normalized.old_string;
+    delete normalized.old_string;
+  }
+  // new_string → newText (edit)
+  if ("new_string" in normalized && !("newText" in normalized)) {
+    normalized.newText = normalized.new_string;
+    delete normalized.new_string;
+  }
+  return normalized;
+}
+
+// Generic wrapper to normalize parameters for any tool
+function wrapToolParamNormalization(tool: AnyAgentTool): AnyAgentTool {
+  return {
+    ...tool,
+    execute: async (toolCallId, params, signal, onUpdate) => {
+      const normalized = normalizeToolParams(params);
+      return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
+    },
+  };
+}
 function createClawdbotReadTool(base: AnyAgentTool): AnyAgentTool {
   return {
     ...base,
     execute: async (toolCallId, params, signal) => {
+      const normalized = normalizeToolParams(params);
       const result = (await base.execute(
         toolCallId,
-        params,
+        normalized ?? params,
         signal,
       )) as AgentToolResult<unknown>;
-      const record =
-        params && typeof params === "object"
-          ? (params as Record<string, unknown>)
-          : undefined;
+      const record = normalized ?? (params as Record<string, unknown>);
       const filePath =
         typeof record?.path === "string" ? String(record.path) : "<unknown>";
-      const normalized = await normalizeReadImageResult(result, filePath);
-      return sanitizeToolResultImages(normalized, `read:${filePath}`);
+      const normalizedResult = await normalizeReadImageResult(result, filePath);
+      return sanitizeToolResultImages(normalizedResult, `read:${filePath}`);
     },
   };
 }
@@ -581,11 +686,13 @@ export function createClawdbotCodingTools(options?: {
     if (tool.name === "bash" || tool.name === execToolName) return [];
     if (tool.name === "write") {
       if (sandboxRoot) return [];
-      return [createWriteTool(workspaceRoot)];
+      // Wrap with param normalization for Claude Code compatibility
+      return [wrapToolParamNormalization(createWriteTool(workspaceRoot))];
     }
     if (tool.name === "edit") {
       if (sandboxRoot) return [];
-      return [createEditTool(workspaceRoot)];
+      // Wrap with param normalization for Claude Code compatibility
+      return [wrapToolParamNormalization(createEditTool(workspaceRoot))];
     }
     return [tool as AnyAgentTool];
   });
