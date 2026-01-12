@@ -87,9 +87,9 @@ function normalizeApiKeyInput(raw: string): string {
 
   const unquoted =
     valuePart.length >= 2 &&
-      ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
-        (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
-        (valuePart.startsWith("`") && valuePart.endsWith("`")))
+    ((valuePart.startsWith('"') && valuePart.endsWith('"')) ||
+      (valuePart.startsWith("'") && valuePart.endsWith("'")) ||
+      (valuePart.startsWith("`") && valuePart.endsWith("`")))
       ? valuePart.slice(1, -1)
       : valuePart;
 
@@ -133,20 +133,20 @@ export async function warnIfModelConfigLooksOff(
   const configWithModel =
     agentModelOverride && agentModelOverride.length > 0
       ? {
-        ...config,
-        agents: {
-          ...config.agents,
-          defaults: {
-            ...config.agents?.defaults,
-            model: {
-              ...(typeof config.agents?.defaults?.model === "object"
-                ? config.agents.defaults.model
-                : undefined),
-              primary: agentModelOverride,
+          ...config,
+          agents: {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              model: {
+                ...(typeof config.agents?.defaults?.model === "object"
+                  ? config.agents.defaults.model
+                  : undefined),
+                primary: agentModelOverride,
+              },
             },
           },
-        },
-      }
+        }
       : config;
   const ref = resolveConfiguredModelRef({
     cfg: configWithModel,
@@ -239,8 +239,8 @@ export async function applyAuthChoice(params: {
     const storeWithKeychain = hasClaudeCli
       ? store
       : ensureAuthProfileStore(params.agentDir, {
-        allowKeychainPrompt: true,
-      });
+          allowKeychainPrompt: true,
+        });
 
     if (!storeWithKeychain.profiles[CLAUDE_CLI_PROFILE_ID]) {
       if (process.stdin.isTTY) {
@@ -540,15 +540,15 @@ export async function applyAuthChoice(params: {
     await params.prompter.note(
       isRemote
         ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, paste the redirect URL back here.",
-        ].join("\n")
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, paste the redirect URL back here.",
+          ].join("\n")
         : [
-          "Browser will open for OpenAI authentication.",
-          "If the callback doesn't auto-complete, paste the redirect URL.",
-          "OpenAI OAuth uses localhost:1455 for the callback.",
-        ].join("\n"),
+            "Browser will open for OpenAI authentication.",
+            "If the callback doesn't auto-complete, paste the redirect URL.",
+            "OpenAI OAuth uses localhost:1455 for the callback.",
+          ].join("\n"),
       "OpenAI Codex OAuth",
     );
     const spin = params.prompter.progress("Starting OAuth flow…");
@@ -652,15 +652,15 @@ export async function applyAuthChoice(params: {
     await params.prompter.note(
       isRemote
         ? [
-          "You are running in a remote/VPS environment.",
-          "A URL will be shown for you to open in your LOCAL browser.",
-          "After signing in, copy the redirect URL and paste it back here.",
-        ].join("\n")
+            "You are running in a remote/VPS environment.",
+            "A URL will be shown for you to open in your LOCAL browser.",
+            "After signing in, copy the redirect URL and paste it back here.",
+          ].join("\n")
         : [
-          "Browser will open for Google authentication.",
-          "Sign in with your Google account that has Antigravity access.",
-          "The callback will be captured automatically on localhost:51121.",
-        ].join("\n"),
+            "Browser will open for Google authentication.",
+            "Sign in with your Google account that has Antigravity access.",
+            "The callback will be captured automatically on localhost:51121.",
+          ].join("\n"),
       "Google Antigravity OAuth",
     );
     const spin = params.prompter.progress("Starting OAuth flow…");
@@ -718,11 +718,11 @@ export async function applyAuthChoice(params: {
                 ...nextConfig.agents?.defaults,
                 model: {
                   ...(existingModel &&
-                    "fallbacks" in (existingModel as Record<string, unknown>)
+                  "fallbacks" in (existingModel as Record<string, unknown>)
                     ? {
-                      fallbacks: (existingModel as { fallbacks?: string[] })
-                        .fallbacks,
-                    }
+                        fallbacks: (existingModel as { fallbacks?: string[] })
+                          .fallbacks,
+                      }
                     : undefined),
                   primary: modelKey,
                 },
