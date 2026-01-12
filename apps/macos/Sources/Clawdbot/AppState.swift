@@ -612,7 +612,6 @@ enum AppStateStore {
     static var canvasEnabled: Bool {
         UserDefaults.standard.object(forKey: canvasEnabledKey) as? Bool ?? true
     }
-
 }
 
 @MainActor

@@ -99,7 +99,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
         return NSRect.zero
     }
+}
 
+extension MenuSessionsInjector {
     // MARK: - Injection
 
     private func inject(into menu: NSMenu) {
@@ -508,7 +510,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         item.view = self.makeHostedView(rootView: view, width: width, highlighted: false)
         return item
     }
+}
 
+extension MenuSessionsInjector {
     // MARK: - Cache
 
     private func refreshCache(force: Bool) async {
@@ -579,7 +583,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         }
         return "Sessions unavailable"
     }
+}
 
+extension MenuSessionsInjector {
     // MARK: - Submenus
 
     private func buildSubmenu(for row: SessionRow, storePath: String) -> NSMenu {
@@ -911,7 +917,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(value, forType: .string)
     }
+}
 
+extension MenuSessionsInjector {
     // MARK: - Width + placement
 
     private func findInsertIndex(in menu: NSMenu) -> Int? {
@@ -987,7 +995,9 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
             return lhsName < rhsName
         }
     }
+}
 
+extension MenuSessionsInjector {
     // MARK: - Views
 
     private func makeHostedView(rootView: AnyView, width: CGFloat, highlighted: Bool) -> NSView {

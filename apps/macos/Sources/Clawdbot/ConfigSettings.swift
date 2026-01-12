@@ -70,7 +70,9 @@ struct ConfigSettings: View {
                 self.allowAutosave = true
             }
     }
+}
 
+extension ConfigSettings {
     private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
             self.header
@@ -461,7 +463,9 @@ struct ConfigSettings: View {
         }
         .padding(.top, 2)
     }
+}
 
+extension ConfigSettings {
     private func loadConfig() async {
         let parsed = await ConfigStore.load()
         let agents = parsed["agents"] as? [String: Any]
@@ -639,7 +643,9 @@ struct ConfigSettings: View {
             return error.localizedDescription
         }
     }
+}
 
+extension ConfigSettings {
     private var browserColor: Color {
         let raw = self.browserColorHex.trimmingCharacters(in: .whitespacesAndNewlines)
         let hex = raw.hasPrefix("#") ? String(raw.dropFirst()) : raw
@@ -736,7 +742,9 @@ struct ConfigSettings: View {
         if host == "::1" { return true }
         return false
     }
+}
 
+extension ConfigSettings {
     private func loadModels() async {
         guard !self.modelsLoading else { return }
         self.modelsLoading = true

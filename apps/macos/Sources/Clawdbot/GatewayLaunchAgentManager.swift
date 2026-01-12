@@ -12,10 +12,11 @@ enum GatewayLaunchAgentManager {
         var errorDescription: String? {
             switch self {
             case let .message(message):
-                return message
+                message
             }
         }
     }
+
     private static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/\(gatewayLaunchdLabel).plist")
@@ -28,8 +29,8 @@ enum GatewayLaunchAgentManager {
 
     private static func gatewayProgramArguments(
         port: Int,
-        bind: String,
-    ) -> Result<[String], GatewayProgramArgumentsError> {
+        bind: String) -> Result<[String], GatewayProgramArgumentsError>
+    {
         let projectRoot = CommandResolver.projectRoot()
         #if DEBUG
         if let localBin = CommandResolver.projectClawdbotExecutable(projectRoot: projectRoot) {
