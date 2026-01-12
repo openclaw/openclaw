@@ -206,7 +206,7 @@ describe("cli credentials", () => {
     });
 
     const { readCodexCliCredentials } = await import("./cli-credentials.js");
-    const creds = readCodexCliCredentials();
+    const creds = readCodexCliCredentials({ platform: "darwin" });
 
     expect(creds).toMatchObject({
       access: "keychain-access",

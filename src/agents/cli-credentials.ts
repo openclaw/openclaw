@@ -88,8 +88,11 @@ function computeCodexKeychainAccount(codexHome: string) {
   return `cli|${hash.slice(0, 16)}`;
 }
 
-function readCodexKeychainCredentials(): CodexCliCredential | null {
-  if (process.platform !== "darwin") return null;
+function readCodexKeychainCredentials(options?: {
+  platform?: NodeJS.Platform;
+}): CodexCliCredential | null {
+  const platform = options?.platform ?? process.platform;
+  if (platform !== "darwin") return null;
 
   const codexHome = resolveCodexHomePath();
   const account = computeCodexKeychainAccount(codexHome);
@@ -353,8 +356,12 @@ export function writeClaudeCliCredentials(
   return writeFile(newCredentials, { homeDir: options?.homeDir });
 }
 
-export function readCodexCliCredentials(): CodexCliCredential | null {
-  const keychain = readCodexKeychainCredentials();
+export function readCodexCliCredentials(options?: {
+  platform?: NodeJS.Platform;
+}): CodexCliCredential | null {
+  const keychain = readCodexKeychainCredentials({
+    platform: options?.platform,
+  });
   if (keychain) return keychain;
 
   const authPath = resolveCodexCliAuthPath();
@@ -390,10 +397,11 @@ export function readCodexCliCredentials(): CodexCliCredential | null {
 
 export function readCodexCliCredentialsCached(options?: {
   ttlMs?: number;
+  platform?: NodeJS.Platform;
 }): CodexCliCredential | null {
   const ttlMs = options?.ttlMs ?? 0;
   const now = Date.now();
-  const cacheKey = resolveCodexCliAuthPath();
+  const cacheKey = `${options?.platform ?? process.platform}|${resolveCodexCliAuthPath()}`;
   if (
     ttlMs > 0 &&
     codexCliCache &&
@@ -402,7 +410,7 @@ export function readCodexCliCredentialsCached(options?: {
   ) {
     return codexCliCache.value;
   }
-  const value = readCodexCliCredentials();
+  const value = readCodexCliCredentials({ platform: options?.platform });
   if (ttlMs > 0) {
     codexCliCache = { value, readAt: now, cacheKey };
   }
