@@ -126,20 +126,11 @@ describe("gateway server auth/connect", () => {
     await server.close();
   });
 
-  test.skip(
+  test(
     "invalid connect params surface in response and close reason",
     { timeout: 15000 },
     async () => {
       const { server, ws } = await startServerWithClient();
-      await new Promise<void>((resolve) => ws.once("open", resolve));
-
-      const closePromise = new Promise<{ code: number; reason: string }>(
-        (resolve) => {
-          ws.once("close", (code, reason) =>
-            resolve({ code, reason: reason.toString() }),
-          );
-        },
-      );
 
       ws.send(
         JSON.stringify({
@@ -159,37 +150,34 @@ describe("gateway server auth/connect", () => {
         }),
       );
 
-      const raceResult = await Promise.race([
-        onceMessage<{
-          ok: boolean;
-          error?: { message?: string };
-        }>(
-          ws,
-          (o) =>
-            (o as { type?: string }).type === "res" &&
-            (o as { id?: string }).id === "h-bad",
-        ),
-        closePromise,
-      ]);
+      const res = await onceMessage<{
+        ok: boolean;
+        error?: { message?: string };
+      }>(
+        ws,
+        (o) =>
+          (o as { type?: string }).type === "res" &&
+          (o as { id?: string }).id === "h-bad",
+      );
+      expect(res.ok).toBe(false);
+      expect(String(res.error?.message ?? "")).toContain(
+        "invalid connect params",
+      );
 
-      if ("ok" in raceResult) {
-        expect(raceResult.ok).toBe(false);
-        expect(String(raceResult.error?.message ?? "")).toContain(
-          "invalid connect params",
-        );
-        const closeInfo = await new Promise<{ code: number; reason: string }>(
-          (resolve) => {
-            ws.once("close", (code, reason) =>
-              resolve({ code, reason: reason.toString() }),
-            );
-          },
-        );
-        expect(closeInfo.code).toBe(1008);
-        expect(closeInfo.reason).toContain("invalid connect params");
-      } else {
-        // handshake timed out/closed before response; still ensure closure happened
-        expect(raceResult.code === 1008 || raceResult.code === 1000).toBe(true);
-      }
+      const closeInfo = await new Promise<{ code: number; reason: string }>(
+        (resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error("close timeout")),
+            3000,
+          );
+          ws.once("close", (code, reason) => {
+            clearTimeout(timer);
+            resolve({ code, reason: reason.toString() });
+          });
+        },
+      );
+      expect(closeInfo.code).toBe(1008);
+      expect(closeInfo.reason).toContain("invalid connect params");
 
       await server.close();
     },

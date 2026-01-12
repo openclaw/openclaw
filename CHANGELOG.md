@@ -23,6 +23,7 @@
 
 ### Fixes
 - Gateway/WebChat: include handshake validation details in the WebSocket close reason for easier debugging.
+- Gateway/Auth: send invalid connect responses before closing the handshake; stabilize invalid-connect auth test.
 - Doctor: surface plugin diagnostics in the report.
 - CLI/Update: preserve base environment when passing overrides to update subprocesses. (#713) — thanks @danielz1z.
 - Agents: treat message tool errors as failures so fallback replies still send; require `to` + `message` for `action=send`. (#717) — thanks @theglove44.
