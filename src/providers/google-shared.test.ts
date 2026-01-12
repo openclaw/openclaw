@@ -560,7 +560,8 @@ describe("google-shared convertMessages", () => {
     const contents = convertMessages(model, context);
     const parts = contents.flatMap((content) => content.parts ?? []);
     const toolCallPart = parts.find(
-      (part) => typeof part === "object" && part !== null && "functionCall" in part,
+      (part) =>
+        typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolResponsePart = parts.find(
       (part) =>
