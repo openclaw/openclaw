@@ -96,7 +96,7 @@ export function resolveCommandAuthorization(params: {
   }
   const ownerList = ownerCandidates;
 
-  const senderRaw = ctx.SenderId ?? ctx.SenderE164 ?? from;
+  const senderRaw = ctx.SenderId || ctx.SenderE164 || from;
   const senderId = senderRaw
     ? formatAllowFromList({
         dock,
