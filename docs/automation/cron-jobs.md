@@ -27,6 +27,8 @@ A cron job is a stored record with:
 - a **schedule** (when it should run),
 - a **payload** (what it should do),
 - optional **delivery** (where output should be sent).
+- optional **agent binding** (`agentId`): run the job under a specific agent; if
+  missing or unknown, the gateway falls back to the default agent.
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
 In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
@@ -190,6 +192,16 @@ clawdbot cron add \
   --deliver \
   --provider whatsapp \
   --to "+15551234567"
+
+Agent selection (multi-agent setups):
+```bash
+# Pin a job to agent "ops" (falls back to default if that agent is missing)
+clawdbot cron add --name "Ops sweep" --cron "0 6 * * *" --session isolated --message "Check ops queue" --agent ops
+
+# Switch or clear the agent on an existing job
+clawdbot cron edit <jobId> --agent ops
+clawdbot cron edit <jobId> --clear-agent
+```
 ```
 
 Manual run (debug):

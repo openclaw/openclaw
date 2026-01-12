@@ -71,7 +71,9 @@ describe("CronService", () => {
     const jobs = await cron.list({ includeDisabled: true });
     const updated = jobs.find((j) => j.id === job.id);
     expect(updated?.enabled).toBe(false);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", {
+      agentId: undefined,
+    });
     expect(requestHeartbeatNow).toHaveBeenCalled();
 
     await cron.list({ includeDisabled: true });
@@ -128,7 +130,9 @@ describe("CronService", () => {
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
     expect(requestHeartbeatNow).not.toHaveBeenCalled();
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", {
+      agentId: undefined,
+    });
     expect(job.state.runningAtMs).toBeTypeOf("number");
 
     resolveHeartbeat?.({ status: "ran", durationMs: 123 });
@@ -175,7 +179,9 @@ describe("CronService", () => {
 
     await cron.list({ includeDisabled: true });
     expect(runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron: done");
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("Cron: done", {
+      agentId: undefined,
+    });
     expect(requestHeartbeatNow).toHaveBeenCalled();
     cron.stop();
     await store.cleanup();
@@ -318,6 +324,7 @@ describe("CronService", () => {
 
     expect(enqueueSystemEvent).toHaveBeenCalledWith(
       "Cron (error): last output",
+      { agentId: undefined },
     );
     expect(requestHeartbeatNow).toHaveBeenCalled();
     cron.stop();

@@ -826,6 +826,7 @@ export const CronJobStateSchema = Type.Object(
 export const CronJobSchema = Type.Object(
   {
     id: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
     name: NonEmptyString,
     description: Type.Optional(Type.String()),
     enabled: Type.Boolean(),
@@ -856,6 +857,7 @@ export const CronStatusParamsSchema = Type.Object(
 export const CronAddParamsSchema = Type.Object(
   {
     name: NonEmptyString,
+    agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     description: Type.Optional(Type.String()),
     enabled: Type.Optional(Type.Boolean()),
     schedule: CronScheduleSchema,

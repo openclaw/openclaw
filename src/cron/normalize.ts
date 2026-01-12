@@ -1,3 +1,4 @@
+import { normalizeAgentId } from "../routing/session-key.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -52,6 +53,17 @@ export function normalizeCronJobInput(
   if (!isRecord(raw)) return null;
   const base = unwrapJob(raw);
   const next: UnknownRecord = { ...base };
+
+  if ("agentId" in base) {
+    const agentId = (base as UnknownRecord).agentId;
+    if (agentId === null) {
+      next.agentId = null;
+    } else if (typeof agentId === "string") {
+      const trimmed = agentId.trim();
+      if (trimmed) next.agentId = normalizeAgentId(trimmed);
+      else delete next.agentId;
+    }
+  }
 
   if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);

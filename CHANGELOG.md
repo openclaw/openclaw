@@ -1,36 +1,9 @@
 # Changelog
 
-# 2026.1.12-1
+## 2026.1.12
 
 ### Changes
-- Heartbeat: raise default `ackMaxChars` to 300 so any `HEARTBEAT_OK` replies with short padding stay internal (fewer noisy heartbeat posts on providers).
-
-## 2026.1.11-5
-
-### Fixes
-- Auto-reply: prevent duplicate /status replies (including /usage alias) and add tests for inline + standalone cases.
-
-## 2026.1.11-4
-
-### Fixes
-- CLI: read the git commit hash from the package root so npm installs show it.
-
-## 2026.1.11-3
-
-### Fixes
-- CLI: avoid top-level await warnings in the entrypoint on fresh installs.
-- CLI: show a commit hash in the banner for npm installs (package.json gitHead fallback).
-
-## 2026.1.11-2
-
-### Fixes
-- Installer: ensure the CLI entrypoint is executable after npm installs.
-- Packaging: include `dist/plugins/` in the npm package to avoid missing module errors.
-
-## 2026.1.11-1
-
-### Fixes
-- Installer: include `patches/` in the npm package so postinstall patching works for npm/bun installs.
+- Cron: add optional `agentId` binding (CLI `--agent` / `--clear-agent`), route cron runs + summaries to the chosen agent, and document/test the fallback to the default agent. (#770)
 
 ## 2026.1.11
 

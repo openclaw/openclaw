@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { CronJob, CronSchedule } from "../cron/types.js";
 import { danger } from "../globals.js";
 import { PROVIDER_IDS } from "../providers/registry.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { colorize, isRich, theme } from "../terminal/theme.js";
@@ -72,6 +73,7 @@ const CRON_NEXT_PAD = 10;
 const CRON_LAST_PAD = 10;
 const CRON_STATUS_PAD = 9;
 const CRON_TARGET_PAD = 9;
+const CRON_AGENT_PAD = 10;
 
 const pad = (value: string, width: number) => value.padEnd(width);
 
@@ -139,6 +141,7 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     pad("Last", CRON_LAST_PAD),
     pad("Status", CRON_STATUS_PAD),
     pad("Target", CRON_TARGET_PAD),
+    pad("Agent", CRON_AGENT_PAD),
   ].join(" ");
 
   runtime.log(rich ? theme.heading(header) : header);
@@ -162,6 +165,10 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
     const statusRaw = formatStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget, CRON_TARGET_PAD);
+    const agentLabel = pad(
+      truncate(job.agentId ?? "default", CRON_AGENT_PAD),
+      CRON_AGENT_PAD,
+    );
 
     const coloredStatus = (() => {
       if (statusRaw === "ok") return colorize(rich, theme.success, statusLabel);
@@ -178,6 +185,9 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       job.sessionTarget === "isolated"
         ? colorize(rich, theme.accentBright, targetLabel)
         : colorize(rich, theme.accent, targetLabel);
+    const coloredAgent = job.agentId
+      ? colorize(rich, theme.info, agentLabel)
+      : colorize(rich, theme.muted, agentLabel);
 
     const line = [
       colorize(rich, theme.accent, idLabel),
@@ -187,6 +197,7 @@ function printCronList(jobs: CronJob[], runtime = defaultRuntime) {
       colorize(rich, theme.muted, lastLabel),
       coloredStatus,
       coloredTarget,
+      coloredAgent,
     ].join(" ");
 
     runtime.log(line.trimEnd());
@@ -283,6 +294,7 @@ export function registerCronCli(program: Command) {
       .requiredOption("--name <name>", "Job name")
       .option("--description <text>", "Optional description")
       .option("--disabled", "Create job disabled", false)
+      .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)", "main")
       .option(
         "--wake <mode>",
@@ -375,6 +387,11 @@ export function registerCronCli(program: Command) {
             throw new Error("--wake must be now or next-heartbeat");
           }
 
+          const agentId =
+            typeof opts.agent === "string" && opts.agent.trim()
+              ? normalizeAgentId(opts.agent)
+              : undefined;
+
           const payload = (() => {
             const systemEvent =
               typeof opts.systemEvent === "string"
@@ -451,6 +468,7 @@ export function registerCronCli(program: Command) {
             name,
             description,
             enabled: !opts.disabled,
+            agentId,
             schedule,
             sessionTarget,
             wakeMode,
@@ -561,6 +579,8 @@ export function registerCronCli(program: Command) {
       .option("--enable", "Enable job", false)
       .option("--disable", "Disable job", false)
       .option("--session <target>", "Session target (main|isolated)")
+      .option("--agent <id>", "Set agent id")
+      .option("--clear-agent", "Unset agent and use default", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
@@ -613,6 +633,15 @@ export function registerCronCli(program: Command) {
           if (typeof opts.session === "string")
             patch.sessionTarget = opts.session;
           if (typeof opts.wake === "string") patch.wakeMode = opts.wake;
+          if (opts.agent && opts.clearAgent) {
+            throw new Error("Use --agent or --clear-agent, not both");
+          }
+          if (typeof opts.agent === "string" && opts.agent.trim()) {
+            patch.agentId = normalizeAgentId(opts.agent);
+          }
+          if (opts.clearAgent) {
+            patch.agentId = null;
+          }
 
           const scheduleChosen = [opts.at, opts.every, opts.cron].filter(
             Boolean,
