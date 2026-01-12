@@ -96,7 +96,7 @@
 
 /* Mobile: Full-screen modal */
 @media (max-width: 768px) {
-  .chat-split-container {
+  .chat-split-container--open {
     position: fixed;
     top: 0;
     left: 0;
@@ -105,14 +105,13 @@
     z-index: 1000;
   }
 
-  .chat-main {
+  .chat-split-container--open .chat-main {
     display: none; /* Hide chat on mobile when sidebar open */
   }
 
-  .chat-sidebar {
+  .chat-split-container--open .chat-sidebar {
     width: 100%;
     min-width: 0;
     border-left: none;
   }
 }
-
