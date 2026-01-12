@@ -39,7 +39,6 @@ final class CLIInstallPrompter {
         guard !self.isPrompting else { return false }
         guard AppStateStore.shared.onboardingSeen else { return false }
         guard AppStateStore.shared.connectionMode == .local else { return false }
-        guard !AppStateStore.shared.attachExistingGatewayOnly else { return false }
         guard CLIInstaller.installedLocation() == nil else { return false }
         guard let version = Self.appVersion() else { return false }
         let lastPrompt = UserDefaults.standard.string(forKey: cliInstallPromptedVersionKey)
@@ -47,11 +46,11 @@ final class CLIInstallPrompter {
     }
 
     private func installCLI() async {
-        var lastStatus: String?
+        let status = StatusBox()
         await CLIInstaller.install { message in
-            lastStatus = message
+            await status.set(message)
         }
-        if let message = lastStatus {
+        if let message = await status.get() {
             let alert = NSAlert()
             alert.messageText = "CLI install finished"
             alert.informativeText = message
@@ -69,5 +68,17 @@ final class CLIInstallPrompter {
 
     private static func appVersion() -> String? {
         Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+    }
+}
+
+private actor StatusBox {
+    private var value: String?
+
+    func set(_ value: String) {
+        self.value = value
+    }
+
+    func get() -> String? {
+        self.value
     }
 }
