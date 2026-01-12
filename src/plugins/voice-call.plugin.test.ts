@@ -124,7 +124,7 @@ describe("voice-call plugin", () => {
       action: "get_status",
       callId: "call-1",
     });
-    expect(result.details.found).toBe(true);
+    expect((result.details as { found?: boolean }).found).toBe(true);
   });
 
   it("legacy tool status without sid returns error payload", async () => {
@@ -141,7 +141,9 @@ describe("voice-call plugin", () => {
     };
     const tool = tools[0] as VoiceTool;
     const result = await tool.execute("id", { mode: "status" });
-    expect(String(result.details.error)).toContain("sid required");
+    expect(String((result.details as { error?: unknown }).error)).toContain(
+      "sid required",
+    );
   });
 
   it("CLI start prints JSON", async () => {

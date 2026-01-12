@@ -430,7 +430,7 @@ function wrapSandboxPathGuard(tool: AnyAgentTool, root: string): AnyAgentTool {
 }
 
 type RequiredParamGroup = {
-  keys: string[];
+  keys: readonly string[];
   allowEmpty?: boolean;
   label?: string;
 };
