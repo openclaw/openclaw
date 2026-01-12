@@ -116,6 +116,7 @@ function levelToMinLevel(level: Level): number {
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
   const settings = cachedSettings ?? resolveSettings();
   if (!cachedSettings) cachedSettings = settings;
+  if (settings.level === "silent") return false;
   return levelToMinLevel(level) <= levelToMinLevel(settings.level);
 }
 
@@ -389,6 +390,7 @@ type SubsystemLogger = {
 };
 
 function shouldLogToConsole(level: Level, settings: ConsoleSettings): boolean {
+  if (settings.level === "silent") return false;
   const current = levelToMinLevel(level);
   const min = levelToMinLevel(settings.level);
   return current <= min;

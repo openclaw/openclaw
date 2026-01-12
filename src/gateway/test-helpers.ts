@@ -8,6 +8,7 @@ import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
+import { resetLogger, setLoggerOverride } from "../logging.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -348,6 +349,7 @@ let tempHome: string | undefined;
 
 export function installGatewayTestHooks() {
   beforeEach(async () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "silent" });
     previousHome = process.env.HOME;
     tempHome = await fs.mkdtemp(
       path.join(os.tmpdir(), "clawdbot-gateway-home-"),
@@ -388,6 +390,7 @@ export function installGatewayTestHooks() {
   }, 60_000);
 
   afterEach(async () => {
+    resetLogger();
     process.env.HOME = previousHome;
     if (tempHome) {
       await fs.rm(tempHome, {
