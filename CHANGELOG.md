@@ -33,6 +33,7 @@
 - Memory: add vector search for agent memories (Markdown-only scope) with SQLite index, chunking, lazy sync + file watch, and per-agent enablement/fallback.
 
 ### Changes
+- Agents: strengthen memory recall guidance (memory_search mandatory for past work/preferences; system prompt injects conditional recall section; memory_get now described as safe snippet fetch).
 - Browser: add `scrollintoview` action to scroll refs into view before click/type.
 - Memory: embedding providers support OpenAI or local `node-llama-cpp`; config adds defaults + per-agent overrides, provider/fallback metadata surfaced in tools/CLI.
 - CLI/Tools: new `clawdbot memory` commands plus `memory_search`/`memory_get` tools returning snippets + line ranges and provider info.

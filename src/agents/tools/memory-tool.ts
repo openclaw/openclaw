@@ -34,7 +34,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Search agent memory files (MEMORY.md + memory/*.md) using semantic vectors.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines.",
     parameters: MemorySearchSchema,
     execute: async (_toolCallId, params) => {
       const query = readStringParam(params, "query", { required: true });
@@ -77,7 +77,8 @@ export function createMemoryGetTool(options: {
   return {
     label: "Memory Get",
     name: "memory_get",
-    description: "Read a memory file by path (workspace-relative).",
+    description:
+      "Safe snippet read from MEMORY.md or memory/*.md with optional from/lines; use after memory_search to pull only the needed lines and keep context small.",
     parameters: MemoryGetSchema,
     execute: async (_toolCallId, params) => {
       const relPath = readStringParam(params, "path", { required: true });

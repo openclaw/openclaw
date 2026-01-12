@@ -183,6 +183,14 @@ export function buildAgentSystemPrompt(params: {
         "",
       ]
     : [];
+  const memorySection =
+    availableTools.has("memory_search") || availableTools.has("memory_get")
+      ? [
+          "## Memory Recall",
+          "Before answering anything about prior work, decisions, dates, people, preferences, or todos: run memory_search on MEMORY.md + memory/*.md; then use memory_get to pull only the needed lines. If low confidence after search, say you checked.",
+          "",
+        ]
+      : [];
 
   const lines = [
     "You are a personal assistant running inside Clawdbot.",
@@ -212,6 +220,7 @@ export function buildAgentSystemPrompt(params: {
     "If a task is more complex or takes longer, spawn a sub-agent. It will do the work for you and ping you when it's done. You can always check up on it.",
     "",
     ...skillsSection,
+    ...memorySection,
     hasGateway ? "## Clawdbot Self-Update" : "",
     hasGateway
       ? [
