@@ -144,6 +144,14 @@ Full setup walkthrough (28m) by VelvetShark.
   <img src="/assets/showcase/winix-air-purifier.jpg" alt="Winix air purifier control via Clawdbot" />
 </Card>
 
+<Card title="Pretty Sky Camera Shots" icon="camera" href="https://x.com/signalgaining/status/2010523120604746151">
+  **@signalgaining** • `automation` `camera` `skill` `images`
+
+  Triggered by a roof camera: ask Clawdbot to snap a sky photo whenever it looks pretty — it designed a skill and took the shot.
+
+  <img src="/assets/showcase/roof-camera-sky.jpg" alt="Roof camera sky snapshot captured by Clawdbot" />
+</Card>
+
 <Card title="Visual Morning Briefing Scene" icon="robot" href="https://x.com/buddyhadry/status/2010005331925954739">
   **@buddyhadry** • `automation` `briefing` `images` `telegram`
 
