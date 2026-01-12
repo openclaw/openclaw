@@ -85,6 +85,13 @@ describe("applyAuthChoice", () => {
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Enter MiniMax API key" }),
     );
+    expect(result.config.models?.providers?.minimax).toMatchObject({
+      baseUrl: "https://api.minimax.io/anthropic",
+      api: "anthropic-messages",
+    });
+    expect(result.config.agents?.defaults?.model).toMatchObject({
+      primary: "minimax/MiniMax-M2.1",
+    });
     expect(result.config.auth?.profiles?.["minimax:default"]).toMatchObject({
       provider: "minimax",
       mode: "api_key",

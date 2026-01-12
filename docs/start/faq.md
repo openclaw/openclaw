@@ -496,6 +496,12 @@ Use the `/model` command as a standalone message:
 
 You can list available models with `/model`, `/model list`, or `/model status`.
 
+`/model` (and `/model list`) shows a compact, numbered picker. Select by number:
+
+```
+/model 3
+```
+
 You can also force a specific auth profile for the provider (per session):
 
 ```
@@ -504,6 +510,7 @@ You can also force a specific auth profile for the provider (per session):
 ```
 
 Tip: `/model status` shows which agent is active, which `auth-profiles.json` file is being used, and which auth profile will be tried next.
+It also shows the configured provider endpoint (`baseUrl`) and API mode (`api`) when available.
 
 ### Why do I see “Model … is not allowed” and then no reply?
 

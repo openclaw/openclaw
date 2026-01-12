@@ -151,8 +151,8 @@ Use the interactive config wizard to set MiniMax without editing JSON:
 
 ## Configuration options
 
-- `models.providers.minimax.baseUrl`: `https://api.minimax.io/v1` or `https://api.minimax.io/anthropic`.
-- `models.providers.minimax.api`: `openai-completions` (cloud) or `anthropic-messages` (API).
+- `models.providers.minimax.baseUrl`: prefer `https://api.minimax.io/anthropic` (Anthropic-compatible); `https://api.minimax.io/v1` is optional for OpenAI-compatible payloads.
+- `models.providers.minimax.api`: prefer `anthropic-messages`; `openai-completions` is optional for OpenAI-compatible payloads.
 - `models.providers.minimax.apiKey`: MiniMax API key (`MINIMAX_API_KEY`).
 - `models.providers.minimax.models`: define `id`, `name`, `reasoning`, `contextWindow`, `maxTokens`, `cost`.
 - `agents.defaults.models`: alias models you want in the allowlist.

@@ -611,12 +611,12 @@ describe("runEmbeddedPiAgent", () => {
       models: {
         providers: {
           minimax: {
-            baseUrl: "https://api.minimax.io/v1",
-            api: "openai-completions",
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
             apiKey: "sk-minimax-test",
             models: [
               {
-                id: "minimax-m2.1",
+                id: "MiniMax-M2.1",
                 name: "MiniMax M2.1",
                 reasoning: false,
                 input: ["text"],

@@ -27,6 +27,30 @@ const usageMocks = vi.hoisted(() => ({
 
 vi.mock("../infra/provider-usage.js", () => usageMocks);
 
+const modelCatalogMocks = vi.hoisted(() => ({
+  loadModelCatalog: vi.fn().mockResolvedValue([
+    {
+      provider: "anthropic",
+      id: "claude-opus-4-5",
+      name: "Claude Opus 4.5",
+      contextWindow: 200000,
+    },
+    {
+      provider: "openrouter",
+      id: "anthropic/claude-opus-4-5",
+      name: "Claude Opus 4.5 (OpenRouter)",
+      contextWindow: 200000,
+    },
+    { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
+    { provider: "openai", id: "gpt-5.2", name: "GPT-5.2" },
+    { provider: "openai-codex", id: "gpt-5.2", name: "GPT-5.2 (Codex)" },
+    { provider: "minimax", id: "MiniMax-M2.1", name: "MiniMax M2.1" },
+  ]),
+  resetModelCatalogCacheForTest: vi.fn(),
+}));
+
+vi.mock("../agents/model-catalog.js", () => modelCatalogMocks);
+
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import {
   abortEmbeddedPiRun,
@@ -260,6 +284,102 @@ describe("trigger handling", () => {
           provider: "openai",
           model: "gpt-4.1-mini",
         }),
+      );
+    });
+  });
+
+  it("shows a quick /model picker grouped by model with providers", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "telegram:slash:111",
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const normalized = normalizeTestText(text ?? "");
+      expect(normalized).toContain(
+        "Pick: /model <#> or /model <provider/model>",
+      );
+      expect(normalized).toContain(
+        "1) claude-opus-4-5 — anthropic, openrouter",
+      );
+      expect(normalized).toContain("3) gpt-5.2 — openai, openai-codex");
+      expect(normalized).not.toContain("reasoning");
+      expect(normalized).not.toContain("image");
+    });
+  });
+
+  it("selects a model by index via /model <#>", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const sessionKey = "telegram:slash:111";
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model 3",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: sessionKey,
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(normalizeTestText(text ?? "")).toContain(
+        "Model set to openai/gpt-5.2",
+      );
+
+      const store = loadSessionStore(cfg.session.store);
+      expect(store[sessionKey]?.providerOverride).toBe("openai");
+      expect(store[sessionKey]?.modelOverride).toBe("gpt-5.2");
+    });
+  });
+
+  it("includes endpoint details in /model status when configured", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        ...makeCfg(home),
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+              api: "anthropic-messages",
+            },
+          },
+        },
+      };
+      const res = await getReplyFromConfig(
+        {
+          Body: "/model status",
+          From: "telegram:111",
+          To: "telegram:111",
+          ChatType: "direct",
+          Provider: "telegram",
+          Surface: "telegram",
+          SessionKey: "telegram:slash:111",
+        },
+        {},
+        cfg,
+      );
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const normalized = normalizeTestText(text ?? "");
+      expect(normalized).toContain(
+        "[minimax] endpoint: https://api.minimax.io/anthropic api: anthropic-messages auth:",
       );
     });
   });

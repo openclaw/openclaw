@@ -316,6 +316,121 @@ const resolveProfileOverride = (params: {
   return { profileId: raw };
 };
 
+type ModelPickerCatalogEntry = {
+  provider: string;
+  id: string;
+  name?: string;
+};
+
+type ModelPickerItem = {
+  model: string;
+  providers: string[];
+  providerModels: Record<string, string>;
+};
+
+const MODEL_PICK_PROVIDER_PREFERENCE = [
+  "anthropic",
+  "openai",
+  "openai-codex",
+  "minimax",
+  "google",
+  "zai",
+  "openrouter",
+  "opencode",
+  "github-copilot",
+  "groq",
+  "cerebras",
+  "mistral",
+  "xai",
+  "lmstudio",
+] as const;
+
+function normalizeModelFamilyId(id: string): string {
+  const trimmed = id.trim();
+  if (!trimmed) return trimmed;
+  const parts = trimmed.split("/").filter(Boolean);
+  return parts.length > 0 ? (parts[parts.length - 1] ?? trimmed) : trimmed;
+}
+
+function sortProvidersForPicker(providers: string[]): string[] {
+  const pref = new Map<string, number>(
+    MODEL_PICK_PROVIDER_PREFERENCE.map((provider, idx) => [provider, idx]),
+  );
+  return providers.sort((a, b) => {
+    const pa = pref.get(a);
+    const pb = pref.get(b);
+    if (pa !== undefined && pb !== undefined) return pa - pb;
+    if (pa !== undefined) return -1;
+    if (pb !== undefined) return 1;
+    return a.localeCompare(b);
+  });
+}
+
+function buildModelPickerItems(
+  catalog: ModelPickerCatalogEntry[],
+): ModelPickerItem[] {
+  const byModel = new Map<string, { providerModels: Record<string, string> }>();
+  for (const entry of catalog) {
+    const provider = normalizeProviderId(entry.provider);
+    const model = normalizeModelFamilyId(entry.id);
+    if (!provider || !model) continue;
+    const existing = byModel.get(model);
+    if (existing) {
+      existing.providerModels[provider] = entry.id;
+      continue;
+    }
+    byModel.set(model, { providerModels: { [provider]: entry.id } });
+  }
+  const out: ModelPickerItem[] = [];
+  for (const [model, data] of byModel.entries()) {
+    const providers = sortProvidersForPicker(Object.keys(data.providerModels));
+    out.push({ model, providers, providerModels: data.providerModels });
+  }
+  out.sort((a, b) =>
+    a.model.toLowerCase().localeCompare(b.model.toLowerCase()),
+  );
+  return out;
+}
+
+function pickProviderForModel(params: {
+  item: ModelPickerItem;
+  preferredProvider?: string;
+}): { provider: string; model: string } | null {
+  const preferred = params.preferredProvider
+    ? normalizeProviderId(params.preferredProvider)
+    : undefined;
+  if (preferred && params.item.providerModels[preferred]) {
+    return {
+      provider: preferred,
+      model: params.item.providerModels[preferred],
+    };
+  }
+  const first = params.item.providers[0];
+  if (!first) return null;
+  return {
+    provider: first,
+    model: params.item.providerModels[first] ?? params.item.model,
+  };
+}
+
+function resolveProviderEndpointLabel(
+  provider: string,
+  cfg: ClawdbotConfig,
+): { endpoint?: string; api?: string } {
+  const normalized = normalizeProviderId(provider);
+  const providers = (cfg.models?.providers ?? {}) as Record<
+    string,
+    { baseUrl?: string; api?: string } | undefined
+  >;
+  const entry = providers[normalized];
+  const endpoint = entry?.baseUrl?.trim();
+  const api = entry?.api?.trim();
+  return {
+    endpoint: endpoint || undefined,
+    api: api || undefined,
+  };
+}
+
 export type InlineDirectives = {
   cleaned: string;
   hasThinkDirective: boolean;
@@ -527,111 +642,90 @@ export async function handleDirectiveOnly(params: {
     directives.hasElevatedDirective && !runtimeIsSandboxed;
 
   if (directives.hasModelDirective) {
-    const modelDirective = directives.rawModelDirective?.trim().toLowerCase();
-    const isModelListAlias =
-      modelDirective === "status" || modelDirective === "list";
-    if (!directives.rawModelDirective || isModelListAlias) {
+    const rawDirective = directives.rawModelDirective?.trim();
+    const directive = rawDirective?.toLowerCase();
+    const wantsStatus = directive === "status";
+    const wantsList = !rawDirective || directive === "list";
+
+    if ((wantsList || wantsStatus) && directives.rawModelProfile) {
+      return { text: "Auth profile override requires a model selection." };
+    }
+
+    const resolvedDefault = resolveConfiguredModelRef({
+      cfg: params.cfg,
+      defaultProvider,
+      defaultModel,
+    });
+    const pickerCatalog: ModelPickerCatalogEntry[] = (() => {
+      if (allowedModelCatalog.length > 0) return allowedModelCatalog;
+      const keys = new Set<string>();
+      const out: ModelPickerCatalogEntry[] = [];
+      for (const raw of Object.keys(
+        params.cfg.agents?.defaults?.models ?? {},
+      )) {
+        const resolved = resolveModelRefFromString({
+          raw: String(raw),
+          defaultProvider,
+          aliasIndex,
+        });
+        if (!resolved) continue;
+        const key = modelKey(resolved.ref.provider, resolved.ref.model);
+        if (keys.has(key)) continue;
+        keys.add(key);
+        out.push({
+          provider: resolved.ref.provider,
+          id: resolved.ref.model,
+          name: resolved.ref.model,
+        });
+      }
+      if (out.length === 0 && resolvedDefault.model) {
+        const key = modelKey(resolvedDefault.provider, resolvedDefault.model);
+        keys.add(key);
+        out.push({
+          provider: resolvedDefault.provider,
+          id: resolvedDefault.model,
+          name: resolvedDefault.model,
+        });
+      }
+      return out;
+    })();
+
+    if (wantsList) {
+      const items = buildModelPickerItems(pickerCatalog);
+      if (items.length === 0) return { text: "No models available." };
+      const current = `${params.provider}/${params.model}`;
+      const lines: string[] = [
+        `Current: ${current}`,
+        "Pick: /model <#> or /model <provider/model>",
+      ];
+      for (const [idx, item] of items.entries()) {
+        lines.push(`${idx + 1}) ${item.model} — ${item.providers.join(", ")}`);
+      }
+      lines.push("", "More: /model status");
+      return { text: lines.join("\n") };
+    }
+
+    if (wantsStatus) {
       const modelsPath = `${agentDir}/models.json`;
       const formatPath = (value: string) => shortenHomePath(value);
-      const authMode: ModelAuthDetailMode =
-        modelDirective === "status" ? "verbose" : "compact";
-      if (allowedModelCatalog.length === 0) {
-        const resolvedDefault = resolveConfiguredModelRef({
-          cfg: params.cfg,
-          defaultProvider,
-          defaultModel,
-        });
-        const fallbackKeys = new Set<string>();
-        const fallbackCatalog: Array<{
-          provider: string;
-          id: string;
-        }> = [];
-        for (const raw of Object.keys(
-          params.cfg.agents?.defaults?.models ?? {},
-        )) {
-          const resolved = resolveModelRefFromString({
-            raw: String(raw),
-            defaultProvider,
-            aliasIndex,
-          });
-          if (!resolved) continue;
-          const key = modelKey(resolved.ref.provider, resolved.ref.model);
-          if (fallbackKeys.has(key)) continue;
-          fallbackKeys.add(key);
-          fallbackCatalog.push({
-            provider: resolved.ref.provider,
-            id: resolved.ref.model,
-          });
-        }
-        if (fallbackCatalog.length === 0 && resolvedDefault.model) {
-          const key = modelKey(resolvedDefault.provider, resolvedDefault.model);
-          fallbackKeys.add(key);
-          fallbackCatalog.push({
-            provider: resolvedDefault.provider,
-            id: resolvedDefault.model,
-          });
-        }
-        if (fallbackCatalog.length === 0) {
-          return { text: "No models available." };
-        }
-        const authByProvider = new Map<string, string>();
-        for (const entry of fallbackCatalog) {
-          if (authByProvider.has(entry.provider)) continue;
-          const auth = await resolveAuthLabel(
-            entry.provider,
-            params.cfg,
-            modelsPath,
-            agentDir,
-            authMode,
-          );
-          authByProvider.set(entry.provider, formatAuthLabel(auth));
-        }
-        const current = `${params.provider}/${params.model}`;
-        const defaultLabel = `${defaultProvider}/${defaultModel}`;
-        const lines = [
-          `Current: ${current}`,
-          `Default: ${defaultLabel}`,
-          `Agent: ${activeAgentId}`,
-          `Auth file: ${formatPath(resolveAuthStorePathForDisplay(agentDir))}`,
-          `⚠️ Model catalog unavailable; showing configured models only.`,
-        ];
-        const byProvider = new Map<string, typeof fallbackCatalog>();
-        for (const entry of fallbackCatalog) {
-          const models = byProvider.get(entry.provider);
-          if (models) {
-            models.push(entry);
-            continue;
-          }
-          byProvider.set(entry.provider, [entry]);
-        }
-        for (const provider of byProvider.keys()) {
-          const models = byProvider.get(provider);
-          if (!models) continue;
-          const authLabel = authByProvider.get(provider) ?? "missing";
-          lines.push("");
-          lines.push(`[${provider}] auth: ${authLabel}`);
-          for (const entry of models) {
-            const label = `${entry.provider}/${entry.id}`;
-            const aliases = aliasIndex.byKey.get(label);
-            const aliasSuffix =
-              aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
-            lines.push(`  • ${label}${aliasSuffix}`);
-          }
-        }
-        return { text: lines.join("\n") };
-      }
+      const authMode: ModelAuthDetailMode = "verbose";
+      const catalog = pickerCatalog;
+      if (catalog.length === 0) return { text: "No models available." };
+
       const authByProvider = new Map<string, string>();
-      for (const entry of allowedModelCatalog) {
-        if (authByProvider.has(entry.provider)) continue;
+      for (const entry of catalog) {
+        const provider = normalizeProviderId(entry.provider);
+        if (authByProvider.has(provider)) continue;
         const auth = await resolveAuthLabel(
-          entry.provider,
+          provider,
           params.cfg,
           modelsPath,
           agentDir,
           authMode,
         );
-        authByProvider.set(entry.provider, formatAuthLabel(auth));
+        authByProvider.set(provider, formatAuthLabel(auth));
       }
+
       const current = `${params.provider}/${params.model}`;
       const defaultLabel = `${defaultProvider}/${defaultModel}`;
       const lines = [
@@ -644,26 +738,32 @@ export async function handleDirectiveOnly(params: {
         lines.push(`(previous selection reset to default)`);
       }
 
-      // Group models by provider
-      const byProvider = new Map<string, typeof allowedModelCatalog>();
-      for (const entry of allowedModelCatalog) {
-        const models = byProvider.get(entry.provider);
+      const byProvider = new Map<string, ModelPickerCatalogEntry[]>();
+      for (const entry of catalog) {
+        const provider = normalizeProviderId(entry.provider);
+        const models = byProvider.get(provider);
         if (models) {
           models.push(entry);
           continue;
         }
-        byProvider.set(entry.provider, [entry]);
+        byProvider.set(provider, [entry]);
       }
 
-      // Iterate over provider groups
       for (const provider of byProvider.keys()) {
         const models = byProvider.get(provider);
         if (!models) continue;
         const authLabel = authByProvider.get(provider) ?? "missing";
+        const endpoint = resolveProviderEndpointLabel(provider, params.cfg);
+        const endpointSuffix = endpoint.endpoint
+          ? ` endpoint: ${endpoint.endpoint}`
+          : " endpoint: default";
+        const apiSuffix = endpoint.api ? ` api: ${endpoint.api}` : "";
         lines.push("");
-        lines.push(`[${provider}] auth: ${authLabel}`);
+        lines.push(
+          `[${provider}]${endpointSuffix}${apiSuffix} auth: ${authLabel}`,
+        );
         for (const entry of models) {
-          const label = `${entry.provider}/${entry.id}`;
+          const label = `${provider}/${entry.id}`;
           const aliases = aliasIndex.byKey.get(label);
           const aliasSuffix =
             aliases && aliases.length > 0 ? ` (${aliases.join(", ")})` : "";
@@ -671,9 +771,6 @@ export async function handleDirectiveOnly(params: {
         }
       }
       return { text: lines.join("\n") };
-    }
-    if (directives.rawModelProfile && !modelDirective) {
-      throw new Error("Auth profile override requires a model selection.");
     }
   }
 
@@ -835,17 +932,87 @@ export async function handleDirectiveOnly(params: {
   let modelSelection: ModelDirectiveSelection | undefined;
   let profileOverride: string | undefined;
   if (directives.hasModelDirective && directives.rawModelDirective) {
-    const resolved = resolveModelDirectiveSelection({
-      raw: directives.rawModelDirective,
-      defaultProvider,
-      defaultModel,
-      aliasIndex,
-      allowedModelKeys,
-    });
-    if (resolved.error) {
-      return { text: resolved.error };
+    const raw = directives.rawModelDirective.trim();
+    if (/^[0-9]+$/.test(raw)) {
+      const resolvedDefault = resolveConfiguredModelRef({
+        cfg: params.cfg,
+        defaultProvider,
+        defaultModel,
+      });
+      const pickerCatalog: ModelPickerCatalogEntry[] = (() => {
+        if (allowedModelCatalog.length > 0) return allowedModelCatalog;
+        const keys = new Set<string>();
+        const out: ModelPickerCatalogEntry[] = [];
+        for (const rawKey of Object.keys(
+          params.cfg.agents?.defaults?.models ?? {},
+        )) {
+          const resolved = resolveModelRefFromString({
+            raw: String(rawKey),
+            defaultProvider,
+            aliasIndex,
+          });
+          if (!resolved) continue;
+          const key = modelKey(resolved.ref.provider, resolved.ref.model);
+          if (keys.has(key)) continue;
+          keys.add(key);
+          out.push({
+            provider: resolved.ref.provider,
+            id: resolved.ref.model,
+            name: resolved.ref.model,
+          });
+        }
+        if (out.length === 0 && resolvedDefault.model) {
+          const key = modelKey(resolvedDefault.provider, resolvedDefault.model);
+          keys.add(key);
+          out.push({
+            provider: resolvedDefault.provider,
+            id: resolvedDefault.model,
+            name: resolvedDefault.model,
+          });
+        }
+        return out;
+      })();
+
+      const items = buildModelPickerItems(pickerCatalog);
+      const index = Number.parseInt(raw, 10) - 1;
+      const item = Number.isFinite(index) ? items[index] : undefined;
+      if (!item) {
+        return {
+          text: `Invalid model selection "${raw}". Use /model to list.`,
+        };
+      }
+      const picked = pickProviderForModel({
+        item,
+        preferredProvider: params.provider,
+      });
+      if (!picked) {
+        return {
+          text: `Invalid model selection "${raw}". Use /model to list.`,
+        };
+      }
+      const key = `${picked.provider}/${picked.model}`;
+      const aliases = aliasIndex.byKey.get(key);
+      const alias = aliases && aliases.length > 0 ? aliases[0] : undefined;
+      modelSelection = {
+        provider: picked.provider,
+        model: picked.model,
+        isDefault:
+          picked.provider === defaultProvider && picked.model === defaultModel,
+        ...(alias ? { alias } : {}),
+      };
+    } else {
+      const resolved = resolveModelDirectiveSelection({
+        raw,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        allowedModelKeys,
+      });
+      if (resolved.error) {
+        return { text: resolved.error };
+      }
+      modelSelection = resolved.selection;
     }
-    modelSelection = resolved.selection;
     if (modelSelection) {
       if (directives.rawModelProfile) {
         const profileResolved = resolveProfileOverride({
