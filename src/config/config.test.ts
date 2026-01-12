@@ -671,7 +671,9 @@ describe("Nix integration (U3, U5, U9)", () => {
         { CLAWDBOT_CONFIG_PATH: "/nix/store/abc/clawdbot.json" },
         async () => {
           const { CONFIG_PATH_CLAWDBOT } = await import("./config.js");
-          expect(CONFIG_PATH_CLAWDBOT).toBe("/nix/store/abc/clawdbot.json");
+          expect(CONFIG_PATH_CLAWDBOT).toBe(
+            path.resolve("/nix/store/abc/clawdbot.json"),
+          );
         },
       );
     });
