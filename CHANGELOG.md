@@ -14,6 +14,7 @@
 - Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
 - Models: normalize `${ENV_VAR}` apiKey config values and auto-fill missing provider `apiKey` from env/auth when custom provider models are configured (fixes MiniMax “Unknown model” on fresh installs).
 - Telegram: show typing indicator in General forum topics. (#779) — thanks @azade-c.
+- Models: keep explicit GitHub Copilot provider config and honor agent-dir auth profiles for auto-injection. (#705) — thanks @TAGOOZ.
 
 ## 2026.1.11
 
