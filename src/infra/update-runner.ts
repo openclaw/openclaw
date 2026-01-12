@@ -417,7 +417,7 @@ export async function runGatewayUpdate(
     const doctorStep = await runStep(
       step(
         "clawdbot doctor",
-        managerScriptArgs(manager, "clawdbot", ["doctor"]),
+        managerScriptArgs(manager, "clawdbot", ["doctor", "--non-interactive"]),
         gitRoot,
         { CLAWDBOT_UPDATE_IN_PROGRESS: "1" },
       ),
