@@ -29,6 +29,7 @@
 - Discord: add `discord.allowBots` to permit bot-authored messages (still ignores its own messages) with docs warning about bot loops. (#802) — thanks @zknicker.
 - CLI/Onboarding: `clawdbot dashboard` prints/copies the tokenized Control UI link and opens it; onboarding now auto-opens the dashboard with your token and keeps the link in the summary.
 - Commands: native slash commands now default to `"auto"` (on for Discord/Telegram, off for Slack) with per-provider overrides (`discord/telegram/slack.commands.native`) and docs updated.
+- Sandbox: allow Docker bind mounts via `docker.binds`; merges global + per-agent binds (per-agent ignored under shared scope) for custom host paths. (#790 — thanks @akonyer)
 
 ### Fixes
 - Auto-reply: inline `/status` now honors allowlists (authorized stripped + replied inline; unauthorized leaves text for the agent) to match command gating tests.
