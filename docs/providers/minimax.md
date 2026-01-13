@@ -29,6 +29,9 @@ MiniMax highlights these improvements in M2.1:
 
 - **Speed:** Lightning is the “fast” variant in MiniMax’s pricing docs.
 - **Cost:** Pricing shows the same input cost, but Lightning has higher output cost.
+- **Coding plan routing:** The Lightning back-end isn’t directly available on the MiniMax
+  coding plan. MiniMax auto-routes most requests to Lightning, but falls back to the
+  regular M2.1 back-end during traffic spikes.
 
 ## Choose a setup
 
