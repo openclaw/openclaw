@@ -91,6 +91,70 @@ describe("extractAssistantText", () => {
     expect(result).toBe("Before\nAfter");
   });
 
+  it("strips minimax tool_call open and close tags", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Start<minimax:tool_call>Inner</minimax:tool_call>End",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("StartInnerEnd");
+  });
+
+  it("ignores invoke blocks without minimax markers", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Before<invoke>Keep</invoke>After",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Before<invoke>Keep</invoke>After");
+  });
+
+  it("strips invoke blocks when minimax markers are present elsewhere", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "Before<invoke>Drop</invoke><minimax:tool_call>After",
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("BeforeAfter");
+  });
+
+  it("strips invoke blocks with nested tags", () => {
+    const msg: AssistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `A<invoke name="Bash"><param><deep>1</deep></param></invoke></minimax:tool_call>B`,
+        },
+      ],
+      timestamp: Date.now(),
+    };
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("AB");
+  });
+
   it("strips tool XML mixed with regular content", () => {
     const msg: AssistantMessage = {
       role: "assistant",
