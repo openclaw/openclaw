@@ -190,7 +190,7 @@ const FIELD_LABELS: Record<string, string> = {
   "channels.discord.maxLinesPerMessage": "Discord Max Lines Per Message",
   "channels.slack.dm.policy": "Slack DM Policy",
   "channels.slack.allowBots": "Slack Allow Bot Messages",
-  "matrix": "Matrix",
+  matrix: "Matrix",
   "matrix.homeserver": "Matrix Homeserver",
   "matrix.userId": "Matrix User ID",
   "matrix.accessToken": "Matrix Access Token",

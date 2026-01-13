@@ -155,13 +155,21 @@ export async function resolveMatrixAuth(params?: {
     throw new Error("Matrix login did not return an access token");
   }
 
-  return {
+  const auth: MatrixAuth = {
     homeserver: resolved.homeserver,
     userId: login.user_id ?? resolved.userId,
     accessToken,
     deviceName: resolved.deviceName,
     initialSyncLimit: resolved.initialSyncLimit,
   };
+
+  saveMatrixCredentials({
+    homeserver: auth.homeserver,
+    userId: auth.userId,
+    accessToken: auth.accessToken,
+  });
+
+  return auth;
 }
 
 export async function createMatrixClient(params: {

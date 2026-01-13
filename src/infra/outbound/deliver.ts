@@ -37,6 +37,7 @@ export type OutboundDeliveryResult = {
   messageId: string;
   chatId?: string;
   channelId?: string;
+  roomId?: string;
   conversationId?: string;
   timestamp?: number;
   toJid?: string;

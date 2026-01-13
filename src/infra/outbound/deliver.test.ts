@@ -141,7 +141,7 @@ describe("deliverOutboundPayloads", () => {
 
     const results = await deliverOutboundPayloads({
       cfg,
-      provider: "matrix",
+      channel: "matrix",
       to: "room:!room:example",
       payloads: [{ text: "hello" }],
       deps: { sendMatrix },
@@ -149,7 +149,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendMatrix).toHaveBeenCalledWith("room:!room:example", "hello");
     expect(results[0]).toMatchObject({
-      provider: "matrix",
+      channel: "matrix",
       roomId: "!room:example",
     });
   });

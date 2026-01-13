@@ -172,10 +172,12 @@ const requireOpenAllowFrom = (params: {
   ctx: z.RefinementCtx;
   path: Array<string | number>;
   message: string;
+  allowEmpty?: boolean;
 }) => {
   if (params.policy !== "open") return;
   const allow = normalizeAllowFrom(params.allowFrom);
   if (allow.includes("*")) return;
+  if (allow.length === 0 && params.allowEmpty) return;
   params.ctx.addIssue({
     code: z.ZodIssueCode.custom,
     path: params.path,

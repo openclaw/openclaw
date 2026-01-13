@@ -120,12 +120,12 @@ export const matrixOnboardingAdapter: ChannelOnboardingAdapter = {
       quickstartScore: configured ? 2 : 0,
     };
   },
-  configure: async ({ cfg, prompter, runtime }) => {
+  configure: async ({ cfg, prompter }) => {
     const configValues = resolveMatrixConfigValues(cfg);
     const envValues = resolveMatrixEnvValues();
     const hasConfigCreds = hasMatrixCredentials(configValues);
     const hasEnvCreds = hasMatrixCredentials(envValues);
-    const matrixConfig = { ...(cfg.matrix ?? {}) } as Record<string, unknown>;
+    const matrixConfig = { ...(cfg.matrix as Record<string, unknown>) };
 
     let next = cfg;
     let shouldWrite = false;

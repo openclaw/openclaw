@@ -85,6 +85,24 @@ struct ChannelsStatusSnapshot: Codable {
         let lastProbeAt: Double?
     }
 
+    struct MatrixProbe: Codable {
+        let ok: Bool
+        let status: Int?
+        let error: String?
+        let elapsedMs: Double?
+        let userId: String?
+    }
+
+    struct MatrixStatus: Codable {
+        let configured: Bool
+        let running: Bool
+        let lastStartAt: Double?
+        let lastStopAt: Double?
+        let lastError: String?
+        let probe: MatrixProbe?
+        let lastProbeAt: Double?
+    }
+
     struct SignalProbe: Codable {
         let ok: Bool
         let status: Int?
@@ -278,6 +296,28 @@ final class ConnectionsStore {
     var discordSlashName: String = ""
     var discordSlashSessionPrefix: String = ""
     var discordSlashEphemeral = true
+    var matrixEnabled = true
+    var matrixHomeserver: String = ""
+    var matrixUserId: String = ""
+    var matrixAccessToken: String = ""
+    var matrixPassword: String = ""
+    var matrixDeviceName: String = ""
+    var matrixAutoJoin: String = "always"
+    var matrixAutoJoinAllowlist: String = ""
+    var matrixGroupPolicy: String = "open"
+    var matrixAllowlistOnly = false
+    var matrixDmEnabled = true
+    var matrixDmPolicy: String = "pairing"
+    var matrixDmAllowFrom: String = ""
+    var matrixTextChunkLimit: String = ""
+    var matrixMediaMaxMb: String = ""
+    var matrixReplyToMode: String = "off"
+    var matrixThreadReplies: String = "inbound"
+    var matrixActionReactions = true
+    var matrixActionMessages = true
+    var matrixActionPins = true
+    var matrixActionMemberInfo = true
+    var matrixActionRoomInfo = true
     var signalEnabled = true
     var signalAccount: String = ""
     var signalHttpUrl: String = ""

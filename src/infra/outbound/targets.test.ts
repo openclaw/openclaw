@@ -86,7 +86,7 @@ describe("resolveOutboundTarget", () => {
   });
 
   it("rejects matrix with missing target", () => {
-    const res = resolveOutboundTarget({ provider: "matrix", to: " " });
+    const res = resolveOutboundTarget({ channel: "matrix", to: " " });
     expect(res.ok).toBe(false);
     if (!res.ok) {
       expect(res.error.message).toContain("Matrix");

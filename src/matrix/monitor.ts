@@ -8,7 +8,6 @@ import type {
 import {
   ClientEvent,
   EventType,
-  MatrixEventEvent,
   RelationType,
   RoomEvent,
   RoomMemberEvent,
@@ -38,8 +37,8 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { saveMediaBuffer } from "../media/store.js";
 import {
-  readProviderAllowFromStore,
-  upsertProviderPairingRequest,
+  readChannelAllowFromStore,
+  upsertChannelPairingRequest,
 } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -580,7 +579,7 @@ export async function monitorMatrixProvider(
       }
 
       const senderName = room.getMember(senderId)?.name ?? senderId;
-      const storeAllowFrom = await readProviderAllowFromStore("matrix").catch(
+      const storeAllowFrom = await readChannelAllowFromStore("matrix").catch(
         () => [],
       );
       const effectiveAllowFrom = normalizeAllowListLower([
@@ -600,8 +599,8 @@ export async function monitorMatrixProvider(
             });
           if (!permitted) {
             if (dmPolicy === "pairing") {
-              const { code, created } = await upsertProviderPairingRequest({
-                provider: "matrix",
+              const { code, created } = await upsertChannelPairingRequest({
+                channel: "matrix",
                 id: senderId,
                 meta: { name: senderName },
               });
@@ -736,7 +735,7 @@ export async function monitorMatrixProvider(
 
       const textWithId = `${bodyText}\n[matrix event id: ${messageId} room: ${roomId}]`;
       const body = formatAgentEnvelope({
-        provider: "Matrix",
+        channel: "Matrix",
         from: senderName,
         timestamp: event.getTs() ?? undefined,
         body: textWithId,
@@ -744,7 +743,7 @@ export async function monitorMatrixProvider(
 
       const route = resolveAgentRoute({
         cfg,
-        provider: "matrix",
+        channel: "matrix",
         peer: {
           kind: isDirectMessage ? "dm" : "channel",
           id: isDirectMessage ? senderId : roomId,
@@ -791,7 +790,7 @@ export async function monitorMatrixProvider(
         await updateLastRoute({
           storePath,
           sessionKey: route.mainSessionKey,
-          provider: "matrix",
+          channel: "matrix",
           to: `room:${roomId}`,
           accountId: route.accountId,
         });

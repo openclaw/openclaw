@@ -93,9 +93,7 @@ extension ConnectionsStore {
         self.matrixUserId = matrix?["userId"]?.stringValue ?? ""
         self.matrixAccessToken = matrix?["accessToken"]?.stringValue ?? ""
         self.matrixPassword = matrix?["password"]?.stringValue ?? ""
-        self.matrixDeviceId = matrix?["deviceId"]?.stringValue ?? ""
         self.matrixDeviceName = matrix?["deviceName"]?.stringValue ?? ""
-        self.matrixEncryption = matrix?["encryption"]?.boolValue ?? true
 
         let autoJoin = matrix?["autoJoin"]?.stringValue ?? "always"
         self.matrixAutoJoin = ["always", "allowlist", "off"].contains(autoJoin)
@@ -265,14 +263,7 @@ extension ConnectionsStore {
         self.setOptionalString(&matrix, key: "userId", value: self.matrixUserId)
         self.setOptionalString(&matrix, key: "accessToken", value: self.matrixAccessToken)
         self.setOptionalString(&matrix, key: "password", value: self.matrixPassword)
-        self.setOptionalString(&matrix, key: "deviceId", value: self.matrixDeviceId)
         self.setOptionalString(&matrix, key: "deviceName", value: self.matrixDeviceName)
-
-        if self.matrixEncryption {
-            matrix.removeValue(forKey: "encryption")
-        } else {
-            matrix["encryption"] = false
-        }
 
         let autoJoin = self.trimmed(self.matrixAutoJoin)
         if autoJoin.isEmpty || autoJoin == "always" {

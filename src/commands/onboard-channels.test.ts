@@ -84,7 +84,7 @@ describe("setupChannels", () => {
     }
 
     const select = vi.fn(async ({ message }: { message: string }) => {
-      if (message === "Select provider (QuickStart)") return "matrix";
+      if (message === "Select channel (QuickStart)") return "matrix";
       throw new Error(`unexpected select prompt: ${message}`);
     });
     const multiselect = vi.fn(async () => {
@@ -127,7 +127,7 @@ describe("setupChannels", () => {
     };
 
     try {
-      await setupProviders({} as ClawdbotConfig, runtime, prompter, {
+      await setupChannels({} as ClawdbotConfig, runtime, prompter, {
         skipConfirm: true,
         quickstartDefaults: true,
         skipDmPolicyPrompt: true,

@@ -5,6 +5,7 @@ import {
 } from "../registry.js";
 import { discordPlugin } from "./discord.js";
 import { imessagePlugin } from "./imessage.js";
+import { matrixPlugin } from "./matrix.js";
 import { msteamsPlugin } from "./msteams.js";
 import { signalPlugin } from "./signal.js";
 import { slackPlugin } from "./slack.js";
@@ -28,6 +29,7 @@ function resolveChannels(): ChannelPlugin[] {
     whatsappPlugin,
     discordPlugin,
     slackPlugin,
+    matrixPlugin,
     signalPlugin,
     imessagePlugin,
     msteamsPlugin,
@@ -58,6 +60,7 @@ export function normalizeChannelId(raw?: string | null): ChannelId | null {
 export {
   discordPlugin,
   imessagePlugin,
+  matrixPlugin,
   msteamsPlugin,
   signalPlugin,
   slackPlugin,

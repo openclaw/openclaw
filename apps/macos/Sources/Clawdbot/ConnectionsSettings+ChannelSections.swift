@@ -521,46 +521,29 @@ extension ConnectionsSettings {
                         if self.showMatrixAccessToken {
                             TextField("access token", text: self.$store.matrixAccessToken)
                                 .textFieldStyle(.roundedBorder)
-                                .disabled(self.isMatrixAuthLocked)
                         } else {
                             SecureField("access token", text: self.$store.matrixAccessToken)
                                 .textFieldStyle(.roundedBorder)
-                                .disabled(self.isMatrixAuthLocked)
                         }
                         Toggle("Show", isOn: self.$showMatrixAccessToken)
                             .toggleStyle(.switch)
-                            .disabled(self.isMatrixAuthLocked)
                     }
                     GridRow {
                         self.gridLabel("Password")
                         if self.showMatrixPassword {
                             TextField("password", text: self.$store.matrixPassword)
                                 .textFieldStyle(.roundedBorder)
-                                .disabled(self.isMatrixAuthLocked)
                         } else {
                             SecureField("password", text: self.$store.matrixPassword)
                                 .textFieldStyle(.roundedBorder)
-                                .disabled(self.isMatrixAuthLocked)
                         }
                         Toggle("Show", isOn: self.$showMatrixPassword)
                             .toggleStyle(.switch)
-                            .disabled(self.isMatrixAuthLocked)
-                    }
-                    GridRow {
-                        self.gridLabel("Device ID")
-                        TextField("CLAWDBOT", text: self.$store.matrixDeviceId)
-                            .textFieldStyle(.roundedBorder)
                     }
                     GridRow {
                         self.gridLabel("Device name")
                         TextField("Clawdbot Gateway", text: self.$store.matrixDeviceName)
                             .textFieldStyle(.roundedBorder)
-                    }
-                    GridRow {
-                        self.gridLabel("E2EE")
-                        Toggle("", isOn: self.$store.matrixEncryption)
-                            .labelsHidden()
-                            .toggleStyle(.checkbox)
                     }
                 }
             }
@@ -697,14 +680,6 @@ extension ConnectionsSettings {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            if self.isMatrixAuthLocked {
-                Text(
-                    "Matrix credentials set via MATRIX_ACCESS_TOKEN/MATRIX_PASSWORD env; " +
-                        "config edits won’t override it.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
 
             self.configStatusMessage

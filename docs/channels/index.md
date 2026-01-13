@@ -17,7 +17,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Slack](/channels/slack) — Bolt SDK; workspace apps.
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
 - [iMessage](/channels/imessage) — macOS only; native integration.
-- [Matrix](/channels/matrix) — matrix-js-sdk; E2EE by default.
+- [Matrix](/channels/matrix) — matrix-js-sdk; unencrypted rooms only.
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support.
 - [WebChat](/web/webchat) — Gateway WebChat UI over WebSocket.
 

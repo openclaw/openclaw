@@ -1,4 +1,5 @@
 import { chunkMarkdownText } from "../../auto-reply/chunk.js";
+import type { MatrixConfig } from "../../config/types.js";
 import {
   listMatrixAccountIds,
   resolveDefaultMatrixAccountId,
@@ -174,7 +175,7 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
     applyAccountName: ({ cfg, name }) => {
       const trimmed = name?.trim();
       if (!trimmed) return cfg;
-      const base = (cfg.matrix as Record<string, unknown> | undefined) ?? {};
+      const base = (cfg.matrix ?? {}) as MatrixConfig;
       return {
         ...cfg,
         matrix: {
@@ -197,8 +198,8 @@ export const matrixPlugin: ChannelPlugin<ResolvedMatrixAccount> = {
       return null;
     },
     applyAccountConfig: ({ cfg, input }) => {
-      const base = (cfg.matrix as Record<string, unknown> | undefined) ?? {};
-      const next: Record<string, unknown> = {
+      const base = (cfg.matrix ?? {}) as MatrixConfig;
+      const next: MatrixConfig = {
         ...base,
         enabled: true,
       };

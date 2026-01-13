@@ -35,22 +35,21 @@ struct UsageRow: Identifiable {
     }
 
     var titleText: String {
-        if let plan = self.plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
+        if let plan, !plan.isEmpty { return "\(self.displayName) (\(plan))" }
         return self.displayName
     }
 
     var remainingPercent: Int? {
-        guard let usedPercent = self.usedPercent, usedPercent.isFinite else { return nil }
+        guard let usedPercent, usedPercent.isFinite else { return nil }
         let remaining = max(0, min(100, Int(round(100 - usedPercent))))
         return remaining
     }
 
     func detailText(now: Date = .init()) -> String {
-        if let error = self.error, !error.isEmpty { return error }
         guard let remaining = self.remainingPercent else { return "No data" }
         var parts = ["\(remaining)% left"]
-        if let windowLabel = self.windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
-        if let resetAt = self.resetAt {
+        if let windowLabel, !windowLabel.isEmpty { parts.append(windowLabel) }
+        if let resetAt {
             let reset = UsageRow.formatResetRemaining(target: resetAt, now: now)
             if let reset { parts.append("⏱\(reset)") }
         }
