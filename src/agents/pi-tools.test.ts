@@ -103,6 +103,31 @@ describe("createClawdbotCodingTools", () => {
     });
   });
 
+  it("drops null-only union variants without flattening other unions", () => {
+    const cleaned = __testing.cleanToolSchemaForGemini({
+      type: "object",
+      properties: {
+        parentId: { anyOf: [{ type: "string" }, { type: "null" }] },
+        count: { oneOf: [{ type: "string" }, { type: "number" }] },
+      },
+    }) as {
+      properties?: Record<string, unknown>;
+    };
+
+    const parentId = cleaned.properties?.parentId as
+      | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
+      | undefined;
+    expect(parentId?.anyOf).toBeUndefined();
+    expect(parentId?.oneOf).toBeUndefined();
+    expect(parentId?.type).toBe("string");
+
+    const count = cleaned.properties?.count as
+      | { type?: unknown; anyOf?: unknown; oneOf?: unknown }
+      | undefined;
+    expect(count?.anyOf).toBeUndefined();
+    expect(Array.isArray(count?.oneOf)).toBe(true);
+  });
+
   it("preserves action enums in normalized schemas", () => {
     const tools = createClawdbotCodingTools();
     const toolNames = [
