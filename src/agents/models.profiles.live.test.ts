@@ -253,19 +253,17 @@ describeLive("live models (profile keys)", () => {
                 parameters: Type.Object({}, { additionalProperties: false }),
               };
 
-              const first = await completeSimpleWithTimeout(
+              let firstUserContent =
+                "Call the tool `noop` with {}. Do not write any other text.";
+              let firstUser = {
+                role: "user" as const,
+                content: firstUserContent,
+                timestamp: Date.now(),
+              };
+
+              let first = await completeSimpleWithTimeout(
                 model,
-                {
-                  messages: [
-                    {
-                      role: "user",
-                      content:
-                        "Call the tool `noop` with {}. Do not write any other text.",
-                      timestamp: Date.now(),
-                    },
-                  ],
-                  tools: [noopTool],
-                },
+                { messages: [firstUser], tools: [noopTool] },
                 {
                   apiKey,
                   reasoning: resolveTestReasoning(model),
@@ -274,8 +272,45 @@ describeLive("live models (profile keys)", () => {
                 perModelTimeoutMs,
               );
 
-              const toolCall = first.content.find((b) => b.type === "toolCall");
+              let toolCall = first.content.find((b) => b.type === "toolCall");
+              let firstText = first.content
+                .filter((b) => b.type === "text")
+                .map((b) => b.text.trim())
+                .join(" ")
+                .trim();
+
+              // Occasional flake: model answers in text instead of tool call (or adds text).
+              // Retry a couple times with a stronger instruction so we still exercise the tool-only replay path.
+              for (let i = 0; i < 2 && (!toolCall || firstText.length > 0); i += 1) {
+                firstUserContent =
+                  "Call the tool `noop` with {}. IMPORTANT: respond ONLY with the tool call; no other text.";
+                firstUser = {
+                  role: "user" as const,
+                  content: firstUserContent,
+                  timestamp: Date.now(),
+                };
+
+                first = await completeSimpleWithTimeout(
+                  model,
+                  { messages: [firstUser], tools: [noopTool] },
+                  {
+                    apiKey,
+                    reasoning: resolveTestReasoning(model),
+                    maxTokens: 128,
+                  },
+                  perModelTimeoutMs,
+                );
+
+                toolCall = first.content.find((b) => b.type === "toolCall");
+                firstText = first.content
+                  .filter((b) => b.type === "text")
+                  .map((b) => b.text.trim())
+                  .join(" ")
+                  .trim();
+              }
+
               expect(toolCall).toBeTruthy();
+              expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");
               }
@@ -284,12 +319,7 @@ describeLive("live models (profile keys)", () => {
                 model,
                 {
                   messages: [
-                    {
-                      role: "user",
-                      content:
-                        "Call the tool `noop` with {}. Do not write any other text.",
-                      timestamp: Date.now(),
-                    },
+                    firstUser,
                     first,
                     {
                       role: "toolResult",
@@ -305,14 +335,15 @@ describeLive("live models (profile keys)", () => {
                       timestamp: Date.now(),
                     },
                   ],
-                },
-                {
-                  apiKey,
-                  reasoning: resolveTestReasoning(model),
-                  maxTokens: 64,
-                },
-                perModelTimeoutMs,
-              );
+                  },
+                  {
+                    apiKey,
+                    reasoning: resolveTestReasoning(model),
+                    // Headroom: reasoning summary can consume most of the output budget.
+                    maxTokens: 256,
+                  },
+                  perModelTimeoutMs,
+                );
 
               const secondText = second.content
                 .filter((b) => b.type === "text")
