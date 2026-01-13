@@ -102,6 +102,28 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("falls back on credential validation errors", async () => {
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new Error('No credentials found for profile "anthropic:claude-cli".'),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-opus-4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(run.mock.calls[1]?.[0]).toBe("anthropic");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  });
+
   it("appends the configured primary as a last fallback", async () => {
     const cfg = makeCfg({
       agents: {
