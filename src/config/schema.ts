@@ -107,6 +107,8 @@ const FIELD_LABELS: Record<string, string> = {
   "tools.audio.transcription.args": "Audio Transcription Args",
   "tools.audio.transcription.timeoutSeconds":
     "Audio Transcription Timeout (sec)",
+  "tools.profile": "Tool Profile",
+  "agents.list[].tools.profile": "Agent Tool Profile",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "gateway.controlUi.basePath": "Control UI Base Path",

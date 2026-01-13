@@ -988,7 +988,11 @@ export type QueueConfig = {
   drop?: QueueDropPolicy;
 };
 
+export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+
 export type AgentToolsConfig = {
+  /** Base tool profile applied before allow/deny lists. */
+  profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
@@ -1053,6 +1057,8 @@ export type MemorySearchConfig = {
 };
 
 export type ToolsConfig = {
+  /** Base tool profile applied before allow/deny lists. */
+  profile?: ToolProfileId;
   allow?: string[];
   deny?: string[];
   audio?: {

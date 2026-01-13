@@ -28,6 +28,11 @@ import type { SandboxContext, SandboxToolPolicy } from "./sandbox.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import { cleanSchemaForGemini } from "./schema/clean-for-gemini.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
+import {
+  expandToolGroups,
+  normalizeToolName,
+  resolveToolProfilePolicy,
+} from "./tool-policy.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
 // to normalize payloads and sanitize oversized images before they hit providers.
@@ -291,21 +296,6 @@ function cleanToolSchemaForGemini(schema: Record<string, unknown>): unknown {
   return cleanSchemaForGemini(schema);
 }
 
-const TOOL_NAME_ALIASES: Record<string, string> = {
-  bash: "exec",
-  "apply-patch": "apply_patch",
-};
-
-function normalizeToolName(name: string) {
-  const normalized = name.trim().toLowerCase();
-  return TOOL_NAME_ALIASES[normalized] ?? normalized;
-}
-
-function normalizeToolNames(list?: string[]) {
-  if (!list) return [];
-  return list.map(normalizeToolName).filter(Boolean);
-}
-
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "openai" || normalized === "openai-codex";
@@ -357,8 +347,8 @@ function isToolAllowedByPolicyName(
   policy?: SandboxToolPolicy,
 ): boolean {
   if (!policy) return true;
-  const deny = new Set(normalizeToolNames(policy.deny));
-  const allowRaw = normalizeToolNames(policy.allow);
+  const deny = new Set(expandToolGroups(policy.deny));
+  const allowRaw = expandToolGroups(policy.allow);
   const allow = allowRaw.length > 0 ? new Set(allowRaw) : null;
   const normalized = normalizeToolName(name);
   if (deny.has(normalized)) return false;
@@ -391,11 +381,15 @@ function resolveEffectiveToolPolicy(params: {
       : undefined;
   const agentTools = agentConfig?.tools;
   const hasAgentToolPolicy =
-    Array.isArray(agentTools?.allow) || Array.isArray(agentTools?.deny);
+    Array.isArray(agentTools?.allow) ||
+    Array.isArray(agentTools?.deny) ||
+    typeof agentTools?.profile === "string";
   const globalTools = params.config?.tools;
+  const profile = agentTools?.profile ?? globalTools?.profile;
   return {
     agentId,
     policy: hasAgentToolPolicy ? agentTools : globalTools,
+    profile,
   };
 }
 
@@ -703,10 +697,15 @@ export function createClawdbotCodingTools(options?: {
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
-  const { agentId, policy: effectiveToolsPolicy } = resolveEffectiveToolPolicy({
+  const {
+    agentId,
+    policy: effectiveToolsPolicy,
+    profile,
+  } = resolveEffectiveToolPolicy({
     config: options?.config,
     sessionKey: options?.sessionKey,
   });
+  const profilePolicy = resolveToolProfilePolicy(profile);
   const scopeKey =
     options?.exec?.scopeKey ?? (agentId ? `agent:${agentId}` : undefined);
   const subagentPolicy =
@@ -714,6 +713,7 @@ export function createClawdbotCodingTools(options?: {
       ? resolveSubagentToolPolicy(options.config)
       : undefined;
   const allowBackground = isToolAllowedByPolicies("process", [
+    profilePolicy,
     effectiveToolsPolicy,
     sandbox?.tools,
     subagentPolicy,
@@ -829,12 +829,15 @@ export function createClawdbotCodingTools(options?: {
       hasRepliedRef: options?.hasRepliedRef,
     }),
   ];
-  const toolsFiltered = effectiveToolsPolicy
-    ? filterToolsByPolicy(tools, effectiveToolsPolicy)
+  const toolsFiltered = profilePolicy
+    ? filterToolsByPolicy(tools, profilePolicy)
     : tools;
-  const sandboxed = sandbox
-    ? filterToolsByPolicy(toolsFiltered, sandbox.tools)
+  const policyFiltered = effectiveToolsPolicy
+    ? filterToolsByPolicy(toolsFiltered, effectiveToolsPolicy)
     : toolsFiltered;
+  const sandboxed = sandbox
+    ? filterToolsByPolicy(policyFiltered, sandbox.tools)
+    : policyFiltered;
   const subagentFiltered = subagentPolicy
     ? filterToolsByPolicy(sandboxed, subagentPolicy)
     : sandboxed;

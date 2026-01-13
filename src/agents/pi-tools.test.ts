@@ -5,6 +5,7 @@ import type { AgentTool } from "@mariozechner/pi-agent-core";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../config/config.js";
+import { createClawdbotTools } from "./clawdbot-tools.js";
 import { __testing, createClawdbotCodingTools } from "./pi-tools.js";
 import { createBrowserTool } from "./tools/browser-tool.js";
 
@@ -16,7 +17,7 @@ describe("createClawdbotCodingTools", () => {
     expect(schema.anyOf).toBeUndefined();
   });
 
-  it("merges properties for union tool schemas", () => {
+  it("keeps browser tool schema properties after normalization", () => {
     const tools = createClawdbotCodingTools();
     const browser = tools.find((tool) => tool.name === "browser");
     expect(browser).toBeDefined();
@@ -262,6 +263,95 @@ describe("createClawdbotCodingTools", () => {
         };
       })
       .filter((entry) => entry.type !== "object");
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("avoids anyOf/oneOf/allOf in tool schemas", () => {
+    const tools = createClawdbotCodingTools();
+    const offenders: Array<{
+      name: string;
+      keyword: string;
+      path: string;
+    }> = [];
+    const keywords = new Set(["anyOf", "oneOf", "allOf"]);
+
+    const walk = (value: unknown, path: string, name: string): void => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        for (const [index, entry] of value.entries()) {
+          walk(entry, `${path}[${index}]`, name);
+        }
+        return;
+      }
+      if (typeof value !== "object") return;
+
+      const record = value as Record<string, unknown>;
+      for (const [key, entry] of Object.entries(record)) {
+        const nextPath = path ? `${path}.${key}` : key;
+        if (keywords.has(key)) {
+          offenders.push({ name, keyword: key, path: nextPath });
+        }
+        walk(entry, nextPath, name);
+      }
+    };
+
+    for (const tool of tools) {
+      walk(tool.parameters, "", tool.name);
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("keeps raw core tool schemas union-free", () => {
+    const tools = createClawdbotTools();
+    const coreTools = new Set([
+      "browser",
+      "canvas",
+      "nodes",
+      "cron",
+      "message",
+      "gateway",
+      "agents_list",
+      "sessions_list",
+      "sessions_history",
+      "sessions_send",
+      "sessions_spawn",
+      "session_status",
+      "memory_search",
+      "memory_get",
+      "image",
+    ]);
+    const offenders: Array<{
+      name: string;
+      keyword: string;
+      path: string;
+    }> = [];
+    const keywords = new Set(["anyOf", "oneOf", "allOf"]);
+
+    const walk = (value: unknown, path: string, name: string): void => {
+      if (!value) return;
+      if (Array.isArray(value)) {
+        for (const [index, entry] of value.entries()) {
+          walk(entry, `${path}[${index}]`, name);
+        }
+        return;
+      }
+      if (typeof value !== "object") return;
+      const record = value as Record<string, unknown>;
+      for (const [key, entry] of Object.entries(record)) {
+        const nextPath = path ? `${path}.${key}` : key;
+        if (keywords.has(key)) {
+          offenders.push({ name, keyword: key, path: nextPath });
+        }
+        walk(entry, nextPath, name);
+      }
+    };
+
+    for (const tool of tools) {
+      if (!coreTools.has(tool.name)) continue;
+      walk(tool.parameters, "", tool.name);
+    }
 
     expect(offenders).toEqual([]);
   });
@@ -515,6 +605,46 @@ describe("createClawdbotCodingTools", () => {
     });
     expect(tools.some((tool) => tool.name === "exec")).toBe(true);
     expect(tools.some((tool) => tool.name === "browser")).toBe(false);
+  });
+
+  it("applies tool profiles before allow/deny policies", () => {
+    const tools = createClawdbotCodingTools({
+      config: { tools: { profile: "messaging" } },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("message")).toBe(true);
+    expect(names.has("sessions_send")).toBe(true);
+    expect(names.has("sessions_spawn")).toBe(false);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("browser")).toBe(false);
+  });
+
+  it("expands group shorthands in global tool policy", () => {
+    const tools = createClawdbotCodingTools({
+      config: { tools: { allow: ["group:fs"] } },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("read")).toBe(true);
+    expect(names.has("write")).toBe(true);
+    expect(names.has("edit")).toBe(true);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("browser")).toBe(false);
+  });
+
+  it("lets agent profiles override global profiles", () => {
+    const tools = createClawdbotCodingTools({
+      sessionKey: "agent:work:main",
+      config: {
+        tools: { profile: "coding" },
+        agents: {
+          list: [{ id: "work", tools: { profile: "messaging" } }],
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("message")).toBe(true);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("read")).toBe(false);
   });
 
   it("removes unsupported JSON Schema keywords for Cloud Code Assist API compatibility", () => {

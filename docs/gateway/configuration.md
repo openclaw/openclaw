@@ -583,6 +583,7 @@ Inbound messages are routed to an agent via bindings.
   - `subagents`: per-agent sub-agent defaults.
     - `allowAgents`: allowlist of agent ids for `sessions_spawn` from this agent (`["*"]` = allow any; default: only same agent)
   - `tools`: per-agent tool restrictions (applied before sandbox tool policy).
+    - `profile`: base tool profile (applied before allow/deny)
     - `allow`: array of allowed tool names
     - `deny`: array of denied tool names (deny wins)
 - `agents.defaults`: shared agent defaults (model, workspace, sandbox, etc.).
@@ -1503,6 +1504,34 @@ Legacy: `tools.bash` is still accepted as an alias.
 - `archiveAfterMinutes`: auto-archive sub-agent sessions after N minutes (default 60; set `0` to disable)
 - Per-subagent tool policy: `tools.subagents.tools.allow` / `tools.subagents.tools.deny` (deny wins)
 
+`tools.profile` sets a **base tool allowlist** before `tools.allow`/`tools.deny`:
+- `minimal`: `session_status` only
+- `coding`: `group:fs`, `group:runtime`, `group:sessions`, `group:memory`, `image`
+- `messaging`: `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`
+- `full`: no restriction (same as unset)
+
+Per-agent override: `agents.list[].tools.profile`.
+
+Example (messaging-only by default, allow Slack + Discord tools too):
+```json5
+{
+  tools: {
+    profile: "messaging",
+    allow: ["slack", "discord"]
+  }
+}
+```
+
+Example (coding profile, but deny exec/process everywhere):
+```json5
+{
+  tools: {
+    profile: "coding",
+    deny: ["group:runtime"]
+  }
+}
+```
+
 `tools.allow` / `tools.deny` configure a global tool allow/deny policy (deny wins).
 This is applied even when the Docker sandbox is **off**.
 
@@ -1512,6 +1541,17 @@ Example (disable browser/canvas everywhere):
   tools: { deny: ["browser", "canvas"] }
 }
 ```
+
+Tool groups (shorthands) work in **global** and **per-agent** tool policies:
+- `group:runtime`: `exec`, `bash`, `process`
+- `group:fs`: `read`, `write`, `edit`, `apply_patch`
+- `group:sessions`: `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `session_status`
+- `group:memory`: `memory_search`, `memory_get`
+- `group:ui`: `browser`, `canvas`
+- `group:automation`: `cron`, `gateway`
+- `group:messaging`: `message`
+- `group:nodes`: `nodes`
+- `group:clawdbot`: all built-in Clawdbot tools (excludes provider plugins)
 
 `tools.elevated` controls elevated (host) exec access:
 - `enabled`: allow elevated mode (default true)
