@@ -33,9 +33,7 @@ describe("prependSystemEvents", () => {
       second: "2-digit",
     });
 
-    expect(result).toContain(
-      `System: [${expectedTimestamp}] Model switched.`,
-    );
+    expect(result).toContain(`System: [${expectedTimestamp}] Model switched.`);
 
     resetSystemEventsForTest();
     vi.useRealTimers();
