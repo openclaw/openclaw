@@ -1153,9 +1153,9 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     let didSendReply = false;
     const { dispatcher, replyOptions, markDispatchIdle } =
       createReplyDispatcherWithTyping({
-          responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
-            .responsePrefix,
-          humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
+        responsePrefix: resolveEffectiveMessagesConfig(cfg, route.agentId)
+          .responsePrefix,
+        humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
         deliver: async (payload) => {
           const replyThreadTs = replyPlan.nextThreadTs();
           await deliverReplies({

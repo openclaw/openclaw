@@ -376,7 +376,7 @@ async function maybeCreateDiscordAutoThread(params: {
   client: Client;
   message: DiscordMessageEvent["message"];
   isGuildMessage: boolean;
-  channelConfig?: DiscordChannelConfigResolved;
+  channelConfig?: DiscordChannelConfigResolved | null;
   threadChannel?: DiscordThreadChannel | null;
   baseText: string;
   combinedBody: string;
