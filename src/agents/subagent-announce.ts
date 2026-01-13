@@ -236,7 +236,8 @@ export async function runSubagentAnnounceFlow(params: {
   startedAt?: number;
   endedAt?: number;
   label?: string;
-}) {
+}): Promise<boolean> {
+  let didAnnounce = false;
   try {
     let reply = params.roundOneReply;
     if (!reply && params.waitForCompletion !== false) {
@@ -249,7 +250,7 @@ export async function runSubagentAnnounceFlow(params: {
         },
         timeoutMs: waitMs + 2000,
       })) as { status?: string };
-      if (wait?.status !== "ok") return;
+      if (wait?.status !== "ok") return false;
       reply = await readLatestAssistantReply({
         sessionKey: params.childSessionKey,
       });
@@ -265,7 +266,7 @@ export async function runSubagentAnnounceFlow(params: {
       sessionKey: params.requesterSessionKey,
       displayKey: params.requesterDisplayKey,
     });
-    if (!announceTarget) return;
+    if (!announceTarget) return false;
 
     const announcePrompt = buildSubagentAnnouncePrompt({
       requesterSessionKey: params.requesterSessionKey,
@@ -289,7 +290,7 @@ export async function runSubagentAnnounceFlow(params: {
       !announceReply.trim() ||
       isAnnounceSkip(announceReply)
     )
-      return;
+      return false;
 
     const statsLine = await buildSubagentStatsLine({
       sessionKey: params.childSessionKey,
@@ -311,6 +312,7 @@ export async function runSubagentAnnounceFlow(params: {
       },
       timeoutMs: 10_000,
     });
+    didAnnounce = true;
   } catch {
     // Best-effort follow-ups; ignore failures to avoid breaking the caller response.
   } finally {
@@ -338,4 +340,5 @@ export async function runSubagentAnnounceFlow(params: {
       }
     }
   }
+  return didAnnounce;
 }
