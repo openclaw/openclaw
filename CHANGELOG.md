@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026.1.13-2
+
+### Changes
+- Dependencies: bump Pi packages to 0.45.3 and refresh patched pi-ai.
+- Testing: update Vitest + browser-playwright to 4.0.17.
+- Docs: add Amazon Bedrock provider notes and link from models/FAQ.
+
 ## 2026.1.13-1
 
 ### Changes

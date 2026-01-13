@@ -212,7 +212,7 @@ Yes. Clawdbot can **reuse Claude Code CLI credentials** (OAuth) and also support
 
 ### Is AWS Bedrock supported?
 
-Not currently. Clawdbot doesn’t ship a Bedrock provider today. If you must use Bedrock, the common workaround is an OpenAI‑compatible proxy in front of Bedrock, then point Clawdbot at that endpoint. See [Model providers](/providers/models) and [Model providers (full list)](/concepts/model-providers).
+Yes — via pi‑ai’s **Amazon Bedrock (Converse)** provider with **manual config**. You must supply AWS credentials/region on the gateway host and add a Bedrock provider entry in your models config. See [Amazon Bedrock](/bedrock) and [Model providers](/providers/models). If you prefer a managed key flow, an OpenAI‑compatible proxy in front of Bedrock is still a valid option.
 
 ### How does Codex auth work?
 
