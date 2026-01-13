@@ -21,6 +21,7 @@
 - TUI: keep the last streamed response instead of replacing it with "(no output)". (#747 — thanks @thewilloftheshadow)
 - Slack: accept slash commands with or without leading `/` for custom command configs. (#798 — thanks @thewilloftheshadow)
 - Onboarding/Configure: refuse to proceed with invalid configs; run `clawdbot doctor` first to avoid wiping custom fields. (#764 — thanks @mukhtharcm)
+- Onboarding: quote Windows browser URLs when launching via `cmd start` to preserve OAuth query params. (#794 — thanks @roshanasingh4)
 - Anthropic: merge consecutive user turns (preserve newest metadata) before validation to avoid “Incorrect role information” errors. (#804 — thanks @ThomsenDrake)
 - Discord/Slack: centralize reply-thread planning so auto-thread replies stay in the created thread without parent reply refs.
 - Telegram: respect account-scoped bindings when webhook mode is enabled. (#821 — thanks @gumadeiras)
