@@ -611,7 +611,10 @@ Examples:
   clawdbot message poll --provider discord --to channel:123 --poll-question "Snack?" --poll-option Pizza --poll-option Sushi
   clawdbot message react --provider discord --to 123 --message-id 456 --emoji "✅"
 
-${theme.muted("Docs:")} ${formatDocsLink("/message", "docs.clawd.bot/message")}`,
+${theme.muted("Docs:")} ${formatDocsLink(
+          "/cli/message",
+          "docs.clawd.bot/cli/message",
+        )}`,
     )
     .action(() => {
       message.help({ error: true });
@@ -620,7 +623,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/message", "docs.clawd.bot/message")}`
   const withMessageBase = (command: Command) =>
     command
       .option("--provider <provider>", `Provider: ${messageProviderOptions}`)
-      .option("--account <id>", "Provider account id")
+      .option("--account <id>", "Provider account id (accountId)")
       .option("--json", "Output result as JSON", false)
       .option("--dry-run", "Print payload and skip sending", false)
       .option("--verbose", "Verbose logging", false);
@@ -645,15 +648,20 @@ ${theme.muted("Docs:")} ${formatDocsLink("/message", "docs.clawd.bot/message")}`
     try {
       await messageCommand(
         {
-          ...opts,
+          ...(() => {
+            const { account, ...rest } = opts;
+            return {
+              ...rest,
+              accountId: typeof account === "string" ? account : undefined,
+            };
+          })(),
           action,
-          account: opts.account as string | undefined,
         },
         deps,
         defaultRuntime,
       );
     } catch (err) {
-      defaultRuntime.error(String(err));
+      defaultRuntime.error(danger(String(err)));
       defaultRuntime.exit(1);
     }
   };
@@ -670,7 +678,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/message", "docs.clawd.bot/message")}`
         "Attach media (image/audio/video/document). Accepts local paths or URLs.",
       )
       .option(
-        "--buttons-json <json>",
+        "--buttons <json>",
         "Telegram inline keyboard buttons as JSON (array of button rows)",
       )
       .option("--reply-to <id>", "Reply-to message id")

@@ -63,19 +63,7 @@ export const telegramMessageActions: ProviderMessageActionAdapter = {
       const mediaUrl = readStringParam(params, "media", { trim: false });
       const replyTo = readStringParam(params, "replyTo");
       const threadId = readStringParam(params, "threadId");
-      let buttons = params.buttons;
-      if (!buttons) {
-        const buttonsJson = readStringParam(params, "buttonsJson", {
-          trim: false,
-        });
-        if (buttonsJson) {
-          try {
-            buttons = JSON.parse(buttonsJson);
-          } catch {
-            throw new Error("buttons-json must be valid JSON");
-          }
-        }
-      }
+      const buttons = params.buttons;
       return await handleTelegramAction(
         {
           action: "sendMessage",

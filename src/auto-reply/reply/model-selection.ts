@@ -28,7 +28,7 @@ type ModelSelectionState = {
   allowedModelKeys: Set<string>;
   allowedModelCatalog: ModelCatalog;
   resetModelOverride: boolean;
-  resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
+  resolveDefaultThinkingLevel: () => Promise<ThinkLevel>;
   needsModelCatalog: boolean;
 };
 
@@ -252,12 +252,16 @@ export async function createModelSelectionState(params: {
       modelCatalog = await loadModelCatalog({ config: cfg });
       catalogForThinking = modelCatalog;
     }
-    defaultThinkingLevel = resolveThinkingDefault({
+    const resolved = resolveThinkingDefault({
       cfg,
       provider,
       model,
       catalog: catalogForThinking,
     });
+    defaultThinkingLevel =
+      resolved ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined) ??
+      "off";
     return defaultThinkingLevel;
   };
 
