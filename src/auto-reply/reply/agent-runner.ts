@@ -40,13 +40,13 @@ import { getProviderDock } from "../../providers/dock.js";
 import type { ProviderThreadingToolContext } from "../../providers/plugins/types.js";
 import { normalizeProviderId } from "../../providers/registry.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import {
   estimateUsageCost,
   formatTokenCount,
   formatUsd,
   resolveModelCostConfig,
 } from "../../utils/usage-format.js";
-import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { stripHeartbeatToken } from "../heartbeat.js";
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { normalizeVerboseLevel, type VerboseLevel } from "../thinking.js";
