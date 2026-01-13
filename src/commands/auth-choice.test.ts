@@ -6,7 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { applyAuthChoice } from "./auth-choice.js";
+import {
+  applyAuthChoice,
+  resolvePreferredProviderForAuthChoice,
+} from "./auth-choice.js";
+import type { AuthChoice } from "./onboard-types.js";
 
 vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
@@ -442,5 +446,19 @@ describe("applyAuthChoice", () => {
       refresh: "rt_test",
       email: "remote-user",
     });
+  });
+});
+
+describe("resolvePreferredProviderForAuthChoice", () => {
+  it("maps github-copilot to the provider", () => {
+    expect(resolvePreferredProviderForAuthChoice("github-copilot")).toBe(
+      "github-copilot",
+    );
+  });
+
+  it("returns undefined for unknown choices", () => {
+    expect(
+      resolvePreferredProviderForAuthChoice("unknown" as AuthChoice),
+    ).toBeUndefined();
   });
 });

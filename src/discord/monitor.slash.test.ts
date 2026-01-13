@@ -40,6 +40,7 @@ describe("discord native commands", () => {
         agents: {
           defaults: {
             model: "anthropic/claude-opus-4-5",
+            humanDelay: { mode: "off" },
             workspace: "/tmp/clawd",
           },
         },
