@@ -94,6 +94,9 @@ extension CronSettings {
     func detailCard(_ job: CronJob) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             LabeledContent("Schedule") { Text(self.scheduleSummary(job.schedule)).font(.callout) }
+            if case .at = job.schedule, job.deleteAfterRun == true {
+                LabeledContent("Auto-delete") { Text("after success") }
+            }
             if let desc = job.description, !desc.isEmpty {
                 LabeledContent("Description") { Text(desc).font(.callout) }
             }

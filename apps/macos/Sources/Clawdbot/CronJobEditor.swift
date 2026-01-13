@@ -31,6 +31,7 @@ struct CronJobEditor: View {
     @State var enabled: Bool = true
     @State var sessionTarget: CronSessionTarget = .main
     @State var wakeMode: CronWakeMode = .nextHeartbeat
+    @State var deleteAfterRun: Bool = false
 
     enum ScheduleKind: String, CaseIterable, Identifiable { case at, every, cron; var id: String { rawValue } }
     @State var scheduleKind: ScheduleKind = .every
@@ -155,6 +156,11 @@ struct CronJobEditor: View {
                                         displayedComponents: [.date, .hourAndMinute])
                                         .labelsHidden()
                                         .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                GridRow {
+                                    self.gridLabel("Auto-delete")
+                                    Toggle("Delete after successful run", isOn: self.$deleteAfterRun)
+                                        .toggleStyle(.switch)
                                 }
                             case .every:
                                 GridRow {

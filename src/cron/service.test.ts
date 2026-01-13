@@ -81,6 +81,46 @@ describe("CronService", () => {
     await store.cleanup();
   });
 
+  it("runs a one-shot job and deletes it after success when requested", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" })),
+    });
+
+    await cron.start();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const job = await cron.add({
+      name: "one-shot delete",
+      enabled: true,
+      deleteAfterRun: true,
+      schedule: { kind: "at", atMs },
+      sessionTarget: "main",
+      wakeMode: "now",
+      payload: { kind: "systemEvent", text: "hello" },
+    });
+
+    vi.setSystemTime(new Date("2025-12-13T00:00:02.000Z"));
+    await vi.runOnlyPendingTimersAsync();
+
+    const jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    expect(enqueueSystemEvent).toHaveBeenCalledWith("hello", {
+      agentId: undefined,
+    });
+    expect(requestHeartbeatNow).toHaveBeenCalled();
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("wakeMode now waits for heartbeat completion when available", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();

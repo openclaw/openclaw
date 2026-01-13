@@ -15,6 +15,7 @@ extension CronJobEditor {
         self.description = job.description ?? ""
         self.agentId = job.agentId ?? ""
         self.enabled = job.enabled
+        self.deleteAfterRun = job.deleteAfterRun ?? false
         self.sessionTarget = job.sessionTarget
         self.wakeMode = job.wakeMode
 
@@ -149,6 +150,11 @@ extension CronJobEditor {
             "wakeMode": self.wakeMode.rawValue,
             "payload": payload,
         ]
+        if self.scheduleKind == .at {
+            root["deleteAfterRun"] = self.deleteAfterRun
+        } else if self.job?.deleteAfterRun != nil {
+            root["deleteAfterRun"] = false
+        }
         if !description.isEmpty { root["description"] = description }
         if !agentId.isEmpty {
             root["agentId"] = agentId

@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.1.13-1
+
+### Changes
+- Cron: accept ISO timestamps for one-shot schedules (UTC) and allow optional delete-after-run; wired into CLI + macOS editor.
+
 ## 2026.1.12-4
 
 ### Changes

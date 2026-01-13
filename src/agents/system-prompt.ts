@@ -60,7 +60,7 @@ export function buildAgentSystemPrompt(params: {
     browser: "Control web browser",
     canvas: "Present/eval/snapshot the Canvas",
     nodes: "List/describe/notify/camera/screen on paired nodes",
-    cron: "Manage cron jobs and wake events",
+    cron: "Manage cron jobs and wake events (use for reminders)",
     message: "Send messages and provider actions",
     gateway:
       "Restart, apply config, or run updates on the running Clawdbot process",
@@ -211,7 +211,7 @@ export function buildAgentSystemPrompt(params: {
           "- browser: control clawd's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
-          "- cron: manage cron jobs and wake events",
+          "- cron: manage cron jobs and wake events (use for reminders)",
           "- sessions_list: list sessions",
           "- sessions_history: fetch session history",
           "- sessions_send: send to another session",

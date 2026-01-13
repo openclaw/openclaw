@@ -20,6 +20,24 @@ cron is the mechanism.
   - **Isolated**: run a dedicated agent turn in `cron:<jobId>`, optionally deliver output.
 - Wakeups are first-class: a job can request “wake now” vs “next heartbeat”.
 
+## Beginner-friendly overview
+Think of a cron job as: **when** to run + **what** to do.
+
+1) **Choose a schedule**
+   - One-shot reminder → `schedule.kind = "at"` (CLI: `--at`)
+   - Repeating job → `schedule.kind = "every"` or `schedule.kind = "cron"`
+   - If your ISO timestamp omits a timezone, it is treated as **UTC**.
+
+2) **Choose where it runs**
+   - `sessionTarget: "main"` → run during the next heartbeat with main context.
+   - `sessionTarget: "isolated"` → run a dedicated agent turn in `cron:<jobId>`.
+
+3) **Choose the payload**
+   - Main session → `payload.kind = "systemEvent"`
+   - Isolated session → `payload.kind = "agentTurn"`
+
+Optional: `deleteAfterRun: true` removes successful one-shot jobs from the store.
+
 ## Concepts
 
 ### Jobs
@@ -32,10 +50,11 @@ A cron job is a stored record with:
 
 Jobs are identified by a stable `jobId` (used by CLI/Gateway APIs).
 In agent tool calls, `jobId` is canonical; legacy `id` is accepted for compatibility.
+Jobs can optionally auto-delete after a successful one-shot run via `deleteAfterRun: true`.
 
 ### Schedules
 Cron supports three schedule kinds:
-- `at`: one-shot timestamp (ms since epoch).
+- `at`: one-shot timestamp (ms since epoch). Gateway accepts ISO 8601 and coerces to UTC.
 - `every`: fixed interval (ms).
 - `cron`: 5-field cron expression with optional IANA timezone.
 
@@ -142,6 +161,17 @@ Disable cron entirely:
 - `CLAWDBOT_SKIP_CRON=1` (env)
 
 ## CLI quickstart
+
+One-shot reminder (UTC ISO, auto-delete after success):
+```bash
+clawdbot cron add \
+  --name "Send reminder" \
+  --at "2026-01-12T18:00:00Z" \
+  --session main \
+  --system-event "Reminder: submit expense report." \
+  --wake now \
+  --delete-after-run
+```
 
 One-shot reminder (main session, wake immediately):
 ```bash

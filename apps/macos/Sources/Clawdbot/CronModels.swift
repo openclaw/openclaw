@@ -149,6 +149,7 @@ struct CronJob: Identifiable, Codable, Equatable {
     var name: String
     var description: String?
     var enabled: Bool
+    var deleteAfterRun: Bool?
     let createdAtMs: Int
     let updatedAtMs: Int
     let schedule: CronSchedule

@@ -1,4 +1,5 @@
 import { normalizeAgentId } from "../routing/session-key.js";
+import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import type { CronJobCreate, CronJobPatch } from "./types.js";
 
@@ -19,11 +20,32 @@ function isRecord(value: unknown): value is UnknownRecord {
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const kind = typeof schedule.kind === "string" ? schedule.kind : undefined;
+  const atMsRaw = schedule.atMs;
+  const atRaw = schedule.at;
+  const parsedAtMs =
+    typeof atMsRaw === "string"
+      ? parseAbsoluteTimeMs(atMsRaw)
+      : typeof atRaw === "string"
+        ? parseAbsoluteTimeMs(atRaw)
+        : null;
+
   if (!kind) {
-    if (typeof schedule.atMs === "number") next.kind = "at";
+    if (
+      typeof schedule.atMs === "number" ||
+      typeof schedule.at === "string" ||
+      typeof schedule.atMs === "string"
+    )
+      next.kind = "at";
     else if (typeof schedule.everyMs === "number") next.kind = "every";
     else if (typeof schedule.expr === "string") next.kind = "cron";
   }
+
+  if (typeof schedule.atMs !== "number" && parsedAtMs !== null) {
+    next.atMs = parsedAtMs;
+  }
+
+  if ("at" in next) delete next.at;
+
   return next;
 }
 
