@@ -19,6 +19,7 @@ import {
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
 } from "../agents/model-selection.js";
+import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { resolveAnnounceTargetFromKey } from "../agents/tools/sessions-send-helpers.js";
 import { CANVAS_HOST_PATH } from "../canvas-host/a2ui.js";
 import {
@@ -460,6 +461,7 @@ export async function startGatewayServer(
   }
 
   const cfgAtStart = loadConfig();
+  initSubagentRegistry();
   await autoMigrateLegacyState({ cfg: cfgAtStart, log });
   const defaultAgentId = resolveDefaultAgentId(cfgAtStart);
   const defaultWorkspaceDir = resolveAgentWorkspaceDir(
