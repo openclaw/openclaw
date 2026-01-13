@@ -637,9 +637,7 @@ export async function handleCommands(params: {
     };
   }
 
-  const statusRequested =
-    directives.hasStatusDirective ||
-    command.commandBodyNormalized === "/status";
+  const statusRequested = directives.hasStatusDirective;
   if (allowTextCommands && statusRequested) {
     if (!command.isAuthorizedSender) {
       logVerbose(
