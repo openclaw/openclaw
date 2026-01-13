@@ -586,7 +586,7 @@ export async function runConfigureWizard(
     const prompter = createClackPrompter();
 
     const snapshot = await readConfigFileSnapshot();
-    let baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
+    const baseConfig: ClawdbotConfig = snapshot.valid ? snapshot.config : {};
 
     if (snapshot.exists) {
       const title = snapshot.valid
@@ -604,14 +604,11 @@ export async function runConfigureWizard(
         );
       }
       if (!snapshot.valid) {
-        const reset = guardCancel(
-          await confirm({
-            message: "Config invalid. Start fresh?",
-            initialValue: true,
-          }),
-          runtime,
+        outro(
+          "Config invalid. Run `clawdbot doctor` to repair it, then re-run configure.",
         );
-        if (reset) baseConfig = {};
+        runtime.exit(1);
+        return;
       }
     }
 
