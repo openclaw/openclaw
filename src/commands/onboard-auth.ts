@@ -1,5 +1,5 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveClawdbotAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { OPENCODE_ZEN_DEFAULT_MODEL_REF } from "../agents/opencode-zen-models.js";
 import {
@@ -24,6 +24,9 @@ const MOONSHOT_DEFAULT_CONTEXT_WINDOW = 256000;
 const MOONSHOT_DEFAULT_MAX_TOKENS = 8192;
 export const MOONSHOT_DEFAULT_MODEL_REF = `moonshot/${MOONSHOT_DEFAULT_MODEL_ID}`;
 export { SYNTHETIC_DEFAULT_MODEL_ID, SYNTHETIC_DEFAULT_MODEL_REF };
+
+const resolveAuthAgentDir = (agentDir?: string) =>
+  agentDir ?? resolveClawdbotAgentDir();
 // Pricing: MiniMax doesn't publish public rates. Override in models.json for accurate costs.
 const MINIMAX_API_COST = {
   input: 15,
@@ -107,7 +110,7 @@ export async function writeOAuthCredentials(
   creds: OAuthCredentials,
   agentDir?: string,
 ): Promise<void> {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: `${provider}:${creds.email ?? "default"}`,
     credential: {
@@ -115,12 +118,12 @@ export async function writeOAuthCredentials(
       provider,
       ...creds,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setAnthropicApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "anthropic:default",
     credential: {
@@ -128,12 +131,12 @@ export async function setAnthropicApiKey(key: string, agentDir?: string) {
       provider: "anthropic",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setGeminiApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "google:default",
     credential: {
@@ -141,12 +144,12 @@ export async function setGeminiApiKey(key: string, agentDir?: string) {
       provider: "google",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setMinimaxApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "minimax:default",
     credential: {
@@ -154,12 +157,12 @@ export async function setMinimaxApiKey(key: string, agentDir?: string) {
       provider: "minimax",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setMoonshotApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "moonshot:default",
     credential: {
@@ -167,12 +170,12 @@ export async function setMoonshotApiKey(key: string, agentDir?: string) {
       provider: "moonshot",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
 export async function setSyntheticApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "synthetic:default",
     credential: {
@@ -180,7 +183,7 @@ export async function setSyntheticApiKey(key: string, agentDir?: string) {
       provider: "synthetic",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
@@ -188,7 +191,7 @@ export const ZAI_DEFAULT_MODEL_REF = "zai/glm-4.7";
 export const OPENROUTER_DEFAULT_MODEL_REF = "openrouter/auto";
 
 export async function setZaiApiKey(key: string, agentDir?: string) {
-  // Write to the multi-agent path so gateway finds credentials on startup
+  // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({
     profileId: "zai:default",
     credential: {
@@ -196,7 +199,7 @@ export async function setZaiApiKey(key: string, agentDir?: string) {
       provider: "zai",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
@@ -208,7 +211,7 @@ export async function setOpenrouterApiKey(key: string, agentDir?: string) {
       provider: "openrouter",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 
@@ -714,7 +717,7 @@ export async function setOpencodeZenApiKey(key: string, agentDir?: string) {
       provider: "opencode",
       key,
     },
-    agentDir: agentDir ?? resolveDefaultAgentDir(),
+    agentDir: resolveAuthAgentDir(agentDir),
   });
 }
 

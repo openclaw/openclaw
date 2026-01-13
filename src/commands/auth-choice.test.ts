@@ -18,6 +18,8 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
 
 const noopAsync = async () => {};
 const noop = () => {};
+const authProfilePathFor = (agentDir: string) =>
+  path.join(agentDir, "auth-profiles.json");
 
 describe("applyAuthChoice", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
@@ -111,12 +113,8 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const authProfilePath = path.join(
-      tempStateDir,
-      "agents",
-      "main",
-      "agent",
-      "auth-profiles.json",
+    const authProfilePath = authProfilePathFor(
+      process.env.CLAWDBOT_AGENT_DIR!,
     );
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
@@ -170,12 +168,8 @@ describe("applyAuthChoice", () => {
       mode: "api_key",
     });
 
-    const authProfilePath = path.join(
-      tempStateDir,
-      "agents",
-      "main",
-      "agent",
-      "auth-profiles.json",
+    const authProfilePath = authProfilePathFor(
+      process.env.CLAWDBOT_AGENT_DIR!,
     );
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
@@ -337,12 +331,8 @@ describe("applyAuthChoice", () => {
       "openrouter/auto",
     );
 
-    const authProfilePath = path.join(
-      tempStateDir,
-      "agents",
-      "main",
-      "agent",
-      "auth-profiles.json",
+    const authProfilePath = authProfilePathFor(
+      process.env.CLAWDBOT_AGENT_DIR!,
     );
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
@@ -426,12 +416,8 @@ describe("applyAuthChoice", () => {
       mode: "oauth",
     });
 
-    const authProfilePath = path.join(
-      tempStateDir,
-      "agents",
-      "main",
-      "agent",
-      "auth-profiles.json",
+    const authProfilePath = authProfilePathFor(
+      process.env.CLAWDBOT_AGENT_DIR!,
     );
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {

@@ -16,10 +16,14 @@ import {
   applySyntheticConfig,
   applySyntheticProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
+  setMinimaxApiKey,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   writeOAuthCredentials,
 } from "./onboard-auth.js";
+
+const authProfilePathFor = (agentDir: string) =>
+  path.join(agentDir, "auth-profiles.json");
 
 describe("writeOAuthCredentials", () => {
   const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
@@ -50,10 +54,9 @@ describe("writeOAuthCredentials", () => {
     delete process.env.CLAWDBOT_OAUTH_DIR;
   });
 
-  it("writes auth-profiles.json under CLAWDBOT_STATE_DIR/agents/main/agent", async () => {
+  it("writes auth-profiles.json under CLAWDBOT_AGENT_DIR when set", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-oauth-"));
     process.env.CLAWDBOT_STATE_DIR = tempStateDir;
-    // Even if legacy env vars are set, onboarding should write to the multi-agent path.
     process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "agent");
     process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
 
@@ -65,13 +68,8 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds);
 
-    // Now writes to the multi-agent path: agents/main/agent
-    const authProfilePath = path.join(
-      tempStateDir,
-      "agents",
-      "main",
-      "agent",
-      "auth-profiles.json",
+    const authProfilePath = authProfilePathFor(
+      process.env.CLAWDBOT_AGENT_DIR!,
     );
     const raw = await fs.readFile(authProfilePath, "utf8");
     const parsed = JSON.parse(raw) as {
@@ -85,7 +83,65 @@ describe("writeOAuthCredentials", () => {
 
     await expect(
       fs.readFile(
-        path.join(tempStateDir, "agent", "auth-profiles.json"),
+        path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"),
+        "utf8",
+      ),
+    ).rejects.toThrow();
+  });
+});
+
+describe("setMinimaxApiKey", () => {
+  const previousStateDir = process.env.CLAWDBOT_STATE_DIR;
+  const previousAgentDir = process.env.CLAWDBOT_AGENT_DIR;
+  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
+  let tempStateDir: string | null = null;
+
+  afterEach(async () => {
+    if (tempStateDir) {
+      await fs.rm(tempStateDir, { recursive: true, force: true });
+      tempStateDir = null;
+    }
+    if (previousStateDir === undefined) {
+      delete process.env.CLAWDBOT_STATE_DIR;
+    } else {
+      process.env.CLAWDBOT_STATE_DIR = previousStateDir;
+    }
+    if (previousAgentDir === undefined) {
+      delete process.env.CLAWDBOT_AGENT_DIR;
+    } else {
+      process.env.CLAWDBOT_AGENT_DIR = previousAgentDir;
+    }
+    if (previousPiAgentDir === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
+    }
+  });
+
+  it("writes to CLAWDBOT_AGENT_DIR when set", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "clawdbot-minimax-"));
+    process.env.CLAWDBOT_STATE_DIR = tempStateDir;
+    process.env.CLAWDBOT_AGENT_DIR = path.join(tempStateDir, "custom-agent");
+    process.env.PI_CODING_AGENT_DIR = process.env.CLAWDBOT_AGENT_DIR;
+
+    await setMinimaxApiKey("sk-minimax-test");
+
+    const customAuthPath = authProfilePathFor(
+      process.env.CLAWDBOT_AGENT_DIR!,
+    );
+    const raw = await fs.readFile(customAuthPath, "utf8");
+    const parsed = JSON.parse(raw) as {
+      profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
+    };
+    expect(parsed.profiles?.["minimax:default"]).toMatchObject({
+      type: "api_key",
+      provider: "minimax",
+      key: "sk-minimax-test",
+    });
+
+    await expect(
+      fs.readFile(
+        path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"),
         "utf8",
       ),
     ).rejects.toThrow();
