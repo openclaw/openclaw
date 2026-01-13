@@ -155,6 +155,8 @@ const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.cliBackends": "CLI Backends",
   "commands.native": "Native Commands",
   "commands.text": "Text Commands",
+  "commands.bash": "Allow Bash Chat Command",
+  "commands.bashForegroundMs": "Bash Foreground Window (ms)",
   "commands.config": "Allow /config",
   "commands.debug": "Allow /debug",
   "commands.restart": "Allow Restart",
@@ -289,6 +291,10 @@ const FIELD_HELP: Record<string, string> = {
   "commands.native":
     "Register native commands with connectors that support it (Discord/Slack/Telegram).",
   "commands.text": "Allow text command parsing (slash commands only).",
+  "commands.bash":
+    "Allow bash chat command (`!`; `/bash` alias) to run host shell commands (default: false; requires tools.elevated).",
+  "commands.bashForegroundMs":
+    "How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately).",
   "commands.config":
     "Allow /config chat command to read/write config on disk (default: false).",
   "commands.debug":

@@ -251,6 +251,13 @@ export const CHAT_COMMANDS: ChatCommandDefinition[] = (() => {
       textAlias: "/queue",
       acceptsArgs: true,
     }),
+    defineChatCommand({
+      key: "bash",
+      description: "Run host shell commands (host-only).",
+      textAlias: "/bash",
+      scope: "text",
+      acceptsArgs: true,
+    }),
   ];
 
   registerAlias(commands, "status", "/usage");
@@ -314,6 +321,7 @@ export function isCommandEnabled(
 ): boolean {
   if (commandKey === "config") return cfg.commands?.config === true;
   if (commandKey === "debug") return cfg.commands?.debug === true;
+  if (commandKey === "bash") return cfg.commands?.bash === true;
   return true;
 }
 

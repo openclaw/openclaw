@@ -746,8 +746,10 @@ Controls how chat commands are enabled across connectors.
 ```json5
 {
   commands: {
-    native: false,          // register native commands when supported
+    native: "auto",         // register native commands when supported (auto)
     text: true,             // parse slash commands in chat messages
+    bash: false,            // allow ! (alias: /bash) (host-only; requires tools.elevated allowlists)
+    bashForegroundMs: 2000, // bash foreground window (0 backgrounds immediately)
     config: false,          // allow /config (writes to disk)
     debug: false,           // allow /debug (runtime-only overrides)
     restart: false,         // allow /restart + gateway restart tool
@@ -761,6 +763,8 @@ Notes:
 - `commands.text: false` disables parsing chat messages for commands.
 - `commands.native: "auto"` (default) turns on native commands for Discord/Telegram and leaves Slack off; unsupported providers stay text-only.
 - Set `commands.native: true|false` to force all, or override per provider with `discord.commands.native`, `telegram.commands.native`, `slack.commands.native` (bool or `"auto"`). `false` clears previously registered commands on Discord/Telegram at startup; Slack commands are managed in the Slack app.
+- `commands.bash: true` enables `! <cmd>` to run host shell commands (`/bash <cmd>` also works as an alias). Requires `tools.elevated.enabled` and allowlisting the sender in `tools.elevated.allowFrom.<provider>`.
+- `commands.bashForegroundMs` controls how long bash waits before backgrounding. While a bash job is running, new `! <cmd>` requests are rejected (one at a time).
 - `commands.config: true` enables `/config` (reads/writes `clawdbot.json`).
 - `commands.debug: true` enables `/debug` (runtime-only overrides).
 - `commands.restart: true` enables `/restart` and the gateway tool restart action.

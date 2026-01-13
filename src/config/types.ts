@@ -1244,6 +1244,10 @@ export type CommandsConfig = {
   native?: NativeCommandsSetting;
   /** Enable text command parsing (default: true). */
   text?: boolean;
+  /** Allow bash chat command (`!`; `/bash` alias) (default: false). */
+  bash?: boolean;
+  /** How long bash waits before backgrounding (default: 2000; 0 backgrounds immediately). */
+  bashForegroundMs?: number;
   /** Allow /config command (default: false). */
   config?: boolean;
   /** Allow /debug command (default: false). */

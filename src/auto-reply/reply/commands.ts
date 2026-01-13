@@ -83,6 +83,7 @@ import type {
 } from "../thinking.js";
 import type { ReplyPayload } from "../types.js";
 import { isAbortTrigger, setAbortMemory } from "./abort.js";
+import { handleBashChatCommand } from "./bash-command.js";
 import { parseConfigCommand } from "./config-commands.js";
 import { parseDebugCommand } from "./debug-commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
@@ -400,6 +401,11 @@ export async function handleCommands(params: {
   command: CommandContext;
   agentId?: string;
   directives: InlineDirectives;
+  elevated: {
+    enabled: boolean;
+    allowed: boolean;
+    failures: Array<{ gate: string; key: string }>;
+  };
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey: string;
@@ -425,6 +431,7 @@ export async function handleCommands(params: {
     cfg,
     command,
     directives,
+    elevated,
     sessionEntry,
     sessionStore,
     sessionKey,
@@ -464,6 +471,30 @@ export async function handleCommands(params: {
     surface: command.surface,
     commandSource: ctx.CommandSource,
   });
+
+  const bashSlashRequested =
+    allowTextCommands &&
+    (command.commandBodyNormalized === "/bash" ||
+      command.commandBodyNormalized.startsWith("/bash "));
+  const bashBangRequested =
+    allowTextCommands && command.commandBodyNormalized.startsWith("!");
+  if (bashSlashRequested || (bashBangRequested && command.isAuthorizedSender)) {
+    if (!command.isAuthorizedSender) {
+      logVerbose(
+        `Ignoring /bash from unauthorized sender: ${command.senderId || "<unknown>"}`,
+      );
+      return { shouldContinue: false };
+    }
+    const reply = await handleBashChatCommand({
+      ctx,
+      cfg,
+      agentId: params.agentId,
+      sessionKey,
+      isGroup,
+      elevated,
+    });
+    return { shouldContinue: false, reply };
+  }
 
   if (allowTextCommands && activationCommand.hasCommand) {
     if (!isGroup) {
