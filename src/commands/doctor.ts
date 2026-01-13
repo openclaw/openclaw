@@ -66,7 +66,6 @@ import {
   maybeMigrateLegacyConfigFile,
   normalizeLegacyConfigValues,
 } from "./doctor-legacy-config.js";
-import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import {
   maybeRepairSandboxImages,
@@ -81,6 +80,7 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
+import { maybeRepairUiProtocolFreshness } from "./doctor-ui.js";
 import {
   detectLegacyWorkspaceDirs,
   formatLegacyWorkspaceWarning,
@@ -249,6 +249,8 @@ export async function doctorCommand(
     }
   }
 
+  await maybeRepairUiProtocolFreshness(runtime, prompter);
+
   await maybeMigrateLegacyConfigFile(runtime);
 
   const snapshot = await readConfigFileSnapshot();
@@ -272,9 +274,9 @@ export async function doctorCommand(
       options.nonInteractive === true
         ? true
         : await prompter.confirm({
-          message: "Migrate legacy config entries now?",
-          initialValue: true,
-        });
+            message: "Migrate legacy config entries now?",
+            initialValue: true,
+          });
     if (migrate) {
       // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into whatsapp.allowFrom.
       const { config: migrated, changes } = migrateLegacyConfig(
@@ -327,9 +329,9 @@ export async function doctorCommand(
           : options.nonInteractive === true
             ? false
             : await prompter.confirmRepair({
-              message: "Generate and configure a gateway token now?",
-              initialValue: true,
-            });
+                message: "Generate and configure a gateway token now?",
+                initialValue: true,
+              });
       if (shouldSetToken) {
         const nextToken = randomToken();
         cfg = {
@@ -355,9 +357,9 @@ export async function doctorCommand(
       options.nonInteractive === true
         ? true
         : await prompter.confirm({
-          message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
-          initialValue: true,
-        });
+            message: "Migrate legacy state (sessions/agent/WhatsApp auth) now?",
+            initialValue: true,
+          });
     if (migrate) {
       const migrated = await runLegacyStateMigrations({
         detected: legacyState,
@@ -479,11 +481,13 @@ export async function doctorCommand(
   note(
     [
       `Eligible: ${skillsReport.skills.filter((s) => s.eligible).length}`,
-      `Missing requirements: ${skillsReport.skills.filter(
-        (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
-      ).length
+      `Missing requirements: ${
+        skillsReport.skills.filter(
+          (s) => !s.eligible && !s.disabled && !s.blockedByAllowlist,
+        ).length
       }`,
-      `Blocked by allowlist: ${skillsReport.skills.filter((s) => s.blockedByAllowlist).length
+      `Blocked by allowlist: ${
+        skillsReport.skills.filter((s) => s.blockedByAllowlist).length
       }`,
     ].join("\n"),
     "Skills status",
@@ -493,10 +497,10 @@ export async function doctorCommand(
     config: cfg,
     workspaceDir,
     logger: {
-      info: () => { },
-      warn: () => { },
-      error: () => { },
-      debug: () => { },
+      info: () => {},
+      warn: () => {},
+      error: () => {},
+      debug: () => {},
     },
   });
   if (pluginRegistry.plugins.length > 0) {
@@ -512,9 +516,9 @@ export async function doctorCommand(
       `Errors: ${errored.length}`,
       errored.length > 0
         ? `- ${errored
-          .slice(0, 10)
-          .map((p) => p.id)
-          .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`
+            .slice(0, 10)
+            .map((p) => p.id)
+            .join("\n- ")}${errored.length > 10 ? "\n- ..." : ""}`
         : null,
     ].filter((line): line is string => Boolean(line));
 

@@ -175,6 +175,7 @@ declare global {
 const DEFAULT_CRON_FORM: CronFormState = {
   name: "",
   description: "",
+  agentId: "",
   enabled: true,
   scheduleKind: "every",
   scheduleAt: "",

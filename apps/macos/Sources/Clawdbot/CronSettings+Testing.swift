@@ -7,6 +7,7 @@ struct CronSettings_Previews: PreviewProvider {
         store.jobs = [
             CronJob(
                 id: "job-1",
+                agentId: "ops",
                 name: "Daily summary",
                 description: nil,
                 enabled: true,
@@ -59,6 +60,7 @@ extension CronSettings {
 
         let job = CronJob(
             id: "job-1",
+            agentId: "ops",
             name: "Daily summary",
             description: "Summary job",
             enabled: true,

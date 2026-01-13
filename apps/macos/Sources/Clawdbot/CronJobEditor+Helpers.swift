@@ -13,6 +13,7 @@ extension CronJobEditor {
         guard let job else { return }
         self.name = job.name
         self.description = job.description ?? ""
+        self.agentId = job.agentId ?? ""
         self.enabled = job.enabled
         self.sessionTarget = job.sessionTarget
         self.wakeMode = job.wakeMode
@@ -67,6 +68,7 @@ extension CronJobEditor {
                 userInfo: [NSLocalizedDescriptionKey: "Name is required."])
         }
         let description = self.description.trimmingCharacters(in: .whitespacesAndNewlines)
+        let agentId = self.agentId.trimmingCharacters(in: .whitespacesAndNewlines)
         let schedule: [String: Any]
         switch self.scheduleKind {
         case .at:
@@ -148,6 +150,11 @@ extension CronJobEditor {
             "payload": payload,
         ]
         if !description.isEmpty { root["description"] = description }
+        if !agentId.isEmpty {
+            root["agentId"] = agentId
+        } else if self.job?.agentId != nil {
+            root["agentId"] = NSNull()
+        }
 
         if self.sessionTarget == .isolated {
             let trimmed = self.postPrefix.trimmingCharacters(in: .whitespacesAndNewlines)

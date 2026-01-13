@@ -4,6 +4,7 @@ import path from "node:path";
 import { type ClawdbotConfig, loadConfig } from "../config/config.js";
 import { resolveClawdbotAgentDir } from "./agent-paths.js";
 import {
+  type AuthProfileStore,
   ensureAuthProfileStore,
   listProfilesForProvider,
 } from "./auth-profiles.js";
@@ -70,9 +71,10 @@ async function readJson(pathname: string): Promise<unknown> {
   }
 }
 
-function buildMinimaxApiProvider(): ProviderConfig {
+function buildMinimaxApiProvider(apiKey?: string): ProviderConfig {
   return {
     baseUrl: MINIMAX_API_BASE_URL,
+    ...(apiKey ? { apiKey } : {}),
     api: "anthropic-messages",
     models: [
       {
@@ -88,6 +90,35 @@ function buildMinimaxApiProvider(): ProviderConfig {
   };
 }
 
+function resolveMinimaxApiKeyFromStore(
+  store: AuthProfileStore,
+): string | undefined {
+  const profileIds = listProfilesForProvider(store, "minimax");
+  for (const profileId of profileIds) {
+    const cred = store.profiles[profileId];
+    if (!cred) continue;
+    if (cred.type === "api_key") {
+      const key = cred.key?.trim();
+      if (key) return key;
+      continue;
+    }
+    if (cred.type === "token") {
+      const token = cred.token?.trim();
+      if (!token) continue;
+      if (
+        typeof cred.expires === "number" &&
+        Number.isFinite(cred.expires) &&
+        cred.expires > 0 &&
+        Date.now() >= cred.expires
+      ) {
+        continue;
+      }
+      return token;
+    }
+  }
+  return undefined;
+}
+
 function resolveImplicitProviders(params: {
   cfg: ClawdbotConfig;
   agentDir: string;
@@ -95,10 +126,10 @@ function resolveImplicitProviders(params: {
   const providers: Record<string, ProviderConfig> = {};
   const minimaxEnv = resolveEnvApiKey("minimax");
   const authStore = ensureAuthProfileStore(params.agentDir);
-  const hasMinimaxProfile =
-    listProfilesForProvider(authStore, "minimax").length > 0;
-  if (minimaxEnv || hasMinimaxProfile) {
-    providers.minimax = buildMinimaxApiProvider();
+  const minimaxKey =
+    minimaxEnv?.apiKey ?? resolveMinimaxApiKeyFromStore(authStore);
+  if (minimaxKey) {
+    providers.minimax = buildMinimaxApiProvider(minimaxKey);
   }
   return providers;
 }
