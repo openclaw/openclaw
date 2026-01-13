@@ -1042,6 +1042,7 @@ export function resolveAuthProfileOrder(params: {
 }): string[] {
   const { cfg, store, provider, preferredProfile } = params;
   const providerKey = normalizeProviderId(provider);
+  const now = Date.now();
   const storedOrder = (() => {
     const order = store.order;
     if (!order) return undefined;
@@ -1076,7 +1077,36 @@ export function resolveAuthProfileOrder(params: {
 
   const filtered = baseOrder.filter((profileId) => {
     const cred = store.profiles[profileId];
-    return cred ? normalizeProviderId(cred.provider) === providerKey : true;
+    if (!cred) return false;
+    if (normalizeProviderId(cred.provider) !== providerKey) return false;
+    const profileConfig = cfg?.auth?.profiles?.[profileId];
+    if (profileConfig) {
+      if (normalizeProviderId(profileConfig.provider) !== providerKey) {
+        return false;
+      }
+      if (profileConfig.mode !== cred.type) {
+        const oauthCompatible =
+          profileConfig.mode === "oauth" && cred.type === "token";
+        if (!oauthCompatible) return false;
+      }
+    }
+    if (cred.type === "api_key") return Boolean(cred.key?.trim());
+    if (cred.type === "token") {
+      if (!cred.token?.trim()) return false;
+      if (
+        typeof cred.expires === "number" &&
+        Number.isFinite(cred.expires) &&
+        cred.expires > 0 &&
+        now >= cred.expires
+      ) {
+        return false;
+      }
+      return true;
+    }
+    if (cred.type === "oauth") {
+      return Boolean(cred.access?.trim() || cred.refresh?.trim());
+    }
+    return false;
   });
   const deduped: string[] = [];
   for (const entry of filtered) {
@@ -1089,7 +1119,6 @@ export function resolveAuthProfileOrder(params: {
   if (explicitOrder && explicitOrder.length > 0) {
     // ...but still respect cooldown tracking to avoid repeatedly selecting a
     // known-bad/rate-limited key as the first candidate.
-    const now = Date.now();
     const available: string[] = [];
     const inCooldown: Array<{ profileId: string; cooldownUntil: number }> = [];
 
