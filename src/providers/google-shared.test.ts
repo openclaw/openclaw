@@ -171,7 +171,7 @@ describe("google-shared convertMessages", () => {
             {
               type: "thinking",
               thinking: "hidden",
-              thinkingSignature: "sig",
+              thinkingSignature: "c2ln",
             },
           ],
           api: "google-generative-ai",
@@ -202,7 +202,7 @@ describe("google-shared convertMessages", () => {
     expect(contents[0].role).toBe("model");
     expect(contents[0].parts?.[0]).toMatchObject({
       thought: true,
-      thoughtSignature: "sig",
+      thoughtSignature: "c2ln",
     });
   });
 
@@ -216,7 +216,7 @@ describe("google-shared convertMessages", () => {
             {
               type: "thinking",
               thinking: "structured",
-              thinkingSignature: "sig",
+              thinkingSignature: "c2ln",
             },
           ],
           api: "google-generative-ai",
@@ -247,7 +247,7 @@ describe("google-shared convertMessages", () => {
     expect(parts).toHaveLength(1);
     expect(parts[0]).toMatchObject({
       thought: true,
-      thoughtSignature: "sig",
+      thoughtSignature: "c2ln",
     });
   });
 
