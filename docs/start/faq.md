@@ -87,6 +87,20 @@ The wizard can also build UI assets automatically. After onboarding, you typical
 
 The wizard now opens your browser with a tokenized dashboard URL right after onboarding and also prints the full link (with token) in the summary. Keep that tab open; if it didn’t launch, copy/paste the printed URL on the same machine. Tokens stay local to your host—nothing is fetched from the browser.
 
+### How do I authenticate the dashboard (token) on localhost vs remote?
+
+**Localhost (same machine):**
+- Open `http://127.0.0.1:18789/`.
+- If it asks for auth, run `clawdbot dashboard` and use the tokenized link (`?token=...`).
+- The token is the same value as `gateway.auth.token` (or `CLAWDBOT_GATEWAY_TOKEN`) and is stored by the UI after first load.
+
+**Not on localhost:**
+- **Tailscale Serve** (recommended): keep bind loopback, run `clawdbot gateway --tailscale serve`, open `https://<magicdns>/`. If `gateway.auth.allowTailscale` is `true`, identity headers satisfy auth (no token).
+- **Tailnet bind**: run `clawdbot gateway --bind tailnet --token "<token>"`, open `http://<tailscale-ip>:18789/`, paste token in dashboard settings.
+- **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@host` then open `http://127.0.0.1:18789/?token=...` from `clawdbot dashboard`.
+
+See [Dashboard](/web/dashboard) and [Web surfaces](/web) for bind modes and auth details.
+
 ### What runtime do I need?
 
 Node **>= 22** is required. `pnpm` is recommended; `bun` is optional.
